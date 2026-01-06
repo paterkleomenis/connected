@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Connected</string>
+    <string name="discover_devices">Discover Devices</string>
+    <string name="stop_discovery">Stop Discovery</string>
+    <string name="no_devices_found">No devices found</string>
+    <string name="searching">Searching for devices…</string>
+    <string name="device_info">Device Info</string>
+    <string name="ping">Ping</string>
+    <string name="ping_success">Ping successful: %1$d ms</string>
+    <string name="ping_failed">Ping failed: %1$s</string>
+    <string name="initializing">Initializing…</string>
+    <string name="error_init_failed">Failed to initialize: %1$s</string>
+    <string name="permission_required">Network permission required</string>
+</resources>

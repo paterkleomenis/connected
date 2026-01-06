@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Background circle -->
+    <path
+        android:fillColor="#6200EE"
+        android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0" />
+
+    <!-- Connection icon - two devices with signal -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,42h12c1.1,0 2,0.9 2,2v20c0,1.1 -0.9,2 -2,2h-12c-1.1,0 -2,-0.9 -2,-2v-20c0,-1.1 0.9,-2 2,-2zM35,45v16h10v-16h-10z" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M62,42h12c1.1,0 2,0.9 2,2v20c0,1.1 -0.9,2 -2,2h-12c-1.1,0 -2,-0.9 -2,-2v-20c0,-1.1 0.9,-2 2,-2zM63,45v16h10v-16h-10z" />
+
+    <!-- Connection waves -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:pathData="M50,50c2,-2 6,-2 8,0" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:pathData="M50,54c2,2 6,2 8,0" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:pathData="M50,58c2,-2 6,-2 8,0" />
+
+</vector>

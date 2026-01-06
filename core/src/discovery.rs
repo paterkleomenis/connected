@@ -1,0 +1,611 @@
+use crate::device::{Device, DeviceType};
+use crate::error::{ConnectedError, Result};
+use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
+use tracing::{debug, error, info, trace, warn};
+
+// QUIC runs over UDP, so we use UDP service type
+const SERVICE_TYPE: &str = "_connected._udp.local.";
+const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(60);
+const BROWSE_TIMEOUT: Duration = Duration::from_millis(100);
+const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(15);
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(5);
+
+#[derive(Clone)]
+struct TrackedDevice {
+    device: Device,
+    last_seen: Instant,
+}
+
+pub struct DiscoveryService {
+    daemon: ServiceDaemon,
+    local_device: Device,
+    discovered_devices: Arc<RwLock<HashMap<String, TrackedDevice>>>,
+    running: Arc<AtomicBool>,
+    announced: Arc<AtomicBool>,
+    service_fullname: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum DiscoveryEvent {
+    DeviceFound(Device),
+    DeviceLost(String),
+    Error(String),
+}
+
+impl DiscoveryService {
+    pub fn new(local_device: Device) -> Result<Self> {
+        let daemon = ServiceDaemon::new()?;
+
+        // Create a consistent instance name that we can use for unregistration
+        let instance_name = Self::create_instance_name(&local_device);
+        let service_fullname = format!("{}.{}", instance_name, SERVICE_TYPE);
+
+        Ok(Self {
+            daemon,
+            local_device,
+            discovered_devices: Arc::new(RwLock::new(HashMap::new())),
+            running: Arc::new(AtomicBool::new(false)),
+            announced: Arc::new(AtomicBool::new(false)),
+            service_fullname,
+        })
+    }
+
+    fn create_instance_name(device: &Device) -> String {
+        // Use a format that's easy to parse: name--uuid (double dash as separator)
+        // This avoids issues with single underscores in device names
+        format!("{}--{}", device.name.replace("--", "-"), device.id)
+    }
+
+    fn parse_instance_name(instance: &str) -> Option<(String, String)> {
+        // Parse "name--uuid" format
+        if let Some(pos) = instance.rfind("--") {
+            let name = instance[..pos].to_string();
+            let id = instance[pos + 2..].to_string();
+            if !id.is_empty() && !name.is_empty() {
+                return Some((name, id));
+            }
+        }
+        None
+    }
+
+    pub fn announce(&self) -> Result<()> {
+        let instance_name = Self::create_instance_name(&self.local_device);
+
+        // Properties for service discovery
+        let mut properties = HashMap::new();
+        properties.insert("id".to_string(), self.local_device.id.clone());
+        properties.insert("name".to_string(), self.local_device.name.clone());
+        properties.insert(
+            "type".to_string(),
+            self.local_device.device_type.as_str().to_string(),
+        );
+        properties.insert("version".to_string(), "1".to_string());
+
+        let ip: IpAddr = self
+            .local_device
+            .ip
+            .parse()
+            .map_err(|_| ConnectedError::InvalidAddress(self.local_device.ip.clone()))?;
+
+        // Create the hostname - use a unique name for this device
+        let hostname = format!("{}.local.", self.local_device.id);
+
+        debug!(
+            "Creating mDNS service: type={}, instance={}, hostname={}, ip={}, port={}",
+            SERVICE_TYPE, instance_name, hostname, ip, self.local_device.port
+        );
+
+        let service_info = ServiceInfo::new(
+            SERVICE_TYPE,
+            &instance_name,
+            &hostname,
+            ip,
+            self.local_device.port,
+            properties.clone(),
+        )?;
+
+        debug!("Service properties: {:?}", properties);
+
+        // Register (will update if already registered)
+        self.daemon.register(service_info)?;
+        self.announced.store(true, Ordering::SeqCst);
+
+        info!(
+            "Announced device '{}' (id={}) on mDNS at {}:{} [service_type={}]",
+            self.local_device.name,
+            self.local_device.id,
+            self.local_device.ip,
+            self.local_device.port,
+            SERVICE_TYPE
+        );
+
+        Ok(())
+    }
+
+    pub fn start_listening(&self, event_tx: mpsc::UnboundedSender<DiscoveryEvent>) -> Result<()> {
+        // If already running, just re-announce
+        if self.running.swap(true, Ordering::SeqCst) {
+            debug!("Discovery already running, re-announcing");
+            let _ = self.announce();
+            return Ok(());
+        }
+
+        // Clear any stale devices from previous sessions
+        self.clear_discovered_devices();
+
+        // Start browsing for services
+        let receiver = self.daemon.browse(SERVICE_TYPE)?;
+        let local_id = self.local_device.id.clone();
+        let discovered = self.discovered_devices.clone();
+        let running = self.running.clone();
+        let event_tx_discovery = event_tx.clone();
+
+        info!("Started mDNS discovery for {}", SERVICE_TYPE);
+
+        // Main discovery thread
+        std::thread::Builder::new()
+            .name("mdns-discovery".to_string())
+            .spawn(move || {
+                while running.load(Ordering::SeqCst) {
+                    match receiver.recv_timeout(BROWSE_TIMEOUT) {
+                        Ok(event) => {
+                            Self::handle_event(event, &local_id, &discovered, &event_tx_discovery);
+                        }
+                        Err(e) => {
+                            // Check if it's a timeout (normal) or disconnected (error)
+                            let err_msg = e.to_string().to_lowercase();
+                            if err_msg.contains("timeout") || err_msg.contains("timed out") {
+                                // Normal timeout, continue polling
+                                continue;
+                            }
+                            // Channel disconnected or other error
+                            warn!("mDNS receiver error: {}", e);
+                            break;
+                        }
+                    }
+                }
+                info!("Discovery listener stopped");
+            })?;
+
+        // Periodic re-announcement thread for visibility
+        let daemon = self.daemon.clone();
+        let local_device = self.local_device.clone();
+        let running_announce = self.running.clone();
+        let announced = self.announced.clone();
+
+        std::thread::Builder::new()
+            .name("mdns-announce".to_string())
+            .spawn(move || {
+                // Initial delay before first re-announcement
+                std::thread::sleep(REANNOUNCE_INTERVAL / 2);
+
+                while running_announce.load(Ordering::SeqCst) {
+                    if announced.load(Ordering::SeqCst) {
+                        if let Err(e) = Self::do_announce(&daemon, &local_device) {
+                            debug!("Re-announcement failed: {}", e);
+                        } else {
+                            debug!("Re-announced device on mDNS");
+                        }
+                    }
+                    std::thread::sleep(REANNOUNCE_INTERVAL);
+                }
+            })?;
+
+        // Periodic cleanup thread to remove stale devices
+        let discovered_cleanup = self.discovered_devices.clone();
+        let running_cleanup = self.running.clone();
+        let event_tx_cleanup = event_tx.clone();
+
+        std::thread::Builder::new()
+            .name("mdns-cleanup".to_string())
+            .spawn(move || {
+                while running_cleanup.load(Ordering::SeqCst) {
+                    std::thread::sleep(CLEANUP_INTERVAL);
+
+                    if !running_cleanup.load(Ordering::SeqCst) {
+                        break;
+                    }
+
+                    let now = Instant::now();
+                    let stale_ids: Vec<String> = {
+                        let devices = discovered_cleanup.read();
+                        devices
+                            .iter()
+                            .filter(|(_, tracked)| {
+                                now.duration_since(tracked.last_seen) > DEVICE_STALE_TIMEOUT
+                            })
+                            .map(|(id, _)| id.clone())
+                            .collect()
+                    };
+
+                    for device_id in stale_ids {
+                        if let Some(tracked) = discovered_cleanup.write().remove(&device_id) {
+                            info!(
+                                "Removing stale device: {} ({})",
+                                tracked.device.name, device_id
+                            );
+                            let _ = event_tx_cleanup.send(DiscoveryEvent::DeviceLost(device_id));
+                        }
+                    }
+                }
+                debug!("Device cleanup thread stopped");
+            })?;
+
+        Ok(())
+    }
+
+    fn do_announce(daemon: &ServiceDaemon, device: &Device) -> Result<()> {
+        let instance_name = Self::create_instance_name(device);
+        let hostname = format!("{}.local.", device.id);
+
+        let mut properties = HashMap::new();
+        properties.insert("id".to_string(), device.id.clone());
+        properties.insert("name".to_string(), device.name.clone());
+        properties.insert("type".to_string(), device.device_type.as_str().to_string());
+        properties.insert("version".to_string(), "1".to_string());
+
+        let ip: IpAddr = device
+            .ip
+            .parse()
+            .map_err(|_| ConnectedError::InvalidAddress(device.ip.clone()))?;
+
+        let service_info = ServiceInfo::new(
+            SERVICE_TYPE,
+            &instance_name,
+            &hostname,
+            ip,
+            device.port,
+            properties,
+        )?;
+
+        daemon.register(service_info)?;
+        Ok(())
+    }
+
+    fn handle_event(
+        event: ServiceEvent,
+        local_id: &str,
+        discovered: &Arc<RwLock<HashMap<String, TrackedDevice>>>,
+        event_tx: &mpsc::UnboundedSender<DiscoveryEvent>,
+    ) {
+        match event {
+            ServiceEvent::ServiceResolved(info) => {
+                trace!("ServiceResolved event received: {}", info.fullname);
+                Self::handle_service_resolved(&info, local_id, discovered, event_tx);
+            }
+            ServiceEvent::ServiceRemoved(_service_type, fullname) => {
+                debug!("ServiceRemoved event: {}", fullname);
+                Self::handle_service_removed(&fullname, discovered, event_tx);
+            }
+            ServiceEvent::SearchStarted(stype) => {
+                debug!("mDNS search started for {}", stype);
+            }
+            ServiceEvent::SearchStopped(stype) => {
+                debug!("mDNS search stopped for {}", stype);
+            }
+            ServiceEvent::ServiceFound(stype, fullname) => {
+                info!(
+                    "mDNS ServiceFound: {} - {} (will resolve...)",
+                    stype, fullname
+                );
+            }
+            _ => {
+                trace!("Unhandled mDNS event");
+            }
+        }
+    }
+
+    fn handle_service_resolved(
+        info: &ResolvedService,
+        local_id: &str,
+        discovered: &Arc<RwLock<HashMap<String, TrackedDevice>>>,
+        event_tx: &mpsc::UnboundedSender<DiscoveryEvent>,
+    ) {
+        info!(
+            "ServiceResolved: fullname={}, addresses={:?}, port={}",
+            info.fullname, info.addresses, info.port
+        );
+
+        // Log all TXT properties for debugging
+        for prop in info.txt_properties.iter() {
+            debug!("  TXT property: {}={}", prop.key(), prop.val_str());
+        }
+
+        // Try to get device ID from TXT records first (most reliable)
+        let device_id = info
+            .txt_properties
+            .get("id")
+            .map(|v| v.val_str().to_string())
+            .unwrap_or_default();
+
+        // If not in TXT records, parse from instance name
+        let device_id = if device_id.is_empty() {
+            debug!(
+                "No 'id' in TXT records, parsing from fullname: {}",
+                info.fullname
+            );
+            // fullname format: "name--uuid._connected._udp.local."
+            if let Some(instance) = info.fullname.strip_suffix(&format!(".{}", SERVICE_TYPE)) {
+                debug!("Stripped suffix, instance: {}", instance);
+                Self::parse_instance_name(instance)
+                    .map(|(_, id)| id)
+                    .unwrap_or_default()
+            } else if let Some(instance) = info.fullname.split('.').next() {
+                debug!("Split by dot, instance: {}", instance);
+                Self::parse_instance_name(instance)
+                    .map(|(_, id)| id)
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            }
+        } else {
+            debug!("Got device_id from TXT records: {}", device_id);
+            device_id
+        };
+
+        // Skip if this is our own device or invalid
+        if device_id.is_empty() {
+            warn!(
+                "Could not extract device ID from service info: {}",
+                info.fullname
+            );
+            return;
+        }
+        if device_id == local_id {
+            trace!("Ignoring self (local device id={})", local_id);
+            return;
+        }
+
+        debug!("Processing remote device: id={}", device_id);
+
+        // Get device name from TXT or parse from instance
+        let device_name = info
+            .txt_properties
+            .get("name")
+            .map(|v| v.val_str().to_string())
+            .unwrap_or_else(|| {
+                if let Some(instance) = info.fullname.strip_suffix(&format!(".{}", SERVICE_TYPE)) {
+                    Self::parse_instance_name(instance)
+                        .map(|(name, _)| name)
+                        .unwrap_or_else(|| "Unknown".to_string())
+                } else {
+                    "Unknown".to_string()
+                }
+            });
+
+        let device_type = info
+            .txt_properties
+            .get("type")
+            .map(|v| DeviceType::from_str(v.val_str()))
+            .unwrap_or(DeviceType::Unknown);
+
+        // Get best IP address (prefer IPv4 for compatibility)
+        // In mdns-sd 0.17, addresses are ScopedIp which contains the IpAddr
+        let ip = info
+            .addresses
+            .iter()
+            .find(|scoped_ip| scoped_ip.is_ipv4())
+            .or_else(|| info.addresses.iter().next())
+            .map(|scoped_ip| scoped_ip.to_ip_addr());
+
+        let Some(ip) = ip else {
+            warn!("No IP address found for device: {}", device_name);
+            return;
+        };
+
+        let device = Device::new(
+            device_id.clone(),
+            device_name.clone(),
+            ip,
+            info.port,
+            device_type,
+        );
+
+        info!(
+            "Discovered device: {} ({}) at {}:{}",
+            device_name, device_id, ip, info.port
+        );
+
+        // Check if this is a new device or an update
+        let is_new = {
+            let mut devices = discovered.write();
+            let is_new = !devices.contains_key(&device_id);
+            let tracked = TrackedDevice {
+                device: device.clone(),
+                last_seen: Instant::now(),
+            };
+            devices.insert(device_id.clone(), tracked);
+            is_new
+        };
+
+        // Only send event for new devices (not updates)
+        if is_new {
+            info!(
+                "NEW device discovered: {} ({}) at {}:{}",
+                device_name, device_id, ip, info.port
+            );
+            if event_tx.send(DiscoveryEvent::DeviceFound(device)).is_err() {
+                error!("Event channel closed - cannot notify about new device!");
+            }
+        } else {
+            trace!("Updated existing device: {} ({})", device_name, device_id);
+        }
+    }
+
+    fn handle_service_removed(
+        fullname: &str,
+        discovered: &Arc<RwLock<HashMap<String, TrackedDevice>>>,
+        event_tx: &mpsc::UnboundedSender<DiscoveryEvent>,
+    ) {
+        debug!("ServiceRemoved: {}", fullname);
+
+        // Parse device ID from fullname: "name--uuid._connected._udp.local."
+        let device_id = if let Some(instance) = fullname.strip_suffix(&format!(".{}", SERVICE_TYPE))
+        {
+            Self::parse_instance_name(instance).map(|(_, id)| id)
+        } else if let Some(instance) = fullname.split('.').next() {
+            Self::parse_instance_name(instance).map(|(_, id)| id)
+        } else {
+            None
+        };
+
+        let Some(device_id) = device_id else {
+            debug!(
+                "Could not parse device ID from removed service: {}",
+                fullname
+            );
+            return;
+        };
+
+        if let Some(tracked) = discovered.write().remove(&device_id) {
+            info!("Device left: {} ({})", tracked.device.name, device_id);
+            let _ = event_tx.send(DiscoveryEvent::DeviceLost(device_id));
+        }
+    }
+
+    pub fn stop(&self) {
+        // Stop listening but keep announcing
+        self.running.store(false, Ordering::SeqCst);
+    }
+
+    pub fn shutdown(&self) {
+        // Stop running flag first to signal threads to exit
+        self.running.store(false, Ordering::SeqCst);
+        self.announced.store(false, Ordering::SeqCst);
+
+        // Give the listener thread time to exit cleanly
+        std::thread::sleep(Duration::from_millis(150));
+
+        // Stop browsing first (this closes the browse receiver)
+        if let Err(e) = self.daemon.stop_browse(SERVICE_TYPE) {
+            debug!("Failed to stop mDNS browse: {}", e);
+        }
+
+        // Unregister our service
+        if let Err(e) = self.daemon.unregister(&self.service_fullname) {
+            debug!("Failed to unregister mDNS service: {}", e);
+        }
+
+        // Give time for goodbye packets
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Shutdown daemon
+        if let Err(e) = self.daemon.shutdown() {
+            debug!("Failed to shutdown mDNS daemon: {}", e);
+        }
+
+        info!("Discovery service shut down");
+    }
+
+    pub fn get_discovered_devices(&self) -> Vec<Device> {
+        self.discovered_devices
+            .read()
+            .values()
+            .map(|tracked| tracked.device.clone())
+            .collect()
+    }
+
+    pub fn get_device_by_id(&self, id: &str) -> Option<Device> {
+        self.discovered_devices
+            .read()
+            .get(id)
+            .map(|tracked| tracked.device.clone())
+    }
+
+    pub fn clear_discovered_devices(&self) {
+        let mut devices = self.discovered_devices.write();
+        let count = devices.len();
+        devices.clear();
+        if count > 0 {
+            info!("Cleared {} discovered devices", count);
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    pub fn is_announced(&self) -> bool {
+        self.announced.load(Ordering::SeqCst)
+    }
+
+    pub fn device_count(&self) -> usize {
+        self.discovered_devices.read().len()
+    }
+}
+
+impl Drop for DiscoveryService {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_instance_name_parsing() {
+        // Standard case
+        let (name, id) = DiscoveryService::parse_instance_name("MyDevice--abc123").unwrap();
+        assert_eq!(name, "MyDevice");
+        assert_eq!(id, "abc123");
+
+        // Name with single dash
+        let (name, id) = DiscoveryService::parse_instance_name("My-Device--abc123").unwrap();
+        assert_eq!(name, "My-Device");
+        assert_eq!(id, "abc123");
+
+        // Name with underscore
+        let (name, id) = DiscoveryService::parse_instance_name("My_Device--abc123").unwrap();
+        assert_eq!(name, "My_Device");
+        assert_eq!(id, "abc123");
+
+        // UUID-like ID
+        let (name, id) =
+            DiscoveryService::parse_instance_name("Desktop--550e8400-e29b-41d4-a716-446655440000")
+                .unwrap();
+        assert_eq!(name, "Desktop");
+        assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
+
+        // Invalid cases
+        assert!(DiscoveryService::parse_instance_name("NoSeparator").is_none());
+        assert!(DiscoveryService::parse_instance_name("--OnlyId").is_none());
+        assert!(DiscoveryService::parse_instance_name("OnlyName--").is_none());
+    }
+
+    #[test]
+    fn test_create_instance_name() {
+        use std::net::Ipv4Addr;
+
+        let device = Device::new(
+            "test-id-123".to_string(),
+            "TestDevice".to_string(),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            44444,
+            DeviceType::Linux,
+        );
+
+        let instance_name = DiscoveryService::create_instance_name(&device);
+        assert_eq!(instance_name, "TestDevice--test-id-123");
+
+        // Device with double dash in name gets it replaced
+        let device2 = Device::new(
+            "test-id-456".to_string(),
+            "Test--Device".to_string(),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2)),
+            44444,
+            DeviceType::Linux,
+        );
+
+        let instance_name2 = DiscoveryService::create_instance_name(&device2);
+        assert_eq!(instance_name2, "Test-Device--test-id-456");
+    }
+}

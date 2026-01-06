@@ -1,0 +1,38 @@
+# Cargo configuration for cross-compilation to Android targets
+#
+# Note: These settings require the Android NDK to be installed and
+# the ANDROID_NDK_HOME environment variable to be set.
+#
+# Using cargo-ndk is recommended as it handles linker configuration automatically:
+#   cargo install cargo-ndk
+#   cargo ndk -t arm64-v8a build
+
+[target.aarch64-linux-android]
+# ar = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+# linker = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang"
+
+[target.armv7-linux-androideabi]
+# ar = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+# linker = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi30-clang"
+
+[target.x86_64-linux-android]
+# ar = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+# linker = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android30-clang"
+
+[target.i686-linux-android]
+# ar = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+# linker = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android30-clang"
+
+[build]
+# Uncomment to always build with specific features
+# rustflags = ["-C", "link-arg=-s"]
+
+[env]
+# Set minimum Android API level (26 = Android 8.0)
+# This affects which libc functions are available
+ANDROID_API = "26"
+
+[alias]
+# Convenient aliases for common operations
+ndk-build = "ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 -o android/app/src/main/jniLibs build"
+ndk-release = "ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 -o android/app/src/main/jniLibs build --release"
