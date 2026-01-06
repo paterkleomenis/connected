@@ -11,6 +11,8 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-std = "1.12"
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
 connected-core = { path = "../core" }
 dirs = "5"
 rfd = "0.15"

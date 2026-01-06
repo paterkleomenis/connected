@@ -12,10 +12,10 @@ use tracing::{debug, error, info, trace, warn};
 
 // QUIC runs over UDP, so we use UDP service type
 const SERVICE_TYPE: &str = "_connected._udp.local.";
-const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(60);
+const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
 const BROWSE_TIMEOUT: Duration = Duration::from_millis(100);
-const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(15);
-const CLEANUP_INTERVAL: Duration = Duration::from_secs(5);
+const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(60);
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 struct TrackedDevice {

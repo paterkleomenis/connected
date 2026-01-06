@@ -1,7 +1,6 @@
 use crate::state::DeviceInfo;
 use crate::utils::get_device_icon;
 use dioxus::prelude::*;
-use std::thread;
 
 #[component]
 pub fn DeviceCard(
@@ -11,36 +10,11 @@ pub fn DeviceCard(
     on_send_file: EventHandler<DeviceInfo>,
     on_send_clipboard: EventHandler<DeviceInfo>,
 ) -> Element {
-    let mut pinging = use_signal(|| false);
-    let mut ping_result = use_signal(|| None::<String>);
     let mut show_actions = use_signal(|| false);
 
-    let device_for_ping = device.clone();
+    // Ping disabled for Phase 1 Refactor
     let handle_ping = move |_| {
-        if *pinging.read() {
-            return;
-        }
-
-        let ip = device_for_ping.ip.clone();
-        let port = device_for_ping.port;
-
-        pinging.set(true);
-        ping_result.set(None);
-
-        let result = thread::spawn(move || connected_core::facade::send_ping(ip, port))
-            .join()
-            .ok();
-
-        if let Some(res) = result {
-            if res.success {
-                ping_result.set(Some(format!("{}ms", res.rtt_ms)));
-            } else {
-                ping_result.set(Some("Failed".into()));
-            }
-        } else {
-            ping_result.set(Some("Error".into()));
-        }
-        pinging.set(false);
+        // Todo: Implement Ping via AppAction
     };
 
     let icon = get_device_icon(&device.device_type);
@@ -69,24 +43,15 @@ pub fn DeviceCard(
                 p { class: "device-type", "{device.device_type}" }
             }
 
-            // Ping result
-            if let Some(ref result) = *ping_result.read() {
-                span {
-                    class: if result.contains("ms") { "ping-badge success" } else { "ping-badge error" },
-                    "{result}"
-                }
-            }
-
             // Actions overlay
             if *show_actions.read() || is_selected {
                 div {
                     class: "device-actions",
                     button {
                         class: "action-button",
-                        title: "Ping",
+                        title: "Ping (Disabled)",
                         onclick: handle_ping,
-                        disabled: *pinging.read(),
-                        if *pinging.read() { "..." } else { "📶" }
+                        "📶"
                     }
                     button {
                         class: "action-button",

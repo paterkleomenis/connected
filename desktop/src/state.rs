@@ -1,4 +1,4 @@
-use connected_core::facade::DiscoveredDevice;
+use connected_core::Device;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -15,14 +15,14 @@ pub struct DeviceInfo {
     pub device_type: String,
 }
 
-impl From<DiscoveredDevice> for DeviceInfo {
-    fn from(d: DiscoveredDevice) -> Self {
+impl From<Device> for DeviceInfo {
+    fn from(d: Device) -> Self {
         Self {
             id: d.id,
             name: d.name,
-            ip: d.ip,
+            ip: d.ip.to_string(),
             port: d.port,
-            device_type: d.device_type,
+            device_type: d.device_type.as_str().to_string(),
         }
     }
 }
