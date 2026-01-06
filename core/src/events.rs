@@ -30,6 +30,14 @@ pub enum ConnectedEvent {
         content: String,
         from_device: String,
     },
+    /// A peer wants to pair (connect) but is unknown
+    PairingRequest {
+        fingerprint: String,
+        device_name: String,
+        device_id: String,
+    },
+    /// Pairing mode enabled/disabled
+    PairingModeChanged(bool),
     /// Critical error in a subsystem
     Error(String),
 }

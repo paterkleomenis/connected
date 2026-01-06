@@ -117,3 +117,12 @@ tasks.register<Exec>("generateBindings") {
     )
     dependsOn("buildRustRelease")
 }
+
+afterEvaluate {
+    tasks.named("preDebugBuild").configure {
+        dependsOn("buildRustDebug")
+    }
+    tasks.named("preReleaseBuild").configure {
+        dependsOn("buildRustRelease")
+    }
+}

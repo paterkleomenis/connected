@@ -44,3 +44,5 @@ Thumbs.db
 *.profraw
 *.profdata
 tarpaulin-report.html
+
+test.txt

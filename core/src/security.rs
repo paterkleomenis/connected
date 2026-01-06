@@ -1,0 +1,259 @@
+use crate::error::{ConnectedError, Result};
+use rcgen::{generate_simple_self_signed, CertifiedKey};
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use tracing::{info, warn};
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum PeerStatus {
+    Trusted,
+    Blocked,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PeerInfo {
+    pub fingerprint: String,
+    pub status: PeerStatus,
+    pub device_id: Option<String>,
+    pub name: Option<String>,
+    pub last_seen: u64,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct KnownPeers {
+    // Fingerprint -> PeerInfo
+    peers: HashMap<String, PeerInfo>,
+}
+
+#[derive(Debug)]
+pub struct KeyStore {
+    cert: CertificateDer<'static>,
+    key: PrivatePkcs8KeyDer<'static>,
+    known_peers: KnownPeers,
+    storage_dir: PathBuf,
+    pairing_mode: bool,
+}
+
+impl KeyStore {
+    pub fn new(custom_path: Option<PathBuf>) -> Result<Self> {
+        let storage_dir = if let Some(p) = custom_path {
+            p
+        } else {
+            dirs::config_dir()
+                .ok_or_else(|| {
+                    ConnectedError::InitializationError("Could not find config dir".to_string())
+                })?
+                .join("connected")
+        };
+
+        if !storage_dir.exists() {
+            std::fs::create_dir_all(&storage_dir).map_err(|e| ConnectedError::Io(e))?;
+        }
+
+        let (cert, key) = Self::load_or_create_identity(&storage_dir)?;
+        let known_peers = Self::load_known_peers(&storage_dir)?;
+
+        Ok(Self {
+            cert,
+            key,
+            known_peers,
+            storage_dir,
+            pairing_mode: false,
+        })
+    }
+
+    fn load_or_create_identity(
+        storage_dir: &PathBuf,
+    ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>)> {
+        let identity_path = storage_dir.join("identity.json");
+
+        if identity_path.exists() {
+            return Self::load_identity_der(&identity_path);
+        }
+
+        info!("No identity found, generating new one...");
+        let CertifiedKey { cert, key_pair } = generate_simple_self_signed(vec![
+            "connected.local".to_string(),
+            "localhost".to_string(),
+        ])
+        .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+
+        let cert_der = cert.der().to_vec();
+        let key_der = key_pair.serialize_der();
+
+        // Save
+        let persisted = PersistedIdentityDer {
+            cert_der: cert_der.clone(),
+            key_der: key_der.clone(),
+        };
+        let data = serde_json::to_vec_pretty(&persisted)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        std::fs::write(&identity_path, data).map_err(ConnectedError::Io)?;
+
+        Ok((
+            CertificateDer::from(cert_der),
+            PrivatePkcs8KeyDer::from(key_der),
+        ))
+    }
+
+    fn load_identity_der(
+        path: &PathBuf,
+    ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>)> {
+        let data = std::fs::read(path).map_err(ConnectedError::Io)?;
+        let persisted: PersistedIdentityDer = serde_json::from_slice(&data).map_err(|e| {
+            ConnectedError::InitializationError(format!("Failed to parse identity: {}", e))
+        })?;
+
+        Ok((
+            CertificateDer::from(persisted.cert_der),
+            PrivatePkcs8KeyDer::from(persisted.key_der),
+        ))
+    }
+
+    fn load_known_peers(storage_dir: &PathBuf) -> Result<KnownPeers> {
+        // Migration: Check for old known_hosts.json
+        let old_path = storage_dir.join("known_hosts.json");
+        let new_path = storage_dir.join("known_peers.json");
+
+        if new_path.exists() {
+            let data = std::fs::read(&new_path).map_err(ConnectedError::Io)?;
+            let peers: KnownPeers = serde_json::from_slice(&data).unwrap_or_default();
+            Ok(peers)
+        } else if old_path.exists() {
+            // Migrate old format
+            info!("Migrating legacy known_hosts.json to known_peers.json");
+            #[derive(Serialize, Deserialize, Default)]
+            struct LegacyKnownHosts {
+                hosts: HashMap<String, String>,
+            }
+            let data = std::fs::read(&old_path).map_err(ConnectedError::Io)?;
+            let legacy: LegacyKnownHosts = serde_json::from_slice(&data).unwrap_or_default();
+
+            let mut new_peers = KnownPeers::default();
+            for (device_id, fingerprint) in legacy.hosts {
+                new_peers.peers.insert(
+                    fingerprint.clone(),
+                    PeerInfo {
+                        fingerprint,
+                        status: PeerStatus::Trusted,
+                        device_id: Some(device_id),
+                        name: None,
+                        last_seen: 0,
+                    },
+                );
+            }
+
+            // Save new format
+            let data = serde_json::to_vec_pretty(&new_peers)
+                .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+            std::fs::write(&new_path, data).map_err(ConnectedError::Io)?;
+
+            Ok(new_peers)
+        } else {
+            Ok(KnownPeers::default())
+        }
+    }
+
+    fn save_peers(&self) -> Result<()> {
+        let data = serde_json::to_vec_pretty(&self.known_peers)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        std::fs::write(self.storage_dir.join("known_peers.json"), data)
+            .map_err(ConnectedError::Io)?;
+        Ok(())
+    }
+
+    pub fn trust_peer(
+        &mut self,
+        fingerprint: String,
+        device_id: Option<String>,
+        name: Option<String>,
+    ) -> Result<()> {
+        self.known_peers.peers.insert(
+            fingerprint.clone(),
+            PeerInfo {
+                fingerprint,
+                status: PeerStatus::Trusted,
+                device_id,
+                name,
+                last_seen: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            },
+        );
+        self.save_peers()
+    }
+
+    pub fn block_peer(&mut self, fingerprint: String) -> Result<()> {
+        if let Some(peer) = self.known_peers.peers.get_mut(&fingerprint) {
+            peer.status = PeerStatus::Blocked;
+        } else {
+            self.known_peers.peers.insert(
+                fingerprint.clone(),
+                PeerInfo {
+                    fingerprint,
+                    status: PeerStatus::Blocked,
+                    device_id: None,
+                    name: None,
+                    last_seen: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                },
+            );
+        }
+        self.save_peers()
+    }
+
+    pub fn get_cert(&self) -> CertificateDer<'static> {
+        self.cert.clone()
+    }
+
+    pub fn get_key(&self) -> PrivatePkcs8KeyDer<'static> {
+        self.key.clone_key()
+    }
+
+    pub fn is_trusted(&self, fingerprint: &str) -> bool {
+        if let Some(peer) = self.known_peers.peers.get(fingerprint) {
+            return peer.status == PeerStatus::Trusted;
+        }
+        false
+    }
+
+    pub fn is_blocked(&self, fingerprint: &str) -> bool {
+        if let Some(peer) = self.known_peers.peers.get(fingerprint) {
+            return peer.status == PeerStatus::Blocked;
+        }
+        false
+    }
+
+    // Legacy support / Convenience
+    pub fn is_known_fingerprint(&self, fingerprint: &str) -> bool {
+        self.known_peers.peers.contains_key(fingerprint)
+    }
+
+    pub fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&self.cert);
+        format!("{:x}", hasher.finalize())
+    }
+
+    // Pairing Mode Controls
+    pub fn set_pairing_mode(&mut self, enabled: bool) {
+        self.pairing_mode = enabled;
+        info!("Pairing mode set to: {}", enabled);
+    }
+
+    pub fn is_pairing_mode(&self) -> bool {
+        self.pairing_mode
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedIdentityDer {
+    cert_der: Vec<u8>,
+    key_der: Vec<u8>,
+}

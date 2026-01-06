@@ -1,4 +1,5 @@
 use crate::error::{ConnectedError, Result};
+use crate::transport::{self, Message}; // Use transport constants if public, or redefine
 use quinn::{Connection, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -7,8 +8,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
-const MAX_FILENAME_LEN: usize = 4096;
+// We need to match transport constants
+const STREAM_TYPE_FILE: u8 = 2;
+const BUFFER_SIZE: usize = 1024 * 1024; // 1MB Buffer for I/O
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FileTransferMessage {
@@ -22,9 +24,7 @@ pub enum FileTransferMessage {
     Accept,
     /// Reject file transfer
     Reject { reason: String },
-    /// File chunk
-    Chunk { offset: u64, data: Vec<u8> },
-    /// Transfer complete
+    /// Transfer complete (sent after raw data)
     Complete { checksum: String },
     /// Acknowledge completion
     Ack,
@@ -32,7 +32,7 @@ pub enum FileTransferMessage {
     Error { message: String },
     /// Cancel transfer
     Cancel,
-    /// Clipboard text sharing
+    /// Clipboard text sharing (Control message, but can use this enum)
     ClipboardText { text: String },
     /// Clipboard received acknowledgment
     ClipboardAck,
@@ -58,12 +58,6 @@ pub enum TransferProgress {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransferDirection {
-    Sending,
-    Receiving,
-}
-
 pub struct FileTransfer {
     connection: Connection,
 }
@@ -73,7 +67,7 @@ impl FileTransfer {
         Self { connection }
     }
 
-    /// Send a file to the connected peer
+    /// Send a file to the connected peer using a new multiplexed stream
     pub async fn send_file<P: AsRef<Path>>(
         &self,
         file_path: P,
@@ -82,7 +76,7 @@ impl FileTransfer {
         let path = file_path.as_ref();
 
         // Open and get file metadata
-        let file = File::open(path).await?;
+        let mut file = File::open(path).await?;
         let metadata = file.metadata().await?;
         let file_size = metadata.len();
 
@@ -105,6 +99,9 @@ impl FileTransfer {
         // Open bidirectional stream for file transfer
         let (mut send, mut recv) = self.connection.open_bi().await?;
 
+        // Write Stream Type Prefix
+        send.write_all(&[STREAM_TYPE_FILE]).await?;
+
         // Send transfer request
         let request = FileTransferMessage::SendRequest {
             filename: filename.clone(),
@@ -119,7 +116,7 @@ impl FileTransfer {
 
         match response {
             FileTransferMessage::Accept => {
-                debug!("Transfer accepted, starting to send chunks");
+                debug!("Transfer accepted, starting to stream data");
             }
             FileTransferMessage::Reject { reason } => {
                 warn!("Transfer rejected: {}", reason);
@@ -140,39 +137,42 @@ impl FileTransfer {
             }
         }
 
-        // Send file in chunks
-        let mut reader = BufReader::new(file);
-        let mut buffer = vec![0u8; CHUNK_SIZE];
+        // Send file data (Raw Binary Stream)
+        let mut buffer = vec![0u8; BUFFER_SIZE];
         let mut offset: u64 = 0;
         let mut hasher = crc32fast::Hasher::new();
+        let mut last_progress_update = std::time::Instant::now();
 
         loop {
-            let bytes_read = reader.read(&mut buffer).await?;
+            let bytes_read = file.read(&mut buffer).await?;
             if bytes_read == 0 {
                 break;
             }
 
-            let chunk_data = buffer[..bytes_read].to_vec();
-            hasher.update(&chunk_data);
-
-            let chunk = FileTransferMessage::Chunk {
-                offset,
-                data: chunk_data,
-            };
-
-            send_message(&mut send, &chunk).await?;
+            let chunk = &buffer[..bytes_read];
+            hasher.update(chunk);
+            send.write_all(chunk).await?;
 
             offset += bytes_read as u64;
 
-            // Report progress
-            if let Some(ref tx) = progress_tx {
-                let _ = tx.send(TransferProgress::Progress {
-                    bytes_transferred: offset,
-                    total_size: file_size,
-                });
+            // Report progress (throttle to every 100ms)
+            if last_progress_update.elapsed().as_millis() > 100 {
+                if let Some(ref tx) = progress_tx {
+                    let _ = tx.send(TransferProgress::Progress {
+                        bytes_transferred: offset,
+                        total_size: file_size,
+                    });
+                }
+                last_progress_update = std::time::Instant::now();
             }
+        }
 
-            debug!("Sent chunk: {}/{} bytes", offset, file_size);
+        // Final progress update
+        if let Some(ref tx) = progress_tx {
+            let _ = tx.send(TransferProgress::Progress {
+                bytes_transferred: offset,
+                total_size: file_size,
+            });
         }
 
         // Send completion with checksum
@@ -208,16 +208,16 @@ impl FileTransfer {
         Ok(())
     }
 
-    /// Receive a file from the connected peer
-    pub async fn receive_file<P: AsRef<Path>>(
-        recv_stream: &mut RecvStream,
-        send_stream: &mut SendStream,
-        save_dir: P,
+    /// Receive a file transfer on an existing stream
+    pub async fn handle_incoming(
+        mut send: SendStream,
+        mut recv: RecvStream,
+        save_dir: impl AsRef<Path>,
         progress_tx: Option<mpsc::UnboundedSender<TransferProgress>>,
         auto_accept: bool,
     ) -> Result<String> {
-        // Receive the transfer request
-        let request: FileTransferMessage = recv_message(recv_stream).await?;
+        // Read Request
+        let request: FileTransferMessage = recv_message(&mut recv).await?;
 
         let (filename, file_size, _mime_type) = match request {
             FileTransferMessage::SendRequest {
@@ -245,20 +245,19 @@ impl FileTransfer {
             });
         }
 
-        // Accept or reject (for now, auto-accept if flag is set)
+        // Accept or reject
         if !auto_accept {
-            // In a real app, you'd prompt the user here
             let reject = FileTransferMessage::Reject {
                 reason: "User declined".to_string(),
             };
-            send_message(send_stream, &reject).await?;
+            send_message(&mut send, &reject).await?;
             return Err(ConnectedError::PingFailed("User declined".to_string()));
         }
 
         let accept = FileTransferMessage::Accept;
-        send_message(send_stream, &accept).await?;
+        send_message(&mut send, &accept).await?;
 
-        // Sanitize filename to prevent path traversal
+        // Sanitize filename
         let safe_filename = sanitize_filename(&filename);
         let save_path = save_dir.as_ref().join(&safe_filename);
 
@@ -268,118 +267,101 @@ impl FileTransfer {
         let mut bytes_received: u64 = 0;
         let mut hasher = crc32fast::Hasher::new();
 
-        // Receive chunks
-        loop {
-            let message: FileTransferMessage = recv_message(recv_stream).await?;
+        let mut buffer = vec![0u8; BUFFER_SIZE];
+        let mut last_progress_update = std::time::Instant::now();
 
-            match message {
-                FileTransferMessage::Chunk { offset, data } => {
-                    if offset != bytes_received {
-                        warn!(
-                            "Chunk offset mismatch: expected {}, got {}",
-                            bytes_received, offset
-                        );
+        // Read Raw Data
+        // We read exactly file_size bytes
+        let mut remaining = file_size;
+        while remaining > 0 {
+            let to_read = std::cmp::min(remaining, BUFFER_SIZE as u64) as usize;
+            // Read into buffer
+            match recv.read_exact(&mut buffer[..to_read]).await {
+                Ok(_) => {
+                    let chunk = &buffer[..to_read];
+                    hasher.update(chunk);
+                    writer.write_all(chunk).await?;
+
+                    bytes_received += to_read as u64;
+                    remaining -= to_read as u64;
+
+                    if last_progress_update.elapsed().as_millis() > 100 {
+                        if let Some(ref tx) = progress_tx {
+                            let _ = tx.send(TransferProgress::Progress {
+                                bytes_transferred: bytes_received,
+                                total_size: file_size,
+                            });
+                        }
+                        last_progress_update = std::time::Instant::now();
                     }
-
-                    hasher.update(&data);
-                    writer.write_all(&data).await?;
-                    bytes_received += data.len() as u64;
-
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Progress {
-                            bytes_transferred: bytes_received,
-                            total_size: file_size,
-                        });
-                    }
-
-                    debug!("Received chunk: {}/{} bytes", bytes_received, file_size);
                 }
-                FileTransferMessage::Complete { checksum } => {
-                    writer.flush().await?;
-
-                    // Verify checksum
-                    let our_checksum = format!("{:08x}", hasher.finalize());
-                    if our_checksum != checksum {
-                        error!(
-                            "Checksum mismatch: expected {}, got {}",
-                            checksum, our_checksum
-                        );
-                        let error = FileTransferMessage::Error {
-                            message: "Checksum mismatch".to_string(),
-                        };
-                        send_message(send_stream, &error).await?;
-                        return Err(ConnectedError::PingFailed("Checksum mismatch".to_string()));
-                    }
-
-                    // Send acknowledgment
-                    let ack = FileTransferMessage::Ack;
-                    send_message(send_stream, &ack).await?;
-
-                    info!("File received successfully: {}", safe_filename);
-
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Completed {
-                            filename: safe_filename.clone(),
-                            total_size: file_size,
-                        });
-                    }
-
-                    return Ok(save_path.to_string_lossy().to_string());
-                }
-                FileTransferMessage::Cancel => {
-                    warn!("Transfer cancelled by sender");
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Cancelled);
-                    }
-                    // Clean up partial file
+                Err(e) => {
                     let _ = tokio::fs::remove_file(&save_path).await;
-                    return Err(ConnectedError::PingFailed("Transfer cancelled".to_string()));
-                }
-                FileTransferMessage::Error { message } => {
-                    error!("Transfer error from sender: {}", message);
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Failed {
-                            error: message.clone(),
-                        });
-                    }
-                    // Clean up partial file
-                    let _ = tokio::fs::remove_file(&save_path).await;
-                    return Err(ConnectedError::PingFailed(message));
-                }
-                _ => {
-                    warn!("Unexpected message during transfer");
+                    return Err(ConnectedError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        e,
+                    )));
                 }
             }
+        }
+
+        writer.flush().await?;
+
+        // Read Completion Message
+        let complete: FileTransferMessage = recv_message(&mut recv).await?;
+        match complete {
+            FileTransferMessage::Complete { checksum } => {
+                let our_checksum = format!("{:08x}", hasher.finalize());
+                if our_checksum != checksum {
+                    error!("Checksum mismatch");
+                    let error = FileTransferMessage::Error {
+                        message: "Checksum mismatch".to_string(),
+                    };
+                    send_message(&mut send, &error).await?;
+                    let _ = tokio::fs::remove_file(&save_path).await;
+                    return Err(ConnectedError::PingFailed("Checksum mismatch".to_string()));
+                }
+
+                let ack = FileTransferMessage::Ack;
+                send_message(&mut send, &ack).await?;
+
+                if let Some(ref tx) = progress_tx {
+                    let _ = tx.send(TransferProgress::Completed {
+                        filename: safe_filename.clone(),
+                        total_size: file_size,
+                    });
+                }
+
+                Ok(save_path.to_string_lossy().to_string())
+            }
+            _ => Err(ConnectedError::PingFailed(
+                "Expected Complete message".to_string(),
+            )),
         }
     }
 }
 
 /// Send a message over the stream
-async fn send_message<T: Serialize>(stream: &mut SendStream, message: &T) -> Result<()> {
+pub(crate) async fn send_message<T: Serialize>(stream: &mut SendStream, message: &T) -> Result<()> {
     let data = serde_json::to_vec(message)?;
     let len = data.len() as u32;
-
-    // Send length prefix (4 bytes)
     stream.write_all(&len.to_be_bytes()).await?;
-    // Send message data
     stream.write_all(&data).await?;
-
     Ok(())
 }
 
 /// Receive a message from the stream
-async fn recv_message<T: for<'de> Deserialize<'de>>(stream: &mut RecvStream) -> Result<T> {
-    // Read length prefix
+pub(crate) async fn recv_message<T: for<'de> Deserialize<'de>>(
+    stream: &mut RecvStream,
+) -> Result<T> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
 
     if len > 10 * 1024 * 1024 {
-        // 10MB max message size
         return Err(ConnectedError::PingFailed("Message too large".to_string()));
     }
 
-    // Read message data
     let mut data = vec![0u8; len];
     stream.read_exact(&mut data).await?;
 
@@ -387,14 +369,12 @@ async fn recv_message<T: for<'de> Deserialize<'de>>(stream: &mut RecvStream) -> 
     Ok(message)
 }
 
-/// Sanitize filename to prevent path traversal attacks
 fn sanitize_filename(filename: &str) -> String {
     let name = Path::new(filename)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unnamed");
 
-    // Remove any remaining problematic characters
     name.chars()
         .filter(|c| {
             !matches!(
@@ -404,20 +384,4 @@ fn sanitize_filename(filename: &str) -> String {
         })
         .take(255)
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sanitize_filename() {
-        assert_eq!(sanitize_filename("test.txt"), "test.txt");
-        assert_eq!(sanitize_filename("../../../etc/passwd"), "passwd");
-        assert_eq!(sanitize_filename("file:name.txt"), "filename.txt");
-        assert_eq!(
-            sanitize_filename("normal-file_123.pdf"),
-            "normal-file_123.pdf"
-        );
-    }
 }

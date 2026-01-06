@@ -198,7 +198,6 @@ class MainActivity : AppCompatActivity() {
             sdkInitialized = true
 
             val localDevice = sdk.getLocalDevice()
-            val filePort = localDevice.port + 1
             tvDeviceInfo.text =
                 "Device: ${localDevice.name}\nIP: ${localDevice.ip}\nPort: ${localDevice.port}"
             updateStatus("🔍 Discovering devices...")
@@ -209,26 +208,19 @@ class MainActivity : AppCompatActivity() {
             // Enable clipboard sync button now that SDK is ready
             btnClipboardSync.isEnabled = true
 
+            // Enable pairing mode by default for now
+            sdk.setPairingMode(true)
+
             observeDiscoveryEvents()
             observeFileTransferEvents()
             observeClipboardEvents()
-
-            // Register clipboard receiver
-            sdk.registerClipboardReceiver()
+            observePairingEvents()
 
             // Auto-start discovery so devices can find each other immediately
             startDiscovery()
 
             // Start periodic cleanup to remove stale devices
             startDeviceCleanup()
-
-            // Start file receiver - save to public Downloads folder
-            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            if (!downloadDir.exists()) {
-                downloadDir.mkdirs()
-            }
-            sdk.startFileReceiver(downloadDir.absolutePath)
-            Log.i(TAG, "File receiver started, saving to: ${downloadDir.absolutePath}")
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize SDK", e)
@@ -312,6 +304,36 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun observePairingEvents() {
+        lifecycleScope.launch {
+            sdk.pairingEvents.collect { event ->
+                when (event) {
+                    is com.connected.core.PairingEvent.Request -> {
+                        runOnUiThread {
+                            showPairingDialog(event)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showPairingDialog(request: com.connected.core.PairingEvent.Request) {
+        AlertDialog.Builder(this)
+            .setTitle("🔐 Pairing Request")
+            .setMessage("${request.deviceName} wants to connect.\nFingerprint: ${request.fingerprint.take(8)}...")
+            .setPositiveButton("Trust") { _, _ ->
+                sdk.trustDevice(request.fingerprint, request.deviceName)
+                Toast.makeText(this, "Trusted ${request.deviceName}", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Block") { _, _ ->
+                sdk.blockDevice(request.fingerprint)
+                Toast.makeText(this, "Blocked ${request.deviceName}", Toast.LENGTH_SHORT).show()
+            }
+            .setNeutralButton("Ignore", null)
+            .show()
     }
 
     private fun startDiscovery() {
@@ -437,7 +459,7 @@ class MainActivity : AppCompatActivity() {
                 .setItems(deviceNames) { _, which ->
                     val device = devices[which]
                     syncDevice = device
-                    sdk.startClipboardSync(this, device.ip, device.port + 1)
+                    sdk.startClipboardSync(this, device.ip, device.port)
                     btnClipboardSync.text = "📋 Stop Sync (${device.name})"
                     updateStatus("📋 Clipboard sync with ${device.name}")
                     Toast.makeText(this, "Clipboard sync started with ${device.name}", Toast.LENGTH_SHORT).show()
@@ -493,7 +515,7 @@ class MainActivity : AppCompatActivity() {
     private fun sendClipboard(device: DiscoveredDevice, text: String) {
         updateStatus("📋 Sending clipboard to ${device.name}...")
         try {
-            sdk.sendClipboard(device.ip, device.port + 1, text)
+            sdk.sendClipboard(device.ip, device.port, text)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send clipboard", e)
             Toast.makeText(this, "Failed: ${e.message}", Toast.LENGTH_SHORT).show()

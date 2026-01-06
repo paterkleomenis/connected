@@ -4,6 +4,7 @@ pub mod discovery;
 pub mod error;
 pub mod events;
 pub mod file_transfer;
+pub mod security;
 pub mod transport;
 
 pub use client::ConnectedClient;

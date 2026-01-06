@@ -3,12 +3,14 @@ use crate::discovery::{DiscoveryEvent, DiscoveryService};
 use crate::error::{ConnectedError, Result};
 use crate::events::{ConnectedEvent, TransferDirection};
 use crate::file_transfer::{FileTransfer, FileTransferMessage, TransferProgress};
+use crate::security::KeyStore;
 use crate::transport::{Message, QuicTransport};
+use parking_lot::RwLock;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 const EVENT_CHANNEL_CAPACITY: usize = 100;
 
@@ -17,17 +19,22 @@ pub struct ConnectedClient {
     discovery: Arc<DiscoveryService>,
     transport: Arc<QuicTransport>,
     event_tx: broadcast::Sender<ConnectedEvent>,
-    // We keep a handle to the background tasks to abort them on drop if needed
-    // (Though simple structure drop is usually enough)
+    key_store: Arc<RwLock<KeyStore>>,
+    download_dir: PathBuf,
 }
 
 impl ConnectedClient {
-    pub async fn new(device_name: String, device_type: DeviceType, port: u16) -> Result<Arc<Self>> {
+    pub async fn new(
+        device_name: String,
+        device_type: DeviceType,
+        port: u16,
+        storage_path: Option<PathBuf>,
+    ) -> Result<Arc<Self>> {
         let local_ip = get_local_ip().ok_or_else(|| {
             ConnectedError::InitializationError("Could not determine local IP".to_string())
         })?;
 
-        Self::new_with_ip(device_name, device_type, port, local_ip).await
+        Self::new_with_ip(device_name, device_type, port, local_ip, storage_path).await
     }
 
     pub async fn new_with_ip(
@@ -35,13 +42,27 @@ impl ConnectedClient {
         device_type: DeviceType,
         port: u16,
         local_ip: IpAddr,
+        storage_path: Option<PathBuf>,
     ) -> Result<Arc<Self>> {
-        let device_id = uuid::Uuid::new_v4().to_string();
+        let device_id = uuid::Uuid::new_v4().to_string(); // In reality, we should load this from persistence too!
+
+        // Load KeyStore
+        let key_store = Arc::new(RwLock::new(KeyStore::new(storage_path.clone())?));
+
+        let download_dir = if let Some(p) = storage_path {
+            p.join("downloads")
+        } else {
+            dirs::download_dir().unwrap_or_else(std::env::temp_dir)
+        };
+
+        if !download_dir.exists() {
+            std::fs::create_dir_all(&download_dir).map_err(ConnectedError::Io)?;
+        }
 
         // 1. Initialize Transport (QUIC)
         // If port is 0, OS assigns one. We need to know it for mDNS.
         let bind_addr = SocketAddr::new(local_ip, port);
-        let transport = QuicTransport::new(bind_addr, device_id.clone()).await?;
+        let transport = QuicTransport::new(bind_addr, device_id.clone(), key_store.clone()).await?;
         let actual_port = transport.local_addr()?.port();
 
         // 2. Initialize Device Info
@@ -59,6 +80,8 @@ impl ConnectedClient {
             discovery: Arc::new(discovery),
             transport: Arc::new(transport),
             event_tx,
+            key_store,
+            download_dir,
         });
 
         // 5. Start Background Tasks
@@ -82,6 +105,33 @@ impl ConnectedClient {
         self.discovery.get_discovered_devices()
     }
 
+    pub fn clear_discovered_devices(&self) {
+        self.discovery.clear_discovered_devices()
+    }
+
+    pub fn get_fingerprint(&self) -> String {
+        self.key_store.read().fingerprint()
+    }
+
+    pub fn set_pairing_mode(&self, enabled: bool) {
+        self.key_store.write().set_pairing_mode(enabled);
+        let _ = self
+            .event_tx
+            .send(ConnectedEvent::PairingModeChanged(enabled));
+    }
+
+    pub fn trust_device(&self, fingerprint: String, name: String) -> Result<()> {
+        // We don't have the device ID here usually unless we cached the handshake request.
+        // For now, we trust by fingerprint. The ID can be updated later or passed if known.
+        self.key_store
+            .write()
+            .trust_peer(fingerprint, None, Some(name))
+    }
+
+    pub fn block_device(&self, fingerprint: String) -> Result<()> {
+        self.key_store.write().block_peer(fingerprint)
+    }
+
     pub async fn send_ping(&self, target_ip: IpAddr, target_port: u16) -> Result<u64> {
         let addr = SocketAddr::new(target_ip, target_port);
         let rtt = self.transport.send_ping(addr).await?;
@@ -95,28 +145,21 @@ impl ConnectedClient {
         text: String,
     ) -> Result<()> {
         let addr = SocketAddr::new(target_ip, target_port);
-        let connection = self.transport.connect(addr).await?;
+        let (mut send, mut recv) = self
+            .transport
+            .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+            .await?;
 
         let msg = FileTransferMessage::ClipboardText { text };
-        let (mut send, mut recv) = connection.open_bi().await?;
-
-        // Simple manual serialization for control messages
-        // (Ideally we should reuse transport send/recv helpers but they are private or need refactor)
-        // For now, implementing basic logic here or exposing helpers from transport
+        // let (mut send, mut recv) = connection.open_bi().await?; // Replaced by open_stream
 
         // Using transport helper if possible, otherwise duplicating simple send logic
-        let data = serde_json::to_vec(&msg)?;
-        let len = (data.len() as u32).to_be_bytes();
+        // We need to use the helpers from file_transfer now since we made them pub(crate)
 
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        send.write_all(&len).await?;
-        send.write_all(&data).await?;
-        send.finish()?;
+        crate::file_transfer::send_message(&mut send, &msg).await?;
 
         // Wait for Ack
-        let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await?; // Wait for ack
-                                              // We don't strictly need to parse the ack for clipboard, just knowing they got it is enough
+        let _: FileTransferMessage = crate::file_transfer::recv_message(&mut recv).await?;
 
         Ok(())
     }
@@ -228,266 +271,119 @@ impl ConnectedClient {
 
         // 2. Transport Listener (Incoming Messages)
         let (msg_tx, mut msg_rx) = mpsc::unbounded_channel();
-        self.transport.start_server(msg_tx).await?;
+        let (file_tx, mut file_rx) = mpsc::unbounded_channel();
+
+        self.transport.start_server(msg_tx, file_tx).await?;
 
         let event_tx = self.event_tx.clone();
-        let download_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
-        // TODO: Allow configuring download dir
+        let key_store = self.key_store.clone();
 
+        // Handle Control Messages
         tokio::spawn(async move {
-            while let Some((addr, msg)) = msg_rx.recv().await {
+            while let Some((_addr, fingerprint, msg)) = msg_rx.recv().await {
                 match msg {
-                    Message::FileTransfer => {
-                        // This usually means a raw stream connection for file transfer is incoming
-                        // But wait, QuicTransport::handle_connection loops and reads messages.
-                        // If it's a file transfer, the logic in handle_connection might currently consume the stream?
-                        // Let's check transport.rs again.
-                        // Actually handle_connection reads messages. For file transfer, we likely need
-                        // to handle the stream itself or a specific message that initiates it.
-                        // In the previous implementation, start_file_receiver created a SEPARATE endpoint on port+1.
-                        // We want to unify this if possible, or support the separate port for now.
-                        // For Phase 1, let's keep the logic simple: Transport handles control messages.
-                        // But wait, FileTransfer uses the SAME connection.
+                    Message::Handshake {
+                        device_id,
+                        device_name,
+                    } => {
+                        let is_trusted = key_store.read().is_trusted(&fingerprint);
+                        if !is_trusted {
+                            // It must be in pairing mode then, otherwise PeerVerifier would have rejected it.
+                            info!(
+                                "Received Handshake from untrusted peer (Pairing Mode): {} - {}",
+                                device_name, fingerprint
+                            );
+                            let _ = event_tx.send(ConnectedEvent::PairingRequest {
+                                fingerprint: fingerprint.clone(),
+                                device_name,
+                                device_id,
+                            });
+                        } else {
+                            debug!("Received Handshake from trusted peer: {}", device_name);
+                        }
                     }
                     _ => {}
                 }
             }
         });
 
-        // Handle incoming streams for File Transfer / Clipboard
-        // The transport.start_server handles accepting connections and loops over bi-streams.
-        // We need to hook into that loop.
-        // Currently transport.rs consumes the stream to read the first message.
-        // We need to modify transport.rs to allow handing off the stream.
-
-        Ok(())
-    }
-
-    // Helper to start the separate file receiver (legacy support for now until full multiplexing)
-    pub async fn start_file_receiver(&self, save_path: PathBuf) -> Result<()> {
-        // This logic was previously in facade.rs using a separate port (port + 1)
-        // We should implement this properly.
-        // For the MVP refactor, let's reimplement the separate listener here to match previous behavior
-        // but connected to the event bus.
-
-        let bind_ip = self.local_device.ip.parse().unwrap();
-        let bind_port = self.local_device.port + 1;
-        let bind_addr = SocketAddr::new(bind_ip, bind_port);
-
-        let server_config = QuicTransport::create_server_config().map_err(|e| {
-            ConnectedError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
-        let endpoint =
-            quinn::Endpoint::server(server_config, bind_addr).map_err(|e| ConnectedError::Io(e))?;
-
+        // Handle File Streams
         let event_tx = self.event_tx.clone();
+        let download_dir = self.download_dir.clone();
 
         tokio::spawn(async move {
-            while let Some(incoming) = endpoint.accept().await {
+            while let Some((fingerprint, send, recv)) = file_rx.recv().await {
                 let event_tx = event_tx.clone();
-                let save_path = save_path.clone();
+                let download_dir = download_dir.clone();
+                let fingerprint = fingerprint.clone();
 
                 tokio::spawn(async move {
-                    if let Ok(connection) = incoming.await {
-                        let remote_addr = connection.remote_address();
-                        if let Ok((mut send, mut recv)) = connection.accept_bi().await {
-                            // Handle the incoming stream
-                            // We need to peek/read the first message to know if it's Clipboard or File
+                    let transfer_id = uuid::Uuid::new_v4().to_string();
+                    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
 
-                            use tokio::io::AsyncReadExt;
-                            // Read length
-                            let mut len_buf = [0u8; 4];
-                            if recv.read_exact(&mut len_buf).await.is_err() {
-                                return;
-                            }
-                            let len = u32::from_be_bytes(len_buf) as usize;
-                            let mut data = vec![0u8; len];
-                            if recv.read_exact(&mut data).await.is_err() {
-                                return;
-                            }
+                    let tid = transfer_id.clone();
+                    let p_peer = fingerprint.clone();
+                    let p_tx = event_tx.clone();
 
-                            if let Ok(msg) = serde_json::from_slice::<FileTransferMessage>(&data) {
-                                match msg {
-                                    FileTransferMessage::ClipboardText { text } => {
-                                        let _ = event_tx.send(ConnectedEvent::ClipboardReceived {
-                                            content: text,
-                                            from_device: remote_addr.ip().to_string(), // In future resolve to ID
-                                        });
-                                        // Send Ack
-                                        let ack = FileTransferMessage::ClipboardAck;
-                                        let ack_data = serde_json::to_vec(&ack).unwrap();
-                                        let len = (ack_data.len() as u32).to_be_bytes();
-                                        use tokio::io::AsyncWriteExt;
-                                        let _ = send.write_all(&len).await;
-                                        let _ = send.write_all(&ack_data).await;
-                                        let _ = send.finish();
-                                    }
-                                    FileTransferMessage::SendRequest { filename, size, .. } => {
-                                        // Handle file transfer
-                                        let transfer_id = uuid::Uuid::new_v4().to_string();
-                                        let _ = event_tx.send(ConnectedEvent::TransferStarting {
-                                            id: transfer_id.clone(),
-                                            filename: filename.clone(),
-                                            total_size: size,
-                                            peer_device: remote_addr.ip().to_string(),
-                                            direction: TransferDirection::Incoming,
-                                        });
-
-                                        // Create a "Pre-read" stream wrapper since we already read the first message?
-                                        // Or just pass the data to a modified receive_file
-
-                                        // Easier: modify receive_file to accept the already-read request
-                                        // But receive_file is in file_transfer.rs and expects to read from stream.
-                                        // We can reconstruct the logic here for now or refactor receive_file.
-                                        // Let's refactor receive_file to take the request message.
-
-                                        // For now, I'll inline the logic to save time on multiple file edits
-                                        let (progress_tx, mut progress_rx) =
-                                            mpsc::unbounded_channel();
-
-                                        // Bridge events
-                                        let p_tx = event_tx.clone();
-                                        let tid = transfer_id.clone();
-                                        tokio::spawn(async move {
-                                            while let Some(p) = progress_rx.recv().await {
-                                                // Map progress to events...
-                                                match p {
-                                                    TransferProgress::Progress {
-                                                        bytes_transferred,
-                                                        total_size,
-                                                    } => {
-                                                        let _ = p_tx.send(
-                                                            ConnectedEvent::TransferProgress {
-                                                                id: tid.clone(),
-                                                                bytes_transferred,
-                                                                total_size,
-                                                            },
-                                                        );
-                                                    }
-                                                    TransferProgress::Completed {
-                                                        filename,
-                                                        ..
-                                                    } => {
-                                                        let _ = p_tx.send(
-                                                            ConnectedEvent::TransferCompleted {
-                                                                id: tid.clone(),
-                                                                filename,
-                                                            },
-                                                        );
-                                                    }
-                                                    TransferProgress::Failed { error } => {
-                                                        let _ = p_tx.send(
-                                                            ConnectedEvent::TransferFailed {
-                                                                id: tid.clone(),
-                                                                error,
-                                                            },
-                                                        );
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                        });
-
-                                        // Send Accept
-                                        let accept = FileTransferMessage::Accept;
-                                        let acc_data = serde_json::to_vec(&accept).unwrap();
-                                        use tokio::io::AsyncWriteExt;
-                                        let _ = send
-                                            .write_all(&(acc_data.len() as u32).to_be_bytes())
-                                            .await;
-                                        let _ = send.write_all(&acc_data).await;
-
-                                        // Read chunks
-                                        let safe_filename = sanitize_filename(&filename);
-                                        let path = save_path.join(&safe_filename);
-
-                                        if let Ok(file) = tokio::fs::File::create(&path).await {
-                                            let mut writer = tokio::io::BufWriter::new(file);
-                                            let mut bytes = 0;
-                                            let mut hasher = crc32fast::Hasher::new();
-
-                                            loop {
-                                                // Read next msg
-                                                // Reuse recv logic...
-                                                let mut len_buf = [0u8; 4];
-                                                if recv.read_exact(&mut len_buf).await.is_err() {
-                                                    break;
-                                                }
-                                                let len = u32::from_be_bytes(len_buf) as usize;
-                                                let mut buf = vec![0u8; len];
-                                                if recv.read_exact(&mut buf).await.is_err() {
-                                                    break;
-                                                }
-
-                                                if let Ok(m) =
-                                                    serde_json::from_slice::<FileTransferMessage>(
-                                                        &buf,
-                                                    )
-                                                {
-                                                    match m {
-                                                        FileTransferMessage::Chunk {
-                                                            data, ..
-                                                        } => {
-                                                            hasher.update(&data);
-                                                            let _ = writer.write_all(&data).await;
-                                                            bytes += data.len() as u64;
-                                                            let _ = progress_tx.send(
-                                                                TransferProgress::Progress {
-                                                                    bytes_transferred: bytes,
-                                                                    total_size: size,
-                                                                },
-                                                            );
-                                                        }
-                                                        FileTransferMessage::Complete {
-                                                            checksum,
-                                                        } => {
-                                                            let _ = writer.flush().await;
-                                                            let our_sum = format!(
-                                                                "{:08x}",
-                                                                hasher.finalize()
-                                                            );
-                                                            if our_sum == checksum {
-                                                                let _ = progress_tx.send(
-                                                                    TransferProgress::Completed {
-                                                                        filename: safe_filename
-                                                                            .clone(),
-                                                                        total_size: size,
-                                                                    },
-                                                                );
-                                                                // Ack
-                                                                let ack = FileTransferMessage::Ack;
-                                                                let d = serde_json::to_vec(&ack)
-                                                                    .unwrap();
-                                                                let _ = send
-                                                                    .write_all(
-                                                                        &(d.len() as u32)
-                                                                            .to_be_bytes(),
-                                                                    )
-                                                                    .await;
-                                                                let _ = send.write_all(&d).await;
-                                                            } else {
-                                                                let _ = progress_tx.send(
-                                                                    TransferProgress::Failed {
-                                                                        error: "Checksum mismatch"
-                                                                            .into(),
-                                                                    },
-                                                                );
-                                                            }
-                                                            break;
-                                                        }
-                                                        _ => {}
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    _ => {}
+                    // Bridge progress events
+                    tokio::spawn(async move {
+                        while let Some(p) = progress_rx.recv().await {
+                            match p {
+                                TransferProgress::Starting {
+                                    filename,
+                                    total_size,
+                                } => {
+                                    let _ = p_tx.send(ConnectedEvent::TransferStarting {
+                                        id: tid.clone(),
+                                        filename,
+                                        total_size,
+                                        peer_device: p_peer.clone(),
+                                        direction: TransferDirection::Incoming,
+                                    });
                                 }
+                                TransferProgress::Progress {
+                                    bytes_transferred,
+                                    total_size,
+                                } => {
+                                    let _ = p_tx.send(ConnectedEvent::TransferProgress {
+                                        id: tid.clone(),
+                                        bytes_transferred,
+                                        total_size,
+                                    });
+                                }
+                                TransferProgress::Completed { filename, .. } => {
+                                    let _ = p_tx.send(ConnectedEvent::TransferCompleted {
+                                        id: tid.clone(),
+                                        filename,
+                                    });
+                                }
+                                TransferProgress::Failed { error } => {
+                                    let _ = p_tx.send(ConnectedEvent::TransferFailed {
+                                        id: tid.clone(),
+                                        error,
+                                    });
+                                }
+                                _ => {}
                             }
                         }
+                    });
+
+                    // Handle incoming file
+                    // We auto-accept for now, or we could check a "auto-receive" preference
+                    if let Err(e) = FileTransfer::handle_incoming(
+                        send,
+                        recv,
+                        download_dir,
+                        Some(progress_tx),
+                        true,
+                    )
+                    .await
+                    {
+                        error!("File receive failed: {}", e);
+                        let _ = event_tx.send(ConnectedEvent::TransferFailed {
+                            id: transfer_id,
+                            error: e.to_string(),
+                        });
                     }
                 });
             }
@@ -501,20 +397,4 @@ fn get_local_ip() -> Option<IpAddr> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     socket.local_addr().ok().map(|a| a.ip())
-}
-
-fn sanitize_filename(filename: &str) -> String {
-    std::path::Path::new(filename)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unnamed")
-        .chars()
-        .filter(|c| {
-            !matches!(
-                c,
-                '/' | '\\' | '\0' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
-            )
-        })
-        .take(255)
-        .collect()
 }

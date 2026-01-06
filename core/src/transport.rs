@@ -1,8 +1,11 @@
 use crate::error::{ConnectedError, Result};
+use crate::security::KeyStore;
 use parking_lot::RwLock;
-use quinn::{ClientConfig, Connection, Endpoint, ServerConfig, TransportConfig, VarInt};
-use rcgen::{generate_simple_self_signed, CertifiedKey};
-use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+use quinn::{
+    ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig,
+    VarInt,
+};
+use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -18,7 +21,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_MESSAGE_SIZE: usize = 64 * 1024; // 64KB for control messages
 
 // LAN-optimized transport parameters
-const INITIAL_RTT_MS: u64 = 10; // LAN typically has <1ms RTT, but be conservative
+const INITIAL_RTT_MS: u64 = 10;
 const MAX_IDLE_TIMEOUT_SECS: u64 = 60;
 const KEEP_ALIVE_INTERVAL_SECS: u64 = 15;
 const MAX_CONCURRENT_BIDI_STREAMS: u32 = 128;
@@ -66,12 +69,10 @@ impl ConnectionCache {
 
     fn get(&mut self, addr: &SocketAddr) -> Option<Connection> {
         if let Some(cached) = self.connections.get_mut(addr) {
-            // Check if connection is still alive
             if cached.connection.close_reason().is_none() {
                 cached.last_used = std::time::Instant::now();
                 return Some(cached.connection.clone());
             } else {
-                // Connection is dead, remove it
                 self.connections.remove(addr);
             }
         }
@@ -79,7 +80,6 @@ impl ConnectionCache {
     }
 
     fn insert(&mut self, addr: SocketAddr, connection: Connection) {
-        // Cleanup old connections first (older than 5 minutes)
         let cutoff = std::time::Instant::now() - Duration::from_secs(300);
         self.connections
             .retain(|_, v| v.last_used > cutoff && v.connection.close_reason().is_none());
@@ -103,12 +103,17 @@ pub struct QuicTransport {
     local_id: String,
     client_config: ClientConfig,
     connection_cache: Arc<RwLock<ConnectionCache>>,
+    key_store: Arc<RwLock<KeyStore>>,
 }
 
 impl QuicTransport {
-    pub async fn new(bind_addr: SocketAddr, local_id: String) -> Result<Self> {
-        let (server_config, cert_der) = Self::generate_server_config()?;
-        let client_config = Self::create_client_config(&cert_der)?;
+    pub async fn new(
+        bind_addr: SocketAddr,
+        local_id: String,
+        key_store: Arc<RwLock<KeyStore>>,
+    ) -> Result<Self> {
+        let (server_config, _) = Self::create_server_config(&key_store)?;
+        let client_config = Self::create_client_config(&key_store)?;
 
         let mut endpoint = Endpoint::server(server_config, bind_addr)?;
         endpoint.set_default_client_config(client_config.clone());
@@ -120,13 +125,12 @@ impl QuicTransport {
             local_id,
             client_config,
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
+            key_store,
         })
     }
 
     fn create_transport_config() -> TransportConfig {
         let mut transport = TransportConfig::default();
-
-        // Optimize for LAN: assume low latency, high bandwidth
         transport.initial_rtt(Duration::from_millis(INITIAL_RTT_MS));
         transport.max_idle_timeout(Some(
             Duration::from_secs(MAX_IDLE_TIMEOUT_SECS)
@@ -134,23 +138,13 @@ impl QuicTransport {
                 .unwrap(),
         ));
         transport.keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL_SECS)));
-
-        // Increase concurrent streams for parallel transfers
         transport.max_concurrent_bidi_streams(VarInt::from_u32(MAX_CONCURRENT_BIDI_STREAMS));
         transport.max_concurrent_uni_streams(VarInt::from_u32(MAX_CONCURRENT_UNI_STREAMS));
-
-        // Large receive windows for high throughput on LAN
         transport.stream_receive_window(VarInt::from_u32(STREAM_RECEIVE_WINDOW));
         transport.receive_window(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW));
         transport.send_window(SEND_WINDOW);
-
-        // Disable datagram extension (we don't use it)
         transport.datagram_receive_buffer_size(None);
-
-        // Allow immediate ACKs for better latency
         transport.ack_frequency_config(None);
-
-        // Increase mtu for LAN (most LANs support at least 1500)
         transport.initial_mtu(1400);
         transport.min_mtu(1200);
         transport.mtu_discovery_config(Some(Default::default()));
@@ -158,60 +152,59 @@ impl QuicTransport {
         transport
     }
 
-    pub fn create_server_config() -> Result<ServerConfig> {
-        let (server_config, _) = Self::generate_server_config()?;
+    pub fn create_server_config_detached(
+        key_store: &Arc<RwLock<KeyStore>>,
+    ) -> Result<ServerConfig> {
+        let (server_config, _) = Self::create_server_config(key_store)?;
         Ok(server_config)
     }
 
-    fn generate_server_config() -> Result<(ServerConfig, CertificateDer<'static>)> {
-        let CertifiedKey { cert, key_pair } = generate_simple_self_signed(vec![
-            "connected.local".to_string(),
-            "localhost".to_string(),
-        ])?;
-
-        let cert_der = CertificateDer::from(cert.der().to_vec());
-        let key_der = PrivatePkcs8KeyDer::from(key_pair.serialize_der());
+    fn create_server_config(
+        key_store: &Arc<RwLock<KeyStore>>,
+    ) -> Result<(ServerConfig, CertificateDer<'static>)> {
+        let ks = key_store.read();
+        let cert = ks.get_cert();
+        let key = ks.get_key();
 
         let mut server_crypto = rustls::ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(vec![cert_der.clone()], key_der.into())?;
+            .with_single_cert(vec![cert.clone()], key.into())?;
 
         server_crypto.alpn_protocols = vec![ALPN_PROTOCOL.to_vec()];
-        server_crypto.max_early_data_size = u32::MAX; // Enable 0-RTT
+        server_crypto.max_early_data_size = u32::MAX;
 
         let mut server_config = ServerConfig::with_crypto(Arc::new(
             quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)
                 .map_err(|e| ConnectedError::Tls(rustls::Error::General(e.to_string())))?,
         ));
 
-        // Apply optimized transport config
         server_config.transport_config(Arc::new(Self::create_transport_config()));
 
-        Ok((server_config, cert_der))
+        Ok((server_config, cert))
     }
 
-    fn create_client_config(_server_cert: &CertificateDer<'static>) -> Result<ClientConfig> {
+    fn create_client_config(key_store: &Arc<RwLock<KeyStore>>) -> Result<ClientConfig> {
         let mut client_crypto = rustls::ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+            .with_custom_certificate_verifier(Arc::new(PeerVerifier {
+                key_store: key_store.clone(),
+            }))
             .with_no_client_auth();
 
         client_crypto.alpn_protocols = vec![ALPN_PROTOCOL.to_vec()];
-        client_crypto.enable_early_data = true; // Enable 0-RTT
+        client_crypto.enable_early_data = true;
 
         let mut client_config = ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
                 .map_err(|e| ConnectedError::Tls(rustls::Error::General(e.to_string())))?,
         ));
 
-        // Apply optimized transport config
         client_config.transport_config(Arc::new(Self::create_transport_config()));
 
         Ok(client_config)
     }
 
     pub async fn connect(&self, addr: SocketAddr) -> Result<Connection> {
-        // Check cache first
         {
             let mut cache = self.connection_cache.write();
             if let Some(conn) = cache.get(&addr) {
@@ -222,7 +215,6 @@ impl QuicTransport {
 
         debug!("Establishing new connection to {}", addr);
 
-        // Use the same endpoint for outgoing connections (connection migration friendly)
         let connecting =
             self.endpoint
                 .connect_with(self.client_config.clone(), addr, "connected.local")?;
@@ -234,30 +226,12 @@ impl QuicTransport {
 
         info!("Connected to {} (RTT: {:?})", addr, connection.rtt());
 
-        // Cache the connection
         {
             let mut cache = self.connection_cache.write();
             cache.insert(addr, connection.clone());
         }
 
         Ok(connection)
-    }
-
-    pub async fn connect_with_0rtt(&self, addr: SocketAddr) -> Result<Connection> {
-        // For 0-RTT, we need a previously established connection
-        // This is useful for repeated transfers to the same device
-        debug!("Attempting 0-RTT connection to {}", addr);
-
-        // Check cache - if we have a live connection, use it
-        {
-            let mut cache = self.connection_cache.write();
-            if let Some(conn) = cache.get(&addr) {
-                return Ok(conn);
-            }
-        }
-
-        // Fall back to regular connection
-        self.connect(addr).await
     }
 
     pub fn invalidate_connection(&self, addr: &SocketAddr) {
@@ -276,10 +250,12 @@ impl QuicTransport {
         let connection = self.connect(target_addr).await?;
 
         let (mut send, mut recv) = connection.open_bi().await.map_err(|e| {
-            // Connection might be stale, invalidate it
             self.invalidate_connection(&target_addr);
             ConnectedError::Connection(e.to_string())
         })?;
+
+        // Write Stream Type
+        send.write_all(&[Self::STREAM_TYPE_CONTROL]).await?;
 
         let ping = Message::Ping {
             from_id: self.local_id.clone(),
@@ -287,13 +263,11 @@ impl QuicTransport {
         };
 
         let ping_data = serde_json::to_vec(&ping)?;
-        // Send length-prefixed message for protocol consistency
         let len_bytes = (ping_data.len() as u32).to_be_bytes();
         send.write_all(&len_bytes).await?;
         send.write_all(&ping_data).await?;
         send.finish()?;
 
-        // Wait for pong with timeout - read length-prefixed response
         let response = timeout(PING_TIMEOUT, async {
             let mut len_buf = [0u8; 4];
             recv.read_exact(&mut len_buf).await?;
@@ -344,11 +318,19 @@ impl QuicTransport {
         }
     }
 
+    pub const STREAM_TYPE_CONTROL: u8 = 1;
+
+    pub const STREAM_TYPE_FILE: u8 = 2;
+
     pub async fn start_server(
         &self,
-        message_tx: mpsc::UnboundedSender<(SocketAddr, Message)>,
+
+        message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message)>,
+
+        file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
     ) -> Result<()> {
         let endpoint = self.endpoint.clone();
+
         let local_id = self.local_id.clone();
 
         tokio::spawn(async move {
@@ -356,14 +338,17 @@ impl QuicTransport {
 
             while let Some(incoming) = endpoint.accept().await {
                 let tx = message_tx.clone();
+
+                let f_tx = file_stream_tx.clone();
+
                 let id = local_id.clone();
 
                 tokio::spawn(async move {
-                    // Accept with 0-RTT data if available
                     match incoming.accept() {
                         Ok(connecting) => match connecting.await {
                             Ok(connection) => {
                                 let remote_addr = connection.remote_address();
+
                                 debug!(
                                     "Accepted connection from {} (RTT: {:?})",
                                     remote_addr,
@@ -371,15 +356,18 @@ impl QuicTransport {
                                 );
 
                                 if let Err(e) =
-                                    Self::handle_connection(connection, remote_addr, tx, id).await
+                                    Self::handle_connection(connection, remote_addr, tx, f_tx, id)
+                                        .await
                                 {
                                     warn!("Connection handler error: {}", e);
                                 }
                             }
+
                             Err(e) => {
                                 warn!("Failed to complete connection: {}", e);
                             }
                         },
+
                         Err(e) => {
                             warn!("Failed to accept connection: {}", e);
                         }
@@ -393,79 +381,168 @@ impl QuicTransport {
 
     async fn handle_connection(
         connection: Connection,
+
         remote_addr: SocketAddr,
-        message_tx: mpsc::UnboundedSender<(SocketAddr, Message)>,
+
+        message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message)>,
+
+        file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
+
         local_id: String,
     ) -> Result<()> {
+        let fingerprint =
+            Self::get_peer_fingerprint(&connection).unwrap_or_else(|| "unknown".to_string());
+
         loop {
             match connection.accept_bi().await {
                 Ok((mut send, mut recv)) => {
-                    // Read length-prefixed message
-                    let mut len_buf = [0u8; 4];
-                    if recv.read_exact(&mut len_buf).await.is_err() {
-                        continue;
-                    }
-                    let msg_len = u32::from_be_bytes(len_buf) as usize;
-                    if msg_len == 0 || msg_len > MAX_MESSAGE_SIZE {
-                        continue;
-                    }
-                    let mut data = vec![0u8; msg_len];
-                    if recv.read_exact(&mut data).await.is_err() {
+                    // Read Stream Type
+
+                    let mut type_buf = [0u8; 1];
+
+                    if recv.read_exact(&mut type_buf).await.is_err() {
                         continue;
                     }
 
-                    let message: Message = match serde_json::from_slice(&data) {
-                        Ok(m) => m,
-                        Err(e) => {
-                            debug!("Failed to parse message: {}", e);
-                            continue;
-                        }
-                    };
-                    debug!("Received message from {}: {:?}", remote_addr, message);
+                    match type_buf[0] {
+                        Self::STREAM_TYPE_CONTROL => {
+                            let mut len_buf = [0u8; 4];
 
-                    // Handle ping/pong automatically
-                    match &message {
-                        Message::Ping { timestamp, .. } => {
-                            let pong = Message::Pong {
-                                from_id: local_id.clone(),
-                                timestamp: *timestamp,
+                            if recv.read_exact(&mut len_buf).await.is_err() {
+                                continue;
+                            }
+
+                            let msg_len = u32::from_be_bytes(len_buf) as usize;
+
+                            if msg_len == 0 || msg_len > MAX_MESSAGE_SIZE {
+                                continue;
+                            }
+
+                            let mut data = vec![0u8; msg_len];
+
+                            if recv.read_exact(&mut data).await.is_err() {
+                                continue;
+                            }
+
+                            let message: Message = match serde_json::from_slice(&data) {
+                                Ok(m) => m,
+
+                                Err(e) => {
+                                    debug!("Failed to parse message: {}", e);
+
+                                    continue;
+                                }
                             };
-                            let pong_data = serde_json::to_vec(&pong)?;
-                            // Send length-prefixed response
-                            let len_bytes = (pong_data.len() as u32).to_be_bytes();
-                            send.write_all(&len_bytes).await?;
-                            send.write_all(&pong_data).await?;
-                            send.finish()?;
+
+                            debug!(
+                                "Received message from {} ({}): {:?}",
+                                remote_addr, fingerprint, message
+                            );
+
+                            match &message {
+                                Message::Ping { timestamp, .. } => {
+                                    let pong = Message::Pong {
+                                        from_id: local_id.clone(),
+
+                                        timestamp: *timestamp,
+                                    };
+
+                                    let pong_data = serde_json::to_vec(&pong)?;
+
+                                    let len_bytes = (pong_data.len() as u32).to_be_bytes();
+
+                                    // Send Stream Type + Length + Data
+
+                                    send.write_all(&[Self::STREAM_TYPE_CONTROL]).await?;
+
+                                    send.write_all(&len_bytes).await?;
+
+                                    send.write_all(&pong_data).await?;
+
+                                    send.finish()?;
+                                }
+
+                                _ => {
+                                    let _ = message_tx.send((
+                                        remote_addr,
+                                        fingerprint.clone(),
+                                        message,
+                                    ));
+                                }
+                            }
                         }
+
+                        Self::STREAM_TYPE_FILE => {
+                            // Hand off the stream to the file handler
+
+                            info!("Received File Stream from {}", fingerprint);
+
+                            let _ = file_stream_tx.send((fingerprint.clone(), send, recv));
+                        }
+
                         _ => {
-                            // Forward other messages to the application
-                            let _ = message_tx.send((remote_addr, message));
+                            warn!("Unknown stream type: {}", type_buf[0]);
                         }
                     }
                 }
+
                 Err(quinn::ConnectionError::ApplicationClosed(reason)) => {
                     debug!(
                         "Connection closed by peer: {} (reason: {:?})",
                         remote_addr, reason
                     );
+
                     break;
                 }
+
                 Err(quinn::ConnectionError::LocallyClosed) => {
                     debug!("Connection closed locally: {}", remote_addr);
+
                     break;
                 }
+
                 Err(quinn::ConnectionError::TimedOut) => {
                     debug!("Connection timed out: {}", remote_addr);
+
                     break;
                 }
+
                 Err(e) => {
                     error!("Stream error: {}", e);
+
                     break;
                 }
             }
         }
 
         Ok(())
+    }
+
+    pub async fn open_stream(
+        &self,
+        addr: SocketAddr,
+        stream_type: u8,
+    ) -> Result<(SendStream, RecvStream)> {
+        let connection = self.connect(addr).await?;
+
+        let (mut send, recv) = connection.open_bi().await?;
+
+        send.write_all(&[stream_type]).await?;
+
+        Ok((send, recv))
+    }
+
+    fn get_peer_fingerprint(connection: &Connection) -> Option<String> {
+        let identity = connection.peer_identity()?;
+        let certs = identity.downcast_ref::<Vec<rustls::pki_types::CertificateDer>>()?;
+        if let Some(cert) = certs.first() {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(cert.as_ref());
+            Some(format!("{:x}", hasher.finalize()))
+        } else {
+            None
+        }
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
@@ -491,7 +568,6 @@ impl QuicTransport {
     }
 
     pub async fn shutdown(&self) {
-        // Close all cached connections gracefully
         {
             let cache = self.connection_cache.read();
             for (addr, cached) in cache.connections.iter() {
@@ -513,18 +589,45 @@ pub struct TransportStats {
 }
 
 #[derive(Debug)]
-struct SkipServerVerification;
+struct PeerVerifier {
+    key_store: Arc<RwLock<KeyStore>>,
+}
 
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
+impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
     fn verify_server_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
+        end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
         _server_name: &rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
+        // Calculate fingerprint
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(end_entity.as_ref());
+        let fingerprint = format!("{:x}", hasher.finalize());
+
+        let ks = self.key_store.read();
+
+        if ks.is_trusted(&fingerprint) {
+            return Ok(rustls::client::danger::ServerCertVerified::assertion());
+        }
+
+        if ks.is_blocked(&fingerprint) {
+            warn!("Rejected BLOCKED peer: {}", fingerprint);
+            return Err(rustls::Error::General("Peer is blocked".to_string()));
+        }
+
+        if ks.is_pairing_mode() {
+            info!("Allowing unknown peer in PAIRING MODE: {}", fingerprint);
+            // We allow the TLS connection. The application layer must verify the peer
+            // via the Handshake message and prompt the user if it's not yet trusted.
+            return Ok(rustls::client::danger::ServerCertVerified::assertion());
+        }
+
+        warn!("REJECTING Unknown Certificate: {}", fingerprint);
+        Err(rustls::Error::General("Unknown certificate".to_string()))
     }
 
     fn verify_tls12_signature(
@@ -558,16 +661,5 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
             rustls::SignatureScheme::RSA_PSS_SHA512,
             rustls::SignatureScheme::ED25519,
         ]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_transport_config() {
-        // Just verify config creation doesn't panic
-        let _config = QuicTransport::create_transport_config();
     }
 }

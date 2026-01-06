@@ -88,7 +88,7 @@ fn App() -> Element {
 
                     local_device_name.set(name.clone());
 
-                    match ConnectedClient::new(name.clone(), DeviceType::Linux, 44444).await {
+                    match ConnectedClient::new(name.clone(), DeviceType::Linux, 0, None).await {
                         Ok(c) => {
                             info!("Core initialized");
 
@@ -99,11 +99,6 @@ fn App() -> Element {
                             discovery_active.set(true);
 
                             local_device_ip.set(c.local_device().ip.to_string());
-
-                            // Start File Receiver (Legacy helper)
-                            let save_dir =
-                                dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
-                            let _ = c.start_file_receiver(save_dir).await;
 
                             // Subscribe to events
                             let mut events = c.subscribe();
@@ -217,6 +212,21 @@ fn App() -> Element {
                                         ConnectedEvent::Error(msg) => {
                                             error!("System error: {}", msg);
                                         }
+                                        ConnectedEvent::PairingRequest {
+                                            device_name,
+                                            fingerprint,
+                                            ..
+                                        } => {
+                                            add_notification(
+                                                "Pairing Request",
+                                                &format!("{} wants to connect.", device_name),
+                                                "🔐",
+                                            );
+                                            warn!("Pairing request from {} ({}) - Auto-accept not implemented in UI", device_name, fingerprint);
+                                        }
+                                        ConnectedEvent::PairingModeChanged(enabled) => {
+                                            info!("Pairing mode changed: {}", enabled);
+                                        }
                                     }
                                 }
                             });
@@ -300,7 +310,7 @@ fn App() -> Element {
                     *get_last_clipboard().lock().unwrap() = current_clip.clone();
                     action_tx.send(AppAction::SendClipboard {
                         ip: device.ip.clone(),
-                        port: device.port + 1,
+                        port: device.port,
                         text: current_clip,
                     });
                 }
@@ -613,7 +623,7 @@ fn App() -> Element {
                                             let device = device.clone();
                                             move |_| {
                                                 let ip = device.ip.clone();
-                                                let port = device.port + 1;
+                                                let port = device.port;
                                                 let text = clipboard_text.read().clone();
                                                 if !text.is_empty() {
                                                     action_tx.send(AppAction::SendClipboard { ip, port, text });

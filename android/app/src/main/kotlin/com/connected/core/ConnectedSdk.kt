@@ -51,11 +51,15 @@ sealed class ClipboardEvent {
     data class Sent(val success: Boolean, val error: String?) : ClipboardEvent()
 }
 
+sealed class PairingEvent {
+    data class Request(val deviceName: String, val fingerprint: String, val deviceId: String) : PairingEvent()
+}
+
 class ConnectedSdk private constructor() {
 
     companion object {
         private const val TAG = "ConnectedSdk"
-        private const val DEFAULT_PORT = 44444
+        private const val DEFAULT_PORT = 0 // Dynamic port
         private const val MULTICAST_LOCK_TAG = "ConnectedSdk_MulticastLock"
 
         @Volatile
@@ -68,7 +72,7 @@ class ConnectedSdk private constructor() {
         }
 
         init {
-            System.loadLibrary("connected_core")
+            System.loadLibrary("connected_ffi")
         }
     }
 
@@ -83,22 +87,24 @@ class ConnectedSdk private constructor() {
     private val _clipboardEvents = MutableSharedFlow<ClipboardEvent>(replay = 0, extraBufferCapacity = 64)
     val clipboardEvents: SharedFlow<ClipboardEvent> = _clipboardEvents.asSharedFlow()
 
+    private val _pairingEvents = MutableSharedFlow<PairingEvent>(replay = 0, extraBufferCapacity = 64)
+    val pairingEvents: SharedFlow<PairingEvent> = _pairingEvents.asSharedFlow()
+
     private var isInitialized = false
     private var isDiscovering = false
-    private var isReceivingFiles = false
     private var isClipboardSyncEnabled = false
     private var clipboardSyncJob: kotlinx.coroutines.Job? = null
     private var lastLocalClipboard: String = ""
     private var lastRemoteClipboard: String = ""
     private var clipboardSyncTargetIp: String? = null
-    private var clipboardSyncTargetPort: Int = DEFAULT_PORT + 1
+    private var clipboardSyncTargetPort: Int = DEFAULT_PORT
 
     // WiFi Multicast Lock - required for mDNS on Android
     private var multicastLock: WifiManager.MulticastLock? = null
     private var appContext: Context? = null
 
-    private val discoveryCallback = object : uniffi.connected_core.DiscoveryCallback {
-        override fun onDeviceFound(device: uniffi.connected_core.DiscoveredDevice) {
+    private val discoveryCallback = object : uniffi.connected_ffi.DiscoveryCallback {
+        override fun onDeviceFound(device: uniffi.connected_ffi.DiscoveredDevice) {
             val mappedDevice = DiscoveredDevice(
                 id = device.id,
                 name = device.name,
@@ -127,7 +133,7 @@ class ConnectedSdk private constructor() {
         }
     }
 
-    private val fileTransferCallback = object : uniffi.connected_core.FileTransferCallback {
+    private val fileTransferCallback = object : uniffi.connected_ffi.FileTransferCallback {
         override fun onTransferStarting(filename: String, totalSize: ULong) {
             scope.launch {
                 _fileTransferEvents.emit(FileTransferEvent.Starting(filename, totalSize.toLong()))
@@ -163,7 +169,7 @@ class ConnectedSdk private constructor() {
         }
     }
 
-    private val clipboardCallback = object : uniffi.connected_core.ClipboardCallback {
+    private val clipboardCallback = object : uniffi.connected_ffi.ClipboardCallback {
         override fun onClipboardReceived(text: String, fromDevice: String) {
             // For sync: update last remote clipboard to prevent echo
             if (isClipboardSyncEnabled && text != lastRemoteClipboard && text != lastLocalClipboard) {
@@ -194,6 +200,15 @@ class ConnectedSdk private constructor() {
         }
     }
 
+    private val pairingCallback = object : uniffi.connected_ffi.PairingCallback {
+        override fun onPairingRequest(deviceName: String, fingerprint: String, deviceId: String) {
+            scope.launch {
+                _pairingEvents.emit(PairingEvent.Request(deviceName, fingerprint, deviceId))
+            }
+            Log.d(TAG, "Pairing request from $deviceName ($fingerprint)")
+        }
+    }
+
     @Throws(ConnectedException::class)
     fun initialize(context: Context, deviceName: String, port: Int = DEFAULT_PORT) {
         if (isInitialized) {
@@ -207,33 +222,43 @@ class ConnectedSdk private constructor() {
         // Acquire multicast lock BEFORE initialization so mDNS announcements work
         acquireMulticastLock()
 
+        val storagePath = context.filesDir.absolutePath
+
         try {
             // First try the default initialization
             try {
-                uniffi.connected_core.initialize(
+                uniffi.connected_ffi.initialize(
                     deviceName = deviceName,
                     deviceType = "android",
-                    bindPort = port.toUShort()
+                    bindPort = port.toUShort(),
+                    storagePath = storagePath
                 )
-            } catch (e: uniffi.connected_core.ConnectedFfiException) {
+            } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
                 // If default init fails, try with explicit IP from Android APIs
                 Log.w(TAG, "Default init failed, trying with explicit IP: ${e.message}")
                 val localIp = getLocalIpAddress(context)
                 if (localIp != null) {
                     Log.i(TAG, "Using detected IP: $localIp")
-                    uniffi.connected_core.initializeWithIp(
+                    uniffi.connected_ffi.initializeWithIp(
                         deviceName = deviceName,
                         deviceType = "android",
                         bindPort = port.toUShort(),
-                        ipAddress = localIp
+                        ipAddress = localIp,
+                        storagePath = storagePath
                     )
                 } else {
                     throw e
                 }
             }
+
+            // Register Global Callbacks
+            uniffi.connected_ffi.registerTransferCallback(fileTransferCallback)
+            uniffi.connected_ffi.registerClipboardReceiver(clipboardCallback)
+            uniffi.connected_ffi.registerPairingCallback(pairingCallback)
+
             isInitialized = true
             Log.i(TAG, "Connected SDK initialized successfully")
-        } catch (e: uniffi.connected_core.ConnectedFfiException) {
+        } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
             releaseMulticastLock()
             throw ConnectedException("Failed to initialize: ${e.message}", e)
         }
@@ -318,24 +343,24 @@ class ConnectedSdk private constructor() {
         try {
             // Clear any stale devices from previous sessions before starting fresh
             try {
-                uniffi.connected_core.clearDiscoveredDevices()
+                uniffi.connected_ffi.clearDiscoveredDevices()
                 Log.d(TAG, "Cleared previous discovered devices")
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to clear discovered devices: ${e.message}")
             }
 
             // Multicast lock is already acquired during initialize()
-            uniffi.connected_core.startDiscovery(discoveryCallback)
+            uniffi.connected_ffi.startDiscovery(discoveryCallback)
             isDiscovering = true
             Log.i(TAG, "Discovery started")
-        } catch (e: uniffi.connected_core.ConnectedFfiException) {
+        } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
             throw ConnectedException("Failed to start discovery: ${e.message}", e)
         }
     }
 
     fun clearDiscoveredDevices() {
         try {
-            uniffi.connected_core.clearDiscoveredDevices()
+            uniffi.connected_ffi.clearDiscoveredDevices()
             Log.d(TAG, "Discovered devices cleared")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to clear discovered devices: ${e.message}")
@@ -351,11 +376,11 @@ class ConnectedSdk private constructor() {
         }
 
         try {
-            uniffi.connected_core.stopDiscovery()
+            uniffi.connected_ffi.stopDiscovery()
             isDiscovering = false
             // Don't release multicast lock - keep it for mDNS announcements
             Log.i(TAG, "Discovery stopped")
-        } catch (e: uniffi.connected_core.ConnectedFfiException) {
+        } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
             throw ConnectedException("Failed to stop discovery: ${e.message}", e)
         }
     }
@@ -365,7 +390,7 @@ class ConnectedSdk private constructor() {
         checkInitialized()
 
         return try {
-            uniffi.connected_core.getDiscoveredDevices().map { device ->
+            uniffi.connected_ffi.getDiscoveredDevices().map { device ->
                 DiscoveredDevice(
                     id = device.id,
                     name = device.name,
@@ -374,7 +399,7 @@ class ConnectedSdk private constructor() {
                     deviceType = device.deviceType
                 )
             }
-        } catch (e: uniffi.connected_core.ConnectedFfiException) {
+        } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
             throw ConnectedException("Failed to get devices: ${e.message}", e)
         }
     }
@@ -385,13 +410,13 @@ class ConnectedSdk private constructor() {
 
         return withContext(Dispatchers.IO) {
             try {
-                val result = uniffi.connected_core.sendPing(targetIp, targetPort.toUShort())
+                val result = uniffi.connected_ffi.sendPing(targetIp, targetPort.toUShort())
                 PingResult(
                     success = result.success,
                     rttMs = result.rttMs.toLong(),
                     errorMessage = result.errorMessage
                 )
-            } catch (e: uniffi.connected_core.ConnectedFfiException) {
+            } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
                 PingResult(
                     success = false,
                     rttMs = 0,
@@ -406,7 +431,7 @@ class ConnectedSdk private constructor() {
         checkInitialized()
 
         return try {
-            val device = uniffi.connected_core.getLocalDevice()
+            val device = uniffi.connected_ffi.getLocalDevice()
             DiscoveredDevice(
                 id = device.id,
                 name = device.name,
@@ -414,8 +439,18 @@ class ConnectedSdk private constructor() {
                 port = device.port.toInt(),
                 deviceType = device.deviceType
             )
-        } catch (e: uniffi.connected_core.ConnectedFfiException) {
+        } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
             throw ConnectedException("Failed to get local device: ${e.message}", e)
+        }
+    }
+
+    @Throws(ConnectedException::class)
+    fun getLocalFingerprint(): String {
+        checkInitialized()
+        return try {
+            uniffi.connected_ffi.getLocalFingerprint()
+        } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
+            throw ConnectedException("Failed to get local fingerprint: ${e.message}", e)
         }
     }
 
@@ -429,7 +464,7 @@ class ConnectedSdk private constructor() {
                 stopDiscovery()
             }
             releaseMulticastLock()
-            uniffi.connected_core.shutdown()
+            uniffi.connected_ffi.shutdown()
             isInitialized = false
             isDiscovering = false
             scope.cancel()
@@ -455,47 +490,22 @@ class ConnectedSdk private constructor() {
         }
 
         try {
-            uniffi.connected_core.sendFile(
+            // Updated: No callback needed here, global callback handles it
+            uniffi.connected_ffi.sendFile(
                 targetIp = targetIp,
                 targetPort = targetPort.toUShort(),
-                filePath = filePath,
-                callback = fileTransferCallback
+                filePath = filePath
             )
             Log.i(TAG, "File transfer started: $filePath -> $targetIp:$targetPort")
-        } catch (e: uniffi.connected_core.ConnectedFfiException) {
+        } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
             throw ConnectedException("Failed to send file: ${e.message}", e)
         }
     }
 
-    @Throws(ConnectedException::class)
-    fun startFileReceiver(saveDir: String) {
-        checkInitialized()
-
-        if (isReceivingFiles) {
-            Log.w(TAG, "File receiver already running")
-            return
-        }
-
-        try {
-            // Ensure directory exists
-            val dir = File(saveDir)
-            if (!dir.exists()) {
-                dir.mkdirs()
-            }
-
-            uniffi.connected_core.startFileReceiver(
-                saveDir = saveDir,
-                callback = fileTransferCallback
-            )
-            isReceivingFiles = true
-            Log.i(TAG, "File receiver started, saving to: $saveDir")
-        } catch (e: uniffi.connected_core.ConnectedFfiException) {
-            throw ConnectedException("Failed to start file receiver: ${e.message}", e)
-        }
-    }
+    // Removed startFileReceiver (handled globally/automatically)
 
     @Throws(ConnectedException::class)
-    fun sendClipboard(targetIp: String, targetPort: Int = DEFAULT_PORT + 1, text: String) {
+    fun sendClipboard(targetIp: String, targetPort: Int, text: String) {
         checkInitialized()
 
         if (text.isEmpty()) {
@@ -503,33 +513,22 @@ class ConnectedSdk private constructor() {
         }
 
         try {
-            uniffi.connected_core.sendClipboard(
+            uniffi.connected_ffi.sendClipboard(
                 targetIp = targetIp,
                 targetPort = targetPort.toUShort(),
                 text = text,
                 callback = clipboardCallback
             )
             Log.i(TAG, "Clipboard send started to $targetIp:$targetPort (${text.length} chars)")
-        } catch (e: uniffi.connected_core.ConnectedFfiException) {
+        } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
             throw ConnectedException("Failed to send clipboard: ${e.message}", e)
-        }
-    }
-
-    fun registerClipboardReceiver() {
-        checkInitialized()
-
-        try {
-            uniffi.connected_core.registerClipboardReceiver(clipboardCallback)
-            Log.i(TAG, "Clipboard receiver registered")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to register clipboard receiver: ${e.message}")
         }
     }
 
     fun startClipboardSync(
         context: Context,
         targetIp: String,
-        targetPort: Int = DEFAULT_PORT + 1,
+        targetPort: Int,
         intervalMs: Long = 500
     ) {
         checkInitialized()
@@ -569,7 +568,7 @@ class ConnectedSdk private constructor() {
 
                         // Send to remote
                         try {
-                            uniffi.connected_core.sendClipboard(
+                            uniffi.connected_ffi.sendClipboard(
                                 targetIp = targetIp,
                                 targetPort = targetPort.toUShort(),
                                 text = currentClipboard,
@@ -611,6 +610,37 @@ class ConnectedSdk private constructor() {
         val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         clipboardManager.setPrimaryClip(android.content.ClipData.newPlainText("Connected", text))
         Log.d(TAG, "Clipboard updated from sync: ${text.take(30)}...")
+    }
+
+    // Pairing API
+    fun setPairingMode(enabled: Boolean) {
+        checkInitialized()
+        try {
+            uniffi.connected_ffi.setPairingMode(enabled)
+            Log.d(TAG, "Pairing mode set to $enabled")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set pairing mode: ${e.message}")
+        }
+    }
+
+    fun trustDevice(fingerprint: String, name: String) {
+        checkInitialized()
+        try {
+            uniffi.connected_ffi.trustDevice(fingerprint, name)
+            Log.d(TAG, "Trusted device $name ($fingerprint)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to trust device: ${e.message}")
+        }
+    }
+
+    fun blockDevice(fingerprint: String) {
+        checkInitialized()
+        try {
+            uniffi.connected_ffi.blockDevice(fingerprint)
+            Log.d(TAG, "Blocked device $fingerprint")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to block device: ${e.message}")
+        }
     }
 
     private fun acquireMulticastLock() {
