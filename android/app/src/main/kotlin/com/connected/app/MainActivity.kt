@@ -3,13 +3,15 @@ package com.connected.app
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -19,6 +21,16 @@ import uniffi.connected_ffi.DiscoveredDevice
 
 class MainActivity : ComponentActivity() {
     private lateinit var connectedApp: ConnectedApp
+
+    // Add result launcher for file picker
+    private val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { selectedUri ->
+            // Get the device to send the file to
+            connectedApp.getSelectedDeviceForFileTransfer()?.let { device ->
+                connectedApp.sendFileToDevice(device, selectedUri.toString())
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,7 +42,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             ConnectedTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    ConnectedAppScreen(connectedApp)
+                    ConnectedAppScreen(connectedApp, filePickerLauncher)
                 }
             }
         }
@@ -43,7 +55,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun ConnectedAppScreen(connectedApp: ConnectedApp) {
+fun ConnectedAppScreen(connectedApp: ConnectedApp, filePickerLauncher: ActivityResultLauncher<String>? = null) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -75,7 +87,7 @@ fun ConnectedAppScreen(connectedApp: ConnectedApp) {
             } else {
                 LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
                     items(connectedApp.devices) { device ->
-                        DeviceItem(device, connectedApp)
+                        DeviceItem(device, connectedApp, filePickerLauncher)
                     }
                 }
             }
@@ -128,7 +140,7 @@ fun ConnectedAppScreen(connectedApp: ConnectedApp) {
 }
 
 @Composable
-fun DeviceItem(device: DiscoveredDevice, app: ConnectedApp) {
+fun DeviceItem(device: DiscoveredDevice, app: ConnectedApp, filePickerLauncher: ActivityResultLauncher<String>? = null) {
     // Check if ID is in the trusted set (observes state change)
     val isTrusted = app.trustedDevices.contains(device.id)
     val isPending = app.pendingPairing.contains(device.id)
@@ -154,6 +166,16 @@ fun DeviceItem(device: DiscoveredDevice, app: ConnectedApp) {
 
             if (isTrusted) {
                 Row {
+                    // Send file button before menu
+                    IconButton(onClick = {
+                        // Store the device for later file transfer
+                        app.setSelectedDeviceForFileTransfer(device)
+
+                        // Launch file picker if available
+                        filePickerLauncher?.launch("*/*")
+                     }) {
+                        Text("📁", style = MaterialTheme.typography.titleLarge)
+                    }
                     // More options dropdown
                     Box {
                         IconButton(onClick = { showMenu = true }) {

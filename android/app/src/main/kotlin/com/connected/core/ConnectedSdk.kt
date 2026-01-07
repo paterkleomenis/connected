@@ -134,6 +134,11 @@ class ConnectedSdk private constructor() {
     }
 
     private val fileTransferCallback = object : uniffi.connected_ffi.FileTransferCallback {
+        override fun onTransferRequest(transferId: String, filename: String, fileSize: ULong, fromDevice: String) {
+            // This is handled by the global callback in ConnectedApp
+            Log.d(TAG, "Transfer request from $fromDevice: $filename")
+        }
+
         override fun onTransferStarting(filename: String, totalSize: ULong) {
             scope.launch {
                 _fileTransferEvents.emit(FileTransferEvent.Starting(filename, totalSize.toLong()))
