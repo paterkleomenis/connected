@@ -14,8 +14,10 @@ class ConnectedApp(private val context: Context) {
     val transferStatus = mutableStateOf("Idle")
     val clipboardContent = mutableStateOf("")
     val pairingRequest = mutableStateOf<PairingRequest?>(null)
+    val transferRequest = mutableStateOf<TransferRequest?>(null)
 
     data class PairingRequest(val deviceName: String, val fingerprint: String, val deviceId: String)
+    data class TransferRequest(val id: String, val filename: String, val fileSize: ULong, val fromDevice: String)
 
     // Track when other devices unpair us
     val unpairNotification = mutableStateOf<String?>(null)
@@ -47,6 +49,11 @@ class ConnectedApp(private val context: Context) {
     }
 
     private val transferCallback = object : FileTransferCallback {
+        override fun onTransferRequest(transferId: String, filename: String, fileSize: ULong, fromDevice: String) {
+            Log.d("ConnectedApp", "Transfer request from $fromDevice: $filename")
+            transferRequest.value = TransferRequest(transferId, filename, fileSize, fromDevice)
+        }
+
         override fun onTransferStarting(filename: String, totalSize: ULong) {
             transferStatus.value = "Starting transfer: $filename"
         }
@@ -273,6 +280,24 @@ class ConnectedApp(private val context: Context) {
             Log.e("ConnectedApp", "Block device failed", e)
         }
         pairingRequest.value = null
+    }
+
+    fun acceptTransfer(request: TransferRequest) {
+        try {
+            uniffi.connected_ffi.acceptFileTransfer(request.id)
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Accept transfer failed", e)
+        }
+        transferRequest.value = null
+    }
+
+    fun rejectTransfer(request: TransferRequest) {
+        try {
+            uniffi.connected_ffi.rejectFileTransfer(request.id)
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Reject transfer failed", e)
+        }
+        transferRequest.value = null
     }
 
     fun getDevices() {

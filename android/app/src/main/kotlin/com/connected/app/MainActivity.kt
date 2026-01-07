@@ -104,6 +104,25 @@ fun ConnectedAppScreen(connectedApp: ConnectedApp) {
                     }
                 )
             }
+
+            if (connectedApp.transferRequest.value != null) {
+                val request = connectedApp.transferRequest.value!!
+                AlertDialog(
+                    onDismissRequest = { connectedApp.rejectTransfer(request) },
+                    title = { Text("Incoming File") },
+                    text = { Text("${request.fromDevice} wants to send:\n${request.filename}\nSize: ${request.fileSize} bytes") },
+                    confirmButton = {
+                        Button(onClick = { connectedApp.acceptTransfer(request) }) {
+                            Text("Accept")
+                        }
+                    },
+                    dismissButton = {
+                        Button(onClick = { connectedApp.rejectTransfer(request) }) {
+                            Text("Reject")
+                        }
+                    }
+                )
+            }
         }
     }
 }

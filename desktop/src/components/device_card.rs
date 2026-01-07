@@ -17,11 +17,6 @@ pub fn DeviceCard(
     let mut show_more_actions = use_signal(|| false);
     let mut show_actions = use_signal(|| false);
 
-    // Ping disabled for Phase 1 Refactor
-    let handle_ping = move |_| {
-        // Todo: Implement Ping via AppAction
-    };
-
     let icon = get_device_icon(&device.device_type);
 
     rsx! {
@@ -80,12 +75,6 @@ pub fn DeviceCard(
                             }
                         }
                     } else {
-                        button {
-                            class: "action-button",
-                            title: "Ping (Disabled)",
-                            onclick: handle_ping,
-                            "📶"
-                        }
                         button {
                             class: "action-button",
                             title: "Send File",

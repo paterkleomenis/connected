@@ -126,6 +126,13 @@ pub trait DiscoveryCallback: Send + Sync {
 
 #[uniffi::export(callback_interface)]
 pub trait FileTransferCallback: Send + Sync {
+    fn on_transfer_request(
+        &self,
+        transfer_id: String,
+        filename: String,
+        file_size: u64,
+        from_device: String,
+    );
     fn on_transfer_starting(&self, filename: String, total_size: u64);
     fn on_transfer_progress(&self, bytes_transferred: u64, total_size: u64);
     fn on_transfer_completed(&self, filename: String, total_size: u64);
@@ -249,6 +256,17 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                     } => {
                         if let Some(cb) = CLIPBOARD_CALLBACK.read().as_ref() {
                             cb.on_clipboard_received(content, from_device);
+                        }
+                    }
+                    ConnectedEvent::TransferRequest {
+                        id,
+                        filename,
+                        size,
+                        from_device,
+                        from_fingerprint: _,
+                    } => {
+                        if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
+                            cb.on_transfer_request(id, filename, size, from_device);
                         }
                     }
                     ConnectedEvent::TransferStarting {

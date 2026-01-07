@@ -61,6 +61,7 @@ fn App() -> Element {
     // Pairing State
     let pairing_mode = use_signal(|| false);
     let mut pairing_requests = use_signal(Vec::<PairingRequest>::new);
+    let mut file_transfer_requests = use_signal(Vec::<FileTransferRequest>::new);
 
     // The Controller
     let action_tx =
@@ -110,6 +111,14 @@ fn App() -> Element {
             {
                 let reqs = get_pairing_requests().lock().unwrap().clone();
                 pairing_requests.set(reqs);
+            }
+
+            // Update File Transfer Requests
+            {
+                let reqs_map = get_file_transfer_requests().lock().unwrap();
+                let mut reqs: Vec<FileTransferRequest> = reqs_map.values().cloned().collect();
+                reqs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                file_transfer_requests.set(reqs);
             }
 
             // Clipboard Sync Check
@@ -553,6 +562,49 @@ fn App() -> Element {
                                             }
                                         },
                                         "Trust"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // File Transfer Requests Modal
+            if !file_transfer_requests.read().is_empty() {
+                div {
+                    class: "modal-overlay",
+                    div {
+                        class: "modal-content",
+                        h3 { "Incoming File Transfer" }
+                        for req in file_transfer_requests.read().iter() {
+                            div {
+                                key: "{req.id}",
+                                class: "pairing-request", // Reuse styling
+                                p { "From: {req.from_device}" }
+                                p { class: "fingerprint", "File: {req.filename}" }
+                                p { class: "fingerprint", "Size: {req.size} bytes" }
+                                div {
+                                    class: "modal-actions",
+                                    button {
+                                        class: "secondary-button",
+                                        onclick: {
+                                            let req = req.clone();
+                                            move |_| {
+                                                action_tx.send(AppAction::RejectFileTransfer { transfer_id: req.id.clone() });
+                                            }
+                                        },
+                                        "Reject"
+                                    }
+                                    button {
+                                        class: "primary-button",
+                                        onclick: {
+                                            let req = req.clone();
+                                            move |_| {
+                                                action_tx.send(AppAction::AcceptFileTransfer { transfer_id: req.id.clone() });
+                                            }
+                                        },
+                                        "Accept"
                                     }
                                 }
                             }
