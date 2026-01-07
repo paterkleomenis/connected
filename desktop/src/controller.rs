@@ -1,11 +1,13 @@
 use crate::state::*;
 use crate::utils::set_system_clipboard;
+use connected_core::transport::UnpairReason;
 use connected_core::{ConnectedClient, ConnectedEvent, DeviceType};
 use dioxus::prelude::*;
 use futures_util::StreamExt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{error, info};
+use std::time::Instant;
+use tracing::{error, info, warn};
 
 #[derive(Clone, Debug)]
 pub enum AppAction {
@@ -40,7 +42,22 @@ pub enum AppAction {
         fingerprint: String,
         device_id: String,
     },
+    ForgetDevice {
+        fingerprint: String,
+        device_id: String,
+    },
+    BlockDevice {
+        fingerprint: String,
+        device_id: String,
+    },
     SetPairingMode(bool),
+    AcceptFileTransfer {
+        transfer_id: String,
+    },
+    RejectFileTransfer {
+        transfer_id: String,
+    },
+    SetAutoAcceptFiles(bool),
 }
 
 pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
@@ -58,15 +75,27 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     .or_else(|_| std::env::var("COMPUTERNAME"))
                     .unwrap_or_else(|_| "Desktop".into());
 
+                // Detect device type based on OS
+                let device_type = if cfg!(target_os = "linux") {
+                    DeviceType::Linux
+                } else if cfg!(target_os = "windows") {
+                    DeviceType::Windows
+                } else if cfg!(target_os = "macos") {
+                    DeviceType::MacOS
+                } else {
+                    DeviceType::Unknown
+                };
+
                 // Use default persistence path (None -> ~/.config/connected)
-                match ConnectedClient::new(name.clone(), DeviceType::Linux, 0, None).await {
+                match ConnectedClient::new(name.clone(), device_type, 0, None).await {
                     Ok(c) => {
                         info!("Core initialized");
 
                         client = Some(c.clone());
 
                         // Subscribe to events
-                        let mut events = c.subscribe();
+                        let events = c.subscribe();
+                        let mut events = events;
                         let c_clone = c.clone();
 
                         // Spawn event loop
@@ -194,6 +223,55 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     ConnectedEvent::PairingModeChanged(enabled) => {
                                         info!("Pairing mode changed: {}", enabled);
                                     }
+                                    ConnectedEvent::DeviceUnpaired {
+                                        device_id,
+                                        device_name,
+                                        reason,
+                                    } => {
+                                        // Update local store - device is no longer trusted
+                                        {
+                                            let mut store = get_devices_store().lock().unwrap();
+                                            if let Some(d) = store.get_mut(&device_id) {
+                                                d.is_trusted = false;
+                                            }
+                                        }
+
+                                        let reason_str = match reason {
+                                            UnpairReason::Unpaired => "unpaired from",
+                                            UnpairReason::Forgotten => "forgotten by",
+                                            UnpairReason::Blocked => "blocked by",
+                                        };
+                                        add_notification(
+                                            "Device Disconnected",
+                                            &format!("You were {} {}", reason_str, device_name),
+                                            "💔",
+                                        );
+                                    }
+                                    ConnectedEvent::TransferRequest {
+                                        id,
+                                        filename,
+                                        size,
+                                        from_device,
+                                        from_fingerprint,
+                                    } => {
+                                        add_notification(
+                                            "File Transfer Request",
+                                            &format!(
+                                                "{} wants to send {} ({} bytes)",
+                                                from_device, filename, size
+                                            ),
+                                            "📁",
+                                        );
+                                        // Store the request for UI to display
+                                        add_file_transfer_request(FileTransferRequest {
+                                            id: id.clone(),
+                                            filename,
+                                            size,
+                                            from_device,
+                                            from_fingerprint,
+                                            timestamp: Instant::now(),
+                                        });
+                                    }
                                 }
                             }
                         });
@@ -242,25 +320,44 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     let c = c.clone();
 
                     // Find device ID by IP/Port to add to pending
-                    let store = get_devices_store().lock().unwrap();
-                    if let Some(d) = store.values().find(|d| d.ip == ip && d.port == port) {
-                        get_pending_pairings().lock().unwrap().insert(d.id.clone());
+                    let device_id = {
+                        let store = get_devices_store().lock().unwrap();
+                        store
+                            .values()
+                            .find(|d| d.ip == ip && d.port == port)
+                            .map(|d| d.id.clone())
+                    };
+
+                    if let Some(did) = device_id.clone() {
+                        get_pending_pairings().lock().unwrap().insert(did);
                     }
-                    drop(store);
+
+                    let ip_clone = ip.clone();
+                    let device_id_for_cleanup = device_id;
 
                     tokio::spawn(async move {
-                        if let Ok(ip_addr) = ip.parse() {
-                            // Enable pairing mode temporarily? Or assume user enabled it?
-                            // For initiating, we don't necessarily need to be in pairing mode unless
-                            // the other side requires MUTUAL pairing mode.
-                            // But good practice: enable pairing mode locally too.
-                            c.set_pairing_mode(true);
-
-                            if let Err(e) = c.send_handshake(ip_addr, port).await {
-                                error!("Failed to send handshake: {}", e);
-                                add_notification("Pairing Failed", &e.to_string(), "❌");
-                            } else {
-                                add_notification("Pairing", "Request sent...", "🔗");
+                        if let Ok(ip_addr) = ip_clone.parse() {
+                            // send_handshake now automatically enables pairing mode with timeout
+                            match c.send_handshake(ip_addr, port).await {
+                                Ok(()) => {
+                                    add_notification(
+                                        "Paired",
+                                        "Successfully paired with device",
+                                        "✅",
+                                    );
+                                    // Remove from pending on success
+                                    if let Some(did) = device_id_for_cleanup {
+                                        get_pending_pairings().lock().unwrap().remove(&did);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to send handshake: {}", e);
+                                    add_notification("Pairing Failed", &e.to_string(), "❌");
+                                    // Remove from pending on failure
+                                    if let Some(did) = device_id_for_cleanup {
+                                        get_pending_pairings().lock().unwrap().remove(&did);
+                                    }
+                                }
                             }
                         }
                     });
@@ -272,20 +369,41 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 device_id,
             } => {
                 if let Some(c) = &client {
-                    if let Err(e) = c.trust_device(fingerprint, Some(device_id.clone()), name) {
+                    if let Err(e) =
+                        c.trust_device(fingerprint.clone(), Some(device_id.clone()), name.clone())
+                    {
                         error!("Failed to trust: {}", e);
+                        add_notification("Trust Failed", &e.to_string(), "❌");
                     } else {
-                        // Force refresh of devices to update trust status
+                        // Remove from pairing requests
+                        {
+                            let mut requests = get_pairing_requests().lock().unwrap();
+                            requests.retain(|r| r.fingerprint != fingerprint);
+                        }
+
+                        // Update device trust status in store
+                        {
+                            let mut store = get_devices_store().lock().unwrap();
+                            if let Some(d) = store.get_mut(&device_id) {
+                                d.is_trusted = true;
+                            }
+                        }
+
                         add_notification("Paired", "Device trusted successfully", "✅");
 
-                        // Send handshake back to confirm pairing to the other device
+                        // Send trust confirmation (HandshakeAck) to the other device
+                        // This is NOT a new handshake - it confirms we accepted their pairing request
                         let c_clone = c.clone();
                         let did = device_id.clone();
                         tokio::spawn(async move {
                             let devices = c_clone.get_discovered_devices();
                             if let Some(d) = devices.iter().find(|d| d.id == did) {
                                 if let Some(ip) = d.ip_addr() {
-                                    let _ = c_clone.send_handshake(ip, d.port).await;
+                                    if let Err(e) =
+                                        c_clone.send_trust_confirmation(ip, d.port).await
+                                    {
+                                        warn!("Failed to send trust confirmation: {}", e);
+                                    }
                                 }
                             }
                         });
@@ -294,18 +412,80 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::RejectDevice { fingerprint } => {
                 if let Some(c) = &client {
-                    let _ = c.block_device(fingerprint);
+                    // Remove from pairing requests
+                    {
+                        let mut requests = get_pairing_requests().lock().unwrap();
+                        requests.retain(|r| r.fingerprint != fingerprint);
+                    }
+                    if let Err(e) = c.block_device(fingerprint) {
+                        error!("Failed to block device: {}", e);
+                    } else {
+                        add_notification("Blocked", "Device has been blocked", "🚫");
+                    }
                 }
             }
             AppAction::UnpairDevice {
+                fingerprint: _,
+                device_id,
+            } => {
+                if let Some(c) = &client {
+                    // Unpair = disconnect and remove from UI, but keep backend trust (can auto-reconnect later)
+
+                    // Get device info before unpairing for notification
+                    let device_info = {
+                        let store = get_devices_store().lock().unwrap();
+                        store.get(&device_id).cloned()
+                    };
+
+                    if let Err(e) = c.unpair_device_by_id(&device_id) {
+                        error!("Failed to unpair: {}", e);
+                        add_notification("Unpair Failed", &e.to_string(), "❌");
+                    } else {
+                        // Remove from UI store so it shows as disconnected
+                        {
+                            let mut store = get_devices_store().lock().unwrap();
+                            if let Some(d) = store.get_mut(&device_id) {
+                                d.is_trusted = false;
+                            }
+                        }
+
+                        // Notify the other device so they also update their UI
+                        // Using UnpairReason::Unpaired which preserves backend trust
+                        if let Some(info) = device_info {
+                            let c_clone = c.clone();
+                            tokio::spawn(async move {
+                                if let Ok(ip) = info.ip.parse() {
+                                    let _ = c_clone
+                                        .send_unpair_notification(
+                                            ip,
+                                            info.port,
+                                            UnpairReason::Unpaired,
+                                        )
+                                        .await;
+                                }
+                            });
+                        }
+
+                        add_notification(
+                            "Disconnected",
+                            "Device disconnected - can reconnect anytime",
+                            "💔",
+                        );
+                    }
+                }
+            }
+            AppAction::SetPairingMode(enabled) => {
+                if let Some(c) = &client {
+                    c.set_pairing_mode(enabled);
+                }
+            }
+            AppAction::ForgetDevice {
                 fingerprint,
                 device_id,
             } => {
                 if let Some(c) = &client {
                     // If fingerprint is "TODO", look it up from device_id
                     let fingerprint = if fingerprint == "TODO" {
-                        // Try to find it in key_store (known peers) by device_id?
-                        // KeyStore::get_trusted_peers() returns PeerInfo which has device_id.
                         let peers = c.get_trusted_peers();
                         peers
                             .iter()
@@ -316,22 +496,135 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         fingerprint
                     };
 
-                    if let Err(e) = c.remove_trusted_peer(&fingerprint) {
-                        error!("Failed to remove peer: {}", e);
-                        add_notification("Unpair Failed", &e.to_string(), "❌");
+                    // Get device info before forgetting for notification
+                    let device_info = {
+                        let store = get_devices_store().lock().unwrap();
+                        store.get(&device_id).cloned()
+                    };
+
+                    if let Err(e) = c.forget_device(&fingerprint) {
+                        error!("Failed to forget device: {}", e);
+                        add_notification("Forget Failed", &e.to_string(), "❌");
                     } else {
-                        // Update local store immediately to reflect change
-                        let mut store = get_devices_store().lock().unwrap();
-                        if let Some(d) = store.get_mut(&device_id) {
-                            d.is_trusted = false;
+                        // Update local store to reflect change
+                        {
+                            let mut store = get_devices_store().lock().unwrap();
+                            if let Some(d) = store.get_mut(&device_id) {
+                                d.is_trusted = false;
+                            }
                         }
-                        add_notification("Unpaired", "Device removed from trusted list", "💔");
+
+                        // Notify the other device that we forgot them
+                        if let Some(info) = device_info {
+                            let c_clone = c.clone();
+                            tokio::spawn(async move {
+                                if let Ok(ip) = info.ip.parse() {
+                                    let _ = c_clone
+                                        .send_unpair_notification(
+                                            ip,
+                                            info.port,
+                                            UnpairReason::Forgotten,
+                                        )
+                                        .await;
+                                }
+                            });
+                        }
+
+                        add_notification(
+                            "Device Forgotten",
+                            "Device will require re-pairing approval",
+                            "🔄",
+                        );
                     }
                 }
             }
-            AppAction::SetPairingMode(enabled) => {
+            AppAction::BlockDevice {
+                fingerprint,
+                device_id,
+            } => {
                 if let Some(c) = &client {
-                    c.set_pairing_mode(enabled);
+                    // If fingerprint is "TODO", look it up from device_id
+                    let fingerprint = if fingerprint == "TODO" {
+                        let peers = c.get_trusted_peers();
+                        peers
+                            .iter()
+                            .find(|p| p.device_id.as_deref() == Some(&device_id))
+                            .map(|p| p.fingerprint.clone())
+                            .unwrap_or(fingerprint)
+                    } else {
+                        fingerprint
+                    };
+
+                    // Get device info before blocking for notification
+                    let device_info = {
+                        let store = get_devices_store().lock().unwrap();
+                        store.get(&device_id).cloned()
+                    };
+
+                    if let Err(e) = c.block_device(fingerprint) {
+                        error!("Failed to block device: {}", e);
+                        add_notification("Block Failed", &e.to_string(), "❌");
+                    } else {
+                        // Remove from local store
+                        {
+                            let mut store = get_devices_store().lock().unwrap();
+                            store.remove(&device_id);
+                        }
+
+                        // Notify the other device that we blocked them
+                        if let Some(info) = device_info {
+                            let c_clone = c.clone();
+                            tokio::spawn(async move {
+                                if let Ok(ip) = info.ip.parse() {
+                                    let _ = c_clone
+                                        .send_unpair_notification(
+                                            ip,
+                                            info.port,
+                                            UnpairReason::Blocked,
+                                        )
+                                        .await;
+                                }
+                            });
+                        }
+
+                        add_notification(
+                            "Device Blocked",
+                            "Device will no longer be able to connect",
+                            "🚫",
+                        );
+                    }
+                }
+            }
+            AppAction::AcceptFileTransfer { transfer_id } => {
+                if let Some(c) = &client {
+                    // Remove from pending requests
+                    remove_file_transfer_request(&transfer_id);
+                    if let Err(e) = c.accept_file_transfer(&transfer_id) {
+                        error!("Failed to accept file transfer: {}", e);
+                        add_notification("Transfer Error", &e.to_string(), "❌");
+                    }
+                }
+            }
+            AppAction::RejectFileTransfer { transfer_id } => {
+                if let Some(c) = &client {
+                    // Remove from pending requests
+                    remove_file_transfer_request(&transfer_id);
+                    if let Err(e) = c.reject_file_transfer(&transfer_id) {
+                        error!("Failed to reject file transfer: {}", e);
+                    } else {
+                        add_notification("Transfer Rejected", "File transfer declined", "🚫");
+                    }
+                }
+            }
+            AppAction::SetAutoAcceptFiles(enabled) => {
+                if let Some(c) = &client {
+                    c.set_auto_accept_files(enabled);
+                    let msg = if enabled {
+                        "Auto-accept enabled"
+                    } else {
+                        "Auto-accept disabled"
+                    };
+                    add_notification("Settings", msg, "⚙️");
                 }
             }
         }

@@ -516,6 +516,67 @@ body {
     background: var(--bg-tertiary);
 }
 
+.action-button.danger {
+    color: var(--error);
+}
+
+.action-button.danger:hover:not(:disabled) {
+    background: var(--error);
+    color: white;
+}
+
+/* Action Dropdown */
+.action-dropdown {
+    position: relative;
+}
+
+.dropdown-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: var(--space-xs);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    border: 1px solid var(--border);
+    min-width: 140px;
+    z-index: 100;
+    overflow: hidden;
+}
+
+.dropdown-item {
+    display: block;
+    width: 100%;
+    padding: var(--space-sm) var(--space-md);
+    border: none;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-primary);
+    transition: var(--transition);
+}
+
+.dropdown-item:hover {
+    background: var(--bg-tertiary);
+}
+
+.dropdown-item.warning {
+    color: var(--warning);
+}
+
+.dropdown-item.warning:hover {
+    background: rgba(255, 149, 0, 0.1);
+}
+
+.dropdown-item.danger {
+    color: var(--error);
+}
+
+.dropdown-item.danger:hover {
+    background: rgba(255, 59, 48, 0.1);
+}
+
 /* ============================================================================
    Transfers Section
    ============================================================================ */

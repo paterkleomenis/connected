@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
@@ -16,11 +17,14 @@ const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
 const BROWSE_TIMEOUT: Duration = Duration::from_millis(100);
 const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(60);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(2);
+const PROTOCOL_VERSION: u32 = 1;
+const MIN_COMPATIBLE_VERSION: u32 = 1;
 
 #[derive(Clone)]
 struct TrackedDevice {
     device: Device,
     last_seen: Instant,
+    ip: String, // Cached IP for deduplication
 }
 
 pub struct DiscoveryService {
@@ -30,6 +34,7 @@ pub struct DiscoveryService {
     running: Arc<AtomicBool>,
     announced: Arc<AtomicBool>,
     service_fullname: String,
+    thread_handles: RwLock<Vec<JoinHandle<()>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +59,7 @@ impl DiscoveryService {
             running: Arc::new(AtomicBool::new(false)),
             announced: Arc::new(AtomicBool::new(false)),
             service_fullname,
+            thread_handles: RwLock::new(Vec::new()),
         })
     }
 
@@ -150,7 +156,7 @@ impl DiscoveryService {
         info!("Started mDNS discovery for {}", SERVICE_TYPE);
 
         // Main discovery thread
-        std::thread::Builder::new()
+        let discovery_handle = std::thread::Builder::new()
             .name("mdns-discovery".to_string())
             .spawn(move || {
                 while running.load(Ordering::SeqCst) {
@@ -180,7 +186,7 @@ impl DiscoveryService {
         let running_announce = self.running.clone();
         let announced = self.announced.clone();
 
-        std::thread::Builder::new()
+        let announce_handle = std::thread::Builder::new()
             .name("mdns-announce".to_string())
             .spawn(move || {
                 // Initial delay before first re-announcement
@@ -196,6 +202,7 @@ impl DiscoveryService {
                     }
                     std::thread::sleep(REANNOUNCE_INTERVAL);
                 }
+                debug!("Announce thread stopped");
             })?;
 
         // Periodic cleanup thread to remove stale devices
@@ -203,7 +210,7 @@ impl DiscoveryService {
         let running_cleanup = self.running.clone();
         let event_tx_cleanup = event_tx.clone();
 
-        std::thread::Builder::new()
+        let cleanup_handle = std::thread::Builder::new()
             .name("mdns-cleanup".to_string())
             .spawn(move || {
                 while running_cleanup.load(Ordering::SeqCst) {
@@ -238,6 +245,14 @@ impl DiscoveryService {
                 debug!("Device cleanup thread stopped");
             })?;
 
+        // Store thread handles for proper cleanup
+        {
+            let mut handles = self.thread_handles.write();
+            handles.push(discovery_handle);
+            handles.push(announce_handle);
+            handles.push(cleanup_handle);
+        }
+
         Ok(())
     }
 
@@ -249,7 +264,7 @@ impl DiscoveryService {
         properties.insert("id".to_string(), device.id.clone());
         properties.insert("name".to_string(), device.name.clone());
         properties.insert("type".to_string(), device.device_type.as_str().to_string());
-        properties.insert("version".to_string(), "1".to_string());
+        properties.insert("version".to_string(), PROTOCOL_VERSION.to_string());
 
         let ip: IpAddr = device
             .ip
@@ -316,6 +331,28 @@ impl DiscoveryService {
         // Log all TXT properties for debugging
         for prop in info.txt_properties.iter() {
             debug!("  TXT property: {}={}", prop.key(), prop.val_str());
+        }
+
+        // Check protocol version compatibility
+        let version = info
+            .txt_properties
+            .get("version")
+            .and_then(|v| v.val_str().parse::<u32>().ok())
+            .unwrap_or(0);
+
+        if version < MIN_COMPATIBLE_VERSION {
+            warn!(
+                "Ignoring device with incompatible protocol version {} (min: {}): {}",
+                version, MIN_COMPATIBLE_VERSION, info.fullname
+            );
+            return;
+        }
+
+        if version > PROTOCOL_VERSION {
+            info!(
+                "Device {} has newer protocol version {} (ours: {}), may have reduced functionality",
+                info.fullname, version, PROTOCOL_VERSION
+            );
         }
 
         // Try to get device ID from TXT records first (most reliable)
@@ -408,22 +445,48 @@ impl DiscoveryService {
             device_type,
         );
 
+        let ip_str = ip.to_string();
+
         info!(
             "Discovered device: {} ({}) at {}:{}",
             device_name, device_id, ip, info.port
         );
 
         // Check if this is a new device or an update
-        let is_new = {
+        // Also check for IP conflicts (same IP, different ID = device restarted)
+        let (is_new, old_device_to_remove) = {
             let mut devices = discovered.write();
+
+            // Check if there's an existing device with same IP but different ID
+            // This happens when a device restarts and gets a new UUID
+            let old_id_with_same_ip: Option<String> = devices
+                .iter()
+                .find(|(id, tracked)| tracked.ip == ip_str && *id != &device_id)
+                .map(|(id, _)| id.clone());
+
+            // Remove old entry with same IP if exists
+            if let Some(ref old_id) = old_id_with_same_ip {
+                info!(
+                    "Removing stale device entry {} (same IP {} as new device {})",
+                    old_id, ip_str, device_id
+                );
+                devices.remove(old_id);
+            }
+
             let is_new = !devices.contains_key(&device_id);
             let tracked = TrackedDevice {
                 device: device.clone(),
                 last_seen: Instant::now(),
+                ip: ip_str.clone(),
             };
             devices.insert(device_id.clone(), tracked);
-            is_new
+            (is_new, old_id_with_same_ip)
         };
+
+        // Notify about removed device if we replaced one
+        if let Some(old_id) = old_device_to_remove {
+            let _ = event_tx.send(DiscoveryEvent::DeviceLost(old_id));
+        }
 
         // Only send event for new devices (not updates)
         if is_new {
@@ -480,9 +543,6 @@ impl DiscoveryService {
         self.running.store(false, Ordering::SeqCst);
         self.announced.store(false, Ordering::SeqCst);
 
-        // Give the listener thread time to exit cleanly
-        std::thread::sleep(Duration::from_millis(150));
-
         // Stop browsing first (this closes the browse receiver)
         if let Err(e) = self.daemon.stop_browse(SERVICE_TYPE) {
             debug!("Failed to stop mDNS browse: {}", e);
@@ -493,8 +553,22 @@ impl DiscoveryService {
             debug!("Failed to unregister mDNS service: {}", e);
         }
 
+        // Wait for threads to finish with timeout
+        let handles: Vec<JoinHandle<()>> = {
+            let mut guard = self.thread_handles.write();
+            std::mem::take(&mut *guard)
+        };
+
+        for handle in handles {
+            let thread_name = handle.thread().name().unwrap_or("unnamed").to_string();
+            match handle.join() {
+                Ok(()) => debug!("Thread '{}' joined successfully", thread_name),
+                Err(_) => warn!("Thread '{}' panicked during shutdown", thread_name),
+            }
+        }
+
         // Give time for goodbye packets
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(50));
 
         // Shutdown daemon
         if let Err(e) = self.daemon.shutdown() {

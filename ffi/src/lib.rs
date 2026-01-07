@@ -3,7 +3,7 @@ use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
-use tracing::error;
+use tracing::{error, info};
 
 #[cfg(target_os = "android")]
 static ANDROID_LOGGER_INIT: OnceLock<()> = OnceLock::new();
@@ -35,6 +35,7 @@ static DISCOVERY_CALLBACK: RwLock<Option<Box<dyn DiscoveryCallback>>> = RwLock::
 static CLIPBOARD_CALLBACK: RwLock<Option<Box<dyn ClipboardCallback>>> = RwLock::new(None);
 static TRANSFER_CALLBACK: RwLock<Option<Box<dyn FileTransferCallback>>> = RwLock::new(None);
 static PAIRING_CALLBACK: RwLock<Option<Box<dyn PairingCallback>>> = RwLock::new(None);
+static UNPAIR_CALLBACK: RwLock<Option<Box<dyn UnpairCallback>>> = RwLock::new(None);
 
 fn get_runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
@@ -143,6 +144,11 @@ pub trait PairingCallback: Send + Sync {
     fn on_pairing_request(&self, device_name: String, fingerprint: String, device_id: String);
 }
 
+#[uniffi::export(callback_interface)]
+pub trait UnpairCallback: Send + Sync {
+    fn on_device_unpaired(&self, device_id: String, device_name: String, reason: String);
+}
+
 // ============================================================================
 // Exported Functions
 // ============================================================================
@@ -214,72 +220,103 @@ pub fn initialize_with_ip(
     Ok(())
 }
 
+static SHUTDOWN_FLAG: OnceLock<Arc<std::sync::atomic::AtomicBool>> = OnceLock::new();
+
+fn get_shutdown_flag() -> &'static Arc<std::sync::atomic::AtomicBool> {
+    SHUTDOWN_FLAG.get_or_init(|| Arc::new(std::sync::atomic::AtomicBool::new(false)))
+}
+
 fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
     let mut rx = client.subscribe();
+    let shutdown_flag = get_shutdown_flag().clone();
     runtime.spawn(async move {
-        while let Ok(event) = rx.recv().await {
-            match event {
-                ConnectedEvent::DeviceFound(d) => {
-                    if let Some(cb) = DISCOVERY_CALLBACK.read().as_ref() {
-                        cb.on_device_found(d.into());
+        while !shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            match rx.recv().await {
+                Ok(event) => match event {
+                    ConnectedEvent::DeviceFound(d) => {
+                        if let Some(cb) = DISCOVERY_CALLBACK.read().as_ref() {
+                            cb.on_device_found(d.into());
+                        }
+                    }
+                    ConnectedEvent::DeviceLost(id) => {
+                        if let Some(cb) = DISCOVERY_CALLBACK.read().as_ref() {
+                            cb.on_device_lost(id);
+                        }
+                    }
+                    ConnectedEvent::ClipboardReceived {
+                        content,
+                        from_device,
+                    } => {
+                        if let Some(cb) = CLIPBOARD_CALLBACK.read().as_ref() {
+                            cb.on_clipboard_received(content, from_device);
+                        }
+                    }
+                    ConnectedEvent::TransferStarting {
+                        filename,
+                        total_size,
+                        ..
+                    } => {
+                        if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
+                            cb.on_transfer_starting(filename, total_size);
+                        }
+                    }
+                    ConnectedEvent::TransferProgress {
+                        bytes_transferred,
+                        total_size,
+                        ..
+                    } => {
+                        if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
+                            cb.on_transfer_progress(bytes_transferred, total_size);
+                        }
+                    }
+                    ConnectedEvent::TransferCompleted { filename, .. } => {
+                        if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
+                            cb.on_transfer_completed(filename, 0);
+                        }
+                    }
+                    ConnectedEvent::TransferFailed { error, .. } => {
+                        if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
+                            cb.on_transfer_failed(error);
+                        }
+                    }
+                    ConnectedEvent::PairingRequest {
+                        fingerprint,
+                        device_name,
+                        device_id,
+                    } => {
+                        if let Some(cb) = PAIRING_CALLBACK.read().as_ref() {
+                            cb.on_pairing_request(device_name, fingerprint, device_id);
+                        }
+                    }
+                    ConnectedEvent::DeviceUnpaired {
+                        device_id,
+                        device_name,
+                        reason,
+                    } => {
+                        use connected_core::transport::UnpairReason;
+                        let reason_str = match reason {
+                            UnpairReason::Unpaired => "unpaired",
+                            UnpairReason::Forgotten => "forgotten",
+                            UnpairReason::Blocked => "blocked",
+                        };
+                        if let Some(cb) = UNPAIR_CALLBACK.read().as_ref() {
+                            cb.on_device_unpaired(device_id, device_name, reason_str.to_string());
+                        }
+                    }
+                    ConnectedEvent::Error(msg) => {
+                        error!("Core error: {}", msg);
+                    }
+                    _ => {}
+                },
+                Err(_) => {
+                    // Channel closed or lagged, check shutdown flag
+                    if shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
                     }
                 }
-                ConnectedEvent::DeviceLost(id) => {
-                    if let Some(cb) = DISCOVERY_CALLBACK.read().as_ref() {
-                        cb.on_device_lost(id);
-                    }
-                }
-                ConnectedEvent::ClipboardReceived {
-                    content,
-                    from_device,
-                } => {
-                    if let Some(cb) = CLIPBOARD_CALLBACK.read().as_ref() {
-                        cb.on_clipboard_received(content, from_device);
-                    }
-                }
-                ConnectedEvent::TransferStarting {
-                    filename,
-                    total_size,
-                    ..
-                } => {
-                    if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                        cb.on_transfer_starting(filename, total_size);
-                    }
-                }
-                ConnectedEvent::TransferProgress {
-                    bytes_transferred,
-                    total_size,
-                    ..
-                } => {
-                    if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                        cb.on_transfer_progress(bytes_transferred, total_size);
-                    }
-                }
-                ConnectedEvent::TransferCompleted { filename, .. } => {
-                    if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                        cb.on_transfer_completed(filename, 0);
-                    }
-                }
-                ConnectedEvent::TransferFailed { error, .. } => {
-                    if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                        cb.on_transfer_failed(error);
-                    }
-                }
-                ConnectedEvent::PairingRequest {
-                    fingerprint,
-                    device_name,
-                    device_id,
-                } => {
-                    if let Some(cb) = PAIRING_CALLBACK.read().as_ref() {
-                        cb.on_pairing_request(device_name, fingerprint, device_id);
-                    }
-                }
-                ConnectedEvent::Error(msg) => {
-                    error!("Core error: {}", msg);
-                }
-                _ => {}
             }
         }
+        info!("Event listener stopped");
     });
 }
 
@@ -433,6 +470,11 @@ pub fn register_pairing_callback(callback: Box<dyn PairingCallback>) {
 }
 
 #[uniffi::export]
+pub fn register_unpair_callback(callback: Box<dyn UnpairCallback>) {
+    *UNPAIR_CALLBACK.write() = Some(callback);
+}
+
+#[uniffi::export]
 pub fn set_pairing_mode(enabled: bool) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
     client.set_pairing_mode(enabled);
@@ -450,10 +492,14 @@ pub fn pair_device(target_ip: String, target_port: u16) -> Result<(), ConnectedF
             })?;
 
     get_runtime().spawn(async move {
-        // We set pairing mode to true temporarily to allow the handshake response
-        client.set_pairing_mode(true);
-        if let Err(e) = client.send_handshake(ip, target_port).await {
-            error!("Failed to send handshake: {}", e);
+        // send_handshake now automatically enables pairing mode with timeout
+        match client.send_handshake(ip, target_port).await {
+            Ok(()) => {
+                info!("Pairing completed successfully with {}:{}", ip, target_port);
+            }
+            Err(e) => {
+                error!("Failed to pair with {}:{}: {}", ip, target_port, e);
+            }
         }
     });
 
@@ -461,19 +507,123 @@ pub fn pair_device(target_ip: String, target_port: u16) -> Result<(), ConnectedF
 }
 
 #[uniffi::export]
-pub fn trust_device(fingerprint: String, name: String) -> Result<(), ConnectedFfiError> {
+pub fn send_trust_confirmation(
+    target_ip: String,
+    target_port: u16,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    get_runtime().spawn(async move {
+        if let Err(e) = client.send_trust_confirmation(ip, target_port).await {
+            error!(
+                "Failed to send trust confirmation to {}:{}: {}",
+                ip, target_port, e
+            );
+        }
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_unpair_notification(
+    target_ip: String,
+    target_port: u16,
+    reason: String,
+) -> Result<(), ConnectedFfiError> {
+    use connected_core::transport::UnpairReason;
+
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let unpair_reason = match reason.as_str() {
+        "forgotten" => UnpairReason::Forgotten,
+        "blocked" => UnpairReason::Blocked,
+        _ => UnpairReason::Unpaired,
+    };
+
+    get_runtime().spawn(async move {
+        if let Err(e) = client
+            .send_unpair_notification(ip, target_port, unpair_reason)
+            .await
+        {
+            error!(
+                "Failed to send unpair notification to {}:{}: {}",
+                ip, target_port, e
+            );
+        }
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn trust_device(
+    fingerprint: String,
+    device_id: String,
+    name: String,
+) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
     client
-        .trust_device(fingerprint, None, name)
+        .trust_device(fingerprint, Some(device_id), name)
         .map_err(Into::into)
 }
 
 #[uniffi::export]
-pub fn unpair_device(device_id: String) -> Result<(), ConnectedFfiError> {
+pub fn unpair_device(fingerprint: String) -> Result<(), ConnectedFfiError> {
+    // Unpair = disconnect but keep trust intact (can reconnect anytime without re-pairing)
+    let client = get_client()?;
+    client.unpair_device(&fingerprint).map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn unpair_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
+    // Unpair = disconnect but keep trust intact (can reconnect anytime without re-pairing)
+    let client = get_client()?;
+    client.unpair_device_by_id(&device_id).map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn disconnect_device(device_id: String) -> Result<(), ConnectedFfiError> {
+    // Disconnect = same as unpair, close connection but keep trust intact
     let client = get_client()?;
     client
-        .remove_trusted_peer_by_id(&device_id)
+        .disconnect_device_by_id(&device_id)
         .map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn forget_device(fingerprint: String) -> Result<(), ConnectedFfiError> {
+    // Forget = completely remove trust (must re-pair to connect again)
+    let client = get_client()?;
+    client.forget_device(&fingerprint).map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn forget_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
+    // Forget = completely remove trust (must re-pair to connect again)
+    let client = get_client()?;
+    client.forget_device_by_id(&device_id).map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn is_device_forgotten(fingerprint: String) -> bool {
+    if let Ok(client) = get_client() {
+        client.is_device_forgotten(&fingerprint)
+    } else {
+        false
+    }
 }
 
 #[uniffi::export]
@@ -492,10 +642,85 @@ pub fn block_device(fingerprint: String) -> Result<(), ConnectedFfiError> {
 }
 
 #[uniffi::export]
+pub fn block_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    // Look up fingerprint from device_id in trusted/known peers
+    let peers = client.get_all_known_peers();
+    let fingerprint = peers
+        .iter()
+        .find(|p| p.device_id.as_deref() == Some(&device_id))
+        .map(|p| p.fingerprint.clone());
+
+    if let Some(fp) = fingerprint {
+        client.block_device(fp).map_err(Into::into)
+    } else {
+        Err(ConnectedFfiError::InvalidArgument {
+            msg: format!("Device {} not found in known peers", device_id),
+        })
+    }
+}
+
+#[uniffi::export]
+pub fn accept_file_transfer(transfer_id: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    client
+        .accept_file_transfer(&transfer_id)
+        .map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn reject_file_transfer(transfer_id: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    client
+        .reject_file_transfer(&transfer_id)
+        .map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn set_auto_accept_files(enabled: bool) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    client.set_auto_accept_files(enabled);
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn is_auto_accept_files() -> Result<bool, ConnectedFfiError> {
+    let client = get_client()?;
+    Ok(client.is_auto_accept_files())
+}
+
+#[uniffi::export]
 pub fn shutdown() {
-    // Drop client
-    let mut lock = INSTANCE.get_or_init(|| RwLock::new(None)).write();
-    *lock = None;
+    info!("Shutting down connected FFI...");
+
+    // Signal event listener to stop
+    get_shutdown_flag().store(true, std::sync::atomic::Ordering::SeqCst);
+
+    // Clear callbacks first
+    *DISCOVERY_CALLBACK.write() = None;
+    *CLIPBOARD_CALLBACK.write() = None;
+    *TRANSFER_CALLBACK.write() = None;
+    *PAIRING_CALLBACK.write() = None;
+    *UNPAIR_CALLBACK.write() = None;
+
+    // Get and shutdown the client properly
+    let client = {
+        let mut lock = INSTANCE.get_or_init(|| RwLock::new(None)).write();
+        lock.take()
+    };
+
+    if let Some(c) = client {
+        // Call the proper shutdown method
+        get_runtime().block_on(async {
+            c.shutdown().await;
+        });
+        drop(c);
+    }
+
+    // Reset shutdown flag for potential re-initialization
+    get_shutdown_flag().store(false, std::sync::atomic::Ordering::SeqCst);
+
+    info!("Connected FFI shutdown complete");
 }
 
 uniffi::setup_scaffolding!();

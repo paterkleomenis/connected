@@ -17,6 +17,9 @@ class ConnectedApp(private val context: Context) {
 
     data class PairingRequest(val deviceName: String, val fingerprint: String, val deviceId: String)
 
+    // Track when other devices unpair us
+    val unpairNotification = mutableStateOf<String?>(null)
+
     private val discoveryCallback = object : DiscoveryCallback {
         override fun onDeviceFound(device: DiscoveredDevice) {
             Log.d("ConnectedApp", "Device found: ${device.name}")
@@ -84,6 +87,27 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    private val unpairCallback = object : UnpairCallback {
+        override fun onDeviceUnpaired(deviceId: String, deviceName: String, reason: String) {
+            Log.d("ConnectedApp", "Device $deviceName unpaired us (reason: $reason)")
+            // Remove from trusted devices
+            trustedDevices.remove(deviceId)
+            // Update device in list to show as not trusted
+            val index = devices.indexOfFirst { it.id == deviceId }
+            if (index >= 0) {
+                // Force UI refresh by triggering a state change
+                getDevices()
+            }
+            // Show notification to user
+            val reasonText = when (reason) {
+                "blocked" -> "blocked you"
+                "forgotten" -> "forgot you"
+                else -> "unpaired from you"
+            }
+            unpairNotification.value = "$deviceName $reasonText"
+        }
+    }
+
     fun initialize() {
         try {
             uniffi.connected_ffi.initialize(
@@ -96,6 +120,7 @@ class ConnectedApp(private val context: Context) {
             uniffi.connected_ffi.registerTransferCallback(transferCallback)
             uniffi.connected_ffi.registerClipboardReceiver(clipboardCallback)
             uniffi.connected_ffi.registerPairingCallback(pairingCallback)
+            uniffi.connected_ffi.registerUnpairCallback(unpairCallback)
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Initialization failed", e)
         }
@@ -129,16 +154,80 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun unpairDevice(device: DiscoveredDevice) {
+        // Unpair = disconnect and remove from UI, but keep backend trust (can auto-reconnect later)
         try {
-            uniffi.connected_ffi.unpairDevice(device.id)
+            uniffi.connected_ffi.unpairDeviceById(device.id)
+            // Remove from UI trusted list so it shows as disconnected
+            trustedDevices.remove(device.id)
+            // Notify the other device so they also update their UI
+            // Using "unpaired" reason which preserves backend trust on their side
+            try {
+                uniffi.connected_ffi.sendUnpairNotification(device.ip, device.port, "unpaired")
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to send unpair notification: ${e.message}")
+            }
+            android.widget.Toast.makeText(
+                context,
+                "Disconnected from ${device.name}",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Unpair failed", e)
+        }
+    }
+
+    fun forgetDevice(device: DiscoveredDevice) {
+        try {
+            uniffi.connected_ffi.forgetDeviceById(device.id)
             trustedDevices.remove(device.id)
             if (pendingPairing.contains(device.id)) {
                 pendingPairing.remove(device.id)
             }
+            // Notify the other device that we forgot them
+            try {
+                uniffi.connected_ffi.sendUnpairNotification(device.ip, device.port, "forgotten")
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to send forget notification: ${e.message}")
+            }
             getDevices()
-            android.widget.Toast.makeText(context, "Unpaired ${device.name}", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(
+                context,
+                "Forgot ${device.name} - will require re-approval to pair",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
         } catch (e: Exception) {
-            Log.e("ConnectedApp", "Unpair failed", e)
+            Log.e("ConnectedApp", "Forget device failed", e)
+            android.widget.Toast.makeText(context, "Forget failed: ${e.message}", android.widget.Toast.LENGTH_SHORT)
+                .show()
+        }
+    }
+
+    fun blockDevice(device: DiscoveredDevice) {
+        // Save ip/port before removing from list
+        val ip = device.ip
+        val port = device.port
+        try {
+            uniffi.connected_ffi.blockDeviceById(device.id)
+            trustedDevices.remove(device.id)
+            devices.removeAll { it.id == device.id }
+            if (pendingPairing.contains(device.id)) {
+                pendingPairing.remove(device.id)
+            }
+            // Notify the other device that we blocked them
+            try {
+                uniffi.connected_ffi.sendUnpairNotification(ip, port, "blocked")
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to send block notification: ${e.message}")
+            }
+            android.widget.Toast.makeText(
+                context,
+                "Blocked ${device.name} - device can no longer connect",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Block device failed", e)
+            android.widget.Toast.makeText(context, "Block failed: ${e.message}", android.widget.Toast.LENGTH_SHORT)
+                .show()
         }
     }
 
@@ -152,13 +241,15 @@ class ConnectedApp(private val context: Context) {
 
     fun trustDevice(request: PairingRequest) {
         try {
-            uniffi.connected_ffi.trustDevice(request.fingerprint, request.deviceName)
+            // Pass device_id so is_device_trusted() can find the peer later
+            uniffi.connected_ffi.trustDevice(request.fingerprint, request.deviceId, request.deviceName)
             pairingRequest.value = null
 
-            // Send handshake back to confirm pairing
+            // Send trust confirmation (NOT a new handshake) to the other device
+            // This lets them know we accepted their pairing request
             val device = devices.find { it.id == request.deviceId }
             if (device != null) {
-                pairDevice(device)
+                sendTrustConfirmation(device)
                 if (!trustedDevices.contains(device.id)) {
                     trustedDevices.add(device.id)
                 }
@@ -169,8 +260,23 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    private fun sendTrustConfirmation(device: DiscoveredDevice) {
+        try {
+            uniffi.connected_ffi.sendTrustConfirmation(device.ip, device.port)
+        } catch (e: Exception) {
+            Log.w("ConnectedApp", "Failed to send trust confirmation: ${e.message}")
+            // Don't fail the trust operation if confirmation fails
+        }
+    }
+
     fun rejectDevice(request: PairingRequest) {
-        // We can block it or just ignore. For now, just clear request.
+        try {
+            uniffi.connected_ffi.blockDevice(request.fingerprint)
+            android.widget.Toast.makeText(context, "Blocked ${request.deviceName}", android.widget.Toast.LENGTH_SHORT)
+                .show()
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Block device failed", e)
+        }
         pairingRequest.value = null
     }
 

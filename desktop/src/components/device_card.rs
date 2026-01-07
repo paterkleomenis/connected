@@ -11,7 +11,10 @@ pub fn DeviceCard(
     on_send_clipboard: EventHandler<DeviceInfo>,
     on_pair: EventHandler<DeviceInfo>,
     on_unpair: EventHandler<DeviceInfo>,
+    on_forget: EventHandler<DeviceInfo>,
+    on_block: EventHandler<DeviceInfo>,
 ) -> Element {
+    let mut show_more_actions = use_signal(|| false);
     let mut show_actions = use_signal(|| false);
 
     // Ping disabled for Phase 1 Refactor
@@ -107,17 +110,60 @@ pub fn DeviceCard(
                             },
                             "📋"
                         }
-                        button {
-                            class: "action-button danger",
-                            title: "Unpair / Forget",
-                            onclick: {
-                                let device = device.clone();
-                                move |evt: Event<MouseData>| {
+                        // More actions dropdown
+                        div {
+                            class: "action-dropdown",
+                            button {
+                                class: "action-button",
+                                title: "More actions",
+                                onclick: move |evt: Event<MouseData>| {
                                     evt.stop_propagation();
-                                    on_unpair.call(device.clone());
+                                    let current = *show_more_actions.read();
+                                    show_more_actions.set(!current);
+                                },
+                                "⋮"
+                            }
+                            if *show_more_actions.read() {
+                                div {
+                                    class: "dropdown-menu",
+                                    button {
+                                        class: "dropdown-item",
+                                        onclick: {
+                                            let device = device.clone();
+                                            move |evt: Event<MouseData>| {
+                                                evt.stop_propagation();
+                                                show_more_actions.set(false);
+                                                on_unpair.call(device.clone());
+                                            }
+                                        },
+                                        "💔 Unpair"
+                                    }
+                                    button {
+                                        class: "dropdown-item warning",
+                                        onclick: {
+                                            let device = device.clone();
+                                            move |evt: Event<MouseData>| {
+                                                evt.stop_propagation();
+                                                show_more_actions.set(false);
+                                                on_forget.call(device.clone());
+                                            }
+                                        },
+                                        "🔄 Forget"
+                                    }
+                                    button {
+                                        class: "dropdown-item danger",
+                                        onclick: {
+                                            let device = device.clone();
+                                            move |evt: Event<MouseData>| {
+                                                evt.stop_propagation();
+                                                show_more_actions.set(false);
+                                                on_block.call(device.clone());
+                                            }
+                                        },
+                                        "🚫 Block"
+                                    }
                                 }
-                            },
-                            "💔"
+                            }
                         }
                     }
                 }

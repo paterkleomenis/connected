@@ -5,7 +5,7 @@ use quinn::{
     ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig,
     VarInt,
 };
-use rustls::client::danger::HandshakeSignatureValid;
+
 use rustls::pki_types::CertificateDer;
 use rustls::DistinguishedName;
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,18 @@ pub enum Message {
         text: String,
     },
     FileTransfer,
+    /// Sent when a device unpairs/forgets/blocks another device
+    DeviceUnpaired {
+        device_id: String,
+        reason: UnpairReason,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UnpairReason {
+    Unpaired,
+    Forgotten,
+    Blocked,
 }
 
 struct ConnectionCache {
@@ -98,8 +110,8 @@ impl ConnectionCache {
         );
     }
 
-    fn remove(&mut self, addr: &SocketAddr) {
-        self.connections.remove(addr);
+    fn remove(&mut self, addr: &SocketAddr) -> Option<Connection> {
+        self.connections.remove(addr).map(|c| c.connection)
     }
 }
 
@@ -249,8 +261,36 @@ impl QuicTransport {
 
     pub fn invalidate_connection(&self, addr: &SocketAddr) {
         let mut cache = self.connection_cache.write();
-        cache.remove(addr);
-        debug!("Invalidated cached connection to {}", addr);
+        if let Some(connection) = cache.remove(addr) {
+            // Close the QUIC connection gracefully
+            connection.close(VarInt::from_u32(0), b"unpaired");
+            info!("Closed and invalidated connection to {}", addr);
+        } else {
+            debug!("No cached connection to invalidate for {}", addr);
+        }
+    }
+
+    pub async fn get_connection_fingerprint(&self, addr: SocketAddr) -> Option<String> {
+        let cache = self.connection_cache.read();
+        if let Some(cached) = cache.connections.get(&addr) {
+            if cached.connection.close_reason().is_none() {
+                return Self::get_peer_fingerprint(&cached.connection);
+            }
+        }
+        None
+    }
+
+    pub fn cleanup_stale_connections(&self) {
+        let mut cache = self.connection_cache.write();
+        let before = cache.connections.len();
+        let cutoff = std::time::Instant::now() - Duration::from_secs(300);
+        cache
+            .connections
+            .retain(|_, v| v.last_used > cutoff && v.connection.close_reason().is_none());
+        let after = cache.connections.len();
+        if before != after {
+            debug!("Cleaned up {} stale connections", before - after);
+        }
     }
 
     pub async fn send_ping(&self, target_addr: SocketAddr) -> Result<Duration> {
@@ -337,9 +377,7 @@ impl QuicTransport {
 
     pub async fn start_server(
         &self,
-
-        message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message)>,
-
+        message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message, Option<SendStream>)>,
         file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
     ) -> Result<()> {
         let endpoint = self.endpoint.clone();
@@ -394,13 +432,9 @@ impl QuicTransport {
 
     async fn handle_connection(
         connection: Connection,
-
         remote_addr: SocketAddr,
-
-        message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message)>,
-
+        message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message, Option<SendStream>)>,
         file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
-
         local_id: String,
     ) -> Result<()> {
         let fingerprint =
@@ -475,11 +509,21 @@ impl QuicTransport {
                                     send.finish()?;
                                 }
 
+                                Message::Handshake { .. } => {
+                                    // Pass send stream for Handshake so ack can be sent on same stream
+                                    let _ = message_tx.send((
+                                        remote_addr,
+                                        fingerprint.clone(),
+                                        message,
+                                        Some(send),
+                                    ));
+                                }
                                 _ => {
                                     let _ = message_tx.send((
                                         remote_addr,
                                         fingerprint.clone(),
                                         message,
+                                        None,
                                     ));
                                 }
                             }
@@ -615,7 +659,6 @@ impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        // Calculate fingerprint
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(end_entity.as_ref());
@@ -623,58 +666,75 @@ impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
 
         let ks = self.key_store.read();
 
-        if ks.is_trusted(&fingerprint) {
-            return Ok(rustls::client::danger::ServerCertVerified::assertion());
-        }
-
-        if ks.is_pairing_mode() {
-            info!(
-                "Allowing unknown/blocked peer in PAIRING MODE: {}",
-                fingerprint
-            );
-            return Ok(rustls::client::danger::ServerCertVerified::assertion());
-        }
-
+        // Always reject blocked peers, regardless of pairing mode
         if ks.is_blocked(&fingerprint) {
             warn!("Rejected BLOCKED peer: {}", fingerprint);
             return Err(rustls::Error::General("Peer is blocked".to_string()));
         }
 
-        warn!("Allowing Unknown Certificate (Untrusted): {}", fingerprint);
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
+        if ks.is_trusted(&fingerprint) {
+            debug!("Accepted trusted peer: {}", fingerprint);
+            return Ok(rustls::client::danger::ServerCertVerified::assertion());
+        }
+
+        // Forgotten peers can connect but will need to go through pairing request
+        // Allow connection so handshake message can be processed
+        if ks.is_forgotten(&fingerprint) {
+            info!(
+                "Allowing FORGOTTEN peer (will require re-pairing): {}",
+                fingerprint
+            );
+            return Ok(rustls::client::danger::ServerCertVerified::assertion());
+        }
+
+        // Only allow unknown peers if pairing mode is enabled
+        if ks.is_pairing_mode() {
+            info!("Allowing unknown peer in PAIRING MODE: {}", fingerprint);
+            return Ok(rustls::client::danger::ServerCertVerified::assertion());
+        }
+
+        // Reject unknown peers when not in pairing mode
+        warn!(
+            "Rejected unknown peer (not in pairing mode): {}",
+            fingerprint
+        );
+        Err(rustls::Error::General(
+            "Unknown peer - enable pairing mode to connect".to_string(),
+        ))
     }
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-            rustls::SignatureScheme::RSA_PSS_SHA384,
-            rustls::SignatureScheme::RSA_PSS_SHA512,
-            rustls::SignatureScheme::ED25519,
-        ]
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 
@@ -684,13 +744,20 @@ struct ClientVerifier {
 }
 
 impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
+    fn offer_client_auth(&self) -> bool {
+        true
+    }
+
+    fn client_auth_mandatory(&self) -> bool {
+        true
+    }
+
     fn verify_client_cert(
         &self,
         end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
         _now: rustls::pki_types::UnixTime,
     ) -> std::result::Result<rustls::server::danger::ClientCertVerified, rustls::Error> {
-        // Calculate fingerprint
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(end_entity.as_ref());
@@ -698,25 +765,32 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
 
         let ks = self.key_store.read();
 
-        if ks.is_trusted(&fingerprint) {
-            return Ok(rustls::server::danger::ClientCertVerified::assertion());
-        }
-
-        if ks.is_pairing_mode() {
-            info!(
-                "Allowing unknown/blocked client in PAIRING MODE: {}",
-                fingerprint
-            );
-            return Ok(rustls::server::danger::ClientCertVerified::assertion());
-        }
-
+        // Always reject blocked peers
         if ks.is_blocked(&fingerprint) {
             warn!("Rejected BLOCKED client: {}", fingerprint);
             return Err(rustls::Error::General("Client is blocked".to_string()));
         }
 
-        warn!(
-            "Allowing Unknown Client Certificate (Untrusted): {}",
+        if ks.is_trusted(&fingerprint) {
+            debug!("Accepted trusted client: {}", fingerprint);
+            return Ok(rustls::server::danger::ClientCertVerified::assertion());
+        }
+
+        // Forgotten clients can connect but will trigger pairing request
+        if ks.is_forgotten(&fingerprint) {
+            info!(
+                "Allowing FORGOTTEN client (will require re-pairing): {}",
+                fingerprint
+            );
+            return Ok(rustls::server::danger::ClientCertVerified::assertion());
+        }
+
+        // Allow unknown clients to connect so we can show pairing dialog
+        // The trust decision is made at the application layer (user clicks Trust/Reject)
+        // NOT at the TLS layer. This enables incoming pairing requests to be received
+        // and displayed to the user regardless of pairing mode.
+        info!(
+            "Allowing unknown client to connect (will show pairing request): {}",
             fingerprint
         );
         Ok(rustls::server::danger::ClientCertVerified::assertion())
@@ -724,35 +798,36 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-            rustls::SignatureScheme::RSA_PSS_SHA384,
-            rustls::SignatureScheme::RSA_PSS_SHA512,
-            rustls::SignatureScheme::ED25519,
-        ]
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 
     fn root_hint_subjects(&self) -> &[DistinguishedName] {

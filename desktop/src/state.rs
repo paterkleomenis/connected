@@ -56,6 +56,16 @@ pub struct PairingRequest {
     pub device_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileTransferRequest {
+    pub id: String,
+    pub filename: String,
+    pub size: u64,
+    pub from_device: String,
+    pub from_fingerprint: String,
+    pub timestamp: std::time::Instant,
+}
+
 // ============================================================================
 // Global Stores
 // ============================================================================
@@ -67,6 +77,8 @@ static NOTIFICATION_COUNTER: OnceLock<Arc<Mutex<u64>>> = OnceLock::new();
 static LAST_CLIPBOARD: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 static PAIRING_REQUESTS: OnceLock<Arc<Mutex<Vec<PairingRequest>>>> = OnceLock::new();
 static PENDING_PAIRINGS: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
+static FILE_TRANSFER_REQUESTS: OnceLock<Arc<Mutex<HashMap<String, FileTransferRequest>>>> =
+    OnceLock::new();
 
 pub fn get_devices_store() -> &'static Arc<Mutex<HashMap<String, DeviceInfo>>> {
     DEVICES.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
@@ -94,6 +106,20 @@ pub fn get_pairing_requests() -> &'static Arc<Mutex<Vec<PairingRequest>>> {
 
 pub fn get_pending_pairings() -> &'static Arc<Mutex<HashSet<String>>> {
     PENDING_PAIRINGS.get_or_init(|| Arc::new(Mutex::new(HashSet::new())))
+}
+
+pub fn get_file_transfer_requests() -> &'static Arc<Mutex<HashMap<String, FileTransferRequest>>> {
+    FILE_TRANSFER_REQUESTS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn add_file_transfer_request(request: FileTransferRequest) {
+    let mut requests = get_file_transfer_requests().lock().unwrap();
+    requests.insert(request.id.clone(), request);
+}
+
+pub fn remove_file_transfer_request(id: &str) -> Option<FileTransferRequest> {
+    let mut requests = get_file_transfer_requests().lock().unwrap();
+    requests.remove(id)
 }
 
 pub fn add_notification(title: &str, message: &str, icon: &'static str) {

@@ -278,6 +278,12 @@ fn App() -> Element {
                                     },
                                     on_unpair: move |d: DeviceInfo| {
                                         action_tx.send(AppAction::UnpairDevice { fingerprint: "TODO".to_string(), device_id: d.id.clone() });
+                                    },
+                                    on_forget: move |d: DeviceInfo| {
+                                        action_tx.send(AppAction::ForgetDevice { fingerprint: "TODO".to_string(), device_id: d.id.clone() });
+                                    },
+                                    on_block: move |d: DeviceInfo| {
+                                        action_tx.send(AppAction::BlockDevice { fingerprint: "TODO".to_string(), device_id: d.id.clone() });
                                     }
                                 }
                             }

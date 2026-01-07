@@ -8,8 +8,12 @@ use tracing::info;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum PeerStatus {
+    /// Device is trusted and can connect/transfer freely
     Trusted,
+    /// Device is blocked - cannot connect even in pairing mode
     Blocked,
+    /// Device was forgotten - completely removed, requires full pairing request flow
+    Forgotten,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -160,6 +164,13 @@ impl KeyStore {
                 .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
             std::fs::write(&new_path, data).map_err(ConnectedError::Io)?;
 
+            // Remove old file after successful migration
+            if let Err(e) = std::fs::remove_file(&old_path) {
+                info!("Could not remove old known_hosts.json: {}", e);
+            } else {
+                info!("Removed legacy known_hosts.json after migration");
+            }
+
             Ok(new_peers)
         } else {
             Ok(KnownPeers::default())
@@ -217,6 +228,8 @@ impl KeyStore {
         self.save_peers()
     }
 
+    /// Remove peer completely from known peers list
+    /// This allows re-pairing without any restrictions
     pub fn remove_peer(&mut self, fingerprint: &str) -> Result<()> {
         if self.known_peers.peers.remove(fingerprint).is_some() {
             self.save_peers()
@@ -225,6 +238,7 @@ impl KeyStore {
         }
     }
 
+    /// Remove peer by device_id
     pub fn remove_peer_by_id(&mut self, device_id: &str) -> Result<()> {
         let fingerprint = self
             .known_peers
@@ -235,6 +249,50 @@ impl KeyStore {
 
         if let Some(fp) = fingerprint {
             self.remove_peer(&fp)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Forget a peer - removes trust but keeps record to prevent auto-repairing
+    /// The peer will need to go through pairing request flow again
+    pub fn forget_peer(&mut self, fingerprint: String) -> Result<()> {
+        if let Some(peer) = self.known_peers.peers.get_mut(&fingerprint) {
+            peer.status = PeerStatus::Forgotten;
+            peer.last_seen = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+        } else {
+            // If not known, add as forgotten to prevent auto-trust
+            self.known_peers.peers.insert(
+                fingerprint.clone(),
+                PeerInfo {
+                    fingerprint,
+                    status: PeerStatus::Forgotten,
+                    device_id: None,
+                    name: None,
+                    last_seen: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                },
+            );
+        }
+        self.save_peers()
+    }
+
+    /// Forget peer by device_id
+    pub fn forget_peer_by_id(&mut self, device_id: &str) -> Result<()> {
+        let fingerprint = self
+            .known_peers
+            .peers
+            .values()
+            .find(|p| p.device_id.as_deref() == Some(device_id))
+            .map(|p| p.fingerprint.clone());
+
+        if let Some(fp) = fingerprint {
+            self.forget_peer(fp)
         } else {
             Ok(())
         }
@@ -260,6 +318,22 @@ impl KeyStore {
             return peer.status == PeerStatus::Blocked;
         }
         false
+    }
+
+    /// Check if peer was forgotten (requires re-pairing with user confirmation)
+    pub fn is_forgotten(&self, fingerprint: &str) -> bool {
+        if let Some(peer) = self.known_peers.peers.get(fingerprint) {
+            return peer.status == PeerStatus::Forgotten;
+        }
+        false
+    }
+
+    /// Check if peer should trigger a pairing request (unknown or forgotten)
+    pub fn needs_pairing_request(&self, fingerprint: &str) -> bool {
+        match self.known_peers.peers.get(fingerprint) {
+            None => true, // Unknown peer
+            Some(peer) => peer.status == PeerStatus::Forgotten,
+        }
     }
 
     pub fn get_peer_name(&self, fingerprint: &str) -> Option<String> {
@@ -298,6 +372,28 @@ impl KeyStore {
             .filter(|p| p.status == PeerStatus::Trusted)
             .cloned()
             .collect()
+    }
+
+    pub fn get_forgotten_peers(&self) -> Vec<PeerInfo> {
+        self.known_peers
+            .peers
+            .values()
+            .filter(|p| p.status == PeerStatus::Forgotten)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_blocked_peers(&self) -> Vec<PeerInfo> {
+        self.known_peers
+            .peers
+            .values()
+            .filter(|p| p.status == PeerStatus::Blocked)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_all_known_peers(&self) -> Vec<PeerInfo> {
+        self.known_peers.peers.values().cloned().collect()
     }
 }
 

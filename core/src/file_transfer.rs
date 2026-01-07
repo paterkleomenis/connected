@@ -36,6 +36,12 @@ pub enum FileTransferMessage {
 
 #[derive(Debug, Clone)]
 pub enum TransferProgress {
+    /// File transfer request received, waiting for user approval
+    Pending {
+        filename: String,
+        total_size: u64,
+        mime_type: Option<String>,
+    },
     Starting {
         filename: String,
         total_size: u64,
@@ -121,14 +127,11 @@ impl FileTransfer {
                         error: format!("Rejected: {}", reason),
                     });
                 }
-                return Err(ConnectedError::PingFailed(format!(
-                    "Transfer rejected: {}",
-                    reason
-                )));
+                return Err(ConnectedError::TransferRejected(reason));
             }
             _ => {
-                return Err(ConnectedError::PingFailed(
-                    "Unexpected response".to_string(),
+                return Err(ConnectedError::Protocol(
+                    "Unexpected response to file transfer request".to_string(),
                 ));
             }
         }
@@ -191,12 +194,16 @@ impl FileTransfer {
             FileTransferMessage::Error { message } => {
                 error!("Transfer error: {}", message);
                 if let Some(ref tx) = progress_tx {
-                    let _ = tx.send(TransferProgress::Failed { error: message });
+                    let _ = tx.send(TransferProgress::Failed {
+                        error: message.clone(),
+                    });
                 }
-                return Err(ConnectedError::PingFailed("Transfer failed".to_string()));
+                return Err(ConnectedError::TransferFailed(message));
             }
             _ => {
-                warn!("Unexpected response after completion");
+                return Err(ConnectedError::Protocol(
+                    "Unexpected response after file transfer completion".to_string(),
+                ));
             }
         }
 
@@ -205,12 +212,14 @@ impl FileTransfer {
     }
 
     /// Receive a file transfer on an existing stream
+    /// This version reads the request, waits for accept/reject, then receives the file
     pub async fn handle_incoming(
         mut send: SendStream,
         mut recv: RecvStream,
         save_dir: impl AsRef<Path>,
         progress_tx: Option<mpsc::UnboundedSender<TransferProgress>>,
         auto_accept: bool,
+        accept_rx: Option<tokio::sync::oneshot::Receiver<bool>>,
     ) -> Result<String> {
         // Read Request
         let request: FileTransferMessage = recv_message(&mut recv).await?;
@@ -222,8 +231,8 @@ impl FileTransfer {
                 mime_type,
             } => (filename, size, mime_type),
             _ => {
-                return Err(ConnectedError::PingFailed(
-                    "Expected SendRequest".to_string(),
+                return Err(ConnectedError::Protocol(
+                    "Expected SendRequest message".to_string(),
                 ));
             }
         };
@@ -233,25 +242,54 @@ impl FileTransfer {
             filename, file_size
         );
 
-        // Notify progress
+        // If we need user approval, emit Pending first
+        if !auto_accept {
+            if let Some(ref tx) = progress_tx {
+                let _ = tx.send(TransferProgress::Pending {
+                    filename: filename.clone(),
+                    total_size: file_size,
+                    mime_type: _mime_type.clone(),
+                });
+            }
+        }
+
+        // Accept or reject based on auto_accept or user decision
+        let should_accept = if auto_accept {
+            true
+        } else if let Some(rx) = accept_rx {
+            // Wait for user decision with a timeout
+            match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+                Ok(Ok(accepted)) => accepted,
+                Ok(Err(_)) => false, // Channel closed, treat as rejection
+                Err(_) => false,     // Timeout, treat as rejection
+            }
+        } else {
+            false
+        };
+
+        if !should_accept {
+            let reject = FileTransferMessage::Reject {
+                reason: "User declined".to_string(),
+            };
+            send_message(&mut send, &reject).await?;
+            if let Some(ref tx) = progress_tx {
+                let _ = tx.send(TransferProgress::Cancelled);
+            }
+            return Err(ConnectedError::TransferRejected(
+                "User declined".to_string(),
+            ));
+        }
+
+        let accept = FileTransferMessage::Accept;
+        send_message(&mut send, &accept).await?;
+
+        // Now notify that transfer is starting
         if let Some(ref tx) = progress_tx {
             let _ = tx.send(TransferProgress::Starting {
                 filename: filename.clone(),
                 total_size: file_size,
             });
         }
-
-        // Accept or reject
-        if !auto_accept {
-            let reject = FileTransferMessage::Reject {
-                reason: "User declined".to_string(),
-            };
-            send_message(&mut send, &reject).await?;
-            return Err(ConnectedError::PingFailed("User declined".to_string()));
-        }
-
-        let accept = FileTransferMessage::Accept;
-        send_message(&mut send, &accept).await?;
 
         // Sanitize filename
         let safe_filename = sanitize_filename(&filename);
@@ -309,13 +347,16 @@ impl FileTransfer {
             FileTransferMessage::Complete { checksum } => {
                 let our_checksum = hasher.finalize().to_string();
                 if our_checksum != checksum {
-                    error!("Checksum mismatch");
+                    error!(
+                        "Checksum mismatch: expected {}, got {}",
+                        checksum, our_checksum
+                    );
                     let error = FileTransferMessage::Error {
                         message: "Checksum mismatch".to_string(),
                     };
                     send_message(&mut send, &error).await?;
                     let _ = tokio::fs::remove_file(&save_path).await;
-                    return Err(ConnectedError::PingFailed("Checksum mismatch".to_string()));
+                    return Err(ConnectedError::ChecksumMismatch);
                 }
 
                 let ack = FileTransferMessage::Ack;
@@ -330,7 +371,25 @@ impl FileTransfer {
 
                 Ok(save_path.to_string_lossy().to_string())
             }
-            _ => Err(ConnectedError::PingFailed(
+            FileTransferMessage::Cancel => {
+                let _ = tokio::fs::remove_file(&save_path).await;
+                if let Some(ref tx) = progress_tx {
+                    let _ = tx.send(TransferProgress::Cancelled);
+                }
+                Err(ConnectedError::TransferFailed(
+                    "Transfer cancelled by sender".to_string(),
+                ))
+            }
+            FileTransferMessage::Error { message } => {
+                let _ = tokio::fs::remove_file(&save_path).await;
+                if let Some(ref tx) = progress_tx {
+                    let _ = tx.send(TransferProgress::Failed {
+                        error: message.clone(),
+                    });
+                }
+                Err(ConnectedError::TransferFailed(message))
+            }
+            _ => Err(ConnectedError::Protocol(
                 "Expected Complete message".to_string(),
             )),
         }

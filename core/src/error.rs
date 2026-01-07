@@ -58,6 +58,27 @@ pub enum ConnectedError {
 
     #[error("Connection error: {0}")]
     Connection(String),
+
+    #[error("File transfer rejected: {0}")]
+    TransferRejected(String),
+
+    #[error("File transfer failed: {0}")]
+    TransferFailed(String),
+
+    #[error("Checksum mismatch")]
+    ChecksumMismatch,
+
+    #[error("Protocol error: {0}")]
+    Protocol(String),
+
+    #[error("Pairing failed: {0}")]
+    PairingFailed(String),
+
+    #[error("Peer not trusted")]
+    PeerNotTrusted,
+
+    #[error("Peer is blocked")]
+    PeerBlocked,
 }
 
 pub type Result<T> = std::result::Result<T, ConnectedError>;

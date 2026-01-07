@@ -1,4 +1,5 @@
 use crate::device::Device;
+use crate::transport::UnpairReason;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +26,14 @@ pub enum ConnectedEvent {
     TransferCompleted { id: String, filename: String },
     /// File transfer failed
     TransferFailed { id: String, error: String },
+    /// Incoming file transfer request (for user confirmation)
+    TransferRequest {
+        id: String,
+        filename: String,
+        size: u64,
+        from_device: String,
+        from_fingerprint: String,
+    },
     /// Clipboard content received
     ClipboardReceived {
         content: String,
@@ -38,6 +47,12 @@ pub enum ConnectedEvent {
     },
     /// Pairing mode enabled/disabled
     PairingModeChanged(bool),
+    /// A paired device has unpaired/forgotten/blocked us
+    DeviceUnpaired {
+        device_id: String,
+        device_name: String,
+        reason: UnpairReason,
+    },
     /// Critical error in a subsystem
     Error(String),
 }

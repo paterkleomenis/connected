@@ -623,11 +623,11 @@ class ConnectedSdk private constructor() {
         }
     }
 
-    fun trustDevice(fingerprint: String, name: String) {
+    fun trustDevice(fingerprint: String, deviceId: String, name: String) {
         checkInitialized()
         try {
-            uniffi.connected_ffi.trustDevice(fingerprint, name)
-            Log.d(TAG, "Trusted device $name ($fingerprint)")
+            uniffi.connected_ffi.trustDevice(fingerprint, deviceId, name)
+            Log.d(TAG, "Trusted device $name ($fingerprint, $deviceId)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to trust device: ${e.message}")
         }
