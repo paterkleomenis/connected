@@ -2,7 +2,7 @@ use crate::device::{Device, DeviceType};
 use crate::discovery::{DiscoveryEvent, DiscoveryService};
 use crate::error::{ConnectedError, Result};
 use crate::events::{ConnectedEvent, TransferDirection};
-use crate::file_transfer::{FileTransfer, FileTransferMessage, TransferProgress};
+use crate::file_transfer::{FileTransfer, TransferProgress};
 use crate::security::KeyStore;
 use crate::transport::{Message, QuicTransport};
 use parking_lot::RwLock;
@@ -44,10 +44,9 @@ impl ConnectedClient {
         local_ip: IpAddr,
         storage_path: Option<PathBuf>,
     ) -> Result<Arc<Self>> {
-        let device_id = uuid::Uuid::new_v4().to_string(); // In reality, we should load this from persistence too!
-
-        // Load KeyStore
+        // Load KeyStore first to get the persisted device_id
         let key_store = Arc::new(RwLock::new(KeyStore::new(storage_path.clone())?));
+        let device_id = key_store.read().device_id().to_string();
 
         let download_dir = if let Some(p) = storage_path {
             p.join("downloads")
@@ -120,22 +119,73 @@ impl ConnectedClient {
             .send(ConnectedEvent::PairingModeChanged(enabled));
     }
 
-    pub fn trust_device(&self, fingerprint: String, name: String) -> Result<()> {
+    pub fn trust_device(
+        &self,
+        fingerprint: String,
+        device_id: Option<String>,
+        name: String,
+    ) -> Result<()> {
         // We don't have the device ID here usually unless we cached the handshake request.
         // For now, we trust by fingerprint. The ID can be updated later or passed if known.
         self.key_store
             .write()
-            .trust_peer(fingerprint, None, Some(name))
+            .trust_peer(fingerprint, device_id, Some(name))
     }
 
     pub fn block_device(&self, fingerprint: String) -> Result<()> {
         self.key_store.write().block_peer(fingerprint)
     }
 
+    pub fn is_device_trusted(&self, device_id: &str) -> bool {
+        self.key_store
+            .read()
+            .get_trusted_peers()
+            .iter()
+            .any(|p| p.device_id.as_deref() == Some(device_id))
+    }
+
+    pub fn get_trusted_peers(&self) -> Vec<crate::security::PeerInfo> {
+        self.key_store.read().get_trusted_peers()
+    }
+
     pub async fn send_ping(&self, target_ip: IpAddr, target_port: u16) -> Result<u64> {
         let addr = SocketAddr::new(target_ip, target_port);
         let rtt = self.transport.send_ping(addr).await?;
         Ok(rtt.as_millis() as u64)
+    }
+
+    pub async fn send_handshake(&self, target_ip: IpAddr, target_port: u16) -> Result<()> {
+        let addr = SocketAddr::new(target_ip, target_port);
+        let (mut send, _recv) = self
+            .transport
+            .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+            .await?;
+
+        let msg = Message::Handshake {
+            device_id: self.local_device.id.clone(),
+            device_name: self.local_device.name.clone(),
+        };
+
+        let data = serde_json::to_vec(&msg)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let len_bytes = (data.len() as u32).to_be_bytes();
+
+        // Write Stream Type (Already handled by open_stream? No, open_stream writes the type byte!)
+        // Wait, check QuicTransport::open_stream in transport.rs
+        // It does: send.write_all(&[stream_type]).await?;
+        // So we don't write the type byte here.
+
+        // Write Length
+        send.write_all(&len_bytes)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        // Write Data
+        send.write_all(&data)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.finish().map_err(|e| ConnectedError::Io(e.into()))?;
+
+        Ok(())
     }
 
     pub async fn send_clipboard(
@@ -145,21 +195,24 @@ impl ConnectedClient {
         text: String,
     ) -> Result<()> {
         let addr = SocketAddr::new(target_ip, target_port);
-        let (mut send, mut recv) = self
+        let (mut send, _recv) = self
             .transport
             .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
             .await?;
 
-        let msg = FileTransferMessage::ClipboardText { text };
-        // let (mut send, mut recv) = connection.open_bi().await?; // Replaced by open_stream
+        let msg = Message::Clipboard { text };
 
-        // Using transport helper if possible, otherwise duplicating simple send logic
-        // We need to use the helpers from file_transfer now since we made them pub(crate)
+        let data = serde_json::to_vec(&msg)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let len_bytes = (data.len() as u32).to_be_bytes();
 
-        crate::file_transfer::send_message(&mut send, &msg).await?;
-
-        // Wait for Ack
-        let _: FileTransferMessage = crate::file_transfer::recv_message(&mut recv).await?;
+        send.write_all(&len_bytes)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.write_all(&data)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.finish().map_err(|e| ConnectedError::Io(e.into()))?;
 
         Ok(())
     }
@@ -244,6 +297,41 @@ impl ConnectedClient {
         Ok(())
     }
 
+    pub fn remove_trusted_peer(&self, fingerprint: &str) -> Result<()> {
+        self.key_store.write().remove_peer(fingerprint)
+    }
+
+    pub fn remove_trusted_peer_by_id(&self, device_id: &str) -> Result<()> {
+        self.key_store.write().remove_peer_by_id(device_id)
+    }
+
+    pub async fn send_handshake_ack(&self, target_ip: IpAddr, target_port: u16) -> Result<()> {
+        let addr = SocketAddr::new(target_ip, target_port);
+        let (mut send, _recv) = self
+            .transport
+            .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+            .await?;
+
+        let msg = Message::HandshakeAck {
+            device_id: self.local_device.id.clone(),
+            device_name: self.local_device.name.clone(),
+        };
+
+        let data = serde_json::to_vec(&msg)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let len_bytes = (data.len() as u32).to_be_bytes();
+
+        send.write_all(&len_bytes)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.write_all(&data)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.finish().map_err(|e| ConnectedError::Io(e.into()))?;
+
+        Ok(())
+    }
+
     async fn start_background_tasks(&self) -> Result<()> {
         // 1. Discovery Listener
         let (disco_tx, mut disco_rx) = mpsc::unbounded_channel();
@@ -276,11 +364,15 @@ impl ConnectedClient {
         self.transport.start_server(msg_tx, file_tx).await?;
 
         let event_tx = self.event_tx.clone();
-        let key_store = self.key_store.clone();
+        let key_store_control = self.key_store.clone();
+        let transport_control = self.transport.clone();
+        let local_id = self.local_device.id.clone();
+        let local_name = self.local_device.name.clone();
 
         // Handle Control Messages
         tokio::spawn(async move {
-            while let Some((_addr, fingerprint, msg)) = msg_rx.recv().await {
+            let key_store = key_store_control;
+            while let Some((addr, fingerprint, msg)) = msg_rx.recv().await {
                 match msg {
                     Message::Handshake {
                         device_id,
@@ -288,18 +380,185 @@ impl ConnectedClient {
                     } => {
                         let is_trusted = key_store.read().is_trusted(&fingerprint);
                         if !is_trusted {
-                            // It must be in pairing mode then, otherwise PeerVerifier would have rejected it.
-                            info!(
-                                "Received Handshake from untrusted peer (Pairing Mode): {} - {}",
-                                device_name, fingerprint
-                            );
-                            let _ = event_tx.send(ConnectedEvent::PairingRequest {
-                                fingerprint: fingerprint.clone(),
-                                device_name,
-                                device_id,
-                            });
+                            // If we are in pairing mode, we initiated or are expecting a connection.
+                            // We should accept this Handshake as confirmation.
+                            if key_store.read().is_pairing_mode() {
+                                info!(
+                                    "Auto-trusting peer from Handshake (Pairing Mode): {} - {}",
+                                    device_name, fingerprint
+                                );
+                                if let Err(e) = key_store.write().trust_peer(
+                                    fingerprint.clone(),
+                                    Some(device_id.clone()),
+                                    Some(device_name.clone()),
+                                ) {
+                                    error!("Failed to auto-trust peer: {}", e);
+                                }
+
+                                // Send Ack back
+                                let t = transport_control.clone();
+                                let lid = local_id.clone();
+                                let lname = local_name.clone();
+
+                                tokio::spawn(async move {
+                                    let msg = Message::HandshakeAck {
+                                        device_id: lid,
+                                        device_name: lname,
+                                    };
+                                    if let Ok((mut send, _recv)) = t
+                                        .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+                                        .await
+                                    {
+                                        if let Ok(data) = serde_json::to_vec(&msg) {
+                                            let len_bytes = (data.len() as u32).to_be_bytes();
+                                            let _ = send.write_all(&len_bytes).await;
+                                            let _ = send.write_all(&data).await;
+                                            let _ = send.finish();
+                                        }
+                                    }
+                                });
+
+                                // Notify UI
+                                use crate::device::DeviceType;
+                                let d = Device::new(
+                                    device_id,
+                                    device_name,
+                                    addr.ip(),
+                                    addr.port(),
+                                    DeviceType::Unknown,
+                                );
+                                let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
+                            } else {
+                                // Passive side: We are not in pairing mode, so this is a new unsolicited request.
+                                info!(
+                                    "Received Handshake from untrusted peer (Passive): {} - {}",
+                                    device_name, fingerprint
+                                );
+                                let _ = event_tx.send(ConnectedEvent::PairingRequest {
+                                    fingerprint: fingerprint.clone(),
+                                    device_name,
+                                    device_id,
+                                });
+                            }
                         } else {
                             debug!("Received Handshake from trusted peer: {}", device_name);
+                            // Update device_id for this trusted peer if it's missing or changed
+                            if let Err(e) = key_store.write().trust_peer(
+                                fingerprint.clone(),
+                                Some(device_id),
+                                Some(device_name.clone()),
+                            ) {
+                                error!("Failed to update trusted peer info: {}", e);
+                            }
+
+                            // Send HandshakeAck to confirm we are connected
+                            let t = transport_control.clone();
+                            let lid = local_id.clone();
+                            let lname = local_name.clone();
+
+                            tokio::spawn(async move {
+                                let msg = Message::HandshakeAck {
+                                    device_id: lid,
+                                    device_name: lname,
+                                };
+                                if let Ok((mut send, _recv)) = t
+                                    .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+                                    .await
+                                {
+                                    if let Ok(data) = serde_json::to_vec(&msg) {
+                                        let len_bytes = (data.len() as u32).to_be_bytes();
+                                        let _ = send.write_all(&len_bytes).await;
+                                        let _ = send.write_all(&data).await;
+                                        let _ = send.finish();
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    Message::HandshakeAck {
+                        device_id: remote_device_id,
+                        device_name,
+                    } => {
+                        info!("Received HandshakeAck from {}", device_name);
+
+                        let is_trusted = key_store.read().is_trusted(&fingerprint);
+                        if !is_trusted {
+                            // If we initiated pairing (pairing_mode = true) and they Acked,
+                            // we should Auto-Trust them because we asked for it.
+                            if key_store.read().is_pairing_mode() {
+                                info!(
+                                    "Auto-trusting peer from HandshakeAck (Pairing Mode): {} - {}",
+                                    device_name, fingerprint
+                                );
+                                if let Err(e) = key_store.write().trust_peer(
+                                    fingerprint.clone(),
+                                    Some(remote_device_id.clone()),
+                                    Some(device_name.clone()),
+                                ) {
+                                    error!("Failed to auto-trust peer: {}", e);
+                                }
+
+                                // Turn off pairing mode now that we succeeded?
+                                // Maybe keep it on briefly or let UI handle it.
+                                // But definitely don't emit PairingRequest.
+
+                                // Emit DeviceFound to refresh UI
+                                use crate::device::DeviceType;
+                                let d = Device::new(
+                                    remote_device_id,
+                                    device_name,
+                                    addr.ip(),
+                                    addr.port(),
+                                    DeviceType::Unknown,
+                                );
+                                let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
+                            } else {
+                                // We are NOT in pairing mode, but they sent an Ack?
+                                // This is weird. Maybe we forgot them?
+                                // Treat as request.
+                                info!("Received HandshakeAck from untrusted peer (Not in Pairing Mode): {} - {}", device_name, fingerprint);
+                                let _ = event_tx.send(ConnectedEvent::PairingRequest {
+                                    fingerprint: fingerprint.clone(),
+                                    device_name,
+                                    device_id: remote_device_id,
+                                });
+                            }
+                        } else {
+                            // Already trusted. Update info just in case (e.g. name change or ID sync)
+                            if let Err(e) = key_store.write().trust_peer(
+                                fingerprint.clone(),
+                                Some(remote_device_id.clone()),
+                                Some(device_name.clone()),
+                            ) {
+                                error!("Failed to update trusted peer info on Ack: {}", e);
+                            }
+
+                            // Force UI refresh
+                            use crate::device::DeviceType;
+                            let d = Device::new(
+                                remote_device_id,
+                                device_name,
+                                addr.ip(),
+                                addr.port(),
+                                DeviceType::Unknown,
+                            );
+                            let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
+                        }
+                    }
+                    Message::Clipboard { text } => {
+                        let is_trusted = key_store.read().is_trusted(&fingerprint);
+                        if is_trusted {
+                            // Find device name if possible
+                            let from_device = key_store
+                                .read()
+                                .get_peer_name(&fingerprint)
+                                .unwrap_or_else(|| "Unknown".to_string());
+                            let _ = event_tx.send(ConnectedEvent::ClipboardReceived {
+                                content: text,
+                                from_device,
+                            });
+                        } else {
+                            error!("Rejected Clipboard from untrusted peer: {}", fingerprint);
                         }
                     }
                     _ => {}
@@ -310,9 +569,20 @@ impl ConnectedClient {
         // Handle File Streams
         let event_tx = self.event_tx.clone();
         let download_dir = self.download_dir.clone();
+        let key_store_files = self.key_store.clone();
 
         tokio::spawn(async move {
+            let key_store = key_store_files;
             while let Some((fingerprint, send, recv)) = file_rx.recv().await {
+                let is_trusted = key_store.read().is_trusted(&fingerprint);
+                if !is_trusted {
+                    error!("Rejected File Stream from untrusted peer: {}", fingerprint);
+                    // We can't easily close just this stream without dropping send/recv,
+                    // which happens when we continue loop (they go out of scope).
+                    // Sending an error frame might be polite but strict drop is safer.
+                    continue;
+                }
+
                 let event_tx = event_tx.clone();
                 let download_dir = download_dir.clone();
                 let fingerprint = fingerprint.clone();
@@ -393,8 +663,51 @@ impl ConnectedClient {
     }
 }
 
+impl ConnectedClient {
+    // ... existing methods ...
+
+    pub async fn broadcast_clipboard(&self, text: String) -> Result<usize> {
+        let devices = self.get_discovered_devices();
+        let trusted_peers = self.key_store.read().get_trusted_peers();
+
+        // Create a set of trusted device IDs
+        let trusted_ids: std::collections::HashSet<String> = trusted_peers
+            .into_iter()
+            .filter_map(|p| p.device_id)
+            .collect();
+
+        let mut sent_count = 0;
+
+        for device in devices {
+            if trusted_ids.contains(&device.id) {
+                if let Some(ip) = device.ip_addr() {
+                    let port = device.port;
+                    let txt = text.clone();
+                    // We need a way to call send_clipboard async without blocking the loop
+                    // But send_clipboard is on &self.
+                    // We can't easily spawn a task that uses &self unless we clone the Arc holding self.
+                    // But here we are inside &self method.
+                    // We can assume the caller will handle concurrency if they want,
+                    // OR we can just await sequentially which is safer for now to avoid too many connections.
+                    // Given it's QUIC, it should be fast.
+
+                    // Actually, let's just do it sequentially for now.
+                    if let Err(e) = self.send_clipboard(ip, port, txt).await {
+                        error!("Failed to broadcast clipboard to {}: {}", device.name, e);
+                    } else {
+                        sent_count += 1;
+                    }
+                }
+            }
+        }
+        Ok(sent_count)
+    }
+}
+
 fn get_local_ip() -> Option<IpAddr> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    socket.local_addr().ok().map(|a| a.ip())
+    if_addrs::get_if_addrs()
+        .ok()?
+        .into_iter()
+        .find(|iface| !iface.is_loopback() && iface.ip().is_ipv4())
+        .map(|iface| iface.ip())
 }

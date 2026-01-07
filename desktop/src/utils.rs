@@ -1,67 +1,25 @@
-use std::process::Command;
+use arboard::Clipboard;
+use tracing::warn;
 
 pub fn get_system_clipboard() -> String {
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(output) = Command::new("xclip")
-            .args(["-selection", "clipboard", "-o"])
-            .output()
-        {
-            if output.status.success() {
-                return String::from_utf8_lossy(&output.stdout).to_string();
-            }
-        }
-        if let Ok(output) = Command::new("wl-paste").output() {
-            if output.status.success() {
-                return String::from_utf8_lossy(&output.stdout).to_string();
-            }
+    match Clipboard::new() {
+        Ok(mut clipboard) => clipboard.get_text().unwrap_or_default(),
+        Err(e) => {
+            warn!("Failed to access clipboard: {}", e);
+            String::new()
         }
     }
-
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(output) = Command::new("pbpaste").output() {
-            if output.status.success() {
-                return String::from_utf8_lossy(&output.stdout).to_string();
-            }
-        }
-    }
-
-    String::new()
 }
 
 pub fn set_system_clipboard(text: &str) {
-    #[cfg(target_os = "linux")]
-    {
-        use std::io::Write;
-        if let Ok(mut child) = Command::new("xclip")
-            .args(["-selection", "clipboard"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-        {
-            if let Some(stdin) = child.stdin.as_mut() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-        } else if let Ok(mut child) = Command::new("wl-copy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-        {
-            if let Some(stdin) = child.stdin.as_mut() {
-                let _ = stdin.write_all(text.as_bytes());
+    match Clipboard::new() {
+        Ok(mut clipboard) => {
+            if let Err(e) = clipboard.set_text(text) {
+                warn!("Failed to set clipboard: {}", e);
             }
         }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        use std::io::Write;
-        if let Ok(mut child) = Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-        {
-            if let Some(stdin) = child.stdin.as_mut() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
+        Err(e) => {
+            warn!("Failed to access clipboard: {}", e);
         }
     }
 }

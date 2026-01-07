@@ -4,7 +4,7 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum PeerStatus {
@@ -31,6 +31,7 @@ struct KnownPeers {
 pub struct KeyStore {
     cert: CertificateDer<'static>,
     key: PrivatePkcs8KeyDer<'static>,
+    device_id: String,
     known_peers: KnownPeers,
     storage_dir: PathBuf,
     pairing_mode: bool,
@@ -52,21 +53,26 @@ impl KeyStore {
             std::fs::create_dir_all(&storage_dir).map_err(|e| ConnectedError::Io(e))?;
         }
 
-        let (cert, key) = Self::load_or_create_identity(&storage_dir)?;
+        let (cert, key, device_id) = Self::load_or_create_identity(&storage_dir)?;
         let known_peers = Self::load_known_peers(&storage_dir)?;
 
         Ok(Self {
             cert,
             key,
+            device_id,
             known_peers,
             storage_dir,
             pairing_mode: false,
         })
     }
 
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
     fn load_or_create_identity(
         storage_dir: &PathBuf,
-    ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>)> {
+    ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>, String)> {
         let identity_path = storage_dir.join("identity.json");
 
         if identity_path.exists() {
@@ -82,11 +88,13 @@ impl KeyStore {
 
         let cert_der = cert.der().to_vec();
         let key_der = key_pair.serialize_der();
+        let device_id = uuid::Uuid::new_v4().to_string();
 
         // Save
         let persisted = PersistedIdentityDer {
             cert_der: cert_der.clone(),
             key_der: key_der.clone(),
+            device_id: device_id.clone(),
         };
         let data = serde_json::to_vec_pretty(&persisted)
             .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
@@ -95,12 +103,13 @@ impl KeyStore {
         Ok((
             CertificateDer::from(cert_der),
             PrivatePkcs8KeyDer::from(key_der),
+            device_id,
         ))
     }
 
     fn load_identity_der(
         path: &PathBuf,
-    ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>)> {
+    ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>, String)> {
         let data = std::fs::read(path).map_err(ConnectedError::Io)?;
         let persisted: PersistedIdentityDer = serde_json::from_slice(&data).map_err(|e| {
             ConnectedError::InitializationError(format!("Failed to parse identity: {}", e))
@@ -109,6 +118,7 @@ impl KeyStore {
         Ok((
             CertificateDer::from(persisted.cert_der),
             PrivatePkcs8KeyDer::from(persisted.key_der),
+            persisted.device_id,
         ))
     }
 
@@ -207,6 +217,29 @@ impl KeyStore {
         self.save_peers()
     }
 
+    pub fn remove_peer(&mut self, fingerprint: &str) -> Result<()> {
+        if self.known_peers.peers.remove(fingerprint).is_some() {
+            self.save_peers()
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn remove_peer_by_id(&mut self, device_id: &str) -> Result<()> {
+        let fingerprint = self
+            .known_peers
+            .peers
+            .values()
+            .find(|p| p.device_id.as_deref() == Some(device_id))
+            .map(|p| p.fingerprint.clone());
+
+        if let Some(fp) = fingerprint {
+            self.remove_peer(&fp)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn get_cert(&self) -> CertificateDer<'static> {
         self.cert.clone()
     }
@@ -227,6 +260,13 @@ impl KeyStore {
             return peer.status == PeerStatus::Blocked;
         }
         false
+    }
+
+    pub fn get_peer_name(&self, fingerprint: &str) -> Option<String> {
+        self.known_peers
+            .peers
+            .get(fingerprint)
+            .and_then(|p| p.name.clone())
     }
 
     // Legacy support / Convenience
@@ -250,10 +290,25 @@ impl KeyStore {
     pub fn is_pairing_mode(&self) -> bool {
         self.pairing_mode
     }
+
+    pub fn get_trusted_peers(&self) -> Vec<PeerInfo> {
+        self.known_peers
+            .peers
+            .values()
+            .filter(|p| p.status == PeerStatus::Trusted)
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Serialize, Deserialize)]
 struct PersistedIdentityDer {
     cert_der: Vec<u8>,
     key_der: Vec<u8>,
+    #[serde(default = "default_device_id")]
+    device_id: String,
+}
+
+fn default_device_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }

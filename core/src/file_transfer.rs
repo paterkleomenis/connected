@@ -1,10 +1,10 @@
 use crate::error::{ConnectedError, Result};
-use crate::transport::{self, Message}; // Use transport constants if public, or redefine
+// Use transport constants if public, or redefine
 use quinn::{Connection, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -32,10 +32,6 @@ pub enum FileTransferMessage {
     Error { message: String },
     /// Cancel transfer
     Cancel,
-    /// Clipboard text sharing (Control message, but can use this enum)
-    ClipboardText { text: String },
-    /// Clipboard received acknowledgment
-    ClipboardAck,
 }
 
 #[derive(Debug, Clone)]
@@ -140,7 +136,7 @@ impl FileTransfer {
         // Send file data (Raw Binary Stream)
         let mut buffer = vec![0u8; BUFFER_SIZE];
         let mut offset: u64 = 0;
-        let mut hasher = crc32fast::Hasher::new();
+        let mut hasher = blake3::Hasher::new();
         let mut last_progress_update = std::time::Instant::now();
 
         loop {
@@ -176,7 +172,7 @@ impl FileTransfer {
         }
 
         // Send completion with checksum
-        let checksum = format!("{:08x}", hasher.finalize());
+        let checksum = hasher.finalize().to_string();
         let complete = FileTransferMessage::Complete { checksum };
         send_message(&mut send, &complete).await?;
 
@@ -265,7 +261,7 @@ impl FileTransfer {
         let file = File::create(&save_path).await?;
         let mut writer = BufWriter::new(file);
         let mut bytes_received: u64 = 0;
-        let mut hasher = crc32fast::Hasher::new();
+        let mut hasher = blake3::Hasher::new();
 
         let mut buffer = vec![0u8; BUFFER_SIZE];
         let mut last_progress_update = std::time::Instant::now();
@@ -311,7 +307,7 @@ impl FileTransfer {
         let complete: FileTransferMessage = recv_message(&mut recv).await?;
         match complete {
             FileTransferMessage::Complete { checksum } => {
-                let our_checksum = format!("{:08x}", hasher.finalize());
+                let our_checksum = hasher.finalize().to_string();
                 if our_checksum != checksum {
                     error!("Checksum mismatch");
                     let error = FileTransferMessage::Error {

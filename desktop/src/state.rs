@@ -1,5 +1,5 @@
 use connected_core::Device;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 // ============================================================================
@@ -13,6 +13,8 @@ pub struct DeviceInfo {
     pub ip: String,
     pub port: u16,
     pub device_type: String,
+    pub is_trusted: bool,
+    pub is_pending: bool,
 }
 
 impl From<Device> for DeviceInfo {
@@ -23,6 +25,8 @@ impl From<Device> for DeviceInfo {
             ip: d.ip.to_string(),
             port: d.port,
             device_type: d.device_type.as_str().to_string(),
+            is_trusted: false,
+            is_pending: false,
         }
     }
 }
@@ -37,14 +41,6 @@ pub enum TransferStatus {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ClipboardStatus {
-    Idle,
-    Syncing { device_name: String },
-    Received { from: String, text: String },
-    Sent { success: bool },
-}
-
-#[derive(Debug, Clone)]
 pub struct Notification {
     pub id: u64,
     pub title: String,
@@ -53,16 +49,24 @@ pub struct Notification {
     pub timestamp: std::time::Instant,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PairingRequest {
+    pub fingerprint: String,
+    pub device_name: String,
+    pub device_id: String,
+}
+
 // ============================================================================
 // Global Stores
 // ============================================================================
 
 static DEVICES: OnceLock<Arc<Mutex<HashMap<String, DeviceInfo>>>> = OnceLock::new();
 static TRANSFER_STATUS: OnceLock<Arc<Mutex<TransferStatus>>> = OnceLock::new();
-static CLIPBOARD_STATUS: OnceLock<Arc<Mutex<ClipboardStatus>>> = OnceLock::new();
 static NOTIFICATIONS: OnceLock<Arc<Mutex<Vec<Notification>>>> = OnceLock::new();
 static NOTIFICATION_COUNTER: OnceLock<Arc<Mutex<u64>>> = OnceLock::new();
 static LAST_CLIPBOARD: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
+static PAIRING_REQUESTS: OnceLock<Arc<Mutex<Vec<PairingRequest>>>> = OnceLock::new();
+static PENDING_PAIRINGS: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 
 pub fn get_devices_store() -> &'static Arc<Mutex<HashMap<String, DeviceInfo>>> {
     DEVICES.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
@@ -70,10 +74,6 @@ pub fn get_devices_store() -> &'static Arc<Mutex<HashMap<String, DeviceInfo>>> {
 
 pub fn get_transfer_status() -> &'static Arc<Mutex<TransferStatus>> {
     TRANSFER_STATUS.get_or_init(|| Arc::new(Mutex::new(TransferStatus::Idle)))
-}
-
-pub fn get_clipboard_status() -> &'static Arc<Mutex<ClipboardStatus>> {
-    CLIPBOARD_STATUS.get_or_init(|| Arc::new(Mutex::new(ClipboardStatus::Idle)))
 }
 
 pub fn get_notifications() -> &'static Arc<Mutex<Vec<Notification>>> {
@@ -86,6 +86,14 @@ pub fn get_notification_counter() -> &'static Arc<Mutex<u64>> {
 
 pub fn get_last_clipboard() -> &'static Arc<Mutex<String>> {
     LAST_CLIPBOARD.get_or_init(|| Arc::new(Mutex::new(String::new())))
+}
+
+pub fn get_pairing_requests() -> &'static Arc<Mutex<Vec<PairingRequest>>> {
+    PAIRING_REQUESTS.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+}
+
+pub fn get_pending_pairings() -> &'static Arc<Mutex<HashSet<String>>> {
+    PENDING_PAIRINGS.get_or_init(|| Arc::new(Mutex::new(HashSet::new())))
 }
 
 pub fn add_notification(title: &str, message: &str, icon: &'static str) {

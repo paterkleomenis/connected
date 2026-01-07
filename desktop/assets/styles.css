@@ -510,6 +510,12 @@ body {
     cursor: not-allowed;
 }
 
+.action-button.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background: var(--bg-tertiary);
+}
+
 /* ============================================================================
    Transfers Section
    ============================================================================ */

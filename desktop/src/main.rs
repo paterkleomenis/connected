@@ -1,18 +1,17 @@
 #![allow(non_snake_case)]
 
 mod components;
+mod controller;
 mod state;
 mod utils;
 
 use components::{DeviceCard, FileDialog};
-use connected_core::{ConnectedClient, ConnectedEvent, DeviceType};
+use controller::{app_controller, AppAction};
 use dioxus::prelude::*;
-use futures_util::StreamExt;
 use state::*;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::info;
 use utils::{get_device_icon, get_system_clipboard};
 
 fn main() {
@@ -42,254 +41,59 @@ fn main() {
     LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
 
-#[derive(Clone, Debug)]
-enum AppAction {
-    Init,
-    SendFile { ip: String, port: u16, path: String },
-    SendClipboard { ip: String, port: u16, text: String },
-    ToggleClipboardSync { device: Option<DeviceInfo> },
-}
-
 #[component]
 fn App() -> Element {
     // UI State
-    let mut initialized = use_signal(|| false);
-    let mut local_device_name = use_signal(|| "Desktop".to_string());
-    let mut local_device_ip = use_signal(|| String::new());
+    let initialized = use_signal(|| false);
+    let local_device_name = use_signal(|| "Desktop".to_string());
+    let local_device_ip = use_signal(|| String::new());
     let mut devices_list = use_signal(Vec::<DeviceInfo>::new);
     let mut selected_device = use_signal(|| None::<DeviceInfo>);
     let mut active_tab = use_signal(|| "devices".to_string());
     let mut transfer_status = use_signal(|| TransferStatus::Idle);
-    let mut clipboard_sync_device = use_signal(|| None::<DeviceInfo>);
+    let clipboard_sync_enabled = use_signal(|| false);
     let mut notifications = use_signal(Vec::<Notification>::new);
     let mut show_send_dialog = use_signal(|| false);
     let mut clipboard_text = use_signal(String::new);
     let mut show_clipboard_dialog = use_signal(|| false);
-    let mut discovery_active = use_signal(|| false);
+    let discovery_active = use_signal(|| false);
+
+    // Pairing State
+    let pairing_mode = use_signal(|| false);
+    let mut pairing_requests = use_signal(Vec::<PairingRequest>::new);
 
     // The Controller
-
-    let action_tx = use_coroutine(move |mut rx: UnboundedReceiver<AppAction>| async move {
-        let mut client: Option<Arc<ConnectedClient>> = None;
-
-        let mut _clipboard_synced_peer: Option<String> = None; // IP of synced peer
-
-        while let Some(action) = rx.next().await {
-            match action {
-                AppAction::Init => {
-                    if client.is_some() {
-                        continue;
-                    }
-
-                    let name = std::env::var("HOSTNAME")
-                        .or_else(|_| std::env::var("HOST"))
-                        .or_else(|_| std::env::var("COMPUTERNAME"))
-                        .unwrap_or_else(|_| "Desktop".into());
-
-                    local_device_name.set(name.clone());
-
-                    match ConnectedClient::new(name.clone(), DeviceType::Linux, 0, None).await {
-                        Ok(c) => {
-                            info!("Core initialized");
-
-                            client = Some(c.clone());
-
-                            initialized.set(true);
-
-                            discovery_active.set(true);
-
-                            local_device_ip.set(c.local_device().ip.to_string());
-
-                            // Subscribe to events
-                            let mut events = c.subscribe();
-
-                            // Spawn event loop
-                            tokio::spawn(async move {
-                                while let Ok(event) = events.recv().await {
-                                    match event {
-                                        ConnectedEvent::DeviceFound(d) => {
-                                            let info: DeviceInfo = d.clone().into();
-                                            // Update devices list signal
-                                            // Note: Direct signal update from background task might need schedule_update in some Dioxus versions,
-                                            // but use_coroutine context usually handles it if we are in the main scope?
-                                            // Actually we are in a spawned task inside coroutine. We need to be careful.
-                                            // For safety in Dioxus Desktop, direct signal set is usually thread-safe.
-
-                                            // Update Store
-                                            let mut store = get_devices_store().lock().unwrap();
-                                            if !store.contains_key(&info.id) {
-                                                add_notification(
-                                                    "Device Found",
-                                                    &format!("{} available", info.name),
-                                                    "📱",
-                                                );
-                                            }
-                                            store.insert(info.id.clone(), info);
-                                        }
-                                        ConnectedEvent::DeviceLost(id) => {
-                                            let mut store = get_devices_store().lock().unwrap();
-                                            if let Some(d) = store.remove(&id) {
-                                                add_notification(
-                                                    "Device Lost",
-                                                    &format!("{} disconnected", d.name),
-                                                    "📴",
-                                                );
-                                            }
-                                        }
-                                        ConnectedEvent::TransferStarting {
-                                            filename,
-                                            direction,
-                                            ..
-                                        } => {
-                                            use connected_core::events::TransferDirection;
-                                            if direction == TransferDirection::Incoming {
-                                                *get_transfer_status().lock().unwrap() =
-                                                    TransferStatus::Starting(filename.clone());
-                                                add_notification(
-                                                    "Transfer Starting",
-                                                    &format!("Receiving {}", filename),
-                                                    "📥",
-                                                );
-                                            } else {
-                                                *get_transfer_status().lock().unwrap() =
-                                                    TransferStatus::Starting(filename.clone());
-                                            }
-                                        }
-                                        ConnectedEvent::TransferProgress {
-                                            bytes_transferred,
-                                            total_size,
-                                            id: _,
-                                        } => {
-                                            let percent = if total_size > 0 {
-                                                (bytes_transferred as f32 / total_size as f32)
-                                                    * 100.0
-                                            } else {
-                                                0.0
-                                            };
-                                            let mut status = get_transfer_status().lock().unwrap();
-                                            // Only update if we are in a state that has a filename
-                                            let current_filename = match &*status {
-                                                TransferStatus::Starting(f) => Some(f.clone()),
-                                                TransferStatus::InProgress { filename, .. } => {
-                                                    Some(filename.clone())
-                                                }
-                                                _ => None,
-                                            };
-
-                                            if let Some(filename) = current_filename {
-                                                *status = TransferStatus::InProgress {
-                                                    filename,
-                                                    percent,
-                                                };
-                                            }
-                                        }
-                                        ConnectedEvent::TransferCompleted { filename, .. } => {
-                                            *get_transfer_status().lock().unwrap() =
-                                                TransferStatus::Completed(filename.clone());
-                                            add_notification(
-                                                "Transfer Complete",
-                                                &format!("{} finished", filename),
-                                                "✅",
-                                            );
-                                        }
-                                        ConnectedEvent::TransferFailed { error, .. } => {
-                                            *get_transfer_status().lock().unwrap() =
-                                                TransferStatus::Failed(error.clone());
-                                            add_notification("Transfer Failed", &error, "❌");
-                                        }
-                                        ConnectedEvent::ClipboardReceived {
-                                            content,
-                                            from_device,
-                                        } => {
-                                            utils::set_system_clipboard(&content);
-                                            *get_last_clipboard().lock().unwrap() = content.clone();
-                                            add_notification(
-                                                "Clipboard",
-                                                &format!("Received from {}", from_device),
-                                                "📋",
-                                            );
-                                        }
-                                        ConnectedEvent::Error(msg) => {
-                                            error!("System error: {}", msg);
-                                        }
-                                        ConnectedEvent::PairingRequest {
-                                            device_name,
-                                            fingerprint,
-                                            ..
-                                        } => {
-                                            add_notification(
-                                                "Pairing Request",
-                                                &format!("{} wants to connect.", device_name),
-                                                "🔐",
-                                            );
-                                            warn!("Pairing request from {} ({}) - Auto-accept not implemented in UI", device_name, fingerprint);
-                                        }
-                                        ConnectedEvent::PairingModeChanged(enabled) => {
-                                            info!("Pairing mode changed: {}", enabled);
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            error!("Failed to init: {}", e);
-                            add_notification("Init Failed", &e.to_string(), "❌");
-                        }
-                    }
-                }
-                AppAction::SendFile { ip, port, path } => {
-                    if let Some(c) = &client {
-                        let c = c.clone();
-                        tokio::spawn(async move {
-                            if let Ok(ip_addr) = ip.parse() {
-                                let _ = c.send_file(ip_addr, port, PathBuf::from(path)).await;
-                            }
-                        });
-                    }
-                }
-                AppAction::SendClipboard { ip, port, text } => {
-                    if let Some(c) = &client {
-                        let c = c.clone();
-                        tokio::spawn(async move {
-                            if let Ok(ip_addr) = ip.parse() {
-                                let _ = c.send_clipboard(ip_addr, port, text).await;
-                            }
-                        });
-                    }
-                }
-                AppAction::ToggleClipboardSync { device } => {
-                    if let Some(d) = device {
-                        _clipboard_synced_peer = Some(d.ip.clone());
-                        // TODO: Implement actual sync loop or registration here?
-                        // For now, the UI Poller will handle the *sending* part by invoking SendClipboard
-                        // This action just updates internal state if needed.
-                    } else {
-                        _clipboard_synced_peer = None;
-                    }
-                }
-            }
-        }
-    });
+    let action_tx =
+        use_coroutine(
+            move |rx: UnboundedReceiver<AppAction>| async move { app_controller(rx).await },
+        );
 
     // Start Init
     use_effect(move || {
         action_tx.send(AppAction::Init);
     });
 
-    // UI Poller (Reduced scope: just syncs UI state from global stores and checks clipboard)
-    // We still need this because Dioxus signals don't automatically update when the `get_devices_store()` Mutex changes
-    // unless we wrap the store in a Signal or trigger an update.
+    // UI Poller
     use_future(move || async move {
         loop {
             // Update devices list
-            let list: Vec<DeviceInfo> = get_devices_store()
+            let mut list: Vec<DeviceInfo> = get_devices_store()
                 .lock()
                 .unwrap()
                 .values()
                 .cloned()
                 .collect();
-            devices_list.set(list);
 
+            // Apply pending state
+            let pending = get_pending_pairings().lock().unwrap();
+            for device in list.iter_mut() {
+                if pending.contains(&device.id) {
+                    device.is_pending = true;
+                }
+            }
+            drop(pending);
+
+            devices_list.set(list);
             // Update transfer status
             let status = get_transfer_status().lock().unwrap().clone();
             transfer_status.set(status);
@@ -302,17 +106,19 @@ fn App() -> Element {
             }
             notifications.set(get_notifications().lock().unwrap().clone());
 
+            // Update Pairing Requests
+            {
+                let reqs = get_pairing_requests().lock().unwrap().clone();
+                pairing_requests.set(reqs);
+            }
+
             // Clipboard Sync Check
-            if let Some(ref device) = *clipboard_sync_device.read() {
+            if *clipboard_sync_enabled.read() {
                 let current_clip = get_system_clipboard();
                 let last_clip = get_last_clipboard().lock().unwrap().clone();
                 if !current_clip.is_empty() && current_clip != last_clip {
                     *get_last_clipboard().lock().unwrap() = current_clip.clone();
-                    action_tx.send(AppAction::SendClipboard {
-                        ip: device.ip.clone(),
-                        port: device.port,
-                        text: current_clip,
-                    });
+                    action_tx.send(AppAction::BroadcastClipboard { text: current_clip });
                 }
             }
 
@@ -321,22 +127,19 @@ fn App() -> Element {
     });
 
     let toggle_clipboard_sync = move |_| {
-        if clipboard_sync_device.read().is_some() {
-            clipboard_sync_device.set(None);
-            action_tx.send(AppAction::ToggleClipboardSync { device: None });
-            add_notification("Clipboard Sync", "Sync stopped", "📋");
-        } else if let Some(device) = selected_device.read().clone() {
+        let current = *clipboard_sync_enabled.read();
+        action_tx.send(AppAction::SetClipboardSync(!current));
+        if !current {
             *get_last_clipboard().lock().unwrap() = get_system_clipboard();
-            clipboard_sync_device.set(Some(device.clone()));
-            action_tx.send(AppAction::ToggleClipboardSync {
-                device: Some(device.clone()),
-            });
-            add_notification(
-                "Clipboard Sync",
-                &format!("Syncing with {}", device.name),
-                "📋",
-            );
+            add_notification("Clipboard Sync", "Sync Started (Trusted Devices)", "📋");
+        } else {
+            add_notification("Clipboard Sync", "Sync Stopped", "📋");
         }
+    };
+
+    let toggle_pairing_mode = move |_| {
+        let current = *pairing_mode.read();
+        action_tx.send(AppAction::SetPairingMode(!current));
     };
 
     rsx! {
@@ -396,7 +199,7 @@ fn App() -> Element {
                         onclick: move |_| active_tab.set("clipboard".to_string()),
                         span { class: "nav-icon", "📋" }
                         span { "Clipboard" }
-                        if clipboard_sync_device.read().is_some() {
+                        if *clipboard_sync_enabled.read() {
                             span { class: "nav-badge sync", "●" }
                         }
                     }
@@ -468,6 +271,14 @@ fn App() -> Element {
                                         clipboard_text.set(get_system_clipboard());
                                         show_clipboard_dialog.set(true);
                                     },
+                                    on_pair: move |d: DeviceInfo| {
+                                         if let Ok(port) = d.port.to_string().parse() {
+                                             action_tx.send(AppAction::PairWithDevice { ip: d.ip.clone(), port });
+                                         }
+                                    },
+                                    on_unpair: move |d: DeviceInfo| {
+                                        action_tx.send(AppAction::UnpairDevice { fingerprint: "TODO".to_string(), device_id: d.id.clone() });
+                                    }
                                 }
                             }
                         }
@@ -568,13 +379,13 @@ fn App() -> Element {
                     div {
                         class: "clipboard-section",
                         div {
-                            class: if clipboard_sync_device.read().is_some() { "sync-status active" } else { "sync-status" },
-                            if let Some(ref device) = *clipboard_sync_device.read() {
+                            class: if *clipboard_sync_enabled.read() { "sync-status active" } else { "sync-status" },
+                            if *clipboard_sync_enabled.read() {
                                 div { class: "sync-icon", "🔄" }
                                 div {
                                     class: "sync-info",
-                                    span { class: "sync-label", "Syncing with" }
-                                    span { class: "sync-device", "{device.name}" }
+                                    span { class: "sync-label", "Universal Clipboard" }
+                                    span { class: "sync-device", "Active for trusted devices" }
                                 }
                                 button {
                                     class: "stop-sync-button",
@@ -585,23 +396,20 @@ fn App() -> Element {
                                 div { class: "sync-icon muted", "📋" }
                                 div {
                                     class: "sync-info",
-                                    span { class: "sync-label muted", "Not syncing" }
-                                    if let Some(ref device) = *selected_device.read() {
-                                        button {
-                                            class: "primary-button",
-                                            onclick: toggle_clipboard_sync,
-                                            "Sync with {device.name}"
-                                        }
-                                    } else {
-                                        span { class: "sync-hint", "Select a device to start syncing" }
-                                    }
+                                    span { class: "sync-label muted", "Universal Clipboard" }
+                                    span { class: "sync-hint", "Sync with all trusted devices" }
+                                }
+                                button {
+                                    class: "primary-button",
+                                    onclick: toggle_clipboard_sync,
+                                    "Start Sync"
                                 }
                             }
                         }
 
                         div {
                             class: "manual-clipboard",
-                            h3 { "Send Clipboard" }
+                            h3 { "Manual Send" }
                             textarea {
                                 class: "clipboard-input",
                                 placeholder: "Enter text to send...",
@@ -633,6 +441,12 @@ fn App() -> Element {
                                         },
                                         "Send to {device.name}"
                                     }
+                                } else {
+                                     button {
+                                        class: "primary-button",
+                                        disabled: true,
+                                        "Select a Device"
+                                    }
                                 }
                             }
                         }
@@ -654,6 +468,24 @@ fn App() -> Element {
                                 div { class: "info-value", "{local_device_ip}" }
                             }
                         }
+
+                        div {
+                            class: "info-card",
+                            h3 { "🔐 Security" }
+                            div {
+                                class: "info-grid",
+                                div { class: "info-label", "Pairing Mode" }
+                                div {
+                                    class: "info-value",
+                                    button {
+                                        class: if *pairing_mode.read() { "toggle-button active" } else { "toggle-button" },
+                                        onclick: toggle_pairing_mode,
+                                        if *pairing_mode.read() { "Enabled" } else { "Disabled" }
+                                    }
+                                }
+                            }
+                            p { class: "settings-hint", "Enable to allow new devices to pair with you." }
+                        }
                     }
                 }
             }
@@ -670,6 +502,54 @@ fn App() -> Element {
                             class: "notification-content",
                             span { class: "notification-title", "{notification.title}" }
                             span { class: "notification-message", "{notification.message}" }
+                        }
+                    }
+                }
+            }
+
+            // Pairing Requests Modal
+            if !pairing_requests.read().is_empty() {
+                div {
+                    class: "modal-overlay",
+                    div {
+                        class: "modal-content",
+                        h3 { "Pairing Request" }
+                        for req in pairing_requests.read().iter() {
+                            div {
+                                key: "{req.fingerprint}",
+                                class: "pairing-request",
+                                p { "Device: {req.device_name}" }
+                                p { class: "fingerprint", "ID: {req.fingerprint}" }
+                                div {
+                                    class: "modal-actions",
+                                    button {
+                                        class: "secondary-button",
+                                        onclick: {
+                                            let req = req.clone();
+                                            move |_| {
+                                                action_tx.send(AppAction::RejectDevice { fingerprint: req.fingerprint.clone() });
+                                                get_pairing_requests().lock().unwrap().retain(|r| r.fingerprint != req.fingerprint);
+                                            }
+                                        },
+                                        "Reject"
+                                    }
+                                    button {
+                                        class: "primary-button",
+                                        onclick: {
+                                            let req = req.clone();
+                                            move |_| {
+                                                action_tx.send(AppAction::TrustDevice {
+                                                    fingerprint: req.fingerprint.clone(),
+                                                    name: req.device_name.clone(),
+                                                    device_id: req.device_id.clone()
+                                                });
+                                                get_pairing_requests().lock().unwrap().retain(|r| r.fingerprint != req.fingerprint);
+                                            }
+                                        },
+                                        "Trust"
+                                    }
+                                }
+                            }
                         }
                     }
                 }

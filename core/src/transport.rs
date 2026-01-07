@@ -5,7 +5,9 @@ use quinn::{
     ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig,
     VarInt,
 };
+use rustls::client::danger::HandshakeSignatureValid;
 use rustls::pki_types::CertificateDer;
+use rustls::DistinguishedName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -47,6 +49,9 @@ pub enum Message {
     HandshakeAck {
         device_id: String,
         device_name: String,
+    },
+    Clipboard {
+        text: String,
     },
     FileTransfer,
 }
@@ -103,7 +108,7 @@ pub struct QuicTransport {
     local_id: String,
     client_config: ClientConfig,
     connection_cache: Arc<RwLock<ConnectionCache>>,
-    key_store: Arc<RwLock<KeyStore>>,
+    _key_store: Arc<RwLock<KeyStore>>,
 }
 
 impl QuicTransport {
@@ -125,7 +130,7 @@ impl QuicTransport {
             local_id,
             client_config,
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
-            key_store,
+            _key_store: key_store,
         })
     }
 
@@ -166,8 +171,12 @@ impl QuicTransport {
         let cert = ks.get_cert();
         let key = ks.get_key();
 
+        let client_verifier = Arc::new(ClientVerifier {
+            key_store: key_store.clone(),
+        });
+
         let mut server_crypto = rustls::ServerConfig::builder()
-            .with_no_client_auth()
+            .with_client_cert_verifier(client_verifier)
             .with_single_cert(vec![cert.clone()], key.into())?;
 
         server_crypto.alpn_protocols = vec![ALPN_PROTOCOL.to_vec()];
@@ -184,12 +193,16 @@ impl QuicTransport {
     }
 
     fn create_client_config(key_store: &Arc<RwLock<KeyStore>>) -> Result<ClientConfig> {
+        let ks = key_store.read();
+        let cert = ks.get_cert();
+        let key = ks.get_key();
+
         let mut client_crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(PeerVerifier {
                 key_store: key_store.clone(),
             }))
-            .with_no_client_auth();
+            .with_client_auth_cert(vec![cert], key.into())?;
 
         client_crypto.alpn_protocols = vec![ALPN_PROTOCOL.to_vec()];
         client_crypto.enable_early_data = true;
@@ -614,20 +627,21 @@ impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
             return Ok(rustls::client::danger::ServerCertVerified::assertion());
         }
 
+        if ks.is_pairing_mode() {
+            info!(
+                "Allowing unknown/blocked peer in PAIRING MODE: {}",
+                fingerprint
+            );
+            return Ok(rustls::client::danger::ServerCertVerified::assertion());
+        }
+
         if ks.is_blocked(&fingerprint) {
             warn!("Rejected BLOCKED peer: {}", fingerprint);
             return Err(rustls::Error::General("Peer is blocked".to_string()));
         }
 
-        if ks.is_pairing_mode() {
-            info!("Allowing unknown peer in PAIRING MODE: {}", fingerprint);
-            // We allow the TLS connection. The application layer must verify the peer
-            // via the Handshake message and prompt the user if it's not yet trusted.
-            return Ok(rustls::client::danger::ServerCertVerified::assertion());
-        }
-
-        warn!("REJECTING Unknown Certificate: {}", fingerprint);
-        Err(rustls::Error::General("Unknown certificate".to_string()))
+        warn!("Allowing Unknown Certificate (Untrusted): {}", fingerprint);
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
@@ -661,5 +675,87 @@ impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
             rustls::SignatureScheme::RSA_PSS_SHA512,
             rustls::SignatureScheme::ED25519,
         ]
+    }
+}
+
+#[derive(Debug)]
+struct ClientVerifier {
+    key_store: Arc<RwLock<KeyStore>>,
+}
+
+impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
+    fn verify_client_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::server::danger::ClientCertVerified, rustls::Error> {
+        // Calculate fingerprint
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(end_entity.as_ref());
+        let fingerprint = format!("{:x}", hasher.finalize());
+
+        let ks = self.key_store.read();
+
+        if ks.is_trusted(&fingerprint) {
+            return Ok(rustls::server::danger::ClientCertVerified::assertion());
+        }
+
+        if ks.is_pairing_mode() {
+            info!(
+                "Allowing unknown/blocked client in PAIRING MODE: {}",
+                fingerprint
+            );
+            return Ok(rustls::server::danger::ClientCertVerified::assertion());
+        }
+
+        if ks.is_blocked(&fingerprint) {
+            warn!("Rejected BLOCKED client: {}", fingerprint);
+            return Err(rustls::Error::General("Client is blocked".to_string()));
+        }
+
+        warn!(
+            "Allowing Unknown Client Certificate (Untrusted): {}",
+            fingerprint
+        );
+        Ok(rustls::server::danger::ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::ED25519,
+        ]
+    }
+
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        &[]
     }
 }

@@ -9,6 +9,8 @@ pub fn DeviceCard(
     on_select: EventHandler<DeviceInfo>,
     on_send_file: EventHandler<DeviceInfo>,
     on_send_clipboard: EventHandler<DeviceInfo>,
+    on_pair: EventHandler<DeviceInfo>,
+    on_unpair: EventHandler<DeviceInfo>,
 ) -> Element {
     let mut show_actions = use_signal(|| false);
 
@@ -33,6 +35,9 @@ pub fn DeviceCard(
             div {
                 class: "device-card-icon",
                 "{icon}"
+                if !device.is_trusted {
+                    span { class: "untrusted-badge", "⚠️" }
+                }
             }
 
             // Device info
@@ -41,41 +46,79 @@ pub fn DeviceCard(
                 h3 { class: "device-name", "{device.name}" }
                 p { class: "device-address", "{device.ip}:{device.port}" }
                 p { class: "device-type", "{device.device_type}" }
+                if !device.is_trusted {
+                    p { class: "device-status untrusted", "Not Trusted" }
+                }
             }
 
             // Actions overlay
             if *show_actions.read() || is_selected {
                 div {
                     class: "device-actions",
-                    button {
-                        class: "action-button",
-                        title: "Ping (Disabled)",
-                        onclick: handle_ping,
-                        "📶"
-                    }
-                    button {
-                        class: "action-button",
-                        title: "Send File",
-                        onclick: {
-                            let device = device.clone();
-                            move |evt: Event<MouseData>| {
-                                evt.stop_propagation();
-                                on_send_file.call(device.clone());
+                    if !device.is_trusted {
+                        if device.is_pending {
+                            button {
+                                class: "action-button pair disabled",
+                                disabled: true,
+                                "⏳ Waiting..."
                             }
-                        },
-                        "📁"
-                    }
-                    button {
-                        class: "action-button",
-                        title: "Send Clipboard",
-                        onclick: {
-                            let device = device.clone();
-                            move |evt: Event<MouseData>| {
-                                evt.stop_propagation();
-                                on_send_clipboard.call(device.clone());
+                        } else {
+                            button {
+                                class: "action-button pair",
+                                title: "Pair with Device",
+                                onclick: {
+                                    let device = device.clone();
+                                    move |evt: Event<MouseData>| {
+                                        evt.stop_propagation();
+                                        on_pair.call(device.clone());
+                                    }
+                                },
+                                "🔗 Pair"
                             }
-                        },
-                        "📋"
+                        }
+                    } else {
+                        button {
+                            class: "action-button",
+                            title: "Ping (Disabled)",
+                            onclick: handle_ping,
+                            "📶"
+                        }
+                        button {
+                            class: "action-button",
+                            title: "Send File",
+                            onclick: {
+                                let device = device.clone();
+                                move |evt: Event<MouseData>| {
+                                    evt.stop_propagation();
+                                    on_send_file.call(device.clone());
+                                }
+                            },
+                            "📁"
+                        }
+                        button {
+                            class: "action-button",
+                            title: "Send Clipboard",
+                            onclick: {
+                                let device = device.clone();
+                                move |evt: Event<MouseData>| {
+                                    evt.stop_propagation();
+                                    on_send_clipboard.call(device.clone());
+                                }
+                            },
+                            "📋"
+                        }
+                        button {
+                            class: "action-button danger",
+                            title: "Unpair / Forget",
+                            onclick: {
+                                let device = device.clone();
+                                move |evt: Event<MouseData>| {
+                                    evt.stop_propagation();
+                                    on_unpair.call(device.clone());
+                                }
+                            },
+                            "💔"
+                        }
                     }
                 }
             }

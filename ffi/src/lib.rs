@@ -1,7 +1,5 @@
-use connected_core::events::TransferDirection;
 use connected_core::{ConnectedClient, ConnectedError, ConnectedEvent, Device, DeviceType};
 use parking_lot::RwLock;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
@@ -76,6 +74,13 @@ impl From<Device> for DiscoveredDevice {
             device_type: d.device_type.as_str().to_string(),
         }
     }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TrustedPeer {
+    pub fingerprint: String,
+    pub name: String,
+    pub device_id: String,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -166,7 +171,50 @@ pub fn initialize(
     let client = runtime
         .block_on(async { ConnectedClient::new(device_name, dtype, bind_port, path).await })?;
 
-    // Start Event Listener Loop
+    spawn_event_listener(client.clone(), runtime);
+
+    let lock = INSTANCE.get_or_init(|| RwLock::new(None));
+    *lock.write() = Some(client);
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn initialize_with_ip(
+    device_name: String,
+    device_type: String,
+    bind_port: u16,
+    ip_address: String,
+    storage_path: String,
+) -> Result<(), ConnectedFfiError> {
+    init_android_logging();
+    let runtime = get_runtime();
+    let dtype = DeviceType::from_str(&device_type);
+    let ip: std::net::IpAddr =
+        ip_address
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let path = if storage_path.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(storage_path))
+    };
+
+    let client = runtime.block_on(async {
+        ConnectedClient::new_with_ip(device_name, dtype, bind_port, ip, path).await
+    })?;
+
+    spawn_event_listener(client.clone(), runtime);
+
+    let lock = INSTANCE.get_or_init(|| RwLock::new(None));
+    *lock.write() = Some(client);
+    Ok(())
+}
+
+fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
     let mut rx = client.subscribe();
     runtime.spawn(async move {
         while let Ok(event) = rx.recv().await {
@@ -233,92 +281,6 @@ pub fn initialize(
             }
         }
     });
-
-    let lock = INSTANCE.get_or_init(|| RwLock::new(None));
-    *lock.write() = Some(client);
-
-    Ok(())
-}
-
-#[uniffi::export]
-pub fn initialize_with_ip(
-    device_name: String,
-    device_type: String,
-    bind_port: u16,
-    ip_address: String,
-    storage_path: String,
-) -> Result<(), ConnectedFfiError> {
-    // Same as initialize but with IP
-    // For brevity, calling logic could be shared.
-    // Implementing minimally to satisfy interface.
-    init_android_logging();
-    let runtime = get_runtime();
-    let dtype = DeviceType::from_str(&device_type);
-    let ip: std::net::IpAddr =
-        ip_address
-            .parse()
-            .map_err(|_| ConnectedFfiError::InvalidArgument {
-                msg: "Invalid IP".into(),
-            })?;
-
-    let path = if storage_path.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(storage_path))
-    };
-
-    let client = runtime.block_on(async {
-        ConnectedClient::new_with_ip(device_name, dtype, bind_port, ip, path).await
-    })?;
-
-    // Duplicate event listener setup (refactor into helper function ideally)
-    let mut rx = client.subscribe();
-    runtime.spawn(async move {
-        while let Ok(event) = rx.recv().await {
-            match event {
-                // Duplicate match block
-                ConnectedEvent::DeviceFound(d) => {
-                    if let Some(cb) = DISCOVERY_CALLBACK.read().as_ref() {
-                        cb.on_device_found(d.into());
-                    }
-                }
-                // ... (Omitted for brevity, but needed in real code. I will trust the user to copy/paste or understand this limitation if I can't extract it)
-                // Actually I should just copy the block.
-                ConnectedEvent::TransferStarting {
-                    filename,
-                    total_size,
-                    ..
-                } => {
-                    if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                        cb.on_transfer_starting(filename, total_size);
-                    }
-                }
-                ConnectedEvent::TransferProgress {
-                    bytes_transferred,
-                    total_size,
-                    ..
-                } => {
-                    if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                        cb.on_transfer_progress(bytes_transferred, total_size);
-                    }
-                }
-                ConnectedEvent::PairingRequest {
-                    fingerprint,
-                    device_name,
-                    device_id,
-                } => {
-                    if let Some(cb) = PAIRING_CALLBACK.read().as_ref() {
-                        cb.on_pairing_request(device_name, fingerprint, device_id);
-                    }
-                }
-                _ => {}
-            }
-        }
-    });
-
-    let lock = INSTANCE.get_or_init(|| RwLock::new(None));
-    *lock.write() = Some(client);
-    Ok(())
 }
 
 #[uniffi::export]
@@ -478,9 +440,49 @@ pub fn set_pairing_mode(enabled: bool) -> Result<(), ConnectedFfiError> {
 }
 
 #[uniffi::export]
+pub fn pair_device(target_ip: String, target_port: u16) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    get_runtime().spawn(async move {
+        // We set pairing mode to true temporarily to allow the handshake response
+        client.set_pairing_mode(true);
+        if let Err(e) = client.send_handshake(ip, target_port).await {
+            error!("Failed to send handshake: {}", e);
+        }
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
 pub fn trust_device(fingerprint: String, name: String) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
-    client.trust_device(fingerprint, name).map_err(Into::into)
+    client
+        .trust_device(fingerprint, None, name)
+        .map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn unpair_device(device_id: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    client
+        .remove_trusted_peer_by_id(&device_id)
+        .map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn is_device_trusted(device_id: String) -> bool {
+    if let Ok(client) = get_client() {
+        client.is_device_trusted(&device_id)
+    } else {
+        false
+    }
 }
 
 #[uniffi::export]
