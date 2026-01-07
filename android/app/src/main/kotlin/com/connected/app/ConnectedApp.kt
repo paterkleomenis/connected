@@ -92,12 +92,7 @@ class ConnectedApp(private val context: Context) {
             Log.d("ConnectedApp", "Device $deviceName unpaired us (reason: $reason)")
             // Remove from trusted devices
             trustedDevices.remove(deviceId)
-            // Update device in list to show as not trusted
-            val index = devices.indexOfFirst { it.id == deviceId }
-            if (index >= 0) {
-                // Force UI refresh by triggering a state change
-                getDevices()
-            }
+
             // Show notification to user
             val reasonText = when (reason) {
                 "blocked" -> "blocked you"
