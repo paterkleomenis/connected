@@ -120,7 +120,6 @@ pub struct QuicTransport {
     local_id: String,
     client_config: ClientConfig,
     connection_cache: Arc<RwLock<ConnectionCache>>,
-    _key_store: Arc<RwLock<KeyStore>>,
 }
 
 impl QuicTransport {
@@ -142,7 +141,6 @@ impl QuicTransport {
             local_id,
             client_config,
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
-            _key_store: key_store,
         })
     }
 
@@ -610,20 +608,6 @@ impl QuicTransport {
         &self.endpoint
     }
 
-    pub fn stats(&self) -> TransportStats {
-        let cache = self.connection_cache.read();
-        let active_connections = cache
-            .connections
-            .iter()
-            .filter(|(_, c)| c.connection.close_reason().is_none())
-            .count();
-
-        TransportStats {
-            active_connections,
-            cached_connections: cache.connections.len(),
-        }
-    }
-
     pub async fn shutdown(&self) {
         {
             let cache = self.connection_cache.read();
@@ -637,12 +621,6 @@ impl QuicTransport {
         self.endpoint.wait_idle().await;
         info!("QUIC transport shut down");
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct TransportStats {
-    pub active_connections: usize,
-    pub cached_connections: usize,
 }
 
 #[derive(Debug)]

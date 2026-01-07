@@ -127,51 +127,12 @@ impl KeyStore {
     }
 
     fn load_known_peers(storage_dir: &PathBuf) -> Result<KnownPeers> {
-        // Migration: Check for old known_hosts.json
-        let old_path = storage_dir.join("known_hosts.json");
         let new_path = storage_dir.join("known_peers.json");
 
         if new_path.exists() {
             let data = std::fs::read(&new_path).map_err(ConnectedError::Io)?;
             let peers: KnownPeers = serde_json::from_slice(&data).unwrap_or_default();
             Ok(peers)
-        } else if old_path.exists() {
-            // Migrate old format
-            info!("Migrating legacy known_hosts.json to known_peers.json");
-            #[derive(Serialize, Deserialize, Default)]
-            struct LegacyKnownHosts {
-                hosts: HashMap<String, String>,
-            }
-            let data = std::fs::read(&old_path).map_err(ConnectedError::Io)?;
-            let legacy: LegacyKnownHosts = serde_json::from_slice(&data).unwrap_or_default();
-
-            let mut new_peers = KnownPeers::default();
-            for (device_id, fingerprint) in legacy.hosts {
-                new_peers.peers.insert(
-                    fingerprint.clone(),
-                    PeerInfo {
-                        fingerprint,
-                        status: PeerStatus::Trusted,
-                        device_id: Some(device_id),
-                        name: None,
-                        last_seen: 0,
-                    },
-                );
-            }
-
-            // Save new format
-            let data = serde_json::to_vec_pretty(&new_peers)
-                .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
-            std::fs::write(&new_path, data).map_err(ConnectedError::Io)?;
-
-            // Remove old file after successful migration
-            if let Err(e) = std::fs::remove_file(&old_path) {
-                info!("Could not remove old known_hosts.json: {}", e);
-            } else {
-                info!("Removed legacy known_hosts.json after migration");
-            }
-
-            Ok(new_peers)
         } else {
             Ok(KnownPeers::default())
         }

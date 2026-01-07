@@ -50,25 +50,26 @@ class ConnectedApp(private val context: Context) {
                     devices.add(device)
                 }
 
-                // Check trust status for new/updated device
-                if (isDeviceTrusted(device)) {
-                    if (!trustedDevices.contains(device.id)) {
-                        trustedDevices.add(device.id)
-                    }
-                    // If it was pending, remove it
-                    if (pendingPairing.contains(device.id)) {
-                        pendingPairing.remove(device.id)
-                    }
+                            // Check trust status for new/updated device
+                            if (isDeviceTrusted(device)) {
+                                if (!trustedDevices.contains(device.id)) {
+                                    trustedDevices.add(device.id)
 
-                    // Automatically pair (handshake) to confirm connection
-                    try {
-                        // Call FFI directly to avoid "Pairing request sent" toast
-                        uniffi.connected_ffi.pairDevice(device.ip, device.port)
-                    } catch (e: Exception) {
-                        Log.w("ConnectedApp", "Failed to auto-connect to trusted device", e)
-                    }
-                }
-            }
+                                    // If it was pending, remove it
+                                    if (pendingPairing.contains(device.id)) {
+                                        pendingPairing.remove(device.id)
+                                    }
+
+                                    // Automatically pair (handshake) to confirm connection
+                                    // Only do this when we first discover/trust the device in this session
+                                    try {
+                                        // Call FFI directly to avoid "Pairing request sent" toast
+                                        uniffi.connected_ffi.pairDevice(device.ip, device.port)
+                                    } catch (e: Exception) {
+                                        Log.w("ConnectedApp", "Failed to auto-connect to trusted device", e)
+                                    }
+                                }
+                            }            }
 
             override fun onDeviceLost(deviceId: String) {
                 Log.d("ConnectedApp", "Device lost: $deviceId")

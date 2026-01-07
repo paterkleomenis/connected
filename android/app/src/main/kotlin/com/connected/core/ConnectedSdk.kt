@@ -26,12 +26,6 @@ data class DiscoveredDevice(
     val deviceType: String
 )
 
-data class PingResult(
-    val success: Boolean,
-    val rttMs: Long,
-    val errorMessage: String?
-)
-
 sealed class DiscoveryEvent {
     data class DeviceFound(val device: DiscoveredDevice) : DiscoveryEvent()
     data class DeviceLost(val deviceId: String) : DiscoveryEvent()
@@ -406,28 +400,6 @@ class ConnectedSdk private constructor() {
             }
         } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
             throw ConnectedException("Failed to get devices: ${e.message}", e)
-        }
-    }
-
-    @Throws(ConnectedException::class)
-    suspend fun ping(targetIp: String, targetPort: Int = DEFAULT_PORT): PingResult {
-        checkInitialized()
-
-        return withContext(Dispatchers.IO) {
-            try {
-                val result = uniffi.connected_ffi.sendPing(targetIp, targetPort.toUShort())
-                PingResult(
-                    success = result.success,
-                    rttMs = result.rttMs.toLong(),
-                    errorMessage = result.errorMessage
-                )
-            } catch (e: uniffi.connected_ffi.ConnectedFfiException) {
-                PingResult(
-                    success = false,
-                    rttMs = 0,
-                    errorMessage = e.message
-                )
-            }
         }
     }
 

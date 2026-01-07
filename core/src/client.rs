@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
@@ -1315,27 +1316,48 @@ impl ConnectedClient {
             .filter_map(|p| p.device_id)
             .collect();
 
-        let mut sent_count = 0;
+        let mut tasks = Vec::new();
+        let transport = self.transport.clone();
 
         for device in devices {
             if trusted_ids.contains(&device.id) {
                 if let Some(ip) = device.ip_addr() {
                     let port = device.port;
                     let txt = text.clone();
-                    // We need a way to call send_clipboard async without blocking the loop
-                    // But send_clipboard is on &self.
-                    // We can't easily spawn a task that uses &self unless we clone the Arc holding self.
-                    // But here we are inside &self method.
-                    // We can assume the caller will handle concurrency if they want,
-                    // OR we can just await sequentially which is safer for now to avoid too many connections.
-                    // Given it's QUIC, it should be fast.
+                    let t = transport.clone();
 
-                    // Actually, let's just do it sequentially for now.
-                    if let Err(e) = self.send_clipboard(ip, port, txt).await {
-                        error!("Failed to broadcast clipboard to {}: {}", device.name, e);
-                    } else {
-                        sent_count += 1;
-                    }
+                    tasks.push(tokio::spawn(async move {
+                        let addr = SocketAddr::new(ip, port);
+                        match t
+                            .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+                            .await
+                        {
+                            Ok((mut send, _recv)) => {
+                                let msg = Message::Clipboard { text: txt };
+                                if let Ok(data) = serde_json::to_vec(&msg) {
+                                    let len_bytes = (data.len() as u32).to_be_bytes();
+                                    // Ignore errors during broadcast to keep going
+                                    let _ = send.write_all(&len_bytes).await;
+                                    let _ = send.write_all(&data).await;
+                                    let _ = send.finish(); // Don't await finish to avoid hanging if peer doesn't ack immediately (though for QUIC stream finish is usually fast)
+                                    return true;
+                                }
+                            }
+                            Err(e) => {
+                                debug!("Failed to send clipboard to {}: {}", addr, e);
+                            }
+                        }
+                        false
+                    }));
+                }
+            }
+        }
+
+        let mut sent_count = 0;
+        for task in tasks {
+            if let Ok(success) = task.await {
+                if success {
+                    sent_count += 1;
                 }
             }
         }
@@ -1344,9 +1366,33 @@ impl ConnectedClient {
 }
 
 fn get_local_ip() -> Option<IpAddr> {
-    if_addrs::get_if_addrs()
-        .ok()?
+    let ifaces = if_addrs::get_if_addrs().ok()?;
+
+    // Filter for IPv4 and non-loopback
+    let ipv4_ifaces: Vec<_> = ifaces
         .into_iter()
-        .find(|iface| !iface.is_loopback() && iface.ip().is_ipv4())
+        .filter(|iface| !iface.is_loopback() && iface.ip().is_ipv4())
+        .collect();
+
+    // Try to find a private IP first
+    ipv4_ifaces
+        .iter()
+        .find(|iface| {
+            if let IpAddr::V4(ipv4) = iface.ip() {
+                let octets = ipv4.octets();
+                match octets[0] {
+                    10 => true,
+                    172 => octets[1] >= 16 && octets[1] <= 31,
+                    192 => octets[1] == 168,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        })
         .map(|iface| iface.ip())
+        .or_else(|| {
+            // Fallback to any IPv4
+            ipv4_ifaces.first().map(|iface| iface.ip())
+        })
 }

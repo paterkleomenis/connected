@@ -84,13 +84,6 @@ pub struct TrustedPeer {
     pub device_id: String,
 }
 
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct PingResult {
-    pub success: bool,
-    pub rtt_ms: u64,
-    pub error_message: Option<String>,
-}
-
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum ConnectedFfiError {
     #[error("Initialization error: {msg}")]
@@ -389,44 +382,6 @@ pub fn get_local_fingerprint() -> Result<String, ConnectedFfiError> {
 }
 
 #[uniffi::export]
-pub fn send_ping(target_ip: String, target_port: u16) -> PingResult {
-    let client = match get_client() {
-        Ok(c) => c,
-        Err(_) => {
-            return PingResult {
-                success: false,
-                rtt_ms: 0,
-                error_message: Some("Not initialized".into()),
-            }
-        }
-    };
-
-    let ip: std::net::IpAddr = match target_ip.parse() {
-        Ok(i) => i,
-        Err(_) => {
-            return PingResult {
-                success: false,
-                rtt_ms: 0,
-                error_message: Some("Invalid IP".into()),
-            }
-        }
-    };
-
-    match get_runtime().block_on(client.send_ping(ip, target_port)) {
-        Ok(rtt) => PingResult {
-            success: true,
-            rtt_ms: rtt,
-            error_message: None,
-        },
-        Err(e) => PingResult {
-            success: false,
-            rtt_ms: 0,
-            error_message: Some(e.to_string()),
-        },
-    }
-}
-
-#[uniffi::export]
 pub fn send_file(
     target_ip: String,
     target_port: u16,
@@ -610,15 +565,6 @@ pub fn unpair_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
     // Unpair = disconnect but keep trust intact (can reconnect anytime without re-pairing)
     let client = get_client()?;
     client.unpair_device_by_id(&device_id).map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn disconnect_device(device_id: String) -> Result<(), ConnectedFfiError> {
-    // Disconnect = same as unpair, close connection but keep trust intact
-    let client = get_client()?;
-    client
-        .disconnect_device_by_id(&device_id)
-        .map_err(Into::into)
 }
 
 #[uniffi::export]
