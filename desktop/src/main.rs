@@ -282,7 +282,7 @@ fn App() -> Element {
                                     on_send_clipboard: move |d: DeviceInfo| {
                                         selected_device.set(Some(d));
                                         clipboard_text.set(get_system_clipboard());
-                                        show_clipboard_dialog.set(true);
+                                        active_tab.set("clipboard".to_string());
                                     },
                                     on_pair: move |d: DeviceInfo| {
                                          if let Ok(port) = d.port.to_string().parse() {

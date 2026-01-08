@@ -1,7 +1,7 @@
 use arboard::Clipboard;
 use std::io::Write;
 use std::process::{Command, Stdio};
-use tracing::warn;
+use tracing::{debug, warn};
 
 fn is_wayland() -> bool {
     std::env::var("XDG_SESSION_TYPE").unwrap_or_default() == "wayland"
@@ -10,7 +10,10 @@ fn is_wayland() -> bool {
 pub fn get_system_clipboard() -> String {
     if is_wayland() {
         // Try wl-paste first
-        match Command::new("wl-paste").output() {
+        match Command::new("wl-paste")
+            .arg("--no-newline")
+            .output()
+        {
             Ok(output) => {
                 if output.status.success() {
                     return String::from_utf8_lossy(&output.stdout).to_string();
@@ -34,7 +37,7 @@ pub fn get_system_clipboard() -> String {
 pub fn set_system_clipboard(text: &str) {
     if is_wayland() {
         // Try wl-copy first
-        warn!("Attempting to set clipboard via wl-copy (length: {})", text.len());
+        debug!("Attempting to set clipboard via wl-copy (length: {})", text.len());
         match Command::new("wl-copy")
             .arg("--type")
             .arg("text/plain")
@@ -50,7 +53,7 @@ pub fn set_system_clipboard(text: &str) {
                 match child.wait() {
                     Ok(status) => {
                         if status.success() {
-                            warn!("wl-copy succeeded");
+                            debug!("wl-copy succeeded");
                             return;
                         } else {
                             warn!("wl-copy exited with status: {}", status);
