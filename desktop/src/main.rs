@@ -11,7 +11,7 @@ use dioxus::prelude::*;
 use state::*;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, debug};
 use utils::{get_device_icon, get_system_clipboard};
 
 fn main() {
@@ -51,7 +51,7 @@ fn App() -> Element {
     let mut selected_device = use_signal(|| None::<DeviceInfo>);
     let mut active_tab = use_signal(|| "devices".to_string());
     let mut transfer_status = use_signal(|| TransferStatus::Idle);
-    let clipboard_sync_enabled = use_signal(|| false);
+    let mut clipboard_sync_enabled = use_signal(|| false);
     let mut notifications = use_signal(Vec::<Notification>::new);
     let mut show_send_dialog = use_signal(|| false);
     let mut clipboard_text = use_signal(String::new);
@@ -129,6 +129,7 @@ fn App() -> Element {
                     let current_clip = get_system_clipboard();
                     let last_clip = get_last_clipboard().lock().unwrap().clone();
                     if !current_clip.is_empty() && current_clip != last_clip {
+                        debug!("Local clipboard changed. New content length: {}", current_clip.len());
                         *get_last_clipboard().lock().unwrap() = current_clip.clone();
                         action_tx.send(AppAction::BroadcastClipboard { text: current_clip });
                     }
@@ -141,8 +142,10 @@ fn App() -> Element {
 
     let toggle_clipboard_sync = move |_| {
         let current = *clipboard_sync_enabled.read();
-        action_tx.send(AppAction::SetClipboardSync(!current));
-        if !current {
+        let new_state = !current;
+        clipboard_sync_enabled.set(new_state);
+        action_tx.send(AppAction::SetClipboardSync(new_state));
+        if new_state {
             *get_last_clipboard().lock().unwrap() = get_system_clipboard();
             add_notification("Clipboard Sync", "Sync Started (Trusted Devices)", "📋");
         } else {
@@ -401,28 +404,27 @@ fn App() -> Element {
                             class: if *clipboard_sync_enabled.read() { "sync-status active" } else { "sync-status" },
                             if *clipboard_sync_enabled.read() {
                                 div { class: "sync-icon", "🔄" }
-                                div {
-                                    class: "sync-info",
-                                    span { class: "sync-label", "Universal Clipboard" }
-                                    span { class: "sync-device", "Active for trusted devices" }
-                                }
-                                button {
-                                    class: "stop-sync-button",
-                                    onclick: toggle_clipboard_sync,
-                                    "Stop Sync"
-                                }
                             } else {
                                 div { class: "sync-icon muted", "📋" }
-                                div {
-                                    class: "sync-info",
-                                    span { class: "sync-label muted", "Universal Clipboard" }
-                                    span { class: "sync-hint", "Sync with all trusted devices" }
+                            }
+
+                            div {
+                                class: "sync-info",
+                                span {
+                                    class: if *clipboard_sync_enabled.read() { "sync-label" } else { "sync-label muted" },
+                                    "Universal Clipboard"
                                 }
-                                button {
-                                    class: "primary-button",
-                                    onclick: toggle_clipboard_sync,
-                                    "Start Sync"
+                                span { class: "sync-hint", "Sync with all trusted devices" }
+                            }
+
+                            label {
+                                class: "toggle-switch",
+                                input {
+                                    type: "checkbox",
+                                    checked: "{clipboard_sync_enabled}",
+                                    oninput: toggle_clipboard_sync,
                                 }
+                                span { class: "slider" }
                             }
                         }
 
