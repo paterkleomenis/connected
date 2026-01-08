@@ -271,9 +271,31 @@ impl QuicTransport {
     pub async fn get_connection_fingerprint(&self, addr: SocketAddr) -> Option<String> {
         let cache = self.connection_cache.read();
         if let Some(cached) = cache.connections.get(&addr) {
-            if cached.connection.close_reason().is_none() {
-                return Self::get_peer_fingerprint(&cached.connection);
+            let close_reason = cached.connection.close_reason();
+            if close_reason.is_none() {
+                let fp = Self::get_peer_fingerprint(&cached.connection);
+                if fp.is_some() {
+                    debug!(
+                        "Got fingerprint for {}: {:?}",
+                        addr,
+                        fp.as_ref().map(|s| &s[..16.min(s.len())])
+                    );
+                } else {
+                    warn!("Connection to {} exists but could not get peer fingerprint (no peer identity?)", addr);
+                }
+                return fp;
+            } else {
+                warn!(
+                    "Connection to {} is closed (reason: {:?}), cannot get fingerprint",
+                    addr, close_reason
+                );
             }
+        } else {
+            warn!(
+                "No cached connection found for {} (cache has {} connections)",
+                addr,
+                cache.connections.len()
+            );
         }
         None
     }
@@ -588,14 +610,27 @@ impl QuicTransport {
     }
 
     fn get_peer_fingerprint(connection: &Connection) -> Option<String> {
-        let identity = connection.peer_identity()?;
-        let certs = identity.downcast_ref::<Vec<rustls::pki_types::CertificateDer>>()?;
+        let identity = match connection.peer_identity() {
+            Some(id) => id,
+            None => {
+                debug!("No peer identity available for connection");
+                return None;
+            }
+        };
+        let certs = match identity.downcast_ref::<Vec<rustls::pki_types::CertificateDer>>() {
+            Some(c) => c,
+            None => {
+                debug!("Could not downcast peer identity to certificate chain");
+                return None;
+            }
+        };
         if let Some(cert) = certs.first() {
             use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
             hasher.update(cert.as_ref());
             Some(format!("{:x}", hasher.finalize()))
         } else {
+            debug!("Certificate chain is empty");
             None
         }
     }

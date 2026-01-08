@@ -50,7 +50,7 @@ class ConnectedApp(private val context: Context) {
 
     private val discoveryCallback = object : DiscoveryCallback {
         override fun onDeviceFound(device: DiscoveredDevice) {
-            Log.d("ConnectedApp", "Device found: ${device.name}")
+            Log.d("ConnectedApp", "Device found: ${device.name} (id=${device.id}, ip=${device.ip}:${device.port})")
 
             // Deduplication and Update logic
             val existingIndex = devices.indexOfFirst { it.id == device.id }
@@ -68,9 +68,13 @@ class ConnectedApp(private val context: Context) {
             }
 
             // Check trust status for new/updated device
-            if (isDeviceTrusted(device)) {
+            val isTrusted = isDeviceTrusted(device)
+            Log.d("ConnectedApp", "Device ${device.name} (${device.id}) trust check result: $isTrusted")
+
+            if (isTrusted) {
                 if (!trustedDevices.contains(device.id)) {
                     trustedDevices.add(device.id)
+                    Log.d("ConnectedApp", "Added ${device.name} to trustedDevices list")
 
                     // If it was pending, remove it
                     if (pendingPairing.contains(device.id)) {
@@ -80,11 +84,20 @@ class ConnectedApp(private val context: Context) {
                     // Automatically pair (handshake) to confirm connection
                     // Only do this when we first discover/trust the device in this session
                     try {
-                        // Call FFI directly to avoid "Pairing request sent" toast
+                        Log.d("ConnectedApp", "Auto-connecting to trusted device ${device.name}")
                         uniffi.connected_ffi.pairDevice(device.ip, device.port)
                     } catch (e: Exception) {
                         Log.w("ConnectedApp", "Failed to auto-connect to trusted device", e)
                     }
+                } else {
+                    Log.d("ConnectedApp", "Device ${device.name} already in trustedDevices list")
+                }
+            } else {
+                Log.d("ConnectedApp", "Device ${device.name} is NOT trusted - will show Pair button")
+                // If device was in trustedDevices but is no longer trusted, remove it
+                if (trustedDevices.contains(device.id)) {
+                    trustedDevices.remove(device.id)
+                    Log.d("ConnectedApp", "Removed ${device.name} from trustedDevices (no longer trusted in backend)")
                 }
             }
         }

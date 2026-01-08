@@ -286,6 +286,15 @@ impl ConnectedClient {
             .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
             .await?;
 
+        // Get fingerprint immediately after connecting, before the connection might close
+        let peer_fingerprint = self.transport.get_connection_fingerprint(addr).await;
+        if peer_fingerprint.is_none() {
+            warn!(
+                "Could not get peer fingerprint immediately after connecting to {}",
+                addr
+            );
+        }
+
         let msg = Message::Handshake {
             device_id: self.local_device.id.clone(),
             device_name: self.local_device.name.clone(),
@@ -404,8 +413,16 @@ impl ConnectedClient {
                     return Ok(());
                 }
 
-                // Get fingerprint from connection
-                let fingerprint = self.transport.get_connection_fingerprint(addr).await;
+                // Use the fingerprint we captured at the start of the handshake
+                // This is more reliable than trying to get it after the ack
+                let fingerprint = if peer_fingerprint.is_some() {
+                    peer_fingerprint.clone()
+                } else {
+                    // Fallback: try to get it again (might work if connection still open)
+                    warn!("Using fallback fingerprint lookup for {}", addr);
+                    self.transport.get_connection_fingerprint(addr).await
+                };
+
                 if let Some(fp) = fingerprint {
                     self.key_store.write().trust_peer(
                         fp,
@@ -423,6 +440,11 @@ impl ConnectedClient {
                         DeviceType::Unknown,
                     );
                     let _ = self.event_tx.send(ConnectedEvent::DeviceFound(device));
+                } else {
+                    error!("Failed to get fingerprint for {}, trust not saved!", addr);
+                    return Err(ConnectedError::PairingFailed(
+                        "Could not obtain peer fingerprint".to_string(),
+                    ));
                 }
                 Ok(())
             }
@@ -1107,18 +1129,38 @@ impl ConnectedClient {
                     }
                     Message::Clipboard { text } => {
                         let is_trusted = key_store.read().is_trusted(&fingerprint);
+                        debug!(
+                            "Clipboard received from {} (fingerprint: {}), trusted: {}",
+                            addr.ip(),
+                            &fingerprint[..16.min(fingerprint.len())],
+                            is_trusted
+                        );
                         if is_trusted {
                             // Find device name if possible
                             let from_device = key_store
                                 .read()
                                 .get_peer_name(&fingerprint)
                                 .unwrap_or_else(|| "Unknown".to_string());
+                            info!("Clipboard received from {}, forwarding to UI", from_device);
                             let _ = event_tx.send(ConnectedEvent::ClipboardReceived {
                                 content: text,
                                 from_device,
                             });
                         } else {
-                            error!("Rejected Clipboard from untrusted peer: {}", fingerprint);
+                            // Log all known peers for debugging
+                            let known_peers = key_store.read().get_trusted_peers();
+                            error!(
+                                "Rejected Clipboard from untrusted peer: {} (known peers: {})",
+                                &fingerprint[..16.min(fingerprint.len())],
+                                known_peers.len()
+                            );
+                            for peer in known_peers.iter() {
+                                debug!(
+                                    "  Known peer: {} (fp: {})",
+                                    peer.name.as_deref().unwrap_or("unknown"),
+                                    &peer.fingerprint[..16.min(peer.fingerprint.len())]
+                                );
+                            }
                         }
                     }
                     Message::DeviceUnpaired { device_id, reason } => {

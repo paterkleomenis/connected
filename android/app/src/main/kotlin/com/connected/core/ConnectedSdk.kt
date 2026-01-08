@@ -224,7 +224,9 @@ class ConnectedSdk private constructor() {
         // Acquire multicast lock BEFORE initialization so mDNS announcements work
         acquireMulticastLock()
 
-        val storagePath = context.filesDir.absolutePath
+        // Use external files dir for consistency with ConnectedApp
+        // This ensures the same identity and known_peers are used
+        val storagePath = context.getExternalFilesDir(null)?.absolutePath ?: context.filesDir.absolutePath
 
         try {
             // First try the default initialization
