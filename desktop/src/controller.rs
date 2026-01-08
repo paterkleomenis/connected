@@ -193,6 +193,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     } => {
                                         set_system_clipboard(&content);
                                         *get_last_clipboard().lock().unwrap() = content.clone();
+                                        *get_last_remote_update().lock().unwrap() = Instant::now();
                                         add_notification(
                                             "Clipboard",
                                             &format!("Received from {}", from_device),
@@ -306,8 +307,17 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if let Some(c) = &client {
                     let c = c.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = c.broadcast_clipboard(text).await {
-                            error!("Broadcast failed: {}", e);
+                        match c.broadcast_clipboard(text).await {
+                            Ok(count) => {
+                                if count == 0 {
+                                    info!("Clipboard broadcast sent to 0 devices (no trusted peers found)");
+                                } else {
+                                    info!("Clipboard broadcast sent to {} devices", count);
+                                }
+                            }
+                            Err(e) => {
+                                error!("Broadcast failed: {}", e);
+                            }
                         }
                     });
                 }

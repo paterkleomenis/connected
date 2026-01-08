@@ -1,7 +1,27 @@
 use arboard::Clipboard;
+use std::io::Write;
+use std::process::{Command, Stdio};
 use tracing::warn;
 
+fn is_wayland() -> bool {
+    std::env::var("XDG_SESSION_TYPE").unwrap_or_default() == "wayland"
+}
+
 pub fn get_system_clipboard() -> String {
+    if is_wayland() {
+        // Try wl-paste first
+        match Command::new("wl-paste").output() {
+            Ok(output) => {
+                if output.status.success() {
+                    return String::from_utf8_lossy(&output.stdout).to_string();
+                }
+            }
+            Err(_) => {
+                // wl-paste not found or failed, fall back to arboard
+            }
+        }
+    }
+
     match Clipboard::new() {
         Ok(mut clipboard) => clipboard.get_text().unwrap_or_default(),
         Err(e) => {
@@ -12,6 +32,38 @@ pub fn get_system_clipboard() -> String {
 }
 
 pub fn set_system_clipboard(text: &str) {
+    if is_wayland() {
+        // Try wl-copy first
+        warn!("Attempting to set clipboard via wl-copy (length: {})", text.len());
+        match Command::new("wl-copy")
+            .arg("--type")
+            .arg("text/plain")
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(mut stdin) = child.stdin.take() {
+                    if let Err(e) = stdin.write_all(text.as_bytes()) {
+                         warn!("Failed to write to wl-copy stdin: {}", e);
+                    }
+                }
+                match child.wait() {
+                    Ok(status) => {
+                        if status.success() {
+                            warn!("wl-copy succeeded");
+                            return;
+                        } else {
+                            warn!("wl-copy exited with status: {}", status);
+                        }
+                    }
+                    Err(e) => warn!("Failed to wait on wl-copy: {}", e),
+                }
+            }
+            Err(e) => warn!("Failed to spawn wl-copy: {}", e),
+        }
+        warn!("wl-copy failed, falling back to arboard");
+    }
+
     match Clipboard::new() {
         Ok(mut clipboard) => {
             if let Err(e) = clipboard.set_text(text) {

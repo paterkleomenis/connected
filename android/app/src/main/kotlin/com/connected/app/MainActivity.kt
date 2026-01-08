@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -76,7 +77,21 @@ fun ConnectedAppScreen(connectedApp: ConnectedApp, filePickerLauncher: ActivityR
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { paddingValues ->
         Column(modifier = Modifier.padding(paddingValues).padding(16.dp)) {
-            Text("Nearby Devices", style = MaterialTheme.typography.headlineMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Text("Nearby Devices", style = MaterialTheme.typography.headlineMedium)
+
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text("Sync Clipboard", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 8.dp))
+                    Switch(
+                        checked = connectedApp.isClipboardSyncEnabled.value,
+                        onCheckedChange = { connectedApp.toggleClipboardSync() }
+                    )
+                }
+            }
 
             if (connectedApp.devices.isEmpty()) {
                 Text(
@@ -185,6 +200,13 @@ fun DeviceItem(device: DiscoveredDevice, app: ConnectedApp, filePickerLauncher: 
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("📋 Send Clipboard") },
+                                onClick = {
+                                    showMenu = false
+                                    app.sendClipboard(device)
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("💔 Unpair") },
                                 onClick = {

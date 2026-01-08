@@ -173,12 +173,15 @@ class ConnectedSdk private constructor() {
             // For sync: update last remote clipboard to prevent echo
             if (isClipboardSyncEnabled && text != lastRemoteClipboard && text != lastLocalClipboard) {
                 lastRemoteClipboard = text
-                scope.launch {
+                scope.launch(Dispatchers.Main) {
+                    updateSyncedClipboard(appContext!!, text)
                     _clipboardEvents.emit(ClipboardEvent.Received(text, fromDevice))
                 }
                 Log.d(TAG, "Clipboard sync received: ${text.take(50)}...")
             } else if (!isClipboardSyncEnabled) {
-                scope.launch {
+                scope.launch(Dispatchers.Main) {
+                    // Even if not syncing, we should copy to clipboard if explicitly sent
+                    updateSyncedClipboard(appContext!!, text)
                     _clipboardEvents.emit(ClipboardEvent.Received(text, fromDevice))
                 }
                 Log.d(TAG, "Clipboard received from $fromDevice: ${text.take(50)}...")

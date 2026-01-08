@@ -123,11 +123,15 @@ fn App() -> Element {
 
             // Clipboard Sync Check
             if *clipboard_sync_enabled.read() {
-                let current_clip = get_system_clipboard();
-                let last_clip = get_last_clipboard().lock().unwrap().clone();
-                if !current_clip.is_empty() && current_clip != last_clip {
-                    *get_last_clipboard().lock().unwrap() = current_clip.clone();
-                    action_tx.send(AppAction::BroadcastClipboard { text: current_clip });
+                // Check if we recently received a remote update (debounce to prevent echo)
+                let last_update = *get_last_remote_update().lock().unwrap();
+                if last_update.elapsed() >= Duration::from_millis(1000) {
+                    let current_clip = get_system_clipboard();
+                    let last_clip = get_last_clipboard().lock().unwrap().clone();
+                    if !current_clip.is_empty() && current_clip != last_clip {
+                        *get_last_clipboard().lock().unwrap() = current_clip.clone();
+                        action_tx.send(AppAction::BroadcastClipboard { text: current_clip });
+                    }
                 }
             }
 

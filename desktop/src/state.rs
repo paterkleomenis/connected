@@ -75,6 +75,7 @@ static TRANSFER_STATUS: OnceLock<Arc<Mutex<TransferStatus>>> = OnceLock::new();
 static NOTIFICATIONS: OnceLock<Arc<Mutex<Vec<Notification>>>> = OnceLock::new();
 static NOTIFICATION_COUNTER: OnceLock<Arc<Mutex<u64>>> = OnceLock::new();
 static LAST_CLIPBOARD: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
+static LAST_REMOTE_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 static PAIRING_REQUESTS: OnceLock<Arc<Mutex<Vec<PairingRequest>>>> = OnceLock::new();
 static PENDING_PAIRINGS: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 static FILE_TRANSFER_REQUESTS: OnceLock<Arc<Mutex<HashMap<String, FileTransferRequest>>>> =
@@ -98,6 +99,10 @@ pub fn get_notification_counter() -> &'static Arc<Mutex<u64>> {
 
 pub fn get_last_clipboard() -> &'static Arc<Mutex<String>> {
     LAST_CLIPBOARD.get_or_init(|| Arc::new(Mutex::new(String::new())))
+}
+
+pub fn get_last_remote_update() -> &'static Arc<Mutex<std::time::Instant>> {
+    LAST_REMOTE_UPDATE.get_or_init(|| Arc::new(Mutex::new(std::time::Instant::now())))
 }
 
 pub fn get_pairing_requests() -> &'static Arc<Mutex<Vec<PairingRequest>>> {
