@@ -18,3 +18,5 @@ dirs = "5"
 rfd = "0.15"
 arboard = "3.6.1"
 once_cell.workspace = true
+mime_guess.workspace = true
+base64 = "0.21"

@@ -70,6 +70,13 @@ pub enum AppAction {
         remote_path: String,
         filename: String,
     },
+    PreviewFile {
+        ip: String,
+        port: u16,
+        remote_path: String,
+        filename: String,
+    },
+    ClosePreview,
 }
 
 pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
@@ -717,6 +724,60 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         }
                     });
                 }
+            }
+            AppAction::PreviewFile {
+                ip,
+                port,
+                remote_path,
+                filename,
+            } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    let ip_str = ip.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip_str.parse() {
+                            let temp_dir = std::env::temp_dir();
+                            let local_path = temp_dir.join(format!("preview_{}", filename));
+
+                            add_notification(
+                                "Preview",
+                                &format!("Loading {}...", filename),
+                                "👁️",
+                            );
+
+                            match c
+                                .fs_download_file(ip_addr, port, remote_path, local_path.clone())
+                                .await
+                            {
+                                Ok(_) => {
+                                    // Read file content
+                                    if let Ok(data) = tokio::fs::read(&local_path).await {
+                                        let mime = mime_guess::from_path(&filename)
+                                            .first_or_octet_stream()
+                                            .to_string();
+
+                                        *get_preview_data().lock().unwrap() = Some(PreviewData {
+                                            filename,
+                                            mime_type: mime,
+                                            data,
+                                        });
+                                        // Clean up temp file
+                                        let _ = tokio::fs::remove_file(local_path).await;
+                                    } else {
+                                        add_notification("Preview", "Failed to read file", "❌");
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to preview file: {}", e);
+                                    add_notification("Preview Failed", &e.to_string(), "❌");
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            AppAction::ClosePreview => {
+                *get_preview_data().lock().unwrap() = None;
             }
         }
     }

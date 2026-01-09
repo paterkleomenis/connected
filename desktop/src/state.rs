@@ -84,6 +84,14 @@ static FILE_TRANSFER_REQUESTS: OnceLock<Arc<Mutex<HashMap<String, FileTransferRe
 static REMOTE_FILES: OnceLock<Arc<Mutex<Option<Vec<FsEntry>>>>> = OnceLock::new();
 static REMOTE_PATH: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 static REMOTE_FILES_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
+static PREVIEW_DATA: OnceLock<Arc<Mutex<Option<PreviewData>>>> = OnceLock::new();
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviewData {
+    pub filename: String,
+    pub mime_type: String,
+    pub data: Vec<u8>,
+}
 
 pub fn get_devices_store() -> &'static Arc<Mutex<HashMap<String, DeviceInfo>>> {
     DEVICES.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
@@ -163,4 +171,8 @@ pub fn get_current_remote_path() -> &'static Arc<Mutex<String>> {
 
 pub fn get_remote_files_update() -> &'static Arc<Mutex<std::time::Instant>> {
     REMOTE_FILES_UPDATE.get_or_init(|| Arc::new(Mutex::new(std::time::Instant::now())))
+}
+
+pub fn get_preview_data() -> &'static Arc<Mutex<Option<PreviewData>>> {
+    PREVIEW_DATA.get_or_init(|| Arc::new(Mutex::new(None)))
 }

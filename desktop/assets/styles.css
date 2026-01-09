@@ -1205,3 +1205,42 @@ input:checked + .slider:before {
     background: var(--success);
     color: white;
 }
+
+/* ============================================================================
+   Context Menu
+   ============================================================================ */
+
+.context-menu {
+    position: absolute;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    z-index: 1000;
+    box-shadow: var(--shadow-lg);
+    min-width: 160px;
+    overflow: hidden;
+}
+
+.menu-item {
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-primary);
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.menu-item:hover {
+    background: var(--bg-tertiary);
+}
+
+.menu-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 999;
+}
