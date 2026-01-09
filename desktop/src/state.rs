@@ -1,3 +1,4 @@
+use connected_core::filesystem::FsEntry;
 use connected_core::Device;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -80,6 +81,9 @@ static PAIRING_REQUESTS: OnceLock<Arc<Mutex<Vec<PairingRequest>>>> = OnceLock::n
 static PENDING_PAIRINGS: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 static FILE_TRANSFER_REQUESTS: OnceLock<Arc<Mutex<HashMap<String, FileTransferRequest>>>> =
     OnceLock::new();
+static REMOTE_FILES: OnceLock<Arc<Mutex<Option<Vec<FsEntry>>>>> = OnceLock::new();
+static REMOTE_PATH: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
+static REMOTE_FILES_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 
 pub fn get_devices_store() -> &'static Arc<Mutex<HashMap<String, DeviceInfo>>> {
     DEVICES.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
@@ -147,4 +151,16 @@ pub fn add_notification(title: &str, message: &str, icon: &'static str) {
     if notifications.len() > 5 {
         notifications.remove(0);
     }
+}
+
+pub fn get_current_remote_files() -> &'static Arc<Mutex<Option<Vec<FsEntry>>>> {
+    REMOTE_FILES.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+pub fn get_current_remote_path() -> &'static Arc<Mutex<String>> {
+    REMOTE_PATH.get_or_init(|| Arc::new(Mutex::new(String::from("/"))))
+}
+
+pub fn get_remote_files_update() -> &'static Arc<Mutex<std::time::Instant>> {
+    REMOTE_FILES_UPDATE.get_or_init(|| Arc::new(Mutex::new(std::time::Instant::now())))
 }

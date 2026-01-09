@@ -1,6 +1,7 @@
 package com.connected.app
 
 import android.os.Bundle
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
@@ -14,12 +15,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import uniffi.connected_ffi.DiscoveredDevice
 
+@OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
     private lateinit var connectedApp: ConnectedApp
 
@@ -33,6 +36,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val folderPickerLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let {
+            connectedApp.setRootUri(it)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -43,7 +52,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             ConnectedTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    ConnectedAppScreen(connectedApp, filePickerLauncher)
+                    if (connectedApp.isBrowsingRemote.value) {
+                        RemoteFileBrowser(connectedApp)
+                    } else {
+                        ConnectedAppScreen(connectedApp, filePickerLauncher, folderPickerLauncher)
+                    }
                 }
             }
         }
@@ -56,7 +69,96 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun ConnectedAppScreen(connectedApp: ConnectedApp, filePickerLauncher: ActivityResultLauncher<String>? = null) {
+fun RemoteFileBrowser(app: ConnectedApp) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            IconButton(onClick = { app.closeRemoteBrowser() }) {
+                Text("⬅", style = MaterialTheme.typography.titleLarge)
+            }
+            Text("Remote Files: ${app.currentRemotePath.value}", style = MaterialTheme.typography.titleMedium)
+        }
+
+        LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
+
+            if (app.currentRemotePath.value != "/") {
+
+                item {
+
+                    Card(modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth(), onClick = {
+
+                        val current = app.currentRemotePath.value
+
+                        val parent = current.substringBeforeLast('/').ifEmpty { "/" }
+
+                        // Navigate up
+
+                        app.browseRemoteFiles(app.getBrowsingDevice()!!, parent)
+
+                    }) {
+
+                        Row(modifier = Modifier.padding(16.dp)) {
+
+                            Text("📁 ..")
+
+                        }
+
+                    }
+
+                }
+
+            }
+
+            items(app.remoteFiles) { file ->
+
+                Card(modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth(), onClick = {
+
+                    if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) {
+
+                        app.browseRemoteFiles(app.getBrowsingDevice()!!, file.path)
+
+                    }
+
+                }) {
+
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
+                    ) {
+
+                        Row {
+
+                            Text(if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) "📁 " else "📄 ")
+
+                            Text(file.name)
+
+                        }
+
+                        Text(if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) "" else "${file.size} B")
+
+                    }
+
+                }
+
+            }
+
+        }
+
+    }
+
+}
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+
+@Composable
+
+fun ConnectedAppScreen(
+    connectedApp: ConnectedApp,
+    filePickerLauncher: ActivityResultLauncher<String>? = null,
+    folderPickerLauncher: ActivityResultLauncher<Uri?>? = null
+) {
+
+
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -85,11 +187,61 @@ fun ConnectedAppScreen(connectedApp: ConnectedApp, filePickerLauncher: ActivityR
                 Text("Nearby Devices", style = MaterialTheme.typography.headlineMedium)
 
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text("Sync Clipboard", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 8.dp))
+                    Text(
+                        "Sync Clipboard",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
                     Switch(
                         checked = connectedApp.isClipboardSyncEnabled.value,
                         onCheckedChange = { connectedApp.toggleClipboardSync() }
                     )
+                }
+            }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                modifier = Modifier.padding(vertical = 8.dp).fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Shared Folder", style = MaterialTheme.typography.titleSmall)
+
+                    if (connectedApp.isFsProviderRegistered.value) {
+                        Text(
+                            "Sharing: ${connectedApp.sharedFolderName.value ?: "Unknown"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+                    } else {
+                        Text(
+                            "Select a sharing mode below.",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+                    }
+
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                        Button(
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+                            onClick = {
+                                if (connectedApp.isFullAccessGranted()) {
+                                    connectedApp.setFullAccess()
+                                } else {
+                                    connectedApp.requestFullAccessPermission()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                        ) {
+                            Text(if (connectedApp.isFullAccessGranted()) "Use Full Access" else "Grant Full Access")
+                        }
+                    }
+
+                    Button(
+                        onClick = { folderPickerLauncher?.launch(null) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Select Specific Folder")
+                    }
                 }
             }
 
@@ -154,8 +306,14 @@ fun ConnectedAppScreen(connectedApp: ConnectedApp, filePickerLauncher: ActivityR
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DeviceItem(device: DiscoveredDevice, app: ConnectedApp, filePickerLauncher: ActivityResultLauncher<String>? = null) {
+fun DeviceItem(
+    device: DiscoveredDevice,
+    app: ConnectedApp,
+    filePickerLauncher: ActivityResultLauncher<String>? = null
+) {
+
     // Check if ID is in the trusted set (observes state change)
     val isTrusted = app.trustedDevices.contains(device.id)
     val isPending = app.pendingPairing.contains(device.id)
@@ -188,7 +346,7 @@ fun DeviceItem(device: DiscoveredDevice, app: ConnectedApp, filePickerLauncher: 
 
                         // Launch file picker if available
                         filePickerLauncher?.launch("*/*")
-                     }) {
+                    }) {
                         Text("📁", style = MaterialTheme.typography.titleLarge)
                     }
                     // More options dropdown
@@ -205,6 +363,13 @@ fun DeviceItem(device: DiscoveredDevice, app: ConnectedApp, filePickerLauncher: 
                                 onClick = {
                                     showMenu = false
                                     app.sendClipboard(device)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("📂 Browse Files") },
+                                onClick = {
+                                    showMenu = false
+                                    app.browseRemoteFiles(device)
                                 }
                             )
                             DropdownMenuItem(

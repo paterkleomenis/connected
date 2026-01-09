@@ -395,10 +395,13 @@ impl QuicTransport {
 
     pub const STREAM_TYPE_FILE: u8 = 2;
 
+    pub const STREAM_TYPE_FS: u8 = 3;
+
     pub async fn start_server(
         &self,
         message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message, Option<SendStream>)>,
         file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
+        fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
     ) -> Result<()> {
         let endpoint = self.endpoint.clone();
 
@@ -411,6 +414,7 @@ impl QuicTransport {
                 let tx = message_tx.clone();
 
                 let f_tx = file_stream_tx.clone();
+                let fs_tx = fs_stream_tx.clone();
 
                 let id = local_id.clone();
 
@@ -426,9 +430,15 @@ impl QuicTransport {
                                     connection.rtt()
                                 );
 
-                                if let Err(e) =
-                                    Self::handle_connection(connection, remote_addr, tx, f_tx, id)
-                                        .await
+                                if let Err(e) = Self::handle_connection(
+                                    connection,
+                                    remote_addr,
+                                    tx,
+                                    f_tx,
+                                    fs_tx,
+                                    id,
+                                )
+                                .await
                                 {
                                     warn!("Connection handler error: {}", e);
                                 }
@@ -455,6 +465,7 @@ impl QuicTransport {
         remote_addr: SocketAddr,
         message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message, Option<SendStream>)>,
         file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
+        fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
         local_id: String,
     ) -> Result<()> {
         let fingerprint =
@@ -555,6 +566,11 @@ impl QuicTransport {
                             info!("Received File Stream from {}", fingerprint);
 
                             let _ = file_stream_tx.send((fingerprint.clone(), send, recv));
+                        }
+
+                        Self::STREAM_TYPE_FS => {
+                            info!("Received Filesystem Stream from {}", fingerprint);
+                            let _ = fs_stream_tx.send((fingerprint.clone(), send, recv));
                         }
 
                         _ => {

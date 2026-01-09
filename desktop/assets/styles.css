@@ -116,21 +116,9 @@ body {
 .local-device {
     display: flex;
     align-items: center;
-    gap: var(--space-md);
     padding: var(--space-md);
     background: rgba(255, 255, 255, 0.05);
     border-radius: var(--radius-md);
-}
-
-.local-device-icon {
-    width: 36px;
-    height: 36px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: var(--radius-sm);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
 }
 
 .local-device-info {
@@ -179,7 +167,6 @@ body {
 .nav-item {
     display: flex;
     align-items: center;
-    gap: var(--space-md);
     padding: var(--space-md);
     background: transparent;
     border: none;
@@ -200,12 +187,6 @@ body {
 .nav-item.active {
     background: rgba(255, 255, 255, 0.12);
     color: var(--text-inverse);
-}
-
-.nav-icon {
-    font-size: 18px;
-    width: 24px;
-    text-align: center;
 }
 
 .nav-badge {

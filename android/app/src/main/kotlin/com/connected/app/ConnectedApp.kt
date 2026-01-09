@@ -48,6 +48,123 @@ class ConnectedApp(private val context: Context) {
     private var selectedDeviceForFile: DiscoveredDevice? = null
     private lateinit var downloadDir: File
 
+    // FilesystemProvider State
+    val isFsProviderRegistered = mutableStateOf(false)
+    val sharedFolderName = mutableStateOf<String?>(null)
+    val remoteFiles = mutableStateListOf<FfiFsEntry>()
+    val currentRemotePath = mutableStateOf("/")
+    val isBrowsingRemote = mutableStateOf(false)
+    private var browsingDevice: DiscoveredDevice? = null
+
+    private val PREFS_NAME = "ConnectedPrefs"
+    private val PREF_ROOT_URI = "root_uri"
+
+    private fun getPersistedRootUri(): Uri? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val uriString = prefs.getString(PREF_ROOT_URI, null) ?: return null
+        return Uri.parse(uriString)
+    }
+
+    fun setRootUri(uri: Uri) {
+        // Persist permission ONLY for content URIs
+        if (uri.scheme == "content") {
+            val takeFlags: Int = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+        }
+
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(PREF_ROOT_URI, uri.toString()).apply()
+
+        registerFsProvider(uri)
+    }
+
+    private fun registerFsProvider(uri: Uri) {
+        try {
+            val provider = AndroidFilesystemProvider(context, uri)
+            uniffi.connected_ffi.registerFilesystemProvider(provider)
+            isFsProviderRegistered.value = true
+
+            // Update display name
+            sharedFolderName.value = if (uri.scheme == "file") {
+                "Full Device Access"
+            } else {
+                val doc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+                doc?.name ?: uri.path
+            }
+
+            Log.d("ConnectedApp", "Filesystem provider registered with URI: $uri")
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to register FS provider", e)
+        }
+    }
+
+    fun setFullAccess() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            val root = android.os.Environment.getExternalStorageDirectory()
+            val uri = android.net.Uri.fromFile(root)
+            setRootUri(uri)
+        }
+    }
+
+    fun isFullAccessGranted(): Boolean {
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            true
+        }
+    }
+
+    fun requestFullAccessPermission() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            try {
+                val intent =
+                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                intent.addCategory("android.intent.category.DEFAULT")
+                intent.data = android.net.Uri.parse(String.format("package:%s", context.packageName))
+                intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to launch permission settings", e)
+            }
+        }
+    }
+
+    fun browseRemoteFiles(device: DiscoveredDevice, path: String = "/") {
+        browsingDevice = device
+        isBrowsingRemote.value = true
+        currentRemotePath.value = path
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                val files = uniffi.connected_ffi.requestListDir(device.ip, device.port.toUShort(), path)
+                withContext(Dispatchers.Main) {
+                    remoteFiles.clear()
+                    remoteFiles.addAll(files)
+                }
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to browse remote files", e)
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Failed to list files: ${e.message}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
+    fun closeRemoteBrowser() {
+        isBrowsingRemote.value = false
+        browsingDevice = null
+        remoteFiles.clear()
+    }
+
+    fun getBrowsingDevice(): DiscoveredDevice? {
+        return browsingDevice
+    }
+
     private val discoveryCallback = object : DiscoveryCallback {
         override fun onDeviceFound(device: DiscoveredDevice) {
             Log.d("ConnectedApp", "Device found: ${device.name} (id=${device.id}, ip=${device.ip}:${device.port})")
@@ -251,6 +368,16 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    fun stopSharing() {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().remove(PREF_ROOT_URI).apply()
+
+        sharedFolderName.value = null
+        isFsProviderRegistered.value = false
+
+        android.widget.Toast.makeText(context, "File sharing stopped", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
     fun initialize() {
         try {
             // Create a dedicated download directory in the app's private storage
@@ -274,6 +401,11 @@ class ConnectedApp(private val context: Context) {
             uniffi.connected_ffi.registerClipboardReceiver(clipboardCallback)
             uniffi.connected_ffi.registerPairingCallback(pairingCallback)
             uniffi.connected_ffi.registerUnpairCallback(unpairCallback)
+
+            // Auto-register filesystem if permission exists
+            getPersistedRootUri()?.let { uri ->
+                registerFsProvider(uri)
+            }
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Initialization failed", e)
         }

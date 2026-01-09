@@ -79,6 +79,9 @@ pub enum ConnectedError {
 
     #[error("Peer is blocked")]
     PeerBlocked,
+
+    #[error("Filesystem error: {0}")]
+    Filesystem(String),
 }
 
 pub type Result<T> = std::result::Result<T, ConnectedError>;

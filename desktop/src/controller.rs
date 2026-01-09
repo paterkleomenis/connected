@@ -1,3 +1,4 @@
+use crate::fs_provider::DesktopFilesystemProvider;
 use crate::state::*;
 use crate::utils::set_system_clipboard;
 use connected_core::transport::UnpairReason;
@@ -58,6 +59,11 @@ pub enum AppAction {
         transfer_id: String,
     },
     SetAutoAcceptFiles(bool),
+    ListRemoteFiles {
+        ip: String,
+        port: u16,
+        path: String,
+    },
 }
 
 pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
@@ -90,6 +96,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 match ConnectedClient::new(name.clone(), device_type, 0, None).await {
                     Ok(c) => {
                         info!("Core initialized");
+
+                        // Register Filesystem Provider
+                        c.register_filesystem_provider(Box::new(DesktopFilesystemProvider::new()));
 
                         client = Some(c.clone());
 
@@ -635,6 +644,31 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         "Auto-accept disabled"
                     };
                     add_notification("Settings", msg, "⚙️");
+                }
+            }
+            AppAction::ListRemoteFiles { ip, port, path } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    let ip_str = ip.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip_str.parse() {
+                            match c.fs_list_dir(ip_addr, port, path.clone()).await {
+                                Ok(entries) => {
+                                    *get_current_remote_files().lock().unwrap() = Some(entries);
+                                    *get_current_remote_path().lock().unwrap() = path;
+                                    *get_remote_files_update().lock().unwrap() = Instant::now();
+                                }
+                                Err(e) => {
+                                    error!("Failed to list remote files: {}", e);
+                                    add_notification(
+                                        "File Browser",
+                                        &format!("Failed to list: {}", e),
+                                        "❌",
+                                    );
+                                }
+                            }
+                        }
+                    });
                 }
             }
         }

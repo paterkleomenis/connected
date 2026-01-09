@@ -4,6 +4,7 @@ pub mod discovery;
 pub mod error;
 pub mod events;
 pub mod file_transfer;
+pub mod filesystem;
 pub mod security;
 pub mod transport;
 
@@ -13,5 +14,6 @@ pub use discovery::{DiscoveryEvent, DiscoveryService};
 pub use error::{ConnectedError, Result};
 pub use events::{ConnectedEvent, TransferDirection};
 pub use file_transfer::{FileTransfer, FileTransferMessage, TransferProgress};
+pub use filesystem::{FilesystemMessage, FsEntry, FsEntryType};
 pub use security::{PeerInfo, PeerStatus};
 pub use transport::{Message, QuicTransport, UnpairReason};

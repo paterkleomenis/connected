@@ -2,17 +2,18 @@
 
 mod components;
 mod controller;
+mod fs_provider;
 mod state;
 mod utils;
 
-use components::{DeviceCard, FileDialog};
+use components::{DeviceCard, FileBrowser, FileDialog};
 use controller::{app_controller, AppAction};
 use dioxus::prelude::*;
 use state::*;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::{info, debug};
-use utils::{get_device_icon, get_system_clipboard};
+use tracing::{debug, info};
+use utils::get_system_clipboard;
 
 fn main() {
     // Initialize logging
@@ -129,7 +130,10 @@ fn App() -> Element {
                     let current_clip = get_system_clipboard();
                     let last_clip = get_last_clipboard().lock().unwrap().clone();
                     if !current_clip.is_empty() && current_clip != last_clip {
-                        debug!("Local clipboard changed. New content length: {}", current_clip.len());
+                        debug!(
+                            "Local clipboard changed. New content length: {}",
+                            current_clip.len()
+                        );
                         *get_last_clipboard().lock().unwrap() = current_clip.clone();
                         action_tx.send(AppAction::BroadcastClipboard { text: current_clip });
                     }
@@ -171,17 +175,12 @@ fn App() -> Element {
                 // Logo/Header
                 div {
                     class: "sidebar-header",
-                    div { class: "logo", "⚡" }
                     h1 { "Connected" }
                 }
 
                 // Local device info
                 div {
                     class: "local-device",
-                    div {
-                        class: "local-device-icon",
-                        {get_device_icon("linux")}
-                    }
                     div {
                         class: "local-device-info",
                         span { class: "local-device-name", "{local_device_name}" }
@@ -198,7 +197,6 @@ fn App() -> Element {
                     button {
                         class: if *active_tab.read() == "devices" { "nav-item active" } else { "nav-item" },
                         onclick: move |_| active_tab.set("devices".to_string()),
-                        span { class: "nav-icon", "📱" }
                         span { "Devices" }
                         if !devices_list.read().is_empty() {
                             span { class: "nav-badge", "{devices_list.read().len()}" }
@@ -207,22 +205,19 @@ fn App() -> Element {
                     button {
                         class: if *active_tab.read() == "transfers" { "nav-item active" } else { "nav-item" },
                         onclick: move |_| active_tab.set("transfers".to_string()),
-                        span { class: "nav-icon", "📁" }
                         span { "Transfers" }
                     }
                     button {
                         class: if *active_tab.read() == "clipboard" { "nav-item active" } else { "nav-item" },
                         onclick: move |_| active_tab.set("clipboard".to_string()),
-                        span { class: "nav-icon", "📋" }
                         span { "Clipboard" }
                         if *clipboard_sync_enabled.read() {
-                            span { class: "nav-badge sync", "●" }
+                            span { class: "nav-badge sync", "SYNC" }
                         }
                     }
                     button {
                         class: if *active_tab.read() == "settings" { "nav-item active" } else { "nav-item" },
                         onclick: move |_| active_tab.set("settings".to_string()),
-                        span { class: "nav-icon", "⚙️" }
                         span { "Settings" }
                     }
                 }
@@ -233,10 +228,8 @@ fn App() -> Element {
                     div {
                         class: "discovery-status",
                         if *initialized.read() && *discovery_active.read() {
-                            span { class: "status-indicator active", "●" }
                             span { "Discovering" }
                         } else {
-                            span { class: "status-indicator", "○" }
                             span { "Starting..." }
                         }
                     }
@@ -287,6 +280,10 @@ fn App() -> Element {
                                         clipboard_text.set(get_system_clipboard());
                                         active_tab.set("clipboard".to_string());
                                     },
+                                    on_browse_files: move |d: DeviceInfo| {
+                                        selected_device.set(Some(d));
+                                        active_tab.set("files".to_string());
+                                    },
                                     on_pair: move |d: DeviceInfo| {
                                          if let Ok(port) = d.port.to_string().parse() {
                                              action_tx.send(AppAction::PairWithDevice { ip: d.ip.clone(), port });
@@ -304,6 +301,18 @@ fn App() -> Element {
                                 }
                             }
                         }
+                    }
+                }
+
+                // Tab: Files
+                if *active_tab.read() == "files" {
+                    if let Some(device) = selected_device.read().as_ref() {
+                        FileBrowser {
+                            device: device.clone(),
+                            on_close: move |_| active_tab.set("devices".to_string()),
+                        }
+                    } else {
+                        div { "Please select a device" }
                     }
                 }
 

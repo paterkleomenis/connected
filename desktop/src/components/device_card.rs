@@ -9,6 +9,7 @@ pub fn DeviceCard(
     on_select: EventHandler<DeviceInfo>,
     on_send_file: EventHandler<DeviceInfo>,
     on_send_clipboard: EventHandler<DeviceInfo>,
+    on_browse_files: EventHandler<DeviceInfo>,
     on_pair: EventHandler<DeviceInfo>,
     on_unpair: EventHandler<DeviceInfo>,
     on_forget: EventHandler<DeviceInfo>,
@@ -77,6 +78,18 @@ pub fn DeviceCard(
                     } else {
                         button {
                             class: "action-button",
+                            title: "Browse Files",
+                            onclick: {
+                                let device = device.clone();
+                                move |evt: Event<MouseData>| {
+                                    evt.stop_propagation();
+                                    on_browse_files.call(device.clone());
+                                }
+                            },
+                            "📂"
+                        }
+                        button {
+                            class: "action-button",
                             title: "Send File",
                             onclick: {
                                 let device = device.clone();
@@ -85,7 +98,7 @@ pub fn DeviceCard(
                                     on_send_file.call(device.clone());
                                 }
                             },
-                            "📁"
+                            "📤"
                         }
                         button {
                             class: "action-button",

@@ -34,6 +34,7 @@ pub struct ConnectedClient {
     pending_transfers: Arc<RwLock<HashMap<String, PendingTransferSender>>>,
     /// Track IPs we've sent handshakes to, so we can auto-trust their acks even if pairing mode times out
     pending_handshakes: Arc<RwLock<HashSet<IpAddr>>>,
+    fs_provider: Arc<RwLock<Option<Box<dyn crate::filesystem::FilesystemProvider>>>>,
 }
 
 impl ConnectedClient {
@@ -98,6 +99,7 @@ impl ConnectedClient {
             pairing_mode_handle: Arc::new(RwLock::new(None)),
             pending_transfers: Arc::new(RwLock::new(HashMap::new())),
             pending_handshakes: Arc::new(RwLock::new(HashSet::new())),
+            fs_provider: Arc::new(RwLock::new(None)),
         });
 
         // 5. Start Background Tasks
@@ -156,6 +158,36 @@ impl ConnectedClient {
 
     pub fn set_auto_accept_files(&self, enabled: bool) {
         self.auto_accept_files.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn register_filesystem_provider(
+        &self,
+        provider: Box<dyn crate::filesystem::FilesystemProvider>,
+    ) {
+        *self.fs_provider.write() = Some(provider);
+    }
+
+    pub async fn fs_list_dir(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        path: String,
+    ) -> Result<Vec<crate::filesystem::FsEntry>> {
+        use crate::filesystem::{FilesystemMessage, STREAM_TYPE_FS};
+
+        let addr = SocketAddr::new(target_ip, target_port);
+        let (mut send, mut recv) = self.transport.open_stream(addr, STREAM_TYPE_FS).await?;
+
+        let req = FilesystemMessage::ListDirRequest { path };
+        crate::file_transfer::send_message(&mut send, &req).await?;
+
+        let resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+
+        match resp {
+            FilesystemMessage::ListDirResponse { entries } => Ok(entries),
+            FilesystemMessage::Error { message } => Err(ConnectedError::Protocol(message)),
+            _ => Err(ConnectedError::Protocol("Unexpected response".to_string())),
+        }
     }
 
     pub fn is_auto_accept_files(&self) -> bool {
@@ -938,8 +970,9 @@ impl ConnectedClient {
         // 2. Transport Listener (Incoming Messages)
         let (msg_tx, mut msg_rx) = mpsc::unbounded_channel();
         let (file_tx, mut file_rx) = mpsc::unbounded_channel();
+        let (fs_tx, mut fs_rx) = mpsc::unbounded_channel();
 
-        self.transport.start_server(msg_tx, file_tx).await?;
+        self.transport.start_server(msg_tx, file_tx, fs_tx).await?;
 
         let event_tx = self.event_tx.clone();
         let key_store_control = self.key_store.clone();
@@ -1091,22 +1124,12 @@ impl ConnectedClient {
                                 );
                                 let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
                             } else {
-                                // We are NOT in pairing mode and no pending handshake
-                                // This could be:
-                                // 1. A trust confirmation from a device we just trusted (our side initiated trust)
-                                // 2. An unexpected ack from an unknown device
-                                //
-                                // DON'T auto-trust or show pairing request here.
-                                // If we trusted them first (via PairingRequest dialog), they're already trusted.
-                                // If this is unexpected, just ignore it silently.
                                 info!(
                                     "Received HandshakeAck from {} - ignoring (not in pairing mode, no pending handshake)",
                                     device_name
                                 );
-                                // Don't trust, don't show dialog - just acknowledge receipt
                             }
                         } else {
-                            // Already trusted. Update info just in case (e.g. name change or ID sync)
                             if let Err(e) = key_store.write().trust_peer(
                                 fingerprint.clone(),
                                 Some(remote_device_id.clone()),
@@ -1115,7 +1138,6 @@ impl ConnectedClient {
                                 error!("Failed to update trusted peer info on Ack: {}", e);
                             }
 
-                            // Force UI refresh
                             use crate::device::DeviceType;
                             let d = Device::new(
                                 remote_device_id,
@@ -1129,68 +1151,34 @@ impl ConnectedClient {
                     }
                     Message::Clipboard { text } => {
                         let is_trusted = key_store.read().is_trusted(&fingerprint);
-                        debug!(
-                            "Clipboard received from {} (fingerprint: {}), trusted: {}",
-                            addr.ip(),
-                            &fingerprint[..16.min(fingerprint.len())],
-                            is_trusted
-                        );
                         if is_trusted {
-                            // Find device name if possible
                             let from_device = key_store
                                 .read()
                                 .get_peer_name(&fingerprint)
                                 .unwrap_or_else(|| "Unknown".to_string());
-                            info!("Clipboard received from {}, forwarding to UI", from_device);
                             let _ = event_tx.send(ConnectedEvent::ClipboardReceived {
                                 content: text,
                                 from_device,
                             });
-                        } else {
-                            // Log all known peers for debugging
-                            let known_peers = key_store.read().get_trusted_peers();
-                            error!(
-                                "Rejected Clipboard from untrusted peer: {} (known peers: {})",
-                                &fingerprint[..16.min(fingerprint.len())],
-                                known_peers.len()
-                            );
-                            for peer in known_peers.iter() {
-                                debug!(
-                                    "  Known peer: {} (fp: {})",
-                                    peer.name.as_deref().unwrap_or("unknown"),
-                                    &peer.fingerprint[..16.min(peer.fingerprint.len())]
-                                );
-                            }
                         }
                     }
                     Message::DeviceUnpaired { device_id, reason } => {
-                        info!(
-                            "Received unpair notification from {} (reason: {:?})",
-                            device_id, reason
-                        );
-
-                        // Find the device name before potentially removing
                         let device_name = key_store
                             .read()
                             .get_peer_name(&fingerprint)
                             .unwrap_or_else(|| device_id.clone());
 
-                        // Only remove backend trust for Forgotten/Blocked, not for Unpaired
-                        // Unpaired just means disconnect - trust is preserved for auto-reconnect
                         match reason {
                             UnpairReason::Unpaired => {
-                                // Don't remove trust - just notify UI to update display
                                 info!("Device {} unpaired (trust preserved)", device_id);
                             }
                             UnpairReason::Forgotten | UnpairReason::Blocked => {
-                                // Remove them from our trusted peers
                                 if let Err(e) = key_store.write().remove_peer(&fingerprint) {
                                     error!("Failed to remove unpaired peer: {}", e);
                                 }
                             }
                         }
 
-                        // Notify UI to update display
                         let _ = event_tx.send(ConnectedEvent::DeviceUnpaired {
                             device_id,
                             device_name,
@@ -1199,6 +1187,117 @@ impl ConnectedClient {
                     }
                     _ => {}
                 }
+            }
+        });
+
+        // Handle Filesystem Streams
+        let fs_provider_clone = self.fs_provider.clone();
+        let key_store_fs = self.key_store.clone();
+
+        tokio::spawn(async move {
+            while let Some((fingerprint, mut send, mut recv)) = fs_rx.recv().await {
+                let is_trusted = key_store_fs.read().is_trusted(&fingerprint);
+                if !is_trusted {
+                    error!(
+                        "Rejected Filesystem Stream from untrusted peer: {}",
+                        fingerprint
+                    );
+                    continue;
+                }
+
+                let provider_ref = fs_provider_clone.clone();
+
+                tokio::spawn(async move {
+                    use crate::file_transfer::{recv_message, send_message};
+                    use crate::filesystem::FilesystemMessage;
+
+                    loop {
+                        let msg: Result<FilesystemMessage> = recv_message(&mut recv).await;
+                        match msg {
+                            Ok(req) => {
+                                let provider = provider_ref.clone();
+                                let response = tokio::task::spawn_blocking(move || {
+                                    let lock = provider.read();
+                                    if let Some(p) = lock.as_ref() {
+                                        match req {
+                                            FilesystemMessage::ListDirRequest { path } => {
+                                                match p.list_dir(&path) {
+                                                    Ok(entries) => {
+                                                        FilesystemMessage::ListDirResponse {
+                                                            entries,
+                                                        }
+                                                    }
+                                                    Err(e) => FilesystemMessage::Error {
+                                                        message: e.to_string(),
+                                                    },
+                                                }
+                                            }
+                                            FilesystemMessage::ReadFileRequest {
+                                                path,
+                                                offset,
+                                                size,
+                                            } => match p.read_file(&path, offset, size) {
+                                                Ok(data) => {
+                                                    FilesystemMessage::ReadFileResponse { data }
+                                                }
+                                                Err(e) => FilesystemMessage::Error {
+                                                    message: e.to_string(),
+                                                },
+                                            },
+                                            FilesystemMessage::WriteFileRequest {
+                                                path,
+                                                offset,
+                                                data,
+                                            } => match p.write_file(&path, offset, &data) {
+                                                Ok(bytes) => FilesystemMessage::WriteFileResponse {
+                                                    bytes_written: bytes,
+                                                },
+                                                Err(e) => FilesystemMessage::Error {
+                                                    message: e.to_string(),
+                                                },
+                                            },
+                                            FilesystemMessage::GetMetadataRequest { path } => {
+                                                match p.get_metadata(&path) {
+                                                    Ok(entry) => {
+                                                        FilesystemMessage::GetMetadataResponse {
+                                                            entry,
+                                                        }
+                                                    }
+                                                    Err(e) => FilesystemMessage::Error {
+                                                        message: e.to_string(),
+                                                    },
+                                                }
+                                            }
+                                            _ => FilesystemMessage::Error {
+                                                message: "Not implemented".to_string(),
+                                            },
+                                        }
+                                    } else {
+                                        FilesystemMessage::Error {
+                                            message: "No filesystem provider registered"
+                                                .to_string(),
+                                        }
+                                    }
+                                })
+                                .await;
+
+                                match response {
+                                    Ok(resp_msg) => {
+                                        if let Err(e) = send_message(&mut send, &resp_msg).await {
+                                            warn!("Failed to send FS response: {}", e);
+                                            break;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("FS Handler panicked: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(_) => break, // Stream closed
+                        }
+                    }
+                });
             }
         });
 

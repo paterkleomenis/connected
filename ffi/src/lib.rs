@@ -687,4 +687,173 @@ pub fn shutdown() {
     info!("Connected FFI shutdown complete");
 }
 
+// ============================================================================
+// Filesystem Support
+// ============================================================================
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum FfiFsEntryType {
+    File,
+    Directory,
+    Symlink,
+    Unknown,
+}
+
+impl From<connected_core::filesystem::FsEntryType> for FfiFsEntryType {
+    fn from(t: connected_core::filesystem::FsEntryType) -> Self {
+        match t {
+            connected_core::filesystem::FsEntryType::File => FfiFsEntryType::File,
+            connected_core::filesystem::FsEntryType::Directory => FfiFsEntryType::Directory,
+            connected_core::filesystem::FsEntryType::Symlink => FfiFsEntryType::Symlink,
+            connected_core::filesystem::FsEntryType::Unknown => FfiFsEntryType::Unknown,
+        }
+    }
+}
+
+impl From<FfiFsEntryType> for connected_core::filesystem::FsEntryType {
+    fn from(t: FfiFsEntryType) -> Self {
+        match t {
+            FfiFsEntryType::File => connected_core::filesystem::FsEntryType::File,
+            FfiFsEntryType::Directory => connected_core::filesystem::FsEntryType::Directory,
+            FfiFsEntryType::Symlink => connected_core::filesystem::FsEntryType::Symlink,
+            FfiFsEntryType::Unknown => connected_core::filesystem::FsEntryType::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiFsEntry {
+    pub name: String,
+    pub path: String,
+    pub entry_type: FfiFsEntryType,
+    pub size: u64,
+    pub modified: Option<u64>,
+}
+
+impl From<connected_core::filesystem::FsEntry> for FfiFsEntry {
+    fn from(e: connected_core::filesystem::FsEntry) -> Self {
+        Self {
+            name: e.name,
+            path: e.path,
+            entry_type: e.entry_type.into(),
+            size: e.size,
+            modified: e.modified,
+        }
+    }
+}
+
+impl From<FfiFsEntry> for connected_core::filesystem::FsEntry {
+    fn from(e: FfiFsEntry) -> Self {
+        Self {
+            name: e.name,
+            path: e.path,
+            entry_type: e.entry_type.into(),
+            size: e.size,
+            modified: e.modified,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum FilesystemError {
+    #[error("Filesystem error: {msg}")]
+    Generic { msg: String },
+}
+
+#[uniffi::export(callback_interface)]
+pub trait FilesystemProviderCallback: Send + Sync {
+    fn list_dir(&self, path: String) -> Result<Vec<FfiFsEntry>, FilesystemError>;
+    fn read_file(&self, path: String, offset: u64, size: u64) -> Result<Vec<u8>, FilesystemError>;
+    fn write_file(&self, path: String, offset: u64, data: Vec<u8>) -> Result<u64, FilesystemError>;
+    fn get_metadata(&self, path: String) -> Result<FfiFsEntry, FilesystemError>;
+}
+
+static FS_PROVIDER: RwLock<Option<Box<dyn FilesystemProviderCallback>>> = RwLock::new(None);
+
+struct FfiFilesystemProviderBridge;
+impl connected_core::filesystem::FilesystemProvider for FfiFilesystemProviderBridge {
+    fn list_dir(
+        &self,
+        path: &str,
+    ) -> connected_core::Result<Vec<connected_core::filesystem::FsEntry>> {
+        if let Some(cb) = FS_PROVIDER.read().as_ref() {
+            cb.list_dir(path.to_string())
+                .map_err(|e| connected_core::ConnectedError::Filesystem(e.to_string()))
+                .map(|v| v.into_iter().map(Into::into).collect())
+        } else {
+            Err(connected_core::ConnectedError::Filesystem(
+                "No provider registered".to_string(),
+            ))
+        }
+    }
+
+    fn read_file(&self, path: &str, offset: u64, size: u64) -> connected_core::Result<Vec<u8>> {
+        if let Some(cb) = FS_PROVIDER.read().as_ref() {
+            cb.read_file(path.to_string(), offset, size)
+                .map_err(|e| connected_core::ConnectedError::Filesystem(e.to_string()))
+        } else {
+            Err(connected_core::ConnectedError::Filesystem(
+                "No provider registered".to_string(),
+            ))
+        }
+    }
+
+    fn write_file(&self, path: &str, offset: u64, data: &[u8]) -> connected_core::Result<u64> {
+        if let Some(cb) = FS_PROVIDER.read().as_ref() {
+            cb.write_file(path.to_string(), offset, data.to_vec())
+                .map_err(|e| connected_core::ConnectedError::Filesystem(e.to_string()))
+        } else {
+            Err(connected_core::ConnectedError::Filesystem(
+                "No provider registered".to_string(),
+            ))
+        }
+    }
+
+    fn get_metadata(
+        &self,
+        path: &str,
+    ) -> connected_core::Result<connected_core::filesystem::FsEntry> {
+        if let Some(cb) = FS_PROVIDER.read().as_ref() {
+            cb.get_metadata(path.to_string())
+                .map_err(|e| connected_core::ConnectedError::Filesystem(e.to_string()))
+                .map(Into::into)
+        } else {
+            Err(connected_core::ConnectedError::Filesystem(
+                "No provider registered".to_string(),
+            ))
+        }
+    }
+}
+
+#[uniffi::export]
+pub fn register_filesystem_provider(
+    callback: Box<dyn FilesystemProviderCallback>,
+) -> Result<(), ConnectedFfiError> {
+    *FS_PROVIDER.write() = Some(callback);
+    let client = get_client()?;
+    client.register_filesystem_provider(Box::new(FfiFilesystemProviderBridge));
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn request_list_dir(
+    target_ip: String,
+    target_port: u16,
+    path: String,
+) -> Result<Vec<FfiFsEntry>, ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    // Block on async call - Caller must run this in background thread!
+    let entries =
+        get_runtime().block_on(async { client.fs_list_dir(ip, target_port, path).await })?;
+
+    Ok(entries.into_iter().map(Into::into).collect())
+}
+
 uniffi::setup_scaffolding!();
