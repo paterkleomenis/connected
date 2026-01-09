@@ -116,6 +116,11 @@ fun RemoteFileBrowser(app: ConnectedApp) {
 
                         app.browseRemoteFiles(app.getBrowsingDevice()!!, file.path)
 
+                    } else {
+                        // File clicked: Download and Open
+                        app.getBrowsingDevice()?.let { device ->
+                            app.downloadRemoteFile(device, file.path)
+                        }
                     }
 
                 }) {

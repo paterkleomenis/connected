@@ -411,11 +411,62 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    private fun moveToDownloads(filename: String) {
+    fun downloadRemoteFile(device: DiscoveredDevice, remotePath: String) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Downloading...", android.widget.Toast.LENGTH_SHORT).show()
+                }
+
+                val fileName = remotePath.substringAfterLast('/')
+                val downloadFile = File(downloadDir, fileName)
+
+                uniffi.connected_ffi.requestDownloadFile(
+                    device.ip,
+                    device.port.toUShort(),
+                    remotePath,
+                    downloadFile.absolutePath
+                )
+
+                val uri = moveToDownloads(fileName)
+
+                withContext(Dispatchers.Main) {
+                    // Try to open if possible
+                    if (uri != null) {
+                        openFile(uri)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Download failed", e)
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Download failed: ${e.message}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun openFile(uri: Uri) {
+        try {
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+            intent.setDataAndType(uri, getMimeType(uri.toString()))
+            intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to open file", e)
+            android.widget.Toast.makeText(context, "Cannot open file", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun moveToDownloads(filename: String): Uri? {
         val sourceFile = File(downloadDir, filename)
         if (!sourceFile.exists()) {
             Log.e("ConnectedApp", "Source file not found: ${sourceFile.absolutePath}")
-            return
+            return null
         }
 
         try {
@@ -460,6 +511,7 @@ class ConnectedApp(private val context: Context) {
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
+                return itemUri
             }
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Failed to save to Downloads", e)
@@ -471,6 +523,7 @@ class ConnectedApp(private val context: Context) {
                 ).show()
             }
         }
+        return null
     }
 
     private fun getMimeType(url: String): String {

@@ -64,6 +64,12 @@ pub enum AppAction {
         port: u16,
         path: String,
     },
+    DownloadFile {
+        ip: String,
+        port: u16,
+        remote_path: String,
+        filename: String,
+    },
 }
 
 pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
@@ -665,6 +671,47 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         &format!("Failed to list: {}", e),
                                         "❌",
                                     );
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            AppAction::DownloadFile {
+                ip,
+                port,
+                remote_path,
+                filename,
+            } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    let ip_str = ip.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip_str.parse() {
+                            let download_dir =
+                                dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
+                            let local_path = download_dir.join(&filename);
+
+                            add_notification(
+                                "Download",
+                                &format!("Downloading {}...", filename),
+                                "📥",
+                            );
+
+                            match c
+                                .fs_download_file(ip_addr, port, remote_path, local_path.clone())
+                                .await
+                            {
+                                Ok(_) => {
+                                    add_notification(
+                                        "Download",
+                                        &format!("Downloaded {}", filename),
+                                        "✅",
+                                    );
+                                }
+                                Err(e) => {
+                                    error!("Failed to download file: {}", e);
+                                    add_notification("Download Failed", &e.to_string(), "❌");
                                 }
                             }
                         }

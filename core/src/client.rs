@@ -190,6 +190,74 @@ impl ConnectedClient {
         }
     }
 
+    pub async fn fs_download_file(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        remote_path: String,
+        local_path: PathBuf,
+    ) -> Result<u64> {
+        use crate::filesystem::{FilesystemMessage, STREAM_TYPE_FS};
+        use tokio::io::AsyncWriteExt;
+
+        let addr = SocketAddr::new(target_ip, target_port);
+        let (mut send, mut recv) = self.transport.open_stream(addr, STREAM_TYPE_FS).await?;
+
+        // 1. Get Metadata to know size (optional, but good for allocation or progress)
+        let meta_req = FilesystemMessage::GetMetadataRequest {
+            path: remote_path.clone(),
+        };
+        crate::file_transfer::send_message(&mut send, &meta_req).await?;
+        let meta_resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+
+        let file_size = match meta_resp {
+            FilesystemMessage::GetMetadataResponse { entry } => entry.size,
+            FilesystemMessage::Error { message } => return Err(ConnectedError::Protocol(message)),
+            _ => {
+                return Err(ConnectedError::Protocol(
+                    "Unexpected metadata response".to_string(),
+                ))
+            }
+        };
+
+        // Create local file
+        let mut file = tokio::fs::File::create(&local_path)
+            .await
+            .map_err(ConnectedError::Io)?;
+
+        let mut offset = 0u64;
+        let chunk_size = 1024 * 1024; // 1MB chunks
+
+        while offset < file_size {
+            let size = std::cmp::min(chunk_size, file_size - offset);
+            let req = FilesystemMessage::ReadFileRequest {
+                path: remote_path.clone(),
+                offset,
+                size,
+            };
+            crate::file_transfer::send_message(&mut send, &req).await?;
+
+            let resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+
+            match resp {
+                FilesystemMessage::ReadFileResponse { data } => {
+                    if data.is_empty() {
+                        break;
+                    }
+                    file.write_all(&data).await.map_err(ConnectedError::Io)?;
+                    offset += data.len() as u64;
+                }
+                FilesystemMessage::Error { message } => {
+                    return Err(ConnectedError::Protocol(message))
+                }
+                _ => return Err(ConnectedError::Protocol("Unexpected response".to_string())),
+            }
+        }
+
+        file.flush().await.map_err(ConnectedError::Io)?;
+        Ok(offset)
+    }
+
     pub fn is_auto_accept_files(&self) -> bool {
         self.auto_accept_files.load(Ordering::SeqCst)
     }

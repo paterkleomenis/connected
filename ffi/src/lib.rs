@@ -856,4 +856,29 @@ pub fn request_list_dir(
     Ok(entries.into_iter().map(Into::into).collect())
 }
 
+#[uniffi::export]
+pub fn request_download_file(
+    target_ip: String,
+    target_port: u16,
+    remote_path: String,
+    local_path: String,
+) -> Result<u64, ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    // Block on async call - Caller must run this in background thread!
+    let bytes = get_runtime().block_on(async {
+        client
+            .fs_download_file(ip, target_port, remote_path, PathBuf::from(local_path))
+            .await
+    })?;
+
+    Ok(bytes)
+}
+
 uniffi::setup_scaffolding!();

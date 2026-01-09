@@ -108,6 +108,13 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                             port: port,
                                             path: entry.path.clone(),
                                         });
+                                    } else {
+                                        action_tx.send(AppAction::DownloadFile {
+                                            ip: ip.clone(),
+                                            port: port,
+                                            remote_path: entry.path.clone(),
+                                            filename: entry.name.clone(),
+                                        });
                                     }
                                 }
                             },
