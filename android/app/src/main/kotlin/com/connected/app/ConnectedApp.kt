@@ -16,7 +16,22 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
+import android.support.v4.media.MediaMetadataCompat
+import android.graphics.BitmapFactory
+
 class ConnectedApp(private val context: Context) {
+
+    companion object {
+        private var instance: ConnectedApp? = null
+        fun getInstance(): ConnectedApp? = instance
+    }
+
+    init {
+        instance = this
+    }
+
     // State exposed to Compose
     val devices = mutableStateListOf<DiscoveredDevice>()
     val trustedDevices = mutableStateListOf<String>() // Set of trusted Device IDs
@@ -26,11 +41,24 @@ class ConnectedApp(private val context: Context) {
     val pairingRequest = mutableStateOf<PairingRequest?>(null)
     val transferRequest = mutableStateOf<TransferRequest?>(null)
 
+    // Telephony State
+    val telephonyProvider = TelephonyProvider(context)
+    val contacts = mutableStateListOf<FfiContact>()
+    val conversations = mutableStateListOf<FfiConversation>()
+    val currentMessages = mutableStateListOf<FfiSmsMessage>()
+    val callLog = mutableStateListOf<FfiCallLogEntry>()
+    val activeCall = mutableStateOf<FfiActiveCall?>(null)
+    val isTelephonyEnabled = mutableStateOf(false)
+
+    // Media Session
+    private var mediaSession: MediaSessionCompat? = null
+
     data class PairingRequest(val deviceName: String, val fingerprint: String, val deviceId: String)
     data class TransferRequest(val id: String, val filename: String, val fileSize: ULong, val fromDevice: String)
 
     // Clipboard Sync State
     val isClipboardSyncEnabled = mutableStateOf(false)
+    val isMediaControlEnabled = mutableStateOf(false)
     private var clipboardSyncJob: kotlinx.coroutines.Job? = null
 
     @Volatile
@@ -58,6 +86,199 @@ class ConnectedApp(private val context: Context) {
 
     private val PREFS_NAME = "ConnectedPrefs"
     private val PREF_ROOT_URI = "root_uri"
+
+    // Helper to find device by name or fall back to first trusted device
+    private fun findDeviceByName(fromDevice: String): DiscoveredDevice? {
+        Log.d("ConnectedApp", "Looking for device: '$fromDevice' in ${devices.size} devices")
+        devices.forEach {
+            val isTrusted = trustedDevices.contains(it.id)
+            Log.d(
+                "ConnectedApp",
+                "  - Device: name='${it.name}', id='${it.id}', trusted=$isTrusted"
+            )
+        }
+
+        // Try exact name match first
+        var device = devices.find { it.name == fromDevice }
+
+        // If not found, try to find any trusted device
+        if (device == null) {
+            Log.d("ConnectedApp", "Device not found by name, trying trusted devices")
+            device = devices.find { trustedDevices.contains(it.id) }
+        }
+
+        if (device != null) {
+            Log.d("ConnectedApp", "Found device: ${device.name} (${device.ip}:${device.port})")
+        } else {
+            Log.w("ConnectedApp", "No device found for '$fromDevice'")
+        }
+
+        return device
+    }
+
+    // Telephony Callback implementation
+    private val telephonyCallback = object : TelephonyCallback {
+        override fun onContactsSyncRequest(fromDevice: String) {
+            Log.d("ConnectedApp", "onContactsSyncRequest from: $fromDevice")
+            scope.launch {
+                val deviceContacts = telephonyProvider.getContacts()
+                Log.d("ConnectedApp", "Got ${deviceContacts.size} contacts to send")
+                val device = findDeviceByName(fromDevice)
+                if (device != null) {
+                    sendContacts(device, deviceContacts)
+                    Log.d("ConnectedApp", "Contacts sent to ${device.name}")
+                } else {
+                    Log.e("ConnectedApp", "Cannot send contacts - no device found")
+                }
+            }
+        }
+
+        override fun onContactsReceived(fromDevice: String, receivedContacts: List<FfiContact>) {
+            runOnMainThread {
+                contacts.clear()
+                contacts.addAll(receivedContacts)
+            }
+        }
+
+        override fun onConversationsSyncRequest(fromDevice: String) {
+            Log.d("ConnectedApp", "onConversationsSyncRequest from: $fromDevice")
+            scope.launch {
+                val deviceConversations = telephonyProvider.getConversations()
+                Log.d("ConnectedApp", "Got ${deviceConversations.size} conversations to send")
+                val device = findDeviceByName(fromDevice)
+                if (device != null) {
+                    sendConversations(device, deviceConversations)
+                    Log.d("ConnectedApp", "Conversations sent to ${device.name}")
+                } else {
+                    Log.e("ConnectedApp", "Cannot send conversations - no device found")
+                }
+            }
+        }
+
+        override fun onConversationsReceived(fromDevice: String, receivedConversations: List<FfiConversation>) {
+            runOnMainThread {
+                conversations.clear()
+                conversations.addAll(receivedConversations)
+            }
+        }
+
+        override fun onMessagesRequest(fromDevice: String, threadId: String, limit: UInt) {
+            Log.d("ConnectedApp", "onMessagesRequest from: $fromDevice, threadId: $threadId")
+            scope.launch {
+                val messages = telephonyProvider.getMessages(threadId, limit.toInt())
+                Log.d("ConnectedApp", "Got ${messages.size} messages to send")
+                val device = findDeviceByName(fromDevice)
+                if (device != null) {
+                    sendMessages(device, threadId, messages)
+                    Log.d("ConnectedApp", "Messages sent to ${device.name}")
+                } else {
+                    Log.e("ConnectedApp", "Cannot send messages - no device found")
+                }
+            }
+        }
+
+        override fun onMessagesReceived(fromDevice: String, threadId: String, messages: List<FfiSmsMessage>) {
+            runOnMainThread {
+                currentMessages.clear()
+                currentMessages.addAll(messages)
+            }
+        }
+
+        override fun onSendSmsRequest(fromDevice: String, to: String, body: String) {
+            Log.d("ConnectedApp", "onSendSmsRequest from: $fromDevice, to: $to")
+            val result = telephonyProvider.sendSms(to, body)
+            val device = findDeviceByName(fromDevice)
+            if (device != null) {
+                sendSmsSendResult(device, result.isSuccess, result.getOrNull(), result.exceptionOrNull()?.message)
+            }
+        }
+
+        override fun onSmsSendResult(success: Boolean, messageId: String?, error: String?) {
+            runOnMainThread {
+                if (success) {
+                    transferStatus.value = "SMS sent successfully"
+                } else {
+                    transferStatus.value = "SMS failed: ${error ?: "Unknown error"}"
+                }
+            }
+        }
+
+        override fun onNewSms(fromDevice: String, message: FfiSmsMessage) {
+            runOnMainThread {
+                // Add to current messages if viewing the same thread
+                if (currentMessages.isNotEmpty() && currentMessages.first().threadId == message.threadId) {
+                    currentMessages.add(message)
+                }
+                // Update conversations
+                scope.launch {
+                    val device = devices.find { it.name == fromDevice }
+                    device?.let { requestConversationsSync(it) }
+                }
+            }
+        }
+
+        override fun onCallLogRequest(fromDevice: String, limit: UInt) {
+            Log.d("ConnectedApp", "onCallLogRequest from: $fromDevice, limit: $limit")
+            scope.launch {
+                val entries = telephonyProvider.getCallLog(limit.toInt())
+                Log.d("ConnectedApp", "Got ${entries.size} call log entries to send")
+                val device = findDeviceByName(fromDevice)
+                if (device != null) {
+                    sendCallLog(device, entries)
+                    Log.d("ConnectedApp", "Call log sent to ${device.name}")
+                } else {
+                    Log.e("ConnectedApp", "Cannot send call log - no device found")
+                }
+            }
+        }
+
+        override fun onCallLogReceived(fromDevice: String, entries: List<FfiCallLogEntry>) {
+            runOnMainThread {
+                callLog.clear()
+                callLog.addAll(entries)
+            }
+        }
+
+        override fun onInitiateCallRequest(fromDevice: String, number: String) {
+            Log.d("ConnectedApp", "onInitiateCallRequest from: $fromDevice, number: $number")
+            telephonyProvider.initiateCall(number)
+        }
+
+        override fun onCallActionRequest(fromDevice: String, action: CallAction) {
+            Log.d("ConnectedApp", "onCallActionRequest from: $fromDevice, action: $action")
+            telephonyProvider.performCallAction(action)
+        }
+
+        override fun onActiveCallUpdate(fromDevice: String, call: FfiActiveCall?) {
+            runOnMainThread {
+                activeCall.value = call
+            }
+        }
+    }
+
+    // Telephony listener for local events
+    private val telephonyListener = object : TelephonyProvider.TelephonyListener {
+        override fun onNewSmsReceived(message: FfiSmsMessage) {
+            // Notify connected devices about new SMS
+            trustedDevices.forEach { deviceId ->
+                devices.find { it.id == deviceId }?.let { device ->
+                    notifyNewSms(device, message)
+                }
+            }
+        }
+
+        override fun onCallStateChanged(call: FfiActiveCall?) {
+            runOnMainThread {
+                activeCall.value = call
+            }
+            // Notify connected devices about call state
+            trustedDevices.forEach { deviceId ->
+                devices.find { it.id == deviceId }?.let { device ->
+                    sendActiveCallUpdate(device, call)
+                }
+            }
+        }
+    }
 
     private fun getPersistedRootUri(): Uri? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -345,6 +566,195 @@ class ConnectedApp(private val context: Context) {
     }
 
 
+    // Media Control State
+    val currentMediaTitle = mutableStateOf("Not Playing")
+    val currentMediaArtist = mutableStateOf("")
+    val currentMediaPlaying = mutableStateOf(false)
+    private var lastMediaSourceDevice: String? = null // Fingerprint or Name
+    private var lastBroadcastMediaState: MediaState? = null
+
+    private fun initMediaSession() {
+        if (mediaSession != null) return
+
+        mediaSession = MediaSessionCompat(context, "ConnectedMediaSession").apply {
+            setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay() {
+                    sendMediaCommandToLastSource(MediaCommand.PLAY)
+                }
+
+                override fun onPause() {
+                    sendMediaCommandToLastSource(MediaCommand.PAUSE)
+                }
+
+                override fun onSkipToNext() {
+                    sendMediaCommandToLastSource(MediaCommand.NEXT)
+                }
+
+                override fun onSkipToPrevious() {
+                    sendMediaCommandToLastSource(MediaCommand.PREVIOUS)
+                }
+            })
+            isActive = true
+        }
+    }
+
+    private fun sendMediaCommandToLastSource(command: MediaCommand) {
+        // Find device by last source name or just pick the first trusted one if singular
+        // Ideally we map `lastMediaSourceDevice` (name) to a DiscoveredDevice
+        val targetName = lastMediaSourceDevice
+        val device = devices.find { it.name == targetName && trustedDevices.contains(it.id) }
+            ?: devices.firstOrNull { trustedDevices.contains(it.id) }
+
+        if (device != null) {
+            sendMediaCommand(device, command)
+        } else {
+            Log.w("ConnectedApp", "No trusted device found to send media command")
+        }
+    }
+
+    private fun updateMediaSession(state: MediaState) {
+        val session = mediaSession ?: return
+
+        val metadataBuilder = MediaMetadataCompat.Builder()
+        metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_TITLE, state.title ?: "Unknown Title")
+        metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, state.artist ?: "Unknown Artist")
+        metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, state.album ?: "")
+
+        session.setMetadata(metadataBuilder.build())
+
+        val playbackStateBuilder = PlaybackStateCompat.Builder()
+        val actions = PlaybackStateCompat.ACTION_PLAY or
+                PlaybackStateCompat.ACTION_PAUSE or
+                PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+
+        val stateCode = if (state.playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+
+        playbackStateBuilder.setActions(actions)
+        playbackStateBuilder.setState(stateCode, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
+
+        session.setPlaybackState(playbackStateBuilder.build())
+        session.isActive = true // Ensure session is active when we have state
+    }
+
+    fun onLocalMediaUpdate(state: MediaState) {
+        if (!isMediaControlEnabled.value) return
+
+        // Only broadcast if changed to avoid spam (deduplicate against LAST SENT state, not remote state)
+        if (state == lastBroadcastMediaState) return
+
+        Log.d("ConnectedApp", "Broadcasting local media update: ${state.title}")
+        lastBroadcastMediaState = state
+
+        // Broadcast to all trusted devices
+        for (deviceId in trustedDevices) {
+            val device = devices.find { it.id == deviceId }
+            if (device != null) {
+                try {
+                    uniffi.connected_ffi.sendMediaState(device.ip, device.port.toUShort(), state)
+                } catch (e: Exception) {
+                    Log.e("ConnectedApp", "Failed to send media state to ${device.name}", e)
+                }
+            }
+        }
+    }
+
+    private val mediaCallback = object : MediaControlCallback {
+        override fun onMediaCommand(fromDevice: String, command: MediaCommand) {
+            // Android media control implementation would go here (using MediaSession)
+            // For now, we just log it as we primarily focus on Desktop acting as the receiver/player
+            Log.d("ConnectedApp", "Received media command from $fromDevice: $command")
+
+            runOnMainThread {
+                // Temporarily deactivate our session so we don't swallow the key event
+                val wasActive = mediaSession?.isActive == true
+                if (wasActive) {
+                    mediaSession?.isActive = false
+                }
+
+                // Execute command on Android using AudioManager
+                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+
+                val keyEvent = when (command) {
+                    MediaCommand.PLAY -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY
+                    MediaCommand.PAUSE -> android.view.KeyEvent.KEYCODE_MEDIA_PAUSE
+                    MediaCommand.PLAY_PAUSE -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                    MediaCommand.NEXT -> android.view.KeyEvent.KEYCODE_MEDIA_NEXT
+                    MediaCommand.PREVIOUS -> android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                    MediaCommand.STOP -> android.view.KeyEvent.KEYCODE_MEDIA_STOP
+                    MediaCommand.VOLUME_UP -> {
+                        audioManager.adjustVolume(
+                            android.media.AudioManager.ADJUST_RAISE,
+                            android.media.AudioManager.FLAG_SHOW_UI
+                        )
+                        null
+                    }
+
+                    MediaCommand.VOLUME_DOWN -> {
+                        audioManager.adjustVolume(
+                            android.media.AudioManager.ADJUST_LOWER,
+                            android.media.AudioManager.FLAG_SHOW_UI
+                        )
+                        null
+                    }
+                }
+
+                if (keyEvent != null) {
+                    val down = android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyEvent)
+                    val up = android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, keyEvent)
+                    audioManager.dispatchMediaKeyEvent(down)
+                    audioManager.dispatchMediaKeyEvent(up)
+
+                    android.widget.Toast.makeText(context, "Executed: $command", android.widget.Toast.LENGTH_SHORT)
+                        .show()
+                }
+
+                // Restore active state
+                if (wasActive) {
+                    mediaSession?.isActive = true
+                }
+            }
+        }
+
+        override fun onMediaStateUpdate(fromDevice: String, state: MediaState) {
+            Log.d("ConnectedApp", "Media update from $fromDevice: ${state.title}")
+            // Update local state for UI display
+            lastMediaSourceDevice = fromDevice
+            currentMediaTitle.value = state.title ?: "Unknown Title"
+            currentMediaArtist.value = state.artist ?: "Unknown Artist"
+            currentMediaPlaying.value = state.playing
+
+            // Update Android MediaSession for notification controls
+            if (isMediaControlEnabled.value) {
+                runOnMainThread {
+                    initMediaSession()
+                    updateMediaSession(state)
+                }
+            }
+        }
+    }
+
+    fun toggleMediaControl() {
+        isMediaControlEnabled.value = !isMediaControlEnabled.value
+        val msg = if (isMediaControlEnabled.value) "Media Control Enabled" else "Media Control Disabled"
+        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+
+        if (!isMediaControlEnabled.value) {
+            mediaSession?.isActive = false
+            mediaSession?.release()
+            mediaSession = null
+        }
+    }
+
+    fun sendMediaCommand(device: DiscoveredDevice, command: MediaCommand) {
+        try {
+            uniffi.connected_ffi.sendMediaCommand(device.ip, device.port.toUShort(), command)
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to send media command", e)
+        }
+    }
+
     private val pairingCallback = object : PairingCallback {
         override fun onPairingRequest(deviceName: String, fingerprint: String, deviceId: String) {
             Log.d("ConnectedApp", "Pairing request from $deviceName")
@@ -378,6 +788,130 @@ class ConnectedApp(private val context: Context) {
         android.widget.Toast.makeText(context, "File sharing stopped", android.widget.Toast.LENGTH_SHORT).show()
     }
 
+    fun toggleTelephony() {
+        val enabled = !isTelephonyEnabled.value
+        isTelephonyEnabled.value = enabled
+        if (enabled) {
+            telephonyProvider.setListener(telephonyListener)
+            telephonyProvider.registerReceivers()
+            registerTelephonyCallback(telephonyCallback)
+        } else {
+            telephonyProvider.setListener(null)
+            telephonyProvider.unregisterReceivers()
+        }
+    }
+
+    // Telephony send functions
+    fun requestContactsSync(device: DiscoveredDevice) {
+        try {
+            requestContactsSync(device.ip, device.port)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun sendContacts(device: DiscoveredDevice, contactsList: List<FfiContact>) {
+        try {
+            sendContacts(device.ip, device.port, contactsList)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun requestConversationsSync(device: DiscoveredDevice) {
+        try {
+            requestConversationsSync(device.ip, device.port)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun sendConversations(device: DiscoveredDevice, convos: List<FfiConversation>) {
+        try {
+            sendConversations(device.ip, device.port, convos)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun requestMessages(device: DiscoveredDevice, threadId: String, limit: Int = 50) {
+        try {
+            requestMessages(device.ip, device.port, threadId, limit.toUInt())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun sendMessages(device: DiscoveredDevice, threadId: String, messages: List<FfiSmsMessage>) {
+        try {
+            sendMessages(device.ip, device.port, threadId, messages)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun sendSmsToDevice(device: DiscoveredDevice, to: String, body: String) {
+        try {
+            sendSms(device.ip, device.port, to, body)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun sendSmsSendResult(device: DiscoveredDevice, success: Boolean, messageId: String?, error: String?) {
+        // This would need a new FFI function to send result back
+        // For now, just log it
+        android.util.Log.d("ConnectedApp", "SMS send result: success=$success, id=$messageId, error=$error")
+    }
+
+    fun notifyNewSms(device: DiscoveredDevice, message: FfiSmsMessage) {
+        try {
+            notifyNewSms(device.ip, device.port, message)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun requestCallLog(device: DiscoveredDevice, limit: Int = 50) {
+        try {
+            requestCallLog(device.ip, device.port, limit.toUInt())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun sendCallLog(device: DiscoveredDevice, entries: List<FfiCallLogEntry>) {
+        try {
+            sendCallLog(device.ip, device.port, entries)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun initiateCallOnDevice(device: DiscoveredDevice, number: String) {
+        try {
+            initiateCall(device.ip, device.port, number)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun sendCallActionToDevice(device: DiscoveredDevice, action: CallAction) {
+        try {
+            sendCallAction(device.ip, device.port, action)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun sendActiveCallUpdate(device: DiscoveredDevice, call: FfiActiveCall?) {
+        try {
+            sendActiveCallUpdate(device.ip, device.port, call)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     fun initialize() {
         try {
             // Create a dedicated download directory in the app's private storage
@@ -401,6 +935,7 @@ class ConnectedApp(private val context: Context) {
             uniffi.connected_ffi.registerClipboardReceiver(clipboardCallback)
             uniffi.connected_ffi.registerPairingCallback(pairingCallback)
             uniffi.connected_ffi.registerUnpairCallback(unpairCallback)
+            uniffi.connected_ffi.registerMediaControlCallback(mediaCallback)
 
             // Auto-register filesystem if permission exists
             getPersistedRootUri()?.let { uri ->

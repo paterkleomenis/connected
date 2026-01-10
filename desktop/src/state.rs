@@ -1,5 +1,6 @@
 use connected_core::filesystem::FsEntry;
-use connected_core::Device;
+use connected_core::telephony::{ActiveCall, CallLogEntry, Contact, Conversation, SmsMessage};
+use connected_core::{Device, MediaState};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -85,6 +86,22 @@ static REMOTE_FILES: OnceLock<Arc<Mutex<Option<Vec<FsEntry>>>>> = OnceLock::new(
 static REMOTE_PATH: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 static REMOTE_FILES_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 static PREVIEW_DATA: OnceLock<Arc<Mutex<Option<PreviewData>>>> = OnceLock::new();
+static MEDIA_ENABLED: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
+static CURRENT_MEDIA: OnceLock<Arc<Mutex<Option<RemoteMedia>>>> = OnceLock::new();
+
+// Telephony state
+static PHONE_CONTACTS: OnceLock<Arc<Mutex<Vec<Contact>>>> = OnceLock::new();
+static PHONE_CONVERSATIONS: OnceLock<Arc<Mutex<Vec<Conversation>>>> = OnceLock::new();
+static PHONE_MESSAGES: OnceLock<Arc<Mutex<HashMap<String, Vec<SmsMessage>>>>> = OnceLock::new();
+static PHONE_CALL_LOG: OnceLock<Arc<Mutex<Vec<CallLogEntry>>>> = OnceLock::new();
+static PHONE_DATA_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
+static ACTIVE_CALL: OnceLock<Arc<Mutex<Option<ActiveCall>>>> = OnceLock::new();
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteMedia {
+    pub state: MediaState,
+    pub source_device_id: String,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreviewData {
@@ -127,6 +144,14 @@ pub fn get_pending_pairings() -> &'static Arc<Mutex<HashSet<String>>> {
 
 pub fn get_file_transfer_requests() -> &'static Arc<Mutex<HashMap<String, FileTransferRequest>>> {
     FILE_TRANSFER_REQUESTS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn get_media_enabled() -> &'static Arc<Mutex<bool>> {
+    MEDIA_ENABLED.get_or_init(|| Arc::new(Mutex::new(false)))
+}
+
+pub fn get_current_media() -> &'static Arc<Mutex<Option<RemoteMedia>>> {
+    CURRENT_MEDIA.get_or_init(|| Arc::new(Mutex::new(None)))
 }
 
 pub fn add_file_transfer_request(request: FileTransferRequest) {
@@ -175,4 +200,58 @@ pub fn get_remote_files_update() -> &'static Arc<Mutex<std::time::Instant>> {
 
 pub fn get_preview_data() -> &'static Arc<Mutex<Option<PreviewData>>> {
     PREVIEW_DATA.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+// Telephony getters
+pub fn get_phone_contacts() -> &'static Arc<Mutex<Vec<Contact>>> {
+    PHONE_CONTACTS.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+}
+
+pub fn get_phone_conversations() -> &'static Arc<Mutex<Vec<Conversation>>> {
+    PHONE_CONVERSATIONS.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+}
+
+pub fn get_phone_messages() -> &'static Arc<Mutex<HashMap<String, Vec<SmsMessage>>>> {
+    PHONE_MESSAGES.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn get_phone_call_log() -> &'static Arc<Mutex<Vec<CallLogEntry>>> {
+    PHONE_CALL_LOG.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+}
+
+pub fn get_phone_data_update() -> &'static Arc<Mutex<std::time::Instant>> {
+    PHONE_DATA_UPDATE.get_or_init(|| Arc::new(Mutex::new(std::time::Instant::now())))
+}
+
+pub fn set_phone_contacts(contacts: Vec<Contact>) {
+    *get_phone_contacts().lock().unwrap() = contacts;
+    *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+}
+
+pub fn set_phone_conversations(conversations: Vec<Conversation>) {
+    *get_phone_conversations().lock().unwrap() = conversations;
+    *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+}
+
+pub fn set_phone_messages(thread_id: String, messages: Vec<SmsMessage>) {
+    get_phone_messages()
+        .lock()
+        .unwrap()
+        .insert(thread_id, messages);
+    *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+}
+
+pub fn set_phone_call_log(entries: Vec<CallLogEntry>) {
+    *get_phone_call_log().lock().unwrap() = entries;
+    *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+}
+
+// Active call state
+pub fn get_active_call() -> &'static Arc<Mutex<Option<ActiveCall>>> {
+    ACTIVE_CALL.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+pub fn set_active_call(call: Option<ActiveCall>) {
+    *get_active_call().lock().unwrap() = call;
+    *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
 }

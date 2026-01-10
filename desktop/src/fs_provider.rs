@@ -1,7 +1,7 @@
 use connected_core::filesystem::{FilesystemProvider, FsEntry, FsEntryType};
 use connected_core::Result;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 pub struct DesktopFilesystemProvider {

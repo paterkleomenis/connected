@@ -1,10 +1,22 @@
 use crate::fs_provider::DesktopFilesystemProvider;
-use crate::state::*;
+use crate::state::{
+    add_file_transfer_request, add_notification, get_current_media, get_current_remote_files,
+    get_current_remote_path, get_devices_store, get_last_clipboard, get_last_remote_update,
+    get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_data_update,
+    get_phone_messages, get_preview_data, get_remote_files_update, get_transfer_status,
+    remove_file_transfer_request, set_active_call, set_phone_call_log, set_phone_contacts,
+    set_phone_conversations, set_phone_messages, DeviceInfo, FileTransferRequest, PairingRequest,
+    PreviewData, RemoteMedia, TransferStatus,
+};
 use crate::utils::set_system_clipboard;
+use connected_core::telephony::{CallAction, TelephonyMessage};
 use connected_core::transport::UnpairReason;
-use connected_core::{ConnectedClient, ConnectedEvent, DeviceType};
+use connected_core::{
+    ConnectedClient, ConnectedEvent, DeviceType, MediaCommand, MediaControlMessage, MediaState,
+};
 use dioxus::prelude::*;
 use futures_util::StreamExt;
+use mpris::PlaybackStatus;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -77,6 +89,49 @@ pub enum AppAction {
         filename: String,
     },
     ClosePreview,
+    ToggleMediaControl(bool),
+    SendMediaCommand {
+        ip: String,
+        port: u16,
+        command: MediaCommand,
+    },
+    ControlLocalMedia(MediaCommand),
+    // Telephony actions
+    RequestContactsSync {
+        ip: String,
+        port: u16,
+    },
+    RequestConversationsSync {
+        ip: String,
+        port: u16,
+    },
+    RequestCallLog {
+        ip: String,
+        port: u16,
+        limit: u32,
+    },
+    RequestMessages {
+        ip: String,
+        port: u16,
+        thread_id: String,
+        limit: u32,
+    },
+    SendSms {
+        ip: String,
+        port: u16,
+        to: String,
+        body: String,
+    },
+    InitiateCall {
+        ip: String,
+        port: u16,
+        number: String,
+    },
+    SendCallAction {
+        ip: String,
+        port: u16,
+        action: CallAction,
+    },
 }
 
 pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
@@ -294,6 +349,300 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             from_fingerprint,
                                             timestamp: Instant::now(),
                                         });
+                                    }
+                                    ConnectedEvent::MediaControl { from_device, event } => {
+                                        info!(
+                                            "EVENT: Received MediaControl event from {}",
+                                            from_device
+                                        );
+                                        // Only process if media control is enabled locally
+                                        if *get_media_enabled().lock().unwrap() {
+                                            match event {
+                                                MediaControlMessage::Command(cmd) => {
+                                                    info!(
+                                                        "COMMAND: Executing {:?} from {}",
+                                                        cmd, from_device
+                                                    );
+                                                    // Execute command via MPRIS with manual scan
+                                                    tokio::task::spawn_blocking(move || {
+                                                        use dbus::ffidisp::{BusType, Connection};
+                                                        use mpris::Player;
+                                                        use std::rc::Rc;
+
+                                                        let conn = match Connection::get_private(
+                                                            BusType::Session,
+                                                        ) {
+                                                            Ok(c) => Rc::new(c),
+                                                            Err(e) => {
+                                                                warn!(
+                                                                    "DBus Connection Error: {}",
+                                                                    e
+                                                                );
+                                                                return;
+                                                            }
+                                                        };
+
+                                                        // ListNames
+                                                        use dbus::Message;
+                                                        let msg = Message::new_method_call(
+                                                            "org.freedesktop.DBus",
+                                                            "/org/freedesktop/DBus",
+                                                            "org.freedesktop.DBus",
+                                                            "ListNames",
+                                                        )
+                                                        .unwrap();
+                                                        let names: Vec<String> = match conn
+                                                            .send_with_reply_and_block(msg, 5000)
+                                                        {
+                                                            Ok(reply) => match reply.get1() {
+                                                                Some(n) => n,
+                                                                None => return,
+                                                            },
+                                                            Err(e) => {
+                                                                warn!(
+                                                                    "DBus ListNames Error: {}",
+                                                                    e
+                                                                );
+                                                                return;
+                                                            }
+                                                        };
+
+                                                        let mpris_names: Vec<&String> = names
+                                                            .iter()
+                                                            .filter(|n| {
+                                                                n.starts_with(
+                                                                    "org.mpris.MediaPlayer2.",
+                                                                ) && !n.contains("playerctld")
+                                                            })
+                                                            .collect();
+
+                                                        // Find a player to control (prefer playing one)
+                                                        let mut target_player: Option<Player> =
+                                                            None;
+
+                                                        for name in mpris_names {
+                                                            // Use fresh connection for Player
+                                                            if let Ok(p_conn) =
+                                                                Connection::get_private(
+                                                                    BusType::Session,
+                                                                )
+                                                            {
+                                                                if let Ok(player) = Player::new(
+                                                                    p_conn,
+                                                                    name.clone().into(),
+                                                                    2000,
+                                                                ) {
+                                                                    if let Ok(status) =
+                                                                        player.get_playback_status()
+                                                                    {
+                                                                        if status
+                                                                            == PlaybackStatus::Playing
+                                                                        {
+                                                                            target_player =
+                                                                                Some(player);
+                                                                            break;
+                                                                        }
+                                                                    }
+                                                                    if target_player.is_none() {
+                                                                        target_player =
+                                                                            Some(player);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        if let Some(player) = target_player {
+                                                            info!(
+                                                                "MPRIS: Controlling player: {}",
+                                                                player.identity()
+                                                            );
+                                                            let res = match cmd {
+                                                                MediaCommand::Play => player.play(),
+                                                                MediaCommand::Pause => {
+                                                                    player.pause()
+                                                                }
+                                                                MediaCommand::PlayPause => {
+                                                                    player.play_pause()
+                                                                }
+                                                                MediaCommand::Next => player.next(),
+                                                                MediaCommand::Previous => {
+                                                                    player.previous()
+                                                                }
+                                                                MediaCommand::Stop => player.stop(),
+                                                                MediaCommand::VolumeUp => {
+                                                                    let _ = player.set_volume(
+                                                                        player
+                                                                            .get_volume()
+                                                                            .unwrap_or(0.0)
+                                                                            + 0.05,
+                                                                    );
+                                                                    Ok(())
+                                                                }
+                                                                MediaCommand::VolumeDown => {
+                                                                    let _ = player.set_volume(
+                                                                        player
+                                                                            .get_volume()
+                                                                            .unwrap_or(0.0)
+                                                                            - 0.05,
+                                                                    );
+                                                                    Ok(())
+                                                                }
+                                                            };
+                                                            if let Err(e) = res {
+                                                                warn!(
+                                                                    "MPRIS Command Failed: {}",
+                                                                    e
+                                                                );
+                                                            }
+                                                        } else {
+                                                            warn!("MPRIS: No controllable player found");
+                                                        }
+                                                    });
+                                                }
+
+                                                MediaControlMessage::StateUpdate(state) => {
+                                                    info!(
+                                                        "STATE: Remote state update from {}: {:?}",
+                                                        from_device, state.title
+                                                    );
+
+                                                    // Find device ID by name
+                                                    let device_id = {
+                                                        let store =
+                                                            get_devices_store().lock().unwrap();
+                                                        store
+                                                            .values()
+                                                            .find(|d| d.name == from_device)
+                                                            .map(|d| d.id.clone())
+                                                            .unwrap_or_else(|| {
+                                                                "unknown".to_string()
+                                                            })
+                                                    };
+
+                                                    *get_current_media().lock().unwrap() =
+                                                        Some(RemoteMedia {
+                                                            state,
+                                                            source_device_id: device_id,
+                                                        });
+                                                }
+                                            }
+                                        } else {
+                                            warn!("IGNORED: Media control is disabled in settings");
+                                        }
+                                    }
+                                    ConnectedEvent::Telephony {
+                                        from_device,
+                                        message,
+                                    } => {
+                                        info!(
+                                            "Received telephony event from {}: {:?}",
+                                            from_device, message
+                                        );
+                                        use connected_core::TelephonyMessage;
+                                        match message {
+                                            TelephonyMessage::ContactsSyncResponse { contacts } => {
+                                                let count = contacts.len();
+                                                set_phone_contacts(contacts);
+                                                add_notification(
+                                                    "Contacts",
+                                                    &format!(
+                                                        "Synced {} contacts from {}",
+                                                        count, from_device
+                                                    ),
+                                                    "👤",
+                                                );
+                                            }
+                                            TelephonyMessage::ConversationsSyncResponse {
+                                                conversations,
+                                            } => {
+                                                let count = conversations.len();
+                                                set_phone_conversations(conversations);
+                                                add_notification(
+                                                    "Messages",
+                                                    &format!(
+                                                        "Synced {} conversations from {}",
+                                                        count, from_device
+                                                    ),
+                                                    "💬",
+                                                );
+                                            }
+                                            TelephonyMessage::MessagesResponse {
+                                                thread_id,
+                                                messages,
+                                            } => {
+                                                let count = messages.len();
+                                                set_phone_messages(thread_id, messages);
+                                                add_notification(
+                                                    "Messages",
+                                                    &format!(
+                                                        "Loaded {} messages from {}",
+                                                        count, from_device
+                                                    ),
+                                                    "💬",
+                                                );
+                                            }
+                                            TelephonyMessage::NewSmsNotification { message } => {
+                                                let sender = message
+                                                    .contact_name
+                                                    .clone()
+                                                    .unwrap_or(message.address.clone());
+                                                let preview = if message.body.len() > 50 {
+                                                    format!("{}...", &message.body[..50])
+                                                } else {
+                                                    message.body.clone()
+                                                };
+                                                // Add to existing messages for this thread
+                                                {
+                                                    let mut msgs =
+                                                        get_phone_messages().lock().unwrap();
+                                                    if let Some(thread_msgs) =
+                                                        msgs.get_mut(&message.thread_id)
+                                                    {
+                                                        thread_msgs.push(message);
+                                                    }
+                                                }
+                                                *get_phone_data_update().lock().unwrap() =
+                                                    std::time::Instant::now();
+                                                add_notification(
+                                                    "New SMS",
+                                                    &format!("From {}: {}", sender, preview),
+                                                    "💬",
+                                                );
+                                            }
+                                            TelephonyMessage::CallLogResponse { entries } => {
+                                                let count = entries.len();
+                                                set_phone_call_log(entries);
+                                                add_notification(
+                                                    "Call Log",
+                                                    &format!(
+                                                        "Synced {} call entries from {}",
+                                                        count, from_device
+                                                    ),
+                                                    "📞",
+                                                );
+                                            }
+                                            TelephonyMessage::ActiveCallUpdate { call } => {
+                                                if let Some(ref c) = call {
+                                                    let caller = c
+                                                        .contact_name
+                                                        .clone()
+                                                        .unwrap_or(c.number.clone());
+                                                    add_notification(
+                                                        "Phone Call",
+                                                        &format!(
+                                                            "{:?} call from {}",
+                                                            c.state, caller
+                                                        ),
+                                                        "📞",
+                                                    );
+                                                }
+                                                // Store the active call state
+                                                set_active_call(call);
+                                            }
+                                            _ => {
+                                                // Other telephony messages (requests, etc.)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -739,11 +1088,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             let temp_dir = std::env::temp_dir();
                             let local_path = temp_dir.join(format!("preview_{}", filename));
 
-                            add_notification(
-                                "Preview",
-                                &format!("Loading {}...", filename),
-                                "👁️",
-                            );
+                            add_notification("Preview", &format!("Loading {}...", filename), "👁️");
 
                             match c
                                 .fs_download_file(ip_addr, port, remote_path, local_path.clone())
@@ -778,6 +1123,462 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::ClosePreview => {
                 *get_preview_data().lock().unwrap() = None;
+            }
+            AppAction::ToggleMediaControl(enabled) => {
+                *get_media_enabled().lock().unwrap() = enabled;
+                if enabled {
+                    info!("Media Poller Started");
+                    if let Some(c) = &client {
+                        let c = c.clone();
+                        // Start MPRIS poller
+                        tokio::spawn(async move {
+                            let mut interval =
+                                tokio::time::interval(std::time::Duration::from_secs(1));
+                            let mut last_title = String::new();
+                            let mut last_playing = false;
+
+                            // We need to check the atomic flag in the loop
+                            while *get_media_enabled().lock().unwrap() {
+                                interval.tick().await;
+
+                                let state_update = tokio::task::spawn_blocking(move || {
+                                    // Manual D-Bus scan to bypass broken playerctld
+                                    use dbus::ffidisp::{BusType, Connection};
+                                    use mpris::Player;
+                                    use std::rc::Rc;
+
+                                    // Create a new connection for this iteration
+                                    let conn = match Connection::get_private(BusType::Session) {
+                                        Ok(c) => Rc::new(c),
+                                        Err(e) => {
+                                            warn!("DBus Connection Error: {}", e);
+                                            return None;
+                                        }
+                                    };
+
+                                    // Use the connection to list names
+                                    use dbus::Message;
+                                    let msg = Message::new_method_call(
+                                        "org.freedesktop.DBus",
+                                        "/org/freedesktop/DBus",
+                                        "org.freedesktop.DBus",
+                                        "ListNames",
+                                    )
+                                    .unwrap();
+
+                                    let names: Vec<String> =
+                                        match conn.send_with_reply_and_block(msg, 5000) {
+                                            Ok(reply) => match reply.get1() {
+                                                Some(n) => n,
+                                                None => return None,
+                                            },
+                                            Err(e) => {
+                                                warn!("DBus ListNames Error: {}", e);
+                                                return None;
+                                            }
+                                        };
+
+                                    let mpris_names: Vec<&String> = names
+                                        .iter()
+                                        .filter(|n| {
+                                            n.starts_with("org.mpris.MediaPlayer2.")
+                                                && !n.contains("playerctld")
+                                        })
+                                        .collect();
+
+                                    // Find first playing, or just first one
+                                    let mut best_candidate: Option<(
+                                        Option<String>,
+                                        Option<String>,
+                                        Option<String>,
+                                        bool,
+                                    )> = None;
+
+                                    for name in mpris_names {
+                                        // Player::new takes (conn, bus_name, timeout_ms)
+                                        // We must create a new connection for each player because Player::new takes ownership
+                                        if let Ok(p_conn) =
+                                            Connection::get_private(BusType::Session)
+                                        {
+                                            if let Ok(player) =
+                                                Player::new(p_conn, name.clone().into(), 2000)
+                                            {
+                                                let meta = player.get_metadata().ok();
+                                                let status = player.get_playback_status().ok();
+                                                let playing =
+                                                    matches!(status, Some(PlaybackStatus::Playing));
+
+                                                let title = meta
+                                                    .as_ref()
+                                                    .and_then(|m| m.title().map(|s| s.to_string()));
+                                                let artist = meta.as_ref().and_then(|m| {
+                                                    m.artists().map(|a| a.join(", "))
+                                                });
+                                                let album = meta.as_ref().and_then(|m| {
+                                                    m.album_name().map(|s| s.to_string())
+                                                });
+
+                                                let candidate = (title, artist, album, playing);
+
+                                                if playing {
+                                                    // Found a playing one, return immediately
+                                                    return Some(candidate);
+                                                } else if best_candidate.is_none() {
+                                                    // Keep as fallback
+                                                    best_candidate = Some(candidate);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    best_candidate
+                                })
+                                .await
+                                .unwrap_or(None);
+
+                                if let Some((title, artist, album, playing)) = state_update {
+                                    let current_title = title.clone().unwrap_or_default();
+
+                                    // Only send update if changed
+                                    if current_title != last_title || playing != last_playing {
+                                        last_title = current_title;
+                                        last_playing = playing;
+
+                                        let state = MediaState {
+                                            title,
+                                            artist,
+                                            album,
+                                            playing,
+                                        };
+
+                                        // Update local state too
+                                        *get_current_media().lock().unwrap() = Some(RemoteMedia {
+                                            state: state.clone(),
+                                            source_device_id: "local".to_string(),
+                                        });
+
+                                        // Broadcast to all trusted peers
+                                        let peers = c.get_trusted_peers();
+                                        for peer in peers {
+                                            if let Some(device_id) = peer.device_id {
+                                                // Find IP
+                                                let discovered = c.get_discovered_devices();
+                                                if let Some(d) =
+                                                    discovered.iter().find(|d| d.id == device_id)
+                                                {
+                                                    if let Some(ip) = d.ip_addr() {
+                                                        let _ = c
+                                                            .send_media_control(
+                                                                ip,
+                                                                d.port,
+                                                                MediaControlMessage::StateUpdate(
+                                                                    state.clone(),
+                                                                ),
+                                                            )
+                                                            .await;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            info!("Media poller stopped");
+                        });
+                        add_notification("Media Control", "Media control enabled", "🎵");
+                    }
+                } else {
+                    add_notification("Media Control", "Media control disabled", "🔇");
+                }
+            }
+            AppAction::SendMediaCommand { ip, port, command } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip.parse() {
+                            let _ = c
+                                .send_media_control(
+                                    ip_addr,
+                                    port,
+                                    MediaControlMessage::Command(command),
+                                )
+                                .await;
+                        }
+                    });
+                }
+            }
+            AppAction::ControlLocalMedia(command) => {
+                tokio::task::spawn_blocking(move || {
+                    use dbus::ffidisp::{BusType, Connection};
+                    use mpris::Player;
+                    use std::rc::Rc;
+
+                    let conn = match Connection::get_private(BusType::Session) {
+                        Ok(c) => Rc::new(c),
+                        Err(e) => {
+                            warn!("DBus Connection Error: {}", e);
+                            return;
+                        }
+                    };
+
+                    use dbus::Message;
+                    let msg = Message::new_method_call(
+                        "org.freedesktop.DBus",
+                        "/org/freedesktop/DBus",
+                        "org.freedesktop.DBus",
+                        "ListNames",
+                    )
+                    .unwrap();
+                    let names: Vec<String> = match conn.send_with_reply_and_block(msg, 5000) {
+                        Ok(reply) => match reply.get1() {
+                            Some(n) => n,
+                            None => return,
+                        },
+                        Err(e) => {
+                            warn!("DBus ListNames Error: {}", e);
+                            return;
+                        }
+                    };
+
+                    let mpris_names: Vec<&String> = names
+                        .iter()
+                        .filter(|n| {
+                            n.starts_with("org.mpris.MediaPlayer2.") && !n.contains("playerctld")
+                        })
+                        .collect();
+
+                    let mut target_player: Option<Player> = None;
+
+                    for name in mpris_names {
+                        if let Ok(p_conn) = Connection::get_private(BusType::Session) {
+                            if let Ok(player) = Player::new(p_conn, name.clone().into(), 2000) {
+                                if let Ok(status) = player.get_playback_status() {
+                                    if status == PlaybackStatus::Playing {
+                                        target_player = Some(player);
+                                        break;
+                                    }
+                                }
+                                if target_player.is_none() {
+                                    target_player = Some(player);
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(player) = target_player {
+                        info!(
+                            "Local Control: Executing {:?} on {}",
+                            command,
+                            player.identity()
+                        );
+                        let res = match command {
+                            MediaCommand::Play => player.play(),
+                            MediaCommand::Pause => player.pause(),
+                            MediaCommand::PlayPause => player.play_pause(),
+                            MediaCommand::Next => player.next(),
+                            MediaCommand::Previous => player.previous(),
+                            MediaCommand::Stop => player.stop(),
+                            MediaCommand::VolumeUp => {
+                                let _ =
+                                    player.set_volume(player.get_volume().unwrap_or(0.0) + 0.05);
+                                Ok(())
+                            }
+                            MediaCommand::VolumeDown => {
+                                let _ =
+                                    player.set_volume(player.get_volume().unwrap_or(0.0) - 0.05);
+                                Ok(())
+                            }
+                        };
+                        if let Err(e) = res {
+                            warn!("Local Control Failed: {}", e);
+                        }
+                    }
+                });
+            }
+            AppAction::RequestContactsSync { ip, port } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip.parse() {
+                            let msg = TelephonyMessage::ContactsSyncRequest;
+                            match c.send_telephony(ip_addr, port, msg).await {
+                                Ok(_) => {
+                                    info!("Contacts sync request sent to {}:{}", ip, port);
+                                    add_notification("Phone", "Requesting contacts...", "👤");
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to request contacts sync to {}:{}: {}",
+                                        ip, port, e
+                                    );
+                                    let user_msg = if e.to_string().contains("timed out") {
+                                        "Connection timed out. Is the device online?".to_string()
+                                    } else {
+                                        format!("Sync failed: {}", e)
+                                    };
+                                    add_notification("Phone", &user_msg, "❌");
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            AppAction::RequestConversationsSync { ip, port } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip.parse() {
+                            let msg = TelephonyMessage::ConversationsSyncRequest;
+                            match c.send_telephony(ip_addr, port, msg).await {
+                                Ok(_) => {
+                                    info!("Conversations sync request sent to {}:{}", ip, port);
+                                    add_notification("Phone", "Requesting messages...", "💬");
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to request conversations sync to {}:{}: {}",
+                                        ip, port, e
+                                    );
+                                    let user_msg = if e.to_string().contains("timed out") {
+                                        "Connection timed out. Is the device online?".to_string()
+                                    } else {
+                                        format!("Sync failed: {}", e)
+                                    };
+                                    add_notification("Phone", &user_msg, "❌");
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            AppAction::RequestCallLog { ip, port, limit } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip.parse() {
+                            let msg = TelephonyMessage::CallLogRequest {
+                                limit,
+                                before_timestamp: None,
+                            };
+                            match c.send_telephony(ip_addr, port, msg).await {
+                                Ok(_) => {
+                                    info!("Call log request sent to {}:{}", ip, port);
+                                    add_notification("Phone", "Requesting call log...", "📞");
+                                }
+                                Err(e) => {
+                                    error!("Failed to request call log to {}:{}: {}", ip, port, e);
+                                    let user_msg = if e.to_string().contains("timed out") {
+                                        "Connection timed out. Is the device online?".to_string()
+                                    } else {
+                                        format!("Sync failed: {}", e)
+                                    };
+                                    add_notification("Phone", &user_msg, "❌");
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            AppAction::RequestMessages {
+                ip,
+                port,
+                thread_id,
+                limit,
+            } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip.parse() {
+                            let msg = TelephonyMessage::MessagesRequest {
+                                thread_id,
+                                limit,
+                                before_timestamp: None,
+                            };
+                            match c.send_telephony(ip_addr, port, msg).await {
+                                Ok(_) => {
+                                    info!("Messages request sent to {}:{}", ip, port);
+                                }
+                                Err(e) => {
+                                    error!("Failed to request messages: {}", e);
+                                    add_notification("Phone", &format!("Failed: {}", e), "❌");
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            AppAction::SendSms { ip, port, to, body } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip.parse() {
+                            let msg = TelephonyMessage::SendSms {
+                                to: to.clone(),
+                                body: body.clone(),
+                            };
+                            match c.send_telephony(ip_addr, port, msg).await {
+                                Ok(_) => {
+                                    info!("SMS send request sent to {}:{}", ip, port);
+                                    add_notification(
+                                        "Phone",
+                                        &format!("Sending SMS to {}...", to),
+                                        "📤",
+                                    );
+                                }
+                                Err(e) => {
+                                    error!("Failed to send SMS: {}", e);
+                                    add_notification("Phone", &format!("Failed: {}", e), "❌");
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            AppAction::InitiateCall { ip, port, number } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip.parse() {
+                            let msg = TelephonyMessage::InitiateCall {
+                                number: number.clone(),
+                            };
+                            match c.send_telephony(ip_addr, port, msg).await {
+                                Ok(_) => {
+                                    info!("Call initiation request sent to {}:{}", ip, port);
+                                    add_notification(
+                                        "Phone",
+                                        &format!("Calling {}...", number),
+                                        "📞",
+                                    );
+                                }
+                                Err(e) => {
+                                    error!("Failed to initiate call: {}", e);
+                                    add_notification("Phone", &format!("Failed: {}", e), "❌");
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            AppAction::SendCallAction { ip, port, action } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip.parse() {
+                            let action_name = format!("{:?}", action);
+                            let msg = TelephonyMessage::CallAction { action };
+                            match c.send_telephony(ip_addr, port, msg).await {
+                                Ok(_) => {
+                                    info!("Call action {} sent to {}:{}", action_name, ip, port);
+                                }
+                                Err(e) => {
+                                    error!("Failed to send call action: {}", e);
+                                    add_notification("Phone", &format!("Failed: {}", e), "❌");
+                                }
+                            }
+                        }
+                    });
+                }
             }
         }
     }

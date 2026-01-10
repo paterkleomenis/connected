@@ -1,5 +1,6 @@
 use crate::error::{ConnectedError, Result};
 use crate::security::KeyStore;
+use crate::telephony::TelephonyMessage;
 use parking_lot::RwLock;
 use quinn::{
     ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig,
@@ -59,6 +60,35 @@ pub enum Message {
         device_id: String,
         reason: UnpairReason,
     },
+    MediaControl(MediaControlMessage),
+    /// Telephony messages (SMS, calls, contacts)
+    Telephony(TelephonyMessage),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MediaControlMessage {
+    Command(MediaCommand),
+    StateUpdate(MediaState),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MediaCommand {
+    Play,
+    Pause,
+    PlayPause,
+    Next,
+    Previous,
+    Stop,
+    VolumeUp,
+    VolumeDown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MediaState {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub playing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,7 +266,7 @@ impl QuicTransport {
             }
         }
 
-        debug!("Establishing new connection to {}", addr);
+        info!("Establishing new QUIC connection to {}", addr);
 
         let connecting =
             self.endpoint
@@ -244,8 +274,17 @@ impl QuicTransport {
 
         let connection = timeout(CONNECT_TIMEOUT, connecting)
             .await
-            .map_err(|_| ConnectedError::Timeout("Connection timeout".to_string()))?
-            .map_err(|e| ConnectedError::Connection(e.to_string()))?;
+            .map_err(|_| {
+                warn!("Connection to {} timed out after {:?}", addr, CONNECT_TIMEOUT);
+                ConnectedError::Timeout(format!(
+                    "Connection to {} timed out after {:?}. Ensure the device is online and reachable.",
+                    addr, CONNECT_TIMEOUT
+                ))
+            })?
+            .map_err(|e| {
+                warn!("Connection to {} failed: {}", addr, e);
+                ConnectedError::Connection(format!("Failed to connect to {}: {}", addr, e))
+            })?;
 
         info!("Connected to {} (RTT: {:?})", addr, connection.rtt());
 

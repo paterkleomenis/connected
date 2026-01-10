@@ -1,4 +1,5 @@
 use crate::device::Device;
+use crate::telephony::TelephonyMessage;
 use crate::transport::UnpairReason;
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +53,16 @@ pub enum ConnectedEvent {
         device_id: String,
         device_name: String,
         reason: UnpairReason,
+    },
+    /// Media control event (command received or state update)
+    MediaControl {
+        from_device: String,
+        event: crate::transport::MediaControlMessage,
+    },
+    /// Telephony event (SMS, calls, contacts)
+    Telephony {
+        from_device: String,
+        message: TelephonyMessage,
     },
     /// Critical error in a subsystem
     Error(String),

@@ -36,6 +36,8 @@ static CLIPBOARD_CALLBACK: RwLock<Option<Box<dyn ClipboardCallback>>> = RwLock::
 static TRANSFER_CALLBACK: RwLock<Option<Box<dyn FileTransferCallback>>> = RwLock::new(None);
 static PAIRING_CALLBACK: RwLock<Option<Box<dyn PairingCallback>>> = RwLock::new(None);
 static UNPAIR_CALLBACK: RwLock<Option<Box<dyn UnpairCallback>>> = RwLock::new(None);
+static MEDIA_CALLBACK: RwLock<Option<Box<dyn MediaControlCallback>>> = RwLock::new(None);
+static TELEPHONY_CALLBACK: RwLock<Option<Box<dyn TelephonyCallback>>> = RwLock::new(None);
 
 fn get_runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
@@ -55,6 +57,477 @@ fn get_client() -> Result<Arc<ConnectedClient>, ConnectedFfiError> {
 // ============================================================================
 // UniFFI Types
 // ============================================================================
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum MediaCommand {
+    Play,
+    Pause,
+    PlayPause,
+    Next,
+    Previous,
+    Stop,
+    VolumeUp,
+    VolumeDown,
+}
+
+impl From<MediaCommand> for connected_core::MediaCommand {
+    fn from(c: MediaCommand) -> Self {
+        match c {
+            MediaCommand::Play => connected_core::MediaCommand::Play,
+            MediaCommand::Pause => connected_core::MediaCommand::Pause,
+            MediaCommand::PlayPause => connected_core::MediaCommand::PlayPause,
+            MediaCommand::Next => connected_core::MediaCommand::Next,
+            MediaCommand::Previous => connected_core::MediaCommand::Previous,
+            MediaCommand::Stop => connected_core::MediaCommand::Stop,
+            MediaCommand::VolumeUp => connected_core::MediaCommand::VolumeUp,
+            MediaCommand::VolumeDown => connected_core::MediaCommand::VolumeDown,
+        }
+    }
+}
+
+impl From<connected_core::MediaCommand> for MediaCommand {
+    fn from(c: connected_core::MediaCommand) -> Self {
+        match c {
+            connected_core::MediaCommand::Play => MediaCommand::Play,
+            connected_core::MediaCommand::Pause => MediaCommand::Pause,
+            connected_core::MediaCommand::PlayPause => MediaCommand::PlayPause,
+            connected_core::MediaCommand::Next => MediaCommand::Next,
+            connected_core::MediaCommand::Previous => MediaCommand::Previous,
+            connected_core::MediaCommand::Stop => MediaCommand::Stop,
+            connected_core::MediaCommand::VolumeUp => MediaCommand::VolumeUp,
+            connected_core::MediaCommand::VolumeDown => MediaCommand::VolumeDown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MediaState {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub playing: bool,
+}
+
+// ============================================================================
+// Telephony Types
+// ============================================================================
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum PhoneNumberType {
+    Mobile,
+    Home,
+    Work,
+    Main,
+    Other,
+}
+
+impl From<PhoneNumberType> for connected_core::PhoneNumberType {
+    fn from(t: PhoneNumberType) -> Self {
+        match t {
+            PhoneNumberType::Mobile => connected_core::PhoneNumberType::Mobile,
+            PhoneNumberType::Home => connected_core::PhoneNumberType::Home,
+            PhoneNumberType::Work => connected_core::PhoneNumberType::Work,
+            PhoneNumberType::Main => connected_core::PhoneNumberType::Main,
+            PhoneNumberType::Other => connected_core::PhoneNumberType::Other,
+        }
+    }
+}
+
+impl From<connected_core::PhoneNumberType> for PhoneNumberType {
+    fn from(t: connected_core::PhoneNumberType) -> Self {
+        match t {
+            connected_core::PhoneNumberType::Mobile => PhoneNumberType::Mobile,
+            connected_core::PhoneNumberType::Home => PhoneNumberType::Home,
+            connected_core::PhoneNumberType::Work => PhoneNumberType::Work,
+            connected_core::PhoneNumberType::Main => PhoneNumberType::Main,
+            connected_core::PhoneNumberType::Other => PhoneNumberType::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiPhoneNumber {
+    pub number: String,
+    pub label: PhoneNumberType,
+}
+
+impl From<FfiPhoneNumber> for connected_core::PhoneNumber {
+    fn from(p: FfiPhoneNumber) -> Self {
+        connected_core::PhoneNumber {
+            number: p.number,
+            label: p.label.into(),
+        }
+    }
+}
+
+impl From<connected_core::PhoneNumber> for FfiPhoneNumber {
+    fn from(p: connected_core::PhoneNumber) -> Self {
+        FfiPhoneNumber {
+            number: p.number,
+            label: p.label.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiContact {
+    pub id: String,
+    pub name: String,
+    pub phone_numbers: Vec<FfiPhoneNumber>,
+    pub emails: Vec<String>,
+    pub photo: Option<String>,
+    pub starred: bool,
+}
+
+impl From<FfiContact> for connected_core::Contact {
+    fn from(c: FfiContact) -> Self {
+        connected_core::Contact {
+            id: c.id,
+            name: c.name,
+            phone_numbers: c.phone_numbers.into_iter().map(|p| p.into()).collect(),
+            emails: c.emails,
+            photo: c.photo,
+            starred: c.starred,
+        }
+    }
+}
+
+impl From<connected_core::Contact> for FfiContact {
+    fn from(c: connected_core::Contact) -> Self {
+        FfiContact {
+            id: c.id,
+            name: c.name,
+            phone_numbers: c.phone_numbers.into_iter().map(|p| p.into()).collect(),
+            emails: c.emails,
+            photo: c.photo,
+            starred: c.starred,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum SmsStatus {
+    Pending,
+    Sent,
+    Delivered,
+    Failed,
+    Received,
+}
+
+impl From<SmsStatus> for connected_core::SmsStatus {
+    fn from(s: SmsStatus) -> Self {
+        match s {
+            SmsStatus::Pending => connected_core::SmsStatus::Pending,
+            SmsStatus::Sent => connected_core::SmsStatus::Sent,
+            SmsStatus::Delivered => connected_core::SmsStatus::Delivered,
+            SmsStatus::Failed => connected_core::SmsStatus::Failed,
+            SmsStatus::Received => connected_core::SmsStatus::Received,
+        }
+    }
+}
+
+impl From<connected_core::SmsStatus> for SmsStatus {
+    fn from(s: connected_core::SmsStatus) -> Self {
+        match s {
+            connected_core::SmsStatus::Pending => SmsStatus::Pending,
+            connected_core::SmsStatus::Sent => SmsStatus::Sent,
+            connected_core::SmsStatus::Delivered => SmsStatus::Delivered,
+            connected_core::SmsStatus::Failed => SmsStatus::Failed,
+            connected_core::SmsStatus::Received => SmsStatus::Received,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiSmsMessage {
+    pub id: String,
+    pub thread_id: String,
+    pub address: String,
+    pub contact_name: Option<String>,
+    pub body: String,
+    pub timestamp: u64,
+    pub is_outgoing: bool,
+    pub is_read: bool,
+    pub status: SmsStatus,
+}
+
+impl From<FfiSmsMessage> for connected_core::SmsMessage {
+    fn from(m: FfiSmsMessage) -> Self {
+        connected_core::SmsMessage {
+            id: m.id,
+            thread_id: m.thread_id,
+            address: m.address,
+            contact_name: m.contact_name,
+            body: m.body,
+            timestamp: m.timestamp,
+            is_outgoing: m.is_outgoing,
+            is_read: m.is_read,
+            status: m.status.into(),
+            attachments: vec![],
+        }
+    }
+}
+
+impl From<connected_core::SmsMessage> for FfiSmsMessage {
+    fn from(m: connected_core::SmsMessage) -> Self {
+        FfiSmsMessage {
+            id: m.id,
+            thread_id: m.thread_id,
+            address: m.address,
+            contact_name: m.contact_name,
+            body: m.body,
+            timestamp: m.timestamp,
+            is_outgoing: m.is_outgoing,
+            is_read: m.is_read,
+            status: m.status.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiConversation {
+    pub id: String,
+    pub addresses: Vec<String>,
+    pub contact_names: Vec<String>,
+    pub last_message: Option<String>,
+    pub last_timestamp: u64,
+    pub unread_count: u32,
+}
+
+impl From<FfiConversation> for connected_core::Conversation {
+    fn from(c: FfiConversation) -> Self {
+        connected_core::Conversation {
+            id: c.id,
+            addresses: c.addresses,
+            contact_names: c.contact_names,
+            last_message: c.last_message,
+            last_timestamp: c.last_timestamp,
+            unread_count: c.unread_count,
+        }
+    }
+}
+
+impl From<connected_core::Conversation> for FfiConversation {
+    fn from(c: connected_core::Conversation) -> Self {
+        FfiConversation {
+            id: c.id,
+            addresses: c.addresses,
+            contact_names: c.contact_names,
+            last_message: c.last_message,
+            last_timestamp: c.last_timestamp,
+            unread_count: c.unread_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum CallType {
+    Incoming,
+    Outgoing,
+    Missed,
+    Rejected,
+    Blocked,
+    Voicemail,
+}
+
+impl From<CallType> for connected_core::CallType {
+    fn from(t: CallType) -> Self {
+        match t {
+            CallType::Incoming => connected_core::CallType::Incoming,
+            CallType::Outgoing => connected_core::CallType::Outgoing,
+            CallType::Missed => connected_core::CallType::Missed,
+            CallType::Rejected => connected_core::CallType::Rejected,
+            CallType::Blocked => connected_core::CallType::Blocked,
+            CallType::Voicemail => connected_core::CallType::Voicemail,
+        }
+    }
+}
+
+impl From<connected_core::CallType> for CallType {
+    fn from(t: connected_core::CallType) -> Self {
+        match t {
+            connected_core::CallType::Incoming => CallType::Incoming,
+            connected_core::CallType::Outgoing => CallType::Outgoing,
+            connected_core::CallType::Missed => CallType::Missed,
+            connected_core::CallType::Rejected => CallType::Rejected,
+            connected_core::CallType::Blocked => CallType::Blocked,
+            connected_core::CallType::Voicemail => CallType::Voicemail,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiCallLogEntry {
+    pub id: String,
+    pub number: String,
+    pub contact_name: Option<String>,
+    pub call_type: CallType,
+    pub timestamp: u64,
+    pub duration: u32,
+    pub is_read: bool,
+}
+
+impl From<FfiCallLogEntry> for connected_core::CallLogEntry {
+    fn from(e: FfiCallLogEntry) -> Self {
+        connected_core::CallLogEntry {
+            id: e.id,
+            number: e.number,
+            contact_name: e.contact_name,
+            call_type: e.call_type.into(),
+            timestamp: e.timestamp,
+            duration: e.duration,
+            is_read: e.is_read,
+        }
+    }
+}
+
+impl From<connected_core::CallLogEntry> for FfiCallLogEntry {
+    fn from(e: connected_core::CallLogEntry) -> Self {
+        FfiCallLogEntry {
+            id: e.id,
+            number: e.number,
+            contact_name: e.contact_name,
+            call_type: e.call_type.into(),
+            timestamp: e.timestamp,
+            duration: e.duration,
+            is_read: e.is_read,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum ActiveCallState {
+    Ringing,
+    Dialing,
+    Connected,
+    OnHold,
+    Ended,
+}
+
+impl From<ActiveCallState> for connected_core::ActiveCallState {
+    fn from(s: ActiveCallState) -> Self {
+        match s {
+            ActiveCallState::Ringing => connected_core::ActiveCallState::Ringing,
+            ActiveCallState::Dialing => connected_core::ActiveCallState::Dialing,
+            ActiveCallState::Connected => connected_core::ActiveCallState::Connected,
+            ActiveCallState::OnHold => connected_core::ActiveCallState::OnHold,
+            ActiveCallState::Ended => connected_core::ActiveCallState::Ended,
+        }
+    }
+}
+
+impl From<connected_core::ActiveCallState> for ActiveCallState {
+    fn from(s: connected_core::ActiveCallState) -> Self {
+        match s {
+            connected_core::ActiveCallState::Ringing => ActiveCallState::Ringing,
+            connected_core::ActiveCallState::Dialing => ActiveCallState::Dialing,
+            connected_core::ActiveCallState::Connected => ActiveCallState::Connected,
+            connected_core::ActiveCallState::OnHold => ActiveCallState::OnHold,
+            connected_core::ActiveCallState::Ended => ActiveCallState::Ended,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiActiveCall {
+    pub number: String,
+    pub contact_name: Option<String>,
+    pub state: ActiveCallState,
+    pub duration: u32,
+    pub is_incoming: bool,
+}
+
+impl From<FfiActiveCall> for connected_core::ActiveCall {
+    fn from(c: FfiActiveCall) -> Self {
+        connected_core::ActiveCall {
+            number: c.number,
+            contact_name: c.contact_name,
+            state: c.state.into(),
+            duration: c.duration,
+            is_incoming: c.is_incoming,
+        }
+    }
+}
+
+impl From<connected_core::ActiveCall> for FfiActiveCall {
+    fn from(c: connected_core::ActiveCall) -> Self {
+        FfiActiveCall {
+            number: c.number,
+            contact_name: c.contact_name,
+            state: c.state.into(),
+            duration: c.duration,
+            is_incoming: c.is_incoming,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum CallAction {
+    Answer,
+    Reject,
+    HangUp,
+    Mute,
+    Unmute,
+    Hold,
+    Unhold,
+    SendDtmf { digit: String },
+}
+
+impl From<CallAction> for connected_core::CallAction {
+    fn from(a: CallAction) -> Self {
+        match a {
+            CallAction::Answer => connected_core::CallAction::Answer,
+            CallAction::Reject => connected_core::CallAction::Reject,
+            CallAction::HangUp => connected_core::CallAction::HangUp,
+            CallAction::Mute => connected_core::CallAction::Mute,
+            CallAction::Unmute => connected_core::CallAction::Unmute,
+            CallAction::Hold => connected_core::CallAction::Hold,
+            CallAction::Unhold => connected_core::CallAction::Unhold,
+            CallAction::SendDtmf { digit } => {
+                connected_core::CallAction::SendDtmf(digit.chars().next().unwrap_or('0'))
+            }
+        }
+    }
+}
+
+impl From<connected_core::CallAction> for CallAction {
+    fn from(a: connected_core::CallAction) -> Self {
+        match a {
+            connected_core::CallAction::Answer => CallAction::Answer,
+            connected_core::CallAction::Reject => CallAction::Reject,
+            connected_core::CallAction::HangUp => CallAction::HangUp,
+            connected_core::CallAction::Mute => CallAction::Mute,
+            connected_core::CallAction::Unmute => CallAction::Unmute,
+            connected_core::CallAction::Hold => CallAction::Hold,
+            connected_core::CallAction::Unhold => CallAction::Unhold,
+            connected_core::CallAction::SendDtmf(c) => CallAction::SendDtmf {
+                digit: c.to_string(),
+            },
+        }
+    }
+}
+
+impl From<MediaState> for connected_core::MediaState {
+    fn from(s: MediaState) -> Self {
+        Self {
+            title: s.title,
+            artist: s.artist,
+            album: s.album,
+            playing: s.playing,
+        }
+    }
+}
+
+impl From<connected_core::MediaState> for MediaState {
+    fn from(s: connected_core::MediaState) -> Self {
+        Self {
+            title: s.title,
+            artist: s.artist,
+            album: s.album,
+            playing: s.playing,
+        }
+    }
+}
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct DiscoveredDevice {
@@ -147,6 +620,49 @@ pub trait PairingCallback: Send + Sync {
 #[uniffi::export(callback_interface)]
 pub trait UnpairCallback: Send + Sync {
     fn on_device_unpaired(&self, device_id: String, device_name: String, reason: String);
+}
+
+#[uniffi::export(callback_interface)]
+pub trait MediaControlCallback: Send + Sync {
+    fn on_media_command(&self, from_device: String, command: MediaCommand);
+    fn on_media_state_update(&self, from_device: String, state: MediaState);
+}
+
+#[uniffi::export(callback_interface)]
+pub trait TelephonyCallback: Send + Sync {
+    /// Called when contacts sync is requested
+    fn on_contacts_sync_request(&self, from_device: String);
+    /// Called when contacts are received
+    fn on_contacts_received(&self, from_device: String, contacts: Vec<FfiContact>);
+    /// Called when conversations sync is requested
+    fn on_conversations_sync_request(&self, from_device: String);
+    /// Called when conversations are received
+    fn on_conversations_received(&self, from_device: String, conversations: Vec<FfiConversation>);
+    /// Called when messages for a thread are requested
+    fn on_messages_request(&self, from_device: String, thread_id: String, limit: u32);
+    /// Called when messages are received
+    fn on_messages_received(
+        &self,
+        from_device: String,
+        thread_id: String,
+        messages: Vec<FfiSmsMessage>,
+    );
+    /// Called when a request to send SMS is received
+    fn on_send_sms_request(&self, from_device: String, to: String, body: String);
+    /// Called when SMS send result is received
+    fn on_sms_send_result(&self, success: bool, message_id: Option<String>, error: Option<String>);
+    /// Called when a new SMS notification is received
+    fn on_new_sms(&self, from_device: String, message: FfiSmsMessage);
+    /// Called when call log is requested
+    fn on_call_log_request(&self, from_device: String, limit: u32);
+    /// Called when call log is received
+    fn on_call_log_received(&self, from_device: String, entries: Vec<FfiCallLogEntry>);
+    /// Called when a call initiation is requested
+    fn on_initiate_call_request(&self, from_device: String, number: String);
+    /// Called when a call action is requested
+    fn on_call_action_request(&self, from_device: String, action: CallAction);
+    /// Called when active call state is updated
+    fn on_active_call_update(&self, from_device: String, call: Option<FfiActiveCall>);
 }
 
 // ============================================================================
@@ -312,6 +828,96 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                         };
                         if let Some(cb) = UNPAIR_CALLBACK.read().as_ref() {
                             cb.on_device_unpaired(device_id, device_name, reason_str.to_string());
+                        }
+                    }
+                    ConnectedEvent::MediaControl { from_device, event } => {
+                        if let Some(cb) = MEDIA_CALLBACK.read().as_ref() {
+                            match event {
+                                connected_core::MediaControlMessage::Command(cmd) => {
+                                    cb.on_media_command(from_device, cmd.into());
+                                }
+                                connected_core::MediaControlMessage::StateUpdate(state) => {
+                                    cb.on_media_state_update(from_device, state.into());
+                                }
+                            }
+                        }
+                    }
+                    ConnectedEvent::Telephony {
+                        from_device,
+                        message,
+                    } => {
+                        if let Some(cb) = TELEPHONY_CALLBACK.read().as_ref() {
+                            use connected_core::TelephonyMessage;
+                            match message {
+                                TelephonyMessage::ContactsSyncRequest => {
+                                    cb.on_contacts_sync_request(from_device);
+                                }
+                                TelephonyMessage::ContactsSyncResponse { contacts } => {
+                                    let ffi_contacts: Vec<FfiContact> =
+                                        contacts.into_iter().map(|c| c.into()).collect();
+                                    cb.on_contacts_received(from_device, ffi_contacts);
+                                }
+                                TelephonyMessage::ConversationsSyncRequest => {
+                                    cb.on_conversations_sync_request(from_device);
+                                }
+                                TelephonyMessage::ConversationsSyncResponse { conversations } => {
+                                    let ffi_convos: Vec<FfiConversation> =
+                                        conversations.into_iter().map(|c| c.into()).collect();
+                                    cb.on_conversations_received(from_device, ffi_convos);
+                                }
+                                TelephonyMessage::MessagesRequest {
+                                    thread_id, limit, ..
+                                } => {
+                                    cb.on_messages_request(from_device, thread_id, limit);
+                                }
+                                TelephonyMessage::MessagesResponse {
+                                    thread_id,
+                                    messages,
+                                } => {
+                                    let ffi_msgs: Vec<FfiSmsMessage> =
+                                        messages.into_iter().map(|m| m.into()).collect();
+                                    cb.on_messages_received(from_device, thread_id, ffi_msgs);
+                                }
+                                TelephonyMessage::SendSms { to, body } => {
+                                    cb.on_send_sms_request(from_device, to, body);
+                                }
+                                TelephonyMessage::SmsSendResult {
+                                    success,
+                                    message_id,
+                                    error,
+                                } => {
+                                    cb.on_sms_send_result(success, message_id, error);
+                                }
+                                TelephonyMessage::NewSmsNotification { message } => {
+                                    cb.on_new_sms(from_device, message.into());
+                                }
+                                TelephonyMessage::CallLogRequest { limit, .. } => {
+                                    cb.on_call_log_request(from_device, limit);
+                                }
+                                TelephonyMessage::CallLogResponse { entries } => {
+                                    let ffi_entries: Vec<FfiCallLogEntry> =
+                                        entries.into_iter().map(|e| e.into()).collect();
+                                    cb.on_call_log_received(from_device, ffi_entries);
+                                }
+                                TelephonyMessage::InitiateCall { number } => {
+                                    cb.on_initiate_call_request(from_device, number);
+                                }
+                                TelephonyMessage::CallAction { action } => {
+                                    cb.on_call_action_request(from_device, action.into());
+                                }
+                                TelephonyMessage::ActiveCallUpdate { call } => {
+                                    cb.on_active_call_update(from_device, call.map(|c| c.into()));
+                                }
+                                TelephonyMessage::MarkMessagesRead { .. } => {
+                                    // Handle mark as read if needed
+                                }
+                                TelephonyMessage::DeleteMessages { .. } => {
+                                    // Handle delete messages if needed
+                                }
+                                TelephonyMessage::DeleteConversation { .. } => {
+                                    // Handle delete conversation if needed
+                                }
+                            }
                         }
                     }
                     ConnectedEvent::Error(msg) => {
@@ -879,6 +1485,394 @@ pub fn request_download_file(
     })?;
 
     Ok(bytes)
+}
+
+#[uniffi::export]
+pub fn register_media_control_callback(callback: Box<dyn MediaControlCallback>) {
+    *MEDIA_CALLBACK.write() = Some(callback);
+}
+
+#[uniffi::export]
+pub fn send_media_command(
+    target_ip: String,
+    target_port: u16,
+    command: MediaCommand,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let cmd: connected_core::MediaCommand = command.into();
+    let msg = connected_core::MediaControlMessage::Command(cmd);
+
+    get_runtime().spawn(async move {
+        let _ = client.send_media_control(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_media_state(
+    target_ip: String,
+    target_port: u16,
+    state: MediaState,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let s: connected_core::MediaState = state.into();
+    let msg = connected_core::MediaControlMessage::StateUpdate(s);
+
+    get_runtime().spawn(async move {
+        let _ = client.send_media_control(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+// ============================================================================
+// Telephony Functions
+// ============================================================================
+
+#[uniffi::export]
+pub fn register_telephony_callback(callback: Box<dyn TelephonyCallback>) {
+    *TELEPHONY_CALLBACK.write() = Some(callback);
+}
+
+#[uniffi::export]
+pub fn request_contacts_sync(target_ip: String, target_port: u16) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let msg = connected_core::TelephonyMessage::ContactsSyncRequest;
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_contacts(
+    target_ip: String,
+    target_port: u16,
+    contacts: Vec<FfiContact>,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let core_contacts: Vec<connected_core::Contact> =
+        contacts.into_iter().map(|c| c.into()).collect();
+    let msg = connected_core::TelephonyMessage::ContactsSyncResponse {
+        contacts: core_contacts,
+    };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn request_conversations_sync(
+    target_ip: String,
+    target_port: u16,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let msg = connected_core::TelephonyMessage::ConversationsSyncRequest;
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_conversations(
+    target_ip: String,
+    target_port: u16,
+    conversations: Vec<FfiConversation>,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let core_convos: Vec<connected_core::Conversation> =
+        conversations.into_iter().map(|c| c.into()).collect();
+    let msg = connected_core::TelephonyMessage::ConversationsSyncResponse {
+        conversations: core_convos,
+    };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn request_messages(
+    target_ip: String,
+    target_port: u16,
+    thread_id: String,
+    limit: u32,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let msg = connected_core::TelephonyMessage::MessagesRequest {
+        thread_id,
+        limit,
+        before_timestamp: None,
+    };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_messages(
+    target_ip: String,
+    target_port: u16,
+    thread_id: String,
+    messages: Vec<FfiSmsMessage>,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let core_msgs: Vec<connected_core::SmsMessage> =
+        messages.into_iter().map(|m| m.into()).collect();
+    let msg = connected_core::TelephonyMessage::MessagesResponse {
+        thread_id,
+        messages: core_msgs,
+    };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_sms(
+    target_ip: String,
+    target_port: u16,
+    to: String,
+    body: String,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let msg = connected_core::TelephonyMessage::SendSms { to, body };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn notify_new_sms(
+    target_ip: String,
+    target_port: u16,
+    message: FfiSmsMessage,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let core_msg: connected_core::SmsMessage = message.into();
+    let msg = connected_core::TelephonyMessage::NewSmsNotification { message: core_msg };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn request_call_log(
+    target_ip: String,
+    target_port: u16,
+    limit: u32,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let msg = connected_core::TelephonyMessage::CallLogRequest {
+        limit,
+        before_timestamp: None,
+    };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_call_log(
+    target_ip: String,
+    target_port: u16,
+    entries: Vec<FfiCallLogEntry>,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let core_entries: Vec<connected_core::CallLogEntry> =
+        entries.into_iter().map(|e| e.into()).collect();
+    let msg = connected_core::TelephonyMessage::CallLogResponse {
+        entries: core_entries,
+    };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn initiate_call(
+    target_ip: String,
+    target_port: u16,
+    number: String,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let msg = connected_core::TelephonyMessage::InitiateCall { number };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_call_action(
+    target_ip: String,
+    target_port: u16,
+    action: CallAction,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let core_action: connected_core::CallAction = action.into();
+    let msg = connected_core::TelephonyMessage::CallAction {
+        action: core_action,
+    };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_active_call_update(
+    target_ip: String,
+    target_port: u16,
+    call: Option<FfiActiveCall>,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let core_call = call.map(|c| c.into());
+    let msg = connected_core::TelephonyMessage::ActiveCallUpdate { call: core_call };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
 }
 
 uniffi::setup_scaffolding!();

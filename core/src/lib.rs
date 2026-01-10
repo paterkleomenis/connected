@@ -6,6 +6,7 @@ pub mod events;
 pub mod file_transfer;
 pub mod filesystem;
 pub mod security;
+pub mod telephony;
 pub mod transport;
 
 pub use client::ConnectedClient;
@@ -16,4 +17,11 @@ pub use events::{ConnectedEvent, TransferDirection};
 pub use file_transfer::{FileTransfer, FileTransferMessage, TransferProgress};
 pub use filesystem::{FilesystemMessage, FsEntry, FsEntryType};
 pub use security::{PeerInfo, PeerStatus};
-pub use transport::{Message, QuicTransport, UnpairReason};
+pub use telephony::{
+    ActiveCall, ActiveCallState, CallAction, CallLogEntry, CallType, Contact, Conversation,
+    MmsAttachment, PhoneNumber, PhoneNumberType, SmsMessage, SmsStatus, TelephonyCapabilities,
+    TelephonyMessage,
+};
+pub use transport::{
+    MediaCommand, MediaControlMessage, MediaState, Message, QuicTransport, UnpairReason,
+};

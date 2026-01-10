@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
@@ -663,6 +663,95 @@ impl ConnectedClient {
         Ok(())
     }
 
+    pub async fn send_media_control(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        msg: crate::transport::MediaControlMessage,
+    ) -> Result<()> {
+        let addr = SocketAddr::new(target_ip, target_port);
+        let (mut send, _recv) = self
+            .transport
+            .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+            .await?;
+
+        let msg = Message::MediaControl(msg);
+
+        let data = serde_json::to_vec(&msg)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let len_bytes = (data.len() as u32).to_be_bytes();
+
+        send.write_all(&len_bytes)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.write_all(&data)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.finish().map_err(|e| ConnectedError::Io(e.into()))?;
+
+        Ok(())
+    }
+
+    pub async fn send_telephony(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        msg: crate::telephony::TelephonyMessage,
+    ) -> Result<()> {
+        let addr = SocketAddr::new(target_ip, target_port);
+
+        // Try to send, and if it fails due to connection issues, invalidate cache and retry once
+        let result = self.send_telephony_inner(addr, &msg).await;
+
+        if let Err(ref e) = result {
+            // Check if this is a connection error that might be due to stale connection
+            let should_retry = matches!(
+                e,
+                ConnectedError::Timeout(_) | ConnectedError::Connection(_) | ConnectedError::Io(_)
+            );
+
+            if should_retry {
+                info!(
+                    "Telephony send to {} failed ({}), invalidating connection and retrying...",
+                    addr, e
+                );
+                self.transport.invalidate_connection(&addr);
+
+                // Retry once with fresh connection
+                return self.send_telephony_inner(addr, &msg).await;
+            }
+        }
+
+        result
+    }
+
+    async fn send_telephony_inner(
+        &self,
+        addr: SocketAddr,
+        msg: &crate::telephony::TelephonyMessage,
+    ) -> Result<()> {
+        let (mut send, _recv) = self
+            .transport
+            .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+            .await?;
+
+        let msg = Message::Telephony(msg.clone());
+
+        let data = serde_json::to_vec(&msg)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let len_bytes = (data.len() as u32).to_be_bytes();
+
+        send.write_all(&len_bytes)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.write_all(&data)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.finish().map_err(|e| ConnectedError::Io(e.into()))?;
+
+        Ok(())
+    }
+
     pub async fn send_file(
         &self,
         target_ip: IpAddr,
@@ -1227,6 +1316,32 @@ impl ConnectedClient {
                             let _ = event_tx.send(ConnectedEvent::ClipboardReceived {
                                 content: text,
                                 from_device,
+                            });
+                        }
+                    }
+                    Message::MediaControl(media_msg) => {
+                        let is_trusted = key_store.read().is_trusted(&fingerprint);
+                        if is_trusted {
+                            let from_device = key_store
+                                .read()
+                                .get_peer_name(&fingerprint)
+                                .unwrap_or_else(|| "Unknown".to_string());
+                            let _ = event_tx.send(ConnectedEvent::MediaControl {
+                                from_device,
+                                event: media_msg,
+                            });
+                        }
+                    }
+                    Message::Telephony(telephony_msg) => {
+                        let is_trusted = key_store.read().is_trusted(&fingerprint);
+                        if is_trusted {
+                            let from_device = key_store
+                                .read()
+                                .get_peer_name(&fingerprint)
+                                .unwrap_or_else(|| "Unknown".to_string());
+                            let _ = event_tx.send(ConnectedEvent::Telephony {
+                                from_device,
+                                message: telephony_msg,
                             });
                         }
                     }

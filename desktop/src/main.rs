@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 #![allow(non_snake_case)]
 
 mod components;
@@ -7,42 +8,64 @@ mod state;
 mod utils;
 
 use components::{DeviceCard, FileBrowser, FileDialog};
+use connected_core::telephony::{ActiveCallState, CallAction};
+use connected_core::MediaCommand;
 use controller::{app_controller, AppAction};
 use dioxus::prelude::*;
 use state::*;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::debug;
 use utils::get_system_clipboard;
 
-fn main() {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("info".parse().unwrap())
-                .add_directive("connected_core=debug".parse().unwrap())
-                .add_directive("connected_desktop=debug".parse().unwrap())
-                .add_directive("mdns_sd=warn".parse().unwrap()),
-        )
-        .init();
+fn format_timestamp(ts: u64) -> String {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let diff_secs = (now.saturating_sub(ts)) / 1000;
 
-    info!("Connected Desktop starting...");
+    if diff_secs < 60 {
+        "Just now".to_string()
+    } else if diff_secs < 3600 {
+        format!("{}m ago", diff_secs / 60)
+    } else if diff_secs < 86400 {
+        format!("{}h ago", diff_secs / 3600)
+    } else if diff_secs < 604800 {
+        format!("{}d ago", diff_secs / 86400)
+    } else {
+        let secs = ts / 1000;
+        let datetime = UNIX_EPOCH + Duration::from_secs(secs);
+        if let Ok(dur) = datetime.duration_since(UNIX_EPOCH) {
+            let days = dur.as_secs() / 86400;
+            let years = 1970 + days / 365;
+            let remaining = days % 365;
+            let months = remaining / 30 + 1;
+            let day = remaining % 30 + 1;
+            format!("{}/{}/{}", months, day, years % 100)
+        } else {
+            "Unknown".to_string()
+        }
+    }
+}
+
+fn main() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
 
     let config = dioxus::desktop::Config::new()
         .with_window(
             dioxus::desktop::WindowBuilder::new()
                 .with_title("Connected")
-                .with_inner_size(dioxus::desktop::LogicalSize::new(480.0, 720.0))
-                .with_min_inner_size(dioxus::desktop::LogicalSize::new(400.0, 600.0))
-                .with_resizable(true),
+                .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0)),
         )
         .with_disable_context_menu(true);
 
     LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
 
-#[component]
 fn App() -> Element {
     // UI State
     let initialized = use_signal(|| false);
@@ -51,18 +74,34 @@ fn App() -> Element {
     let mut devices_list = use_signal(Vec::<DeviceInfo>::new);
     let mut selected_device = use_signal(|| None::<DeviceInfo>);
     let mut active_tab = use_signal(|| "devices".to_string());
+    let mut device_detail_tab = use_signal(|| "clipboard".to_string());
     let mut transfer_status = use_signal(|| TransferStatus::Idle);
     let mut clipboard_sync_enabled = use_signal(|| false);
     let mut notifications = use_signal(Vec::<Notification>::new);
     let mut show_send_dialog = use_signal(|| false);
     let mut clipboard_text = use_signal(String::new);
-    let mut show_clipboard_dialog = use_signal(|| false);
+
     let discovery_active = use_signal(|| false);
+    let mut media_enabled = use_signal(|| false);
+    let mut current_media_title = use_signal(|| "Not Playing".to_string());
+    let mut current_media_artist = use_signal(|| String::new());
+    let mut current_media_playing = use_signal(|| false);
+    let mut current_media_source_id = use_signal(|| "local".to_string());
 
     // Pairing State
     let pairing_mode = use_signal(|| false);
     let mut pairing_requests = use_signal(Vec::<PairingRequest>::new);
     let mut file_transfer_requests = use_signal(Vec::<FileTransferRequest>::new);
+
+    // Telephony State
+    let mut phone_sub_tab = use_signal(|| "messages".to_string());
+    let mut phone_contacts = use_signal(Vec::<connected_core::telephony::Contact>::new);
+    let mut phone_conversations = use_signal(Vec::<connected_core::telephony::Conversation>::new);
+    let mut phone_call_log = use_signal(Vec::<connected_core::telephony::CallLogEntry>::new);
+    let mut selected_conversation = use_signal(|| None::<String>);
+    let mut phone_messages = use_signal(Vec::<connected_core::telephony::SmsMessage>::new);
+    let mut sms_compose_text = use_signal(String::new);
+    let mut active_call = use_signal(|| None::<connected_core::telephony::ActiveCall>);
 
     // The Controller
     let action_tx =
@@ -122,6 +161,42 @@ fn App() -> Element {
                 file_transfer_requests.set(reqs);
             }
 
+            // Update Telephony State
+            phone_contacts.set(get_phone_contacts().lock().unwrap().clone());
+            phone_conversations.set(get_phone_conversations().lock().unwrap().clone());
+            phone_call_log.set(get_phone_call_log().lock().unwrap().clone());
+            active_call.set(get_active_call().lock().unwrap().clone());
+            // Update messages for selected conversation
+            if let Some(thread_id) = selected_conversation.read().clone() {
+                if let Some(msgs) = get_phone_messages().lock().unwrap().get(&thread_id) {
+                    phone_messages.set(msgs.clone());
+                }
+            }
+
+            // Update Media State
+            media_enabled.set(*get_media_enabled().lock().unwrap());
+            if let Some(media) = get_current_media().lock().unwrap().clone() {
+                current_media_title.set(
+                    media
+                        .state
+                        .title
+                        .unwrap_or_else(|| "Unknown Title".to_string()),
+                );
+                current_media_artist.set(
+                    media
+                        .state
+                        .artist
+                        .unwrap_or_else(|| "Unknown Artist".to_string()),
+                );
+                current_media_playing.set(media.state.playing);
+                current_media_source_id.set(media.source_device_id);
+            } else {
+                current_media_title.set("Not Playing".to_string());
+                current_media_artist.set(String::new());
+                current_media_playing.set(false);
+                current_media_source_id.set("local".to_string());
+            }
+
             // Clipboard Sync Check
             if *clipboard_sync_enabled.read() {
                 // Check if we recently received a remote update (debounce to prevent echo)
@@ -162,6 +237,11 @@ fn App() -> Element {
         action_tx.send(AppAction::SetPairingMode(!current));
     };
 
+    let toggle_media = move |_| {
+        let current = *media_enabled.read();
+        action_tx.send(AppAction::ToggleMediaControl(!current));
+    };
+
     rsx! {
         style { {include_str!("../assets/styles.css")} }
 
@@ -191,28 +271,18 @@ fn App() -> Element {
                     }
                 }
 
-                // Navigation
+                // Navigation - Simplified to Devices and Settings only
                 nav {
                     class: "sidebar-nav",
                     button {
                         class: if *active_tab.read() == "devices" { "nav-item active" } else { "nav-item" },
-                        onclick: move |_| active_tab.set("devices".to_string()),
+                        onclick: move |_| {
+                            active_tab.set("devices".to_string());
+                            selected_device.set(None);
+                        },
                         span { "Devices" }
                         if !devices_list.read().is_empty() {
                             span { class: "nav-badge", "{devices_list.read().len()}" }
-                        }
-                    }
-                    button {
-                        class: if *active_tab.read() == "transfers" { "nav-item active" } else { "nav-item" },
-                        onclick: move |_| active_tab.set("transfers".to_string()),
-                        span { "Transfers" }
-                    }
-                    button {
-                        class: if *active_tab.read() == "clipboard" { "nav-item active" } else { "nav-item" },
-                        onclick: move |_| active_tab.set("clipboard".to_string()),
-                        span { "Clipboard" }
-                        if *clipboard_sync_enabled.read() {
-                            span { class: "nav-badge sync", "SYNC" }
                         }
                     }
                     button {
@@ -241,7 +311,7 @@ fn App() -> Element {
                 class: "main-content",
 
                 // Tab: Devices
-                if *active_tab.read() == "devices" {
+                if *active_tab.read() == "devices" && selected_device.read().is_none() {
                     div {
                         class: "content-header",
                         h2 { "Nearby Devices" }
@@ -267,215 +337,880 @@ fn App() -> Element {
                                 DeviceCard {
                                     key: "{device.id}",
                                     device: device.clone(),
-                                    is_selected: selected_device.read().as_ref().map(|d| d.id == device.id).unwrap_or(false),
+                                    is_selected: false,
                                     on_select: move |d: DeviceInfo| {
                                         selected_device.set(Some(d));
-                                    },
-                                    on_send_file: move |d: DeviceInfo| {
-                                        selected_device.set(Some(d));
-                                        show_send_dialog.set(true);
-                                    },
-                                    on_send_clipboard: move |d: DeviceInfo| {
-                                        selected_device.set(Some(d));
-                                        clipboard_text.set(get_system_clipboard());
-                                        active_tab.set("clipboard".to_string());
-                                    },
-                                    on_browse_files: move |d: DeviceInfo| {
-                                        selected_device.set(Some(d));
-                                        active_tab.set("files".to_string());
+                                        device_detail_tab.set("clipboard".to_string());
                                     },
                                     on_pair: move |d: DeviceInfo| {
                                          if let Ok(port) = d.port.to_string().parse() {
                                              action_tx.send(AppAction::PairWithDevice { ip: d.ip.clone(), port });
                                          }
                                     },
-                                    on_unpair: move |d: DeviceInfo| {
-                                        action_tx.send(AppAction::UnpairDevice { fingerprint: "TODO".to_string(), device_id: d.id.clone() });
-                                    },
-                                    on_forget: move |d: DeviceInfo| {
-                                        action_tx.send(AppAction::ForgetDevice { fingerprint: "TODO".to_string(), device_id: d.id.clone() });
-                                    },
-                                    on_block: move |d: DeviceInfo| {
-                                        action_tx.send(AppAction::BlockDevice { fingerprint: "TODO".to_string(), device_id: d.id.clone() });
-                                    }
                                 }
                             }
                         }
                     }
                 }
 
-                // Tab: Files
-                if *active_tab.read() == "files" {
+                // Device Detail View - shows when a device is selected
+                if *active_tab.read() == "devices" && selected_device.read().is_some() {
                     if let Some(device) = selected_device.read().as_ref() {
-                        FileBrowser {
-                            device: device.clone(),
-                            on_close: move |_| active_tab.set("devices".to_string()),
-                        }
-                    } else {
-                        div { "Please select a device" }
-                    }
-                }
-
-                // Tab: Transfers
-                if *active_tab.read() == "transfers" {
-                    div {
-                        class: "content-header",
-                        h2 { "File Transfers" }
-                        span { class: "content-subtitle", "Send and receive files" }
-                    }
-
-                    div {
-                        class: "transfers-section",
-                        match &*transfer_status.read() {
-                            TransferStatus::Idle => rsx! {
-                                div {
-                                    class: "transfer-idle",
-                                    div { class: "transfer-icon", "📂" }
-                                    p { "No active transfers" }
-                                }
-                            },
-                            TransferStatus::Starting(filename) => rsx! {
-                                div {
-                                    class: "transfer-active",
-                                    div { class: "transfer-icon spinning", "⏳" }
-                                    p { "Starting transfer: {filename}" }
-                                }
-                            },
-                            TransferStatus::InProgress { filename, percent } => rsx! {
-                                div {
-                                    class: "transfer-active",
-                                    div { class: "transfer-info",
-                                        span { class: "transfer-filename", "{filename}" }
-                                        span { class: "transfer-percent", "{percent:.1}%" }
-                                    }
-                                    div {
-                                        class: "progress-bar",
-                                        div {
-                                            class: "progress-fill",
-                                            style: "width: {percent}%",
-                                        }
-                                    }
-                                }
-                            },
-                            TransferStatus::Completed(filename) => rsx! {
-                                div {
-                                    class: "transfer-complete",
-                                    div { class: "transfer-icon", "✅" }
-                                    p { "{filename} received successfully!" }
-                                }
-                            },
-                            TransferStatus::Failed(error) => rsx! {
-                                div {
-                                    class: "transfer-failed",
-                                    div { class: "transfer-icon", "❌" }
-                                    p { "Transfer failed: {error}" }
-                                }
-                            },
-                        }
-
                         div {
-                            class: "send-file-section",
-                            h3 { "Send a File" }
-                            if let Some(ref device) = *selected_device.read() {
-                                p { "Send to: {device.name}" }
-                                button {
-                                    class: "primary-button",
-                                    onclick: move |_| show_send_dialog.set(true),
-                                    "Choose File"
-                                }
-                            } else {
-                                p { class: "muted", "Select a device first" }
-                            }
-                        }
+                            class: "device-detail-view",
 
-                        div {
-                            class: "download-location",
-                            span { class: "label", "Save to:" }
-                            span {
-                                class: "path",
-                                {dirs::download_dir().unwrap_or_else(|| PathBuf::from(".")).display().to_string()}
-                            }
-                        }
-                    }
-                }
-
-                // Tab: Clipboard
-                if *active_tab.read() == "clipboard" {
-                    div {
-                        class: "content-header",
-                        h2 { "Clipboard Sync" }
-                        span { class: "content-subtitle", "Share your clipboard" }
-                    }
-
-                    div {
-                        class: "clipboard-section",
-                        div {
-                            class: if *clipboard_sync_enabled.read() { "sync-status active" } else { "sync-status" },
-                            if *clipboard_sync_enabled.read() {
-                                div { class: "sync-icon", "🔄" }
-                            } else {
-                                div { class: "sync-icon muted", "📋" }
-                            }
-
+                            // Header with back button and device info
                             div {
-                                class: "sync-info",
-                                span {
-                                    class: if *clipboard_sync_enabled.read() { "sync-label" } else { "sync-label muted" },
-                                    "Universal Clipboard"
-                                }
-                                span { class: "sync-hint", "Sync with all trusted devices" }
-                            }
-
-                            label {
-                                class: "toggle-switch",
-                                input {
-                                    type: "checkbox",
-                                    checked: "{clipboard_sync_enabled}",
-                                    oninput: toggle_clipboard_sync,
-                                }
-                                span { class: "slider" }
-                            }
-                        }
-
-                        div {
-                            class: "manual-clipboard",
-                            h3 { "Manual Send" }
-                            textarea {
-                                class: "clipboard-input",
-                                placeholder: "Enter text to send...",
-                                value: "{clipboard_text}",
-                                oninput: move |evt| clipboard_text.set(evt.value().clone()),
-                            }
-                            div {
-                                class: "clipboard-actions",
+                                class: "device-detail-header",
                                 button {
-                                    class: "secondary-button",
-                                    onclick: move |_| clipboard_text.set(get_system_clipboard()),
-                                    "📋 Paste from Clipboard"
+                                    class: "back-button",
+                                    onclick: move |_| {
+                                        selected_device.set(None);
+                                        active_tab.set("devices".to_string());
+                                    },
+                                    "← Back to Devices"
                                 }
-                                if let Some(ref device) = *selected_device.read() {
+                                div {
+                                    class: "device-detail-info",
+                                    h2 { "{device.name}" }
+                                    span { class: "device-address", "{device.ip}:{device.port}" }
+                                    span { class: "device-type-badge", "{device.device_type}" }
+                                }
+                                // More options dropdown
+                                div {
+                                    class: "device-detail-actions",
                                     button {
-                                        class: "primary-button",
-                                        disabled: clipboard_text.read().is_empty(),
+                                        class: "header-action-btn",
+                                        title: "Unpair device",
                                         onclick: {
                                             let device = device.clone();
                                             move |_| {
-                                                let ip = device.ip.clone();
-                                                let port = device.port;
-                                                let text = clipboard_text.read().clone();
-                                                if !text.is_empty() {
-                                                    action_tx.send(AppAction::SendClipboard { ip, port, text });
-                                                    add_notification("Clipboard", "Sending...", "📤");
-                                                }
+                                                action_tx.send(AppAction::UnpairDevice { fingerprint: "TODO".to_string(), device_id: device.id.clone() });
+                                                selected_device.set(None);
                                             }
                                         },
-                                        "Send to {device.name}"
+                                        "💔 Unpair"
                                     }
-                                } else {
-                                     button {
-                                        class: "primary-button",
-                                        disabled: true,
-                                        "Select a Device"
+                                    button {
+                                        class: "header-action-btn warning",
+                                        title: "Forget device",
+                                        onclick: {
+                                            let device = device.clone();
+                                            move |_| {
+                                                action_tx.send(AppAction::ForgetDevice { fingerprint: "TODO".to_string(), device_id: device.id.clone() });
+                                                selected_device.set(None);
+                                            }
+                                        },
+                                        "🔄 Forget"
+                                    }
+                                    button {
+                                        class: "header-action-btn danger",
+                                        title: "Block device",
+                                        onclick: {
+                                            let device = device.clone();
+                                            move |_| {
+                                                action_tx.send(AppAction::BlockDevice { fingerprint: "TODO".to_string(), device_id: device.id.clone() });
+                                                selected_device.set(None);
+                                            }
+                                        },
+                                        "🚫 Block"
+                                    }
+                                }
+                            }
+
+                            // Sub-tabs for device features
+                            div {
+                                class: "device-detail-tabs",
+                                button {
+                                    class: if *device_detail_tab.read() == "clipboard" { "detail-tab active" } else { "detail-tab" },
+                                    onclick: move |_| device_detail_tab.set("clipboard".to_string()),
+                                    "📋 Clipboard"
+                                }
+                                button {
+                                    class: if *device_detail_tab.read() == "transfers" { "detail-tab active" } else { "detail-tab" },
+                                    onclick: move |_| device_detail_tab.set("transfers".to_string()),
+                                    "📤 Transfers"
+                                }
+                                button {
+                                    class: if *device_detail_tab.read() == "files" { "detail-tab active" } else { "detail-tab" },
+                                    onclick: move |_| device_detail_tab.set("files".to_string()),
+                                    "📂 Browse Files"
+                                }
+                                button {
+                                    class: if *device_detail_tab.read() == "media" { "detail-tab active" } else { "detail-tab" },
+                                    onclick: move |_| device_detail_tab.set("media".to_string()),
+                                    "🎵 Media"
+                                }
+                                button {
+                                    class: if *device_detail_tab.read() == "phone" { "detail-tab active" } else { "detail-tab" },
+                                    onclick: move |_| device_detail_tab.set("phone".to_string()),
+                                    "📱 Phone"
+                                }
+                            }
+
+                            // Device detail content
+                            div {
+                                class: "device-detail-content",
+
+                                // Clipboard sub-tab
+                                if *device_detail_tab.read() == "clipboard" {
+                                    div {
+                                        class: "clipboard-section",
+                                        div {
+                                            class: if *clipboard_sync_enabled.read() { "sync-status active" } else { "sync-status" },
+                                            if *clipboard_sync_enabled.read() {
+                                                div { class: "sync-icon", "🔄" }
+                                            } else {
+                                                div { class: "sync-icon muted", "📋" }
+                                            }
+
+                                            div {
+                                                class: "sync-info",
+                                                span {
+                                                    class: if *clipboard_sync_enabled.read() { "sync-label" } else { "sync-label muted" },
+                                                    "Universal Clipboard"
+                                                }
+                                                span { class: "sync-hint", "Sync with all trusted devices" }
+                                            }
+
+                                            label {
+                                                class: "toggle-switch",
+                                                input {
+                                                    r#type: "checkbox",
+                                                    checked: "{clipboard_sync_enabled}",
+                                                    oninput: toggle_clipboard_sync,
+                                                }
+                                                span { class: "slider" }
+                                            }
+                                        }
+
+                                        div {
+                                            class: "manual-clipboard",
+                                            h3 { "Send to {device.name}" }
+                                            textarea {
+                                                class: "clipboard-input",
+                                                placeholder: "Enter text to send...",
+                                                value: "{clipboard_text}",
+                                                oninput: move |evt| clipboard_text.set(evt.value().clone()),
+                                            }
+                                            div {
+                                                class: "clipboard-actions",
+                                                button {
+                                                    class: "secondary-button",
+                                                    onclick: move |_| clipboard_text.set(get_system_clipboard()),
+                                                    "📋 Paste from Clipboard"
+                                                }
+                                                button {
+                                                    class: "primary-button",
+                                                    disabled: clipboard_text.read().is_empty(),
+                                                    onclick: {
+                                                        let device = device.clone();
+                                                        move |_| {
+                                                            let ip = device.ip.clone();
+                                                            let port = device.port;
+                                                            let text = clipboard_text.read().clone();
+                                                            if !text.is_empty() {
+                                                                action_tx.send(AppAction::SendClipboard { ip, port, text });
+                                                                add_notification("Clipboard", "Sending...", "📤");
+                                                            }
+                                                        }
+                                                    },
+                                                    "Send"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Transfers sub-tab
+                                if *device_detail_tab.read() == "transfers" {
+                                    div {
+                                        class: "transfers-section",
+                                        match &*transfer_status.read() {
+                                            TransferStatus::Idle => rsx! {
+                                                div {
+                                                    class: "transfer-idle",
+                                                    div { class: "transfer-icon", "📂" }
+                                                    p { "No active transfers" }
+                                                }
+                                            },
+                                            TransferStatus::Starting(filename) => rsx! {
+                                                div {
+                                                    class: "transfer-active",
+                                                    div { class: "transfer-icon spinning", "⏳" }
+                                                    p { "Starting transfer: {filename}" }
+                                                }
+                                            },
+                                            TransferStatus::InProgress { filename, percent } => rsx! {
+                                                div {
+                                                    class: "transfer-active",
+                                                    div { class: "transfer-info",
+                                                        span { class: "transfer-filename", "{filename}" }
+                                                        span { class: "transfer-percent", "{percent:.1}%" }
+                                                    }
+                                                    div {
+                                                        class: "progress-bar",
+                                                        div {
+                                                            class: "progress-fill",
+                                                            style: "width: {percent}%",
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            TransferStatus::Completed(filename) => rsx! {
+                                                div {
+                                                    class: "transfer-complete",
+                                                    div { class: "transfer-icon", "✅" }
+                                                    p { "{filename} received successfully!" }
+                                                }
+                                            },
+                                            TransferStatus::Failed(error) => rsx! {
+                                                div {
+                                                    class: "transfer-failed",
+                                                    div { class: "transfer-icon", "❌" }
+                                                    p { "Transfer failed: {error}" }
+                                                }
+                                            },
+                                        }
+
+                                        div {
+                                            class: "send-file-section",
+                                            h3 { "Send a File to {device.name}" }
+                                            button {
+                                                class: "primary-button",
+                                                onclick: move |_| show_send_dialog.set(true),
+                                                "Choose File"
+                                            }
+                                        }
+
+                                        div {
+                                            class: "download-location",
+                                            span { class: "label", "Save to:" }
+                                            span {
+                                                class: "path",
+                                                {dirs::download_dir().unwrap_or_else(|| PathBuf::from(".")).display().to_string()}
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Media sub-tab
+                                if *device_detail_tab.read() == "media" {
+                                    div {
+                                        class: "media-section",
+                                        // Toggle Share
+                                        div {
+                                            class: if *media_enabled.read() { "sync-status active" } else { "sync-status" },
+                                            if *media_enabled.read() {
+                                                div { class: "sync-icon", "🎵" }
+                                            } else {
+                                                div { class: "sync-icon muted", "🔇" }
+                                            }
+                                            div {
+                                                class: "sync-info",
+                                                span {
+                                                    class: if *media_enabled.read() { "sync-label" } else { "sync-label muted" },
+                                                    "Share Media Status"
+                                                }
+                                                span { class: "sync-hint", "Allow others to see and control what's playing" }
+                                            }
+                                            label {
+                                                class: "toggle-switch",
+                                                input {
+                                                    r#type: "checkbox",
+                                                    checked: "{media_enabled}",
+                                                    oninput: toggle_media,
+                                                }
+                                                span { class: "slider" }
+                                            }
+                                        }
+
+                                        // Local Media Status with Controls
+                                        if *media_enabled.read() {
+                                             div {
+                                                class: "info-card",
+                                                h3 { "Playing Now" }
+                                                div { class: "media-info",
+                                                    if current_media_title.read().as_str() == "Not Playing" {
+                                                        div { class: "muted", "No media playing" }
+                                                    } else {
+                                                        div {
+                                                            div { class: "media-title", "{current_media_title}" }
+                                                            div { class: "media-artist", "{current_media_artist}" }
+                                                            div { class: "media-status",
+                                                                if *current_media_playing.read() { "▶ Playing" } else { "⏸ Paused" }
+                                                            }
+
+                                                            // Controls for Playing Now
+                                                            div {
+                                                                class: "control-buttons small-controls",
+                                                                button { class: "control-btn", onclick: {
+                                                                    let source = current_media_source_id.read().clone();
+                                                                    let list = devices_list.read().clone();
+                                                                    move |_| {
+                                                                        if source == "local" {
+                                                                            action_tx.send(AppAction::ControlLocalMedia(MediaCommand::Previous));
+                                                                        } else {
+                                                                            if let Some(device) = list.iter().find(|d| d.id == source) {
+                                                                                if let Ok(port) = device.port.to_string().parse() {
+                                                                                    action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Previous });
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }, "⏮" }
+
+                                                                button { class: "control-btn", onclick: {
+                                                                    let source = current_media_source_id.read().clone();
+                                                                    let list = devices_list.read().clone();
+                                                                    move |_| {
+                                                                        if source == "local" {
+                                                                            action_tx.send(AppAction::ControlLocalMedia(MediaCommand::PlayPause));
+                                                                        } else {
+                                                                            if let Some(device) = list.iter().find(|d| d.id == source) {
+                                                                                if let Ok(port) = device.port.to_string().parse() {
+                                                                                    action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::PlayPause });
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }, "⏯" }
+
+                                                                button { class: "control-btn", onclick: {
+                                                                    let source = current_media_source_id.read().clone();
+                                                                    let list = devices_list.read().clone();
+                                                                    move |_| {
+                                                                        if source == "local" {
+                                                                            action_tx.send(AppAction::ControlLocalMedia(MediaCommand::Next));
+                                                                        } else {
+                                                                            if let Some(device) = list.iter().find(|d| d.id == source) {
+                                                                                if let Ok(port) = device.port.to_string().parse() {
+                                                                                    action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Next });
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }, "⏭" }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                             }
+                                        }
+
+                                        // Remote Control for selected device
+                                        div {
+                                            class: "media-controls",
+                                            h3 { "Control {device.name}" }
+                                            div {
+                                                class: "control-buttons",
+                                                button { class: "control-btn", onclick: {
+                                                    let device = device.clone();
+                                                    move |_| {
+                                                         if let Ok(port) = device.port.to_string().parse() {
+                                                             action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Previous });
+                                                         }
+                                                    }
+                                                }, "⏮" }
+                                                button { class: "control-btn", onclick: {
+                                                    let device = device.clone();
+                                                    move |_| {
+                                                         if let Ok(port) = device.port.to_string().parse() {
+                                                             action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::PlayPause });
+                                                         }
+                                                    }
+                                                }, "⏯" }
+                                                button { class: "control-btn", onclick: {
+                                                    let device = device.clone();
+                                                    move |_| {
+                                                         if let Ok(port) = device.port.to_string().parse() {
+                                                             action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Next });
+                                                         }
+                                                    }
+                                                }, "⏭" }
+                                            }
+                                            div {
+                                                class: "control-buttons secondary",
+                                                button { class: "control-btn small", onclick: {
+                                                    let device = device.clone();
+                                                    move |_| {
+                                                         if let Ok(port) = device.port.to_string().parse() {
+                                                             action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::VolumeDown });
+                                                         }
+                                                    }
+                                                }, "🔉" }
+                                                button { class: "control-btn small", onclick: {
+                                                    let device = device.clone();
+                                                    move |_| {
+                                                         if let Ok(port) = device.port.to_string().parse() {
+                                                             action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::VolumeUp });
+                                                         }
+                                                    }
+                                                }, "🔊" }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Browse Files sub-tab
+                                if *device_detail_tab.read() == "files" {
+                                    FileBrowser {
+                                        device: device.clone(),
+                                        on_close: move |_| device_detail_tab.set("clipboard".to_string()),
+                                    }
+                                }
+
+                                // Phone sub-tab (SMS, Calls, Contacts)
+                                if *device_detail_tab.read() == "phone" {
+                                    div {
+                                        class: "phone-section",
+
+                                        // Phone sub-navigation tabs
+                                        div {
+                                            class: "phone-tabs",
+                                            button {
+                                                class: if *phone_sub_tab.read() == "messages" { "phone-tab active" } else { "phone-tab" },
+                                                onclick: move |_| phone_sub_tab.set("messages".to_string()),
+                                                "💬 Messages"
+                                            }
+                                            button {
+                                                class: if *phone_sub_tab.read() == "calls" { "phone-tab active" } else { "phone-tab" },
+                                                onclick: move |_| phone_sub_tab.set("calls".to_string()),
+                                                "📞 Calls"
+                                            }
+                                            button {
+                                                class: if *phone_sub_tab.read() == "contacts" { "phone-tab active" } else { "phone-tab" },
+                                                onclick: move |_| phone_sub_tab.set("contacts".to_string()),
+                                                "👤 Contacts"
+                                            }
+                                        }
+
+                                        // Messages Tab Content
+                                        if *phone_sub_tab.read() == "messages" {
+                                            if let Some(ref thread_id) = *selected_conversation.read() {
+                                                // Thread view - show individual messages
+                                                {
+                                                    let convo_info = phone_conversations.read().iter()
+                                                        .find(|c| c.id == *thread_id)
+                                                        .cloned();
+                                                    let contact_name = convo_info.as_ref()
+                                                        .and_then(|c| c.contact_names.first().cloned())
+                                                        .or_else(|| convo_info.as_ref().and_then(|c| c.addresses.first().cloned()))
+                                                        .unwrap_or_else(|| "Unknown".to_string());
+                                                    let recipient_address = convo_info.as_ref()
+                                                        .and_then(|c| c.addresses.first().cloned())
+                                                        .unwrap_or_default();
+                                                    let first_char = contact_name.chars().next().unwrap_or('?');
+
+                                                    rsx! {
+                                                        div {
+                                                            class: "phone-content message-thread-view",
+
+                                                            // Thread header with back button
+                                                            div {
+                                                                class: "thread-header",
+                                                                button {
+                                                                    class: "back-button",
+                                                                    onclick: move |_| {
+                                                                        selected_conversation.set(None);
+                                                                        sms_compose_text.set(String::new());
+                                                                    },
+                                                                    "← Back"
+                                                                }
+                                                                div {
+                                                                    class: "thread-contact",
+                                                                    div {
+                                                                        class: "thread-avatar",
+                                                                        "{first_char}"
+                                                                    }
+                                                                    div {
+                                                                        class: "thread-contact-info",
+                                                                        span { class: "thread-contact-name", "{contact_name}" }
+                                                                        span { class: "thread-contact-number", "{recipient_address}" }
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            // Messages list
+                                                            div {
+                                                                class: "messages-container",
+                                                                if phone_messages.read().is_empty() {
+                                                                    div {
+                                                                        class: "empty-state",
+                                                                        span { class: "empty-icon", "💬" }
+                                                                        p { "Loading messages..." }
+                                                                    }
+                                                                } else {
+                                                                    div {
+                                                                        class: "messages-list",
+                                                                        for msg in phone_messages.read().iter().rev() {
+                                                                            {
+                                                                                let is_outgoing = msg.is_outgoing;
+                                                                                let body = msg.body.clone();
+                                                                                let time_str = format_timestamp(msg.timestamp);
+                                                                                let status = match msg.status {
+                                                                                    connected_core::telephony::SmsStatus::Pending => "⏳",
+                                                                                    connected_core::telephony::SmsStatus::Sent => "✓",
+                                                                                    connected_core::telephony::SmsStatus::Delivered => "✓✓",
+                                                                                    connected_core::telephony::SmsStatus::Failed => "❌",
+                                                                                    connected_core::telephony::SmsStatus::Received => "",
+                                                                                };
+                                                                                rsx! {
+                                                                                    div {
+                                                                                        class: if is_outgoing { "message-bubble outgoing" } else { "message-bubble incoming" },
+                                                                                        div { class: "message-body", "{body}" }
+                                                                                        div {
+                                                                                            class: "message-meta",
+                                                                                            span { class: "message-time", "{time_str}" }
+                                                                                            if is_outgoing && !status.is_empty() {
+                                                                                                span { class: "message-status", "{status}" }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            // Compose area
+                                                            div {
+                                                                class: "compose-area",
+                                                                input {
+                                                                    r#type: "text",
+                                                                    class: "compose-input",
+                                                                    placeholder: "Type a message...",
+                                                                    value: "{sms_compose_text.read()}",
+                                                                    oninput: move |e| sms_compose_text.set(e.value().clone())
+                                                                }
+                                                                button {
+                                                                    class: "send-button",
+                                                                    disabled: sms_compose_text.read().is_empty(),
+                                                                    onclick: {
+                                                                        let device_id = device.id.clone();
+                                                                        let to_address = recipient_address.clone();
+                                                                        move |_| {
+                                                                            let text = sms_compose_text.read().clone();
+                                                                            if !text.is_empty() && !to_address.is_empty() {
+                                                                                if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                                    action_tx.send(AppAction::SendSms {
+                                                                                        ip: fresh_device.ip.clone(),
+                                                                                        port: fresh_device.port,
+                                                                                        to: to_address.clone(),
+                                                                                        body: text,
+                                                                                    });
+                                                                                    sms_compose_text.set(String::new());
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    },
+                                                                    "Send"
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                // Conversation list view
+                                                div {
+                                                    class: "phone-content",
+                                                    div {
+                                                        class: "phone-header",
+                                                        h4 { "Messages" }
+                                                        button {
+                                                            class: "sync-button",
+                                                            onclick: {
+                                                                let device_id = device.id.clone();
+                                                                move |_| {
+                                                                    if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                        action_tx.send(AppAction::RequestConversationsSync {
+                                                                            ip: fresh_device.ip.clone(),
+                                                                            port: fresh_device.port,
+                                                                        });
+                                                                    } else {
+                                                                        add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                                    }
+                                                                }
+                                                            },
+                                                            "🔄 Sync"
+                                                        }
+                                                    }
+
+                                                    if phone_conversations.read().is_empty() {
+                                                        div {
+                                                            class: "empty-state",
+                                                            span { class: "empty-icon", "💬" }
+                                                            p { "No messages synced" }
+                                                            p { class: "empty-hint", "Click Sync to load your messages" }
+                                                        }
+                                                    } else {
+                                                        div {
+                                                            class: "conversation-list",
+                                                            for convo in phone_conversations.read().iter() {
+                                                                {
+                                                                    let convo_id = convo.id.clone();
+                                                                    let contact_name = convo.contact_names.first()
+                                                                        .cloned()
+                                                                        .unwrap_or_else(|| convo.addresses.first().cloned().unwrap_or_default());
+                                                                    let last_msg = convo.last_message.clone().unwrap_or_default();
+                                                                    let unread = convo.unread_count;
+                                                                    let time_str = format_timestamp(convo.last_timestamp);
+
+                                                                    rsx! {
+                                                                        div {
+                                                                            class: if unread > 0 { "conversation-item unread" } else { "conversation-item" },
+                                                                            onclick: {
+                                                                                let cid = convo_id.clone();
+                                                                                let device_id = device.id.clone();
+                                                                                move |_| {
+                                                                                    selected_conversation.set(Some(cid.clone()));
+                                                                                    if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                                        action_tx.send(AppAction::RequestMessages {
+                                                                                            ip: fresh_device.ip.clone(),
+                                                                                            port: fresh_device.port,
+                                                                                            thread_id: cid.clone(),
+                                                                                            limit: 50,
+                                                                                        });
+                                                                                    }
+                                                                                }
+                                                                            },
+                                                                            div {
+                                                                                class: "conversation-avatar",
+                                                                                "{contact_name.chars().next().unwrap_or('?')}"
+                                                                            }
+                                                                            div {
+                                                                                class: "conversation-info",
+                                                                                div {
+                                                                                    class: "conversation-header",
+                                                                                    span { class: "conversation-name", "{contact_name}" }
+                                                                                    span { class: "conversation-time", "{time_str}" }
+                                                                                }
+                                                                                div {
+                                                                                    class: "conversation-preview",
+                                                                                    "{last_msg}"
+                                                                                }
+                                                                            }
+                                                                            if unread > 0 {
+                                                                                span { class: "unread-badge", "{unread}" }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Calls Tab Content
+                                        if *phone_sub_tab.read() == "calls" {
+                                            div {
+                                                class: "phone-content",
+                                                div {
+                                                    class: "phone-header",
+                                                    h4 { "Call Log" }
+                                                    button {
+                                                        class: "sync-button",
+                                                        onclick: {
+                                                            let device_id = device.id.clone();
+                                                            move |_| {
+                                                                if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                    action_tx.send(AppAction::RequestCallLog {
+                                                                        ip: fresh_device.ip.clone(),
+                                                                        port: fresh_device.port,
+                                                                        limit: 50,
+                                                                    });
+                                                                } else {
+                                                                    add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                                }
+                                                            }
+                                                        },
+                                                        "🔄 Sync"
+                                                    }
+                                                }
+
+                                                if phone_call_log.read().is_empty() {
+                                                    div {
+                                                        class: "empty-state",
+                                                        span { class: "empty-icon", "📞" }
+                                                        p { "No call history synced" }
+                                                        p { class: "empty-hint", "Click Sync to load your call log" }
+                                                    }
+                                                } else {
+                                                    div {
+                                                        class: "call-log-list",
+                                                        for call in phone_call_log.read().iter() {
+                                                            {
+                                                                let contact = call.contact_name.clone().unwrap_or_else(|| call.number.clone());
+                                                                let call_type = &call.call_type;
+                                                                let duration = call.duration;
+                                                                let timestamp = call.timestamp;
+                                                                let time_str = format_timestamp(timestamp);
+                                                                let (icon, type_class) = match call_type {
+                                                                    connected_core::telephony::CallType::Incoming => ("📥", "incoming"),
+                                                                    connected_core::telephony::CallType::Outgoing => ("📤", "outgoing"),
+                                                                    connected_core::telephony::CallType::Missed => ("📵", "missed"),
+                                                                    connected_core::telephony::CallType::Rejected => ("🚫", "rejected"),
+                                                                    _ => ("📞", "other"),
+                                                                };
+                                                                let duration_str = if duration > 0 {
+                                                                    format!("{}:{:02}", duration / 60, duration % 60)
+                                                                } else {
+                                                                    "—".to_string()
+                                                                };
+
+                                                                rsx! {
+                                                                    div {
+                                                                        class: "call-item {type_class}",
+                                                                        span { class: "call-icon", "{icon}" }
+                                                                        div {
+                                                                            class: "call-info",
+                                                                            div {
+                                                                                class: "call-contact",
+                                                                                "{contact}"
+                                                                            }
+                                                                            div {
+                                                                                class: "call-meta",
+                                                                                span { class: "call-time", "{time_str}" }
+                                                                                span { class: "call-duration", "{duration_str}" }
+                                                                            }
+                                                                        }
+                                                                        button {
+                                                                            class: "call-action",
+                                                                            onclick: {
+                                                                                let number = call.number.clone();
+                                                                                let device_id = device.id.clone();
+                                                                                move |_| {
+                                                                                    if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                                        action_tx.send(AppAction::InitiateCall {
+                                                                                            ip: fresh_device.ip.clone(),
+                                                                                            port: fresh_device.port,
+                                                                                            number: number.clone(),
+                                                                                        });
+                                                                                    }
+                                                                                }
+                                                                            },
+                                                                            "📞"
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Contacts Tab Content
+                                        if *phone_sub_tab.read() == "contacts" {
+                                            div {
+                                                class: "phone-content",
+                                                div {
+                                                    class: "phone-header",
+                                                    h4 { "Contacts ({phone_contacts.read().len()})" }
+                                                    button {
+                                                        class: "sync-button",
+                                                        onclick: {
+                                                            let device_id = device.id.clone();
+                                                            move |_| {
+                                                                if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                    action_tx.send(AppAction::RequestContactsSync {
+                                                                        ip: fresh_device.ip.clone(),
+                                                                        port: fresh_device.port,
+                                                                    });
+                                                                } else {
+                                                                    add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                                }
+                                                            }
+                                                        },
+                                                        "🔄 Sync"
+                                                    }
+                                                }
+
+                                                if phone_contacts.read().is_empty() {
+                                                    div {
+                                                        class: "empty-state",
+                                                        span { class: "empty-icon", "👤" }
+                                                        p { "No contacts synced" }
+                                                        p { class: "empty-hint", "Click Sync to load your contacts" }
+                                                    }
+                                                } else {
+                                                    div {
+                                                        class: "contacts-list",
+                                                        for contact in phone_contacts.read().iter() {
+                                                            {
+                                                                let name = contact.name.clone();
+                                                                let phone = contact.phone_numbers.first()
+                                                                    .map(|p| p.number.clone())
+                                                                    .unwrap_or_default();
+                                                                let starred = contact.starred;
+
+                                                                rsx! {
+                                                                    div {
+                                                                        class: "contact-item",
+                                                                        div {
+                                                                            class: "contact-avatar",
+                                                                            "{name.chars().next().unwrap_or('?')}"
+                                                                        }
+                                                                        div {
+                                                                            class: "contact-info",
+                                                                            div {
+                                                                                class: "contact-name",
+                                                                                if starred { "⭐ " } else { "" }
+                                                                                "{name}"
+                                                                            }
+                                                                            if !phone.is_empty() {
+                                                                                div {
+                                                                                    class: "contact-phone",
+                                                                                    "{phone}"
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        div {
+                                                                            class: "contact-actions",
+                                                                            if !phone.is_empty() {
+                                                                                button {
+                                                                                    class: "contact-action",
+                                                                                    title: "Call",
+                                                                                    onclick: {
+                                                                                        let number = phone.clone();
+                                                                                        let device_id = device.id.clone();
+                                                                                        move |_| {
+                                                                                            if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                                                action_tx.send(AppAction::InitiateCall {
+                                                                                                    ip: fresh_device.ip.clone(),
+                                                                                                    port: fresh_device.port,
+                                                                                                    number: number.clone(),
+                                                                                                });
+                                                                                            }
+                                                                                        }
+                                                                                    },
+                                                                                    "📞"
+                                                                                }
+                                                                                button {
+                                                                                    class: "contact-action",
+                                                                                    title: "Message",
+                                                                                    "💬"
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Note about permissions
+                                        div {
+                                            class: "phone-note",
+                                            span { class: "note-icon", "ℹ️" }
+                                            span { "Make sure Phone Link is enabled in the phone's Connected app settings." }
+                                        }
                                     }
                                 }
                             }
@@ -515,6 +1250,50 @@ fn App() -> Element {
                                 }
                             }
                             p { class: "settings-hint", "Enable to allow new devices to pair with you." }
+                        }
+
+                        div {
+                            class: "info-card",
+                            h3 { "📋 Clipboard Sync" }
+                            div {
+                                class: "info-grid",
+                                div { class: "info-label", "Auto-sync" }
+                                div {
+                                    class: "info-value",
+                                    label {
+                                        class: "toggle-switch",
+                                        input {
+                                            r#type: "checkbox",
+                                            checked: "{clipboard_sync_enabled}",
+                                            oninput: toggle_clipboard_sync,
+                                        }
+                                        span { class: "slider" }
+                                    }
+                                }
+                            }
+                            p { class: "settings-hint", "Automatically sync clipboard with trusted devices." }
+                        }
+
+                        div {
+                            class: "info-card",
+                            h3 { "🎵 Media Sharing" }
+                            div {
+                                class: "info-grid",
+                                div { class: "info-label", "Share Status" }
+                                div {
+                                    class: "info-value",
+                                    label {
+                                        class: "toggle-switch",
+                                        input {
+                                            r#type: "checkbox",
+                                            checked: "{media_enabled}",
+                                            oninput: toggle_media,
+                                        }
+                                        span { class: "slider" }
+                                    }
+                                }
+                            }
+                            p { class: "settings-hint", "Allow other devices to see and control your media." }
                         }
                     }
                 }
@@ -622,6 +1401,150 @@ fn App() -> Element {
                                         "Accept"
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Incoming/Active Call Modal
+            if let Some(call) = active_call.read().clone() {
+                div {
+                    class: "modal-overlay call-overlay",
+                    div {
+                        class: "modal-content call-modal",
+                        // Call state header
+                        div {
+                            class: "call-modal-header",
+                            match call.state {
+                                ActiveCallState::Ringing => rsx! {
+                                    span { class: "call-state-icon ringing", "📞" }
+                                    h3 { "Incoming Call" }
+                                },
+                                ActiveCallState::Dialing => rsx! {
+                                    span { class: "call-state-icon dialing", "📱" }
+                                    h3 { "Dialing..." }
+                                },
+                                ActiveCallState::Connected => rsx! {
+                                    span { class: "call-state-icon connected", "🔊" }
+                                    h3 { "Call in Progress" }
+                                },
+                                ActiveCallState::OnHold => rsx! {
+                                    span { class: "call-state-icon on-hold", "⏸️" }
+                                    h3 { "On Hold" }
+                                },
+                                ActiveCallState::Ended => rsx! {
+                                    span { class: "call-state-icon ended", "📵" }
+                                    h3 { "Call Ended" }
+                                },
+                            }
+                        }
+
+                        // Caller info
+                        div {
+                            class: "call-caller-info",
+                            div {
+                                class: "call-avatar",
+                                {call.contact_name.as_ref().and_then(|n| n.chars().next()).unwrap_or('?').to_string()}
+                            }
+                            div {
+                                class: "call-caller-details",
+                                p {
+                                    class: "call-caller-name",
+                                    {call.contact_name.clone().unwrap_or_else(|| call.number.clone())}
+                                }
+                                p {
+                                    class: "call-caller-number",
+                                    {call.number.clone()}
+                                }
+                            }
+                        }
+
+                        // Call duration for connected calls
+                        if call.state == ActiveCallState::Connected && call.duration > 0 {
+                            div {
+                                class: "call-duration",
+                                {format!("{}:{:02}", call.duration / 60, call.duration % 60)}
+                            }
+                        }
+
+                        // Action buttons
+                        div {
+                            class: "call-modal-actions",
+                            match call.state {
+                                ActiveCallState::Ringing => {
+                                    // Show Answer and Reject buttons for incoming ringing calls
+                                    rsx! {
+                                        button {
+                                            class: "call-button reject",
+                                            onclick: {
+                                                let selected = selected_device.read().clone();
+                                                move |_| {
+                                                    if let Some(ref device) = selected {
+                                                        action_tx.send(AppAction::SendCallAction {
+                                                            ip: device.ip.clone(),
+                                                            port: device.port,
+                                                            action: CallAction::Reject,
+                                                        });
+                                                    }
+                                                }
+                                            },
+                                            span { class: "call-btn-icon", "📵" }
+                                            span { "Reject" }
+                                        }
+                                        button {
+                                            class: "call-button answer",
+                                            onclick: {
+                                                let selected = selected_device.read().clone();
+                                                move |_| {
+                                                    if let Some(ref device) = selected {
+                                                        action_tx.send(AppAction::SendCallAction {
+                                                            ip: device.ip.clone(),
+                                                            port: device.port,
+                                                            action: CallAction::Answer,
+                                                        });
+                                                    }
+                                                }
+                                            },
+                                            span { class: "call-btn-icon", "📞" }
+                                            span { "Answer" }
+                                        }
+                                    }
+                                },
+                                ActiveCallState::Connected | ActiveCallState::OnHold | ActiveCallState::Dialing => {
+                                    // Show End Call button for active calls
+                                    rsx! {
+                                        button {
+                                            class: "call-button end-call",
+                                            onclick: {
+                                                let selected = selected_device.read().clone();
+                                                move |_| {
+                                                    if let Some(ref device) = selected {
+                                                        action_tx.send(AppAction::SendCallAction {
+                                                            ip: device.ip.clone(),
+                                                            port: device.port,
+                                                            action: CallAction::HangUp,
+                                                        });
+                                                    }
+                                                }
+                                            },
+                                            span { class: "call-btn-icon", "📵" }
+                                            span { "End Call" }
+                                        }
+                                    }
+                                },
+                                ActiveCallState::Ended => {
+                                    // Show dismiss button for ended calls
+                                    rsx! {
+                                        button {
+                                            class: "call-button dismiss",
+                                            onclick: move |_| {
+                                                set_active_call(None);
+                                            },
+                                            span { "Dismiss" }
+                                        }
+                                    }
+                                },
                             }
                         }
                     }
