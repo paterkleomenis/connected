@@ -2,14 +2,16 @@ use crate::fs_provider::DesktopFilesystemProvider;
 use crate::state::{
     add_file_transfer_request, add_notification, get_current_media, get_current_remote_files,
     get_current_remote_path, get_devices_store, get_last_clipboard, get_last_remote_update,
-    get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_data_update,
-    get_phone_messages, get_preview_data, get_remote_files_update, get_transfer_status,
-    remove_file_transfer_request, set_active_call, set_phone_call_log, set_phone_contacts,
-    set_phone_conversations, set_phone_messages, DeviceInfo, FileTransferRequest, PairingRequest,
-    PreviewData, RemoteMedia, TransferStatus,
+    get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_call_log,
+    get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
+    get_remote_files_update, get_transfer_status, mark_calls_synced, mark_contacts_synced,
+    mark_messages_synced, remove_file_transfer_request, set_active_call, set_phone_call_log,
+    set_phone_contacts, set_phone_conversations, set_phone_messages, DeviceInfo,
+    FileTransferRequest, PairingRequest, PreviewData, RemoteMedia, TransferStatus,
 };
 use crate::utils::set_system_clipboard;
 use connected_core::telephony::{CallAction, TelephonyMessage};
+use connected_core::telephony::{CallLogEntry, CallType};
 use connected_core::transport::UnpairReason;
 use connected_core::{
     ConnectedClient, ConnectedEvent, DeviceType, MediaCommand, MediaControlMessage, MediaState,
@@ -532,6 +534,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     }
                                     ConnectedEvent::Telephony {
                                         from_device,
+                                        from_ip: _,
+                                        from_port: _,
                                         message,
                                     } => {
                                         info!(
@@ -543,45 +547,30 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             TelephonyMessage::ContactsSyncResponse { contacts } => {
                                                 let count = contacts.len();
                                                 set_phone_contacts(contacts);
-                                                add_notification(
-                                                    "Contacts",
-                                                    &format!(
-                                                        "Synced {} contacts from {}",
-                                                        count, from_device
-                                                    ),
-                                                    "👤",
-                                                );
+                                                mark_contacts_synced();
+                                                // Silent sync - no notification needed
                                             }
                                             TelephonyMessage::ConversationsSyncResponse {
                                                 conversations,
                                             } => {
-                                                let count = conversations.len();
                                                 set_phone_conversations(conversations);
-                                                add_notification(
-                                                    "Messages",
-                                                    &format!(
-                                                        "Synced {} conversations from {}",
-                                                        count, from_device
-                                                    ),
-                                                    "💬",
-                                                );
+                                                mark_messages_synced();
+                                                // Silent sync - no notification needed
                                             }
                                             TelephonyMessage::MessagesResponse {
                                                 thread_id,
                                                 messages,
                                             } => {
-                                                let count = messages.len();
                                                 set_phone_messages(thread_id, messages);
-                                                add_notification(
-                                                    "Messages",
-                                                    &format!(
-                                                        "Loaded {} messages from {}",
-                                                        count, from_device
-                                                    ),
-                                                    "💬",
-                                                );
+                                                // Silent load - no notification needed
                                             }
                                             TelephonyMessage::NewSmsNotification { message } => {
+                                                info!(
+                                                    "NEW SMS NOTIFICATION: from={}, body={}",
+                                                    message.address,
+                                                    &message.body
+                                                        [..std::cmp::min(30, message.body.len())]
+                                                );
                                                 let sender = message
                                                     .contact_name
                                                     .clone()
@@ -591,53 +580,146 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                 } else {
                                                     message.body.clone()
                                                 };
+                                                let thread_id = message.thread_id.clone();
+                                                let msg_timestamp = message.timestamp;
+                                                let msg_body = message.body.clone();
+                                                let msg_address = message.address.clone();
+                                                let msg_contact = message.contact_name.clone();
+
                                                 // Add to existing messages for this thread
                                                 {
                                                     let mut msgs =
                                                         get_phone_messages().lock().unwrap();
                                                     if let Some(thread_msgs) =
-                                                        msgs.get_mut(&message.thread_id)
+                                                        msgs.get_mut(&thread_id)
                                                     {
                                                         thread_msgs.push(message);
                                                     }
                                                 }
+
+                                                // Update conversation list with new message
+                                                {
+                                                    let mut convos =
+                                                        get_phone_conversations().lock().unwrap();
+
+                                                    // Helper to normalize phone numbers for comparison
+                                                    let normalize_phone = |s: &str| -> String {
+                                                        s.chars()
+                                                            .filter(|c| c.is_ascii_digit())
+                                                            .collect()
+                                                    };
+                                                    let normalized_address =
+                                                        normalize_phone(&msg_address);
+
+                                                    // Find conversation by thread_id first, then by phone address
+                                                    let existing_convo =
+                                                        convos.iter_mut().find(|c| {
+                                                            c.id == thread_id
+                                                                || c.addresses.iter().any(|a| {
+                                                                    normalize_phone(a)
+                                                                        == normalized_address
+                                                                })
+                                                        });
+
+                                                    if let Some(convo) = existing_convo {
+                                                        // Update existing conversation
+                                                        convo.last_message = Some(msg_body.clone());
+                                                        convo.last_timestamp = msg_timestamp;
+                                                        convo.unread_count += 1;
+                                                    } else {
+                                                        // Create new conversation entry
+                                                        use connected_core::telephony::Conversation;
+                                                        let new_convo = Conversation {
+                                                            id: thread_id,
+                                                            addresses: vec![msg_address],
+                                                            contact_names: msg_contact
+                                                                .map(|n| vec![n])
+                                                                .unwrap_or_default(),
+                                                            last_message: Some(msg_body.clone()),
+                                                            last_timestamp: msg_timestamp,
+                                                            unread_count: 1,
+                                                        };
+                                                        convos.push(new_convo);
+                                                    }
+                                                    // Sort by timestamp descending
+                                                    convos.sort_by(|a, b| {
+                                                        b.last_timestamp.cmp(&a.last_timestamp)
+                                                    });
+                                                }
+
                                                 *get_phone_data_update().lock().unwrap() =
                                                     std::time::Instant::now();
+                                                info!(
+                                                    "Adding notification for SMS from: {}",
+                                                    sender
+                                                );
                                                 add_notification(
                                                     "New SMS",
                                                     &format!("From {}: {}", sender, preview),
                                                     "💬",
                                                 );
+                                                info!("Notification added successfully");
                                             }
                                             TelephonyMessage::CallLogResponse { entries } => {
-                                                let count = entries.len();
                                                 set_phone_call_log(entries);
-                                                add_notification(
-                                                    "Call Log",
-                                                    &format!(
-                                                        "Synced {} call entries from {}",
-                                                        count, from_device
-                                                    ),
-                                                    "📞",
-                                                );
+                                                mark_calls_synced();
+                                                // Silent sync - no notification needed
                                             }
                                             TelephonyMessage::ActiveCallUpdate { call } => {
+                                                use connected_core::telephony::ActiveCallState;
+
                                                 if let Some(ref c) = call {
                                                     let caller = c
                                                         .contact_name
                                                         .clone()
                                                         .unwrap_or(c.number.clone());
-                                                    add_notification(
-                                                        "Phone Call",
-                                                        &format!(
-                                                            "{:?} call from {}",
-                                                            c.state, caller
-                                                        ),
-                                                        "📞",
-                                                    );
+
+                                                    // If call ended, add to call log
+                                                    if c.state == ActiveCallState::Ended {
+                                                        let entry = CallLogEntry {
+                                                            id: format!(
+                                                                "call_{}",
+                                                                std::time::SystemTime::now()
+                                                                    .duration_since(
+                                                                        std::time::UNIX_EPOCH
+                                                                    )
+                                                                    .unwrap()
+                                                                    .as_millis()
+                                                            ),
+                                                            number: c.number.clone(),
+                                                            contact_name: c.contact_name.clone(),
+                                                            call_type: if c.is_incoming {
+                                                                CallType::Incoming
+                                                            } else {
+                                                                CallType::Outgoing
+                                                            },
+                                                            timestamp: std::time::SystemTime::now()
+                                                                .duration_since(
+                                                                    std::time::UNIX_EPOCH,
+                                                                )
+                                                                .unwrap()
+                                                                .as_millis()
+                                                                as u64,
+                                                            duration: c.duration,
+                                                            is_read: false,
+                                                        };
+                                                        // Add to beginning of call log
+                                                        let mut log =
+                                                            get_phone_call_log().lock().unwrap();
+                                                        log.insert(0, entry);
+                                                    } else {
+                                                        add_notification(
+                                                            "Phone Call",
+                                                            &format!(
+                                                                "{:?} call from {}",
+                                                                c.state, caller
+                                                            ),
+                                                            "📞",
+                                                        );
+                                                    }
                                                 }
                                                 // Store the active call state
-                                                set_active_call(call);
+                                                set_active_call(call.clone());
                                             }
                                             _ => {
                                                 // Other telephony messages (requests, etc.)

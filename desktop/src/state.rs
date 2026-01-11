@@ -1,8 +1,73 @@
 use connected_core::filesystem::FsEntry;
 use connected_core::telephony::{ActiveCall, CallLogEntry, Contact, Conversation, SmsMessage};
 use connected_core::{Device, MediaState};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
+
+// ============================================================================
+// Persistent Settings
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AppSettings {
+    pub clipboard_sync_enabled: bool,
+    pub media_enabled: bool,
+    pub auto_sync_messages: bool,
+    pub auto_sync_calls: bool,
+    pub auto_sync_contacts: bool,
+}
+
+static APP_SETTINGS: OnceLock<Arc<Mutex<AppSettings>>> = OnceLock::new();
+
+fn get_settings_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("connected")
+        .join("settings.json")
+}
+
+pub fn load_settings() -> AppSettings {
+    let path = get_settings_path();
+    if path.exists() {
+        if let Ok(contents) = fs::read_to_string(&path) {
+            if let Ok(settings) = serde_json::from_str(&contents) {
+                return settings;
+            }
+        }
+    }
+    AppSettings::default()
+}
+
+pub fn save_settings(settings: &AppSettings) {
+    let path = get_settings_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(settings) {
+        let _ = fs::write(&path, json);
+    }
+}
+
+pub fn get_app_settings() -> &'static Arc<Mutex<AppSettings>> {
+    APP_SETTINGS.get_or_init(|| Arc::new(Mutex::new(load_settings())))
+}
+
+pub fn initialize_runtime_from_settings() {
+    let settings = get_app_settings().lock().unwrap().clone();
+
+    // Sync runtime states with persistent settings
+    *get_media_enabled().lock().unwrap() = settings.media_enabled;
+}
+
+pub fn update_setting<F: FnOnce(&mut AppSettings)>(f: F) {
+    let settings = get_app_settings();
+    let mut guard = settings.lock().unwrap();
+    f(&mut guard);
+    save_settings(&guard);
+}
 
 // ============================================================================
 // Data Models
@@ -97,6 +162,26 @@ static PHONE_CALL_LOG: OnceLock<Arc<Mutex<Vec<CallLogEntry>>>> = OnceLock::new()
 static PHONE_DATA_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 static ACTIVE_CALL: OnceLock<Arc<Mutex<Option<ActiveCall>>>> = OnceLock::new();
 
+// Track which device's phone data we have cached
+static PHONE_DATA_DEVICE_ID: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
+// Track if initial sync has been done for each category
+static PHONE_SYNC_DONE: OnceLock<Arc<Mutex<PhoneSyncState>>> = OnceLock::new();
+
+#[derive(Debug, Clone, Default)]
+pub struct PhoneSyncState {
+    pub messages_synced: bool,
+    pub calls_synced: bool,
+    pub contacts_synced: bool,
+}
+
+pub fn get_media_enabled() -> &'static Arc<Mutex<bool>> {
+    MEDIA_ENABLED.get_or_init(|| {
+        // Initialize from persistent settings
+        let settings = load_settings();
+        Arc::new(Mutex::new(settings.media_enabled))
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteMedia {
     pub state: MediaState,
@@ -144,10 +229,6 @@ pub fn get_pending_pairings() -> &'static Arc<Mutex<HashSet<String>>> {
 
 pub fn get_file_transfer_requests() -> &'static Arc<Mutex<HashMap<String, FileTransferRequest>>> {
     FILE_TRANSFER_REQUESTS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
-}
-
-pub fn get_media_enabled() -> &'static Arc<Mutex<bool>> {
-    MEDIA_ENABLED.get_or_init(|| Arc::new(Mutex::new(false)))
 }
 
 pub fn get_current_media() -> &'static Arc<Mutex<Option<RemoteMedia>>> {
@@ -254,4 +335,91 @@ pub fn get_active_call() -> &'static Arc<Mutex<Option<ActiveCall>>> {
 pub fn set_active_call(call: Option<ActiveCall>) {
     *get_active_call().lock().unwrap() = call;
     *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+}
+
+// Phone data device tracking
+pub fn get_phone_data_device_id() -> &'static Arc<Mutex<Option<String>>> {
+    PHONE_DATA_DEVICE_ID.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+pub fn get_phone_sync_state() -> &'static Arc<Mutex<PhoneSyncState>> {
+    PHONE_SYNC_DONE.get_or_init(|| Arc::new(Mutex::new(PhoneSyncState::default())))
+}
+
+pub fn set_phone_data_device(device_id: Option<String>) {
+    let current = get_phone_data_device_id().lock().unwrap().clone();
+    if current != device_id {
+        // Device changed, clear cached data and sync state
+        *get_phone_data_device_id().lock().unwrap() = device_id;
+        *get_phone_sync_state().lock().unwrap() = PhoneSyncState::default();
+        *get_phone_contacts().lock().unwrap() = Vec::new();
+        *get_phone_conversations().lock().unwrap() = Vec::new();
+        *get_phone_messages().lock().unwrap() = HashMap::new();
+        *get_phone_call_log().lock().unwrap() = Vec::new();
+    }
+}
+
+pub fn mark_messages_synced() {
+    get_phone_sync_state().lock().unwrap().messages_synced = true;
+}
+
+pub fn mark_calls_synced() {
+    get_phone_sync_state().lock().unwrap().calls_synced = true;
+}
+
+pub fn mark_contacts_synced() {
+    get_phone_sync_state().lock().unwrap().contacts_synced = true;
+}
+
+pub fn is_messages_synced() -> bool {
+    get_phone_sync_state().lock().unwrap().messages_synced
+}
+
+pub fn is_calls_synced() -> bool {
+    get_phone_sync_state().lock().unwrap().calls_synced
+}
+
+pub fn is_contacts_synced() -> bool {
+    get_phone_sync_state().lock().unwrap().contacts_synced
+}
+
+// Settings accessors that use persistent storage
+pub fn get_clipboard_sync_enabled() -> bool {
+    get_app_settings().lock().unwrap().clipboard_sync_enabled
+}
+
+pub fn set_clipboard_sync_enabled(enabled: bool) {
+    update_setting(|s| s.clipboard_sync_enabled = enabled);
+}
+
+pub fn get_media_enabled_setting() -> bool {
+    get_app_settings().lock().unwrap().media_enabled
+}
+
+pub fn set_media_enabled_setting(enabled: bool) {
+    update_setting(|s| s.media_enabled = enabled);
+}
+
+pub fn get_auto_sync_messages() -> bool {
+    get_app_settings().lock().unwrap().auto_sync_messages
+}
+
+pub fn set_auto_sync_messages(enabled: bool) {
+    update_setting(|s| s.auto_sync_messages = enabled);
+}
+
+pub fn get_auto_sync_calls() -> bool {
+    get_app_settings().lock().unwrap().auto_sync_calls
+}
+
+pub fn set_auto_sync_calls(enabled: bool) {
+    update_setting(|s| s.auto_sync_calls = enabled);
+}
+
+pub fn get_auto_sync_contacts() -> bool {
+    get_app_settings().lock().unwrap().auto_sync_contacts
+}
+
+pub fn set_auto_sync_contacts(enabled: bool) {
+    update_setting(|s| s.auto_sync_contacts = enabled);
 }

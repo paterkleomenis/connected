@@ -302,7 +302,8 @@ class TelephonyProvider(private val context: Context) {
             "${Telephony.Sms.DATE} DESC"
         )
 
-        cursor?.use {
+        cursor?.use {                                                                                                    	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:874)
+
             val addressIndex = it.getColumnIndex(Telephony.Sms.ADDRESS)
             val dateIndex = it.getColumnIndex(Telephony.Sms.DATE)
             val readIndex = it.getColumnIndex(Telephony.Sms.READ)

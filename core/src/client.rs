@@ -1341,6 +1341,8 @@ impl ConnectedClient {
                                 .unwrap_or_else(|| "Unknown".to_string());
                             let _ = event_tx.send(ConnectedEvent::Telephony {
                                 from_device,
+                                from_ip: addr.ip().to_string(),
+                                from_port: addr.port(),
                                 message: telephony_msg,
                             });
                         }

@@ -1,5 +1,5 @@
+use crate::components::icon::{get_device_icon_type, Icon, IconType};
 use crate::state::DeviceInfo;
-use crate::utils::get_device_icon;
 use dioxus::prelude::*;
 
 #[component]
@@ -9,11 +9,20 @@ pub fn DeviceCard(
     on_select: EventHandler<DeviceInfo>,
     on_pair: EventHandler<DeviceInfo>,
 ) -> Element {
-    let icon = get_device_icon(&device.device_type);
+    let device_icon = get_device_icon_type(&device.device_type);
+    let mut is_hovered = use_signal(|| false);
+
+    let card_class = if is_selected {
+        "device-card selected"
+    } else {
+        "device-card"
+    };
 
     rsx! {
         div {
-            class: if is_selected { "device-card selected" } else { "device-card" },
+            class: "{card_class}",
+            onmouseenter: move |_| is_hovered.set(true),
+            onmouseleave: move |_| is_hovered.set(false),
             onclick: {
                 let device = device.clone();
                 move |_| {
@@ -23,29 +32,37 @@ pub fn DeviceCard(
                 }
             },
 
-            // Device icon
             div {
                 class: "device-card-icon",
-                "{icon}"
+                Icon { icon: device_icon.clone(), size: 28, color: "var(--text-primary)".to_string() }
                 if !device.is_trusted {
-                    span { class: "untrusted-badge", "⚠️" }
+                    span {
+                        class: "untrusted-badge",
+                        Icon { icon: IconType::Warning, size: 12, color: "var(--bg-card)".to_string() }
+                    }
                 }
             }
 
-            // Device info
             div {
                 class: "device-card-info",
                 h3 { class: "device-name", "{device.name}" }
                 p { class: "device-address", "{device.ip}:{device.port}" }
                 p { class: "device-type", "{device.device_type}" }
                 if device.is_trusted {
-                    p { class: "device-status trusted", "✓ Trusted" }
+                    p {
+                        class: "device-status trusted",
+                        Icon { icon: IconType::Check, size: 12, color: "var(--success)".to_string() }
+                        span { " Trusted" }
+                    }
                 } else {
-                    p { class: "device-status untrusted", "Not Trusted" }
+                    p {
+                        class: "device-status untrusted",
+                        Icon { icon: IconType::Untrusted, size: 12, color: "var(--text-tertiary)".to_string() }
+                        span { " Not paired" }
+                    }
                 }
             }
 
-            // Only show Pair button for untrusted devices
             if !device.is_trusted {
                 div {
                     class: "device-actions",
@@ -53,12 +70,13 @@ pub fn DeviceCard(
                         button {
                             class: "action-button pair disabled",
                             disabled: true,
-                            "⏳ Waiting..."
+                            Icon { icon: IconType::Sync, size: 14, color: "var(--text-secondary)".to_string() }
+                            span { " Waiting..." }
                         }
                     } else {
                         button {
                             class: "action-button pair",
-                            title: "Pair with Device",
+                            title: "Pair with this device",
                             onclick: {
                                 let device = device.clone();
                                 move |evt: Event<MouseData>| {
@@ -66,8 +84,27 @@ pub fn DeviceCard(
                                     on_pair.call(device.clone());
                                 }
                             },
-                            "🔗 Pair"
+                            Icon { icon: IconType::Pair, size: 14, color: "currentColor".to_string() }
+                            span { " Pair" }
                         }
+                    }
+                }
+            }
+
+            if device.is_trusted && *is_hovered.read() {
+                div {
+                    class: "device-actions",
+                    button {
+                        class: "action-button",
+                        title: "Open device",
+                        onclick: {
+                            let device = device.clone();
+                            move |evt: Event<MouseData>| {
+                                evt.stop_propagation();
+                                on_select.call(device.clone());
+                            }
+                        },
+                        Icon { icon: IconType::ArrowRight, size: 16, color: "currentColor".to_string() }
                     }
                 }
             }

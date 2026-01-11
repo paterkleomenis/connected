@@ -36,6 +36,10 @@ class ConnectedApp(private val context: Context) {
     val devices = mutableStateListOf<DiscoveredDevice>()
     val trustedDevices = mutableStateListOf<String>() // Set of trusted Device IDs
     val pendingPairing = mutableStateListOf<String>() // Set of pending Device IDs
+
+    // Cache of trusted device addresses (IP:Port) for sending notifications
+    // Updated whenever we receive a message from a trusted device
+    private val trustedDeviceAddresses = mutableMapOf<String, Pair<String, UShort>>() // deviceName -> (ip, port)
     val transferStatus = mutableStateOf("Idle")
     val clipboardContent = mutableStateOf("")
     val pairingRequest = mutableStateOf<PairingRequest?>(null)
@@ -118,17 +122,18 @@ class ConnectedApp(private val context: Context) {
 
     // Telephony Callback implementation
     private val telephonyCallback = object : TelephonyCallback {
-        override fun onContactsSyncRequest(fromDevice: String) {
-            Log.d("ConnectedApp", "onContactsSyncRequest from: $fromDevice")
+        override fun onContactsSyncRequest(fromDevice: String, fromIp: String, fromPort: UShort) {
+            Log.d("ConnectedApp", "onContactsSyncRequest from: $fromDevice ($fromIp:$fromPort)")
+            // Cache the device address for sending notifications back
+            trustedDeviceAddresses[fromDevice] = Pair(fromIp, fromPort)
             scope.launch {
                 val deviceContacts = telephonyProvider.getContacts()
                 Log.d("ConnectedApp", "Got ${deviceContacts.size} contacts to send")
-                val device = findDeviceByName(fromDevice)
-                if (device != null) {
-                    sendContacts(device, deviceContacts)
-                    Log.d("ConnectedApp", "Contacts sent to ${device.name}")
-                } else {
-                    Log.e("ConnectedApp", "Cannot send contacts - no device found")
+                try {
+                    sendContacts(fromIp, fromPort, deviceContacts)
+                    Log.d("ConnectedApp", "Contacts sent to $fromDevice ($fromIp:$fromPort)")
+                } catch (e: Exception) {
+                    Log.e("ConnectedApp", "Failed to send contacts: ${e.message}")
                 }
             }
         }
@@ -140,17 +145,18 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        override fun onConversationsSyncRequest(fromDevice: String) {
-            Log.d("ConnectedApp", "onConversationsSyncRequest from: $fromDevice")
+        override fun onConversationsSyncRequest(fromDevice: String, fromIp: String, fromPort: UShort) {
+            Log.d("ConnectedApp", "onConversationsSyncRequest from: $fromDevice ($fromIp:$fromPort)")
+            // Cache the device address for sending notifications back
+            trustedDeviceAddresses[fromDevice] = Pair(fromIp, fromPort)
             scope.launch {
                 val deviceConversations = telephonyProvider.getConversations()
                 Log.d("ConnectedApp", "Got ${deviceConversations.size} conversations to send")
-                val device = findDeviceByName(fromDevice)
-                if (device != null) {
-                    sendConversations(device, deviceConversations)
-                    Log.d("ConnectedApp", "Conversations sent to ${device.name}")
-                } else {
-                    Log.e("ConnectedApp", "Cannot send conversations - no device found")
+                try {
+                    sendConversations(fromIp, fromPort, deviceConversations)
+                    Log.d("ConnectedApp", "Conversations sent to $fromDevice ($fromIp:$fromPort)")
+                } catch (e: Exception) {
+                    Log.e("ConnectedApp", "Failed to send conversations: ${e.message}")
                 }
             }
         }
@@ -162,17 +168,18 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        override fun onMessagesRequest(fromDevice: String, threadId: String, limit: UInt) {
-            Log.d("ConnectedApp", "onMessagesRequest from: $fromDevice, threadId: $threadId")
+        override fun onMessagesRequest(fromDevice: String, fromIp: String, fromPort: UShort, threadId: String, limit: UInt) {
+            Log.d("ConnectedApp", "onMessagesRequest from: $fromDevice ($fromIp:$fromPort), threadId: $threadId")
+            // Cache the device address for sending notifications back
+            trustedDeviceAddresses[fromDevice] = Pair(fromIp, fromPort)
             scope.launch {
                 val messages = telephonyProvider.getMessages(threadId, limit.toInt())
                 Log.d("ConnectedApp", "Got ${messages.size} messages to send")
-                val device = findDeviceByName(fromDevice)
-                if (device != null) {
-                    sendMessages(device, threadId, messages)
-                    Log.d("ConnectedApp", "Messages sent to ${device.name}")
-                } else {
-                    Log.e("ConnectedApp", "Cannot send messages - no device found")
+                try {
+                    sendMessages(fromIp, fromPort, threadId, messages)
+                    Log.d("ConnectedApp", "Messages sent to $fromDevice ($fromIp:$fromPort)")
+                } catch (e: Exception) {
+                    Log.e("ConnectedApp", "Failed to send messages: ${e.message}")
                 }
             }
         }
@@ -184,12 +191,15 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        override fun onSendSmsRequest(fromDevice: String, to: String, body: String) {
-            Log.d("ConnectedApp", "onSendSmsRequest from: $fromDevice, to: $to")
+        override fun onSendSmsRequest(fromDevice: String, fromIp: String, fromPort: UShort, to: String, body: String) {
+            Log.d("ConnectedApp", "onSendSmsRequest from: $fromDevice ($fromIp:$fromPort), to: $to")
+            // Cache the device address for sending notifications back
+            trustedDeviceAddresses[fromDevice] = Pair(fromIp, fromPort)
             val result = telephonyProvider.sendSms(to, body)
-            val device = findDeviceByName(fromDevice)
-            if (device != null) {
-                sendSmsSendResult(device, result.isSuccess, result.getOrNull(), result.exceptionOrNull()?.message)
+            try {
+                sendSmsSendResult(fromIp, fromPort, result.isSuccess, result.getOrNull(), result.exceptionOrNull()?.message)
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to send SMS result: ${e.message}")
             }
         }
 
@@ -217,17 +227,18 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        override fun onCallLogRequest(fromDevice: String, limit: UInt) {
-            Log.d("ConnectedApp", "onCallLogRequest from: $fromDevice, limit: $limit")
+        override fun onCallLogRequest(fromDevice: String, fromIp: String, fromPort: UShort, limit: UInt) {
+            Log.d("ConnectedApp", "onCallLogRequest from: $fromDevice ($fromIp:$fromPort), limit: $limit")
+            // Cache the device address for sending notifications back
+            trustedDeviceAddresses[fromDevice] = Pair(fromIp, fromPort)
             scope.launch {
                 val entries = telephonyProvider.getCallLog(limit.toInt())
                 Log.d("ConnectedApp", "Got ${entries.size} call log entries to send")
-                val device = findDeviceByName(fromDevice)
-                if (device != null) {
-                    sendCallLog(device, entries)
-                    Log.d("ConnectedApp", "Call log sent to ${device.name}")
-                } else {
-                    Log.e("ConnectedApp", "Cannot send call log - no device found")
+                try {
+                    sendCallLog(fromIp, fromPort, entries)
+                    Log.d("ConnectedApp", "Call log sent to $fromDevice ($fromIp:$fromPort)")
+                } catch (e: Exception) {
+                    Log.e("ConnectedApp", "Failed to send call log: ${e.message}")
                 }
             }
         }
@@ -239,13 +250,13 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        override fun onInitiateCallRequest(fromDevice: String, number: String) {
-            Log.d("ConnectedApp", "onInitiateCallRequest from: $fromDevice, number: $number")
+        override fun onInitiateCallRequest(fromDevice: String, fromIp: String, fromPort: UShort, number: String) {
+            Log.d("ConnectedApp", "onInitiateCallRequest from: $fromDevice ($fromIp:$fromPort), number: $number")
             telephonyProvider.initiateCall(number)
         }
 
-        override fun onCallActionRequest(fromDevice: String, action: CallAction) {
-            Log.d("ConnectedApp", "onCallActionRequest from: $fromDevice, action: $action")
+        override fun onCallActionRequest(fromDevice: String, fromIp: String, fromPort: UShort, action: CallAction) {
+            Log.d("ConnectedApp", "onCallActionRequest from: $fromDevice ($fromIp:$fromPort), action: $action")
             telephonyProvider.performCallAction(action)
         }
 
@@ -260,8 +271,25 @@ class ConnectedApp(private val context: Context) {
     private val telephonyListener = object : TelephonyProvider.TelephonyListener {
         override fun onNewSmsReceived(message: FfiSmsMessage) {
             // Notify connected devices about new SMS
+            Log.d("ConnectedApp", "onNewSmsReceived: ${message.address} - ${message.body.take(30)}")
+            Log.d("ConnectedApp", "Trusted devices: ${trustedDevices.size}, Discovered devices: ${devices.size}, Cached addresses: ${trustedDeviceAddresses.size}")
+
+            // First, try to notify using cached addresses (most reliable)
+            trustedDeviceAddresses.forEach { (deviceName, address) ->
+                val (ip, port) = address
+                Log.d("ConnectedApp", "Sending new SMS notification to $deviceName ($ip:$port) via cached address")
+                try {
+                    uniffi.connected_ffi.notifyNewSms(ip, port.toUShort(), message)
+                } catch (e: Exception) {
+                    Log.e("ConnectedApp", "Failed to send SMS notification to $deviceName: ${e.message}")
+                }
+            }
+
+            // Also try discovered devices that aren't in cache
             trustedDevices.forEach { deviceId ->
-                devices.find { it.id == deviceId }?.let { device ->
+                val device = devices.find { it.id == deviceId }
+                if (device != null && !trustedDeviceAddresses.containsKey(device.name)) {
+                    Log.d("ConnectedApp", "Sending new SMS notification to ${device.name} (${device.ip}:${device.port}) via discovery")
                     notifyNewSms(device, message)
                 }
             }
@@ -271,9 +299,21 @@ class ConnectedApp(private val context: Context) {
             runOnMainThread {
                 activeCall.value = call
             }
-            // Notify connected devices about call state
+            // Notify connected devices about call state using cached addresses first
+            trustedDeviceAddresses.forEach { (deviceName, address) ->
+                val (ip, port) = address
+                Log.d("ConnectedApp", "Sending call state update to $deviceName ($ip:$port) via cached address")
+                try {
+                    uniffi.connected_ffi.sendActiveCallUpdate(ip, port.toUShort(), call)
+                } catch (e: Exception) {
+                    Log.e("ConnectedApp", "Failed to send call state to $deviceName: ${e.message}")
+                }
+            }
+
+            // Also try discovered devices that aren't in cache
             trustedDevices.forEach { deviceId ->
-                devices.find { it.id == deviceId }?.let { device ->
+                val device = devices.find { it.id == deviceId }
+                if (device != null && !trustedDeviceAddresses.containsKey(device.name)) {
                     sendActiveCallUpdate(device, call)
                 }
             }
@@ -818,6 +858,10 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    fun sendContacts(ip: String, port: UShort, contactsList: List<FfiContact>) {
+        uniffi.connected_ffi.sendContacts(ip, port.toUShort(), contactsList)
+    }
+
     fun requestConversationsSync(device: DiscoveredDevice) {
         try {
             requestConversationsSync(device.ip, device.port)
@@ -828,10 +872,14 @@ class ConnectedApp(private val context: Context) {
 
     fun sendConversations(device: DiscoveredDevice, convos: List<FfiConversation>) {
         try {
-            sendConversations(device.ip, device.port, convos)
+            uniffi.connected_ffi.sendConversations(device.ip, device.port, convos)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    fun sendConversations(ip: String, port: UShort, convos: List<FfiConversation>) {
+        uniffi.connected_ffi.sendConversations(ip, port.toUShort(), convos)
     }
 
     fun requestMessages(device: DiscoveredDevice, threadId: String, limit: Int = 50) {
@@ -844,10 +892,14 @@ class ConnectedApp(private val context: Context) {
 
     fun sendMessages(device: DiscoveredDevice, threadId: String, messages: List<FfiSmsMessage>) {
         try {
-            sendMessages(device.ip, device.port, threadId, messages)
+            uniffi.connected_ffi.sendMessages(device.ip, device.port, threadId, messages)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    fun sendMessages(ip: String, port: UShort, threadId: String, messages: List<FfiSmsMessage>) {
+        uniffi.connected_ffi.sendMessages(ip, port.toUShort(), threadId, messages)
     }
 
     fun sendSmsToDevice(device: DiscoveredDevice, to: String, body: String) {
@@ -859,9 +911,15 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun sendSmsSendResult(device: DiscoveredDevice, success: Boolean, messageId: String?, error: String?) {
-        // This would need a new FFI function to send result back
-        // For now, just log it
-        android.util.Log.d("ConnectedApp", "SMS send result: success=$success, id=$messageId, error=$error")
+        sendSmsSendResult(device.ip, device.port, success, messageId, error)
+    }
+
+    fun sendSmsSendResult(ip: String, port: UShort, success: Boolean, messageId: String?, error: String?) {
+        try {
+            uniffi.connected_ffi.sendSmsSendResult(ip, port.toUShort(), success, messageId, error)
+        } catch (e: Exception) {
+            android.util.Log.e("ConnectedApp", "Failed to send SMS result: ${e.message}")
+        }
     }
 
     fun notifyNewSms(device: DiscoveredDevice, message: FfiSmsMessage) {
@@ -882,10 +940,14 @@ class ConnectedApp(private val context: Context) {
 
     fun sendCallLog(device: DiscoveredDevice, entries: List<FfiCallLogEntry>) {
         try {
-            sendCallLog(device.ip, device.port, entries)
+            uniffi.connected_ffi.sendCallLog(device.ip, device.port, entries)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    fun sendCallLog(ip: String, port: UShort, entries: List<FfiCallLogEntry>) {
+        uniffi.connected_ffi.sendCallLog(ip, port.toUShort(), entries)
     }
 
     fun initiateCallOnDevice(device: DiscoveredDevice, number: String) {

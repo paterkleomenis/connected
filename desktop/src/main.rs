@@ -7,7 +7,12 @@ mod fs_provider;
 mod state;
 mod utils;
 
-use components::{DeviceCard, FileBrowser, FileDialog};
+use state::{
+    get_clipboard_sync_enabled, get_media_enabled_setting, set_clipboard_sync_enabled,
+    set_media_enabled_setting,
+};
+
+use components::{DeviceCard, FileBrowser, FileDialog, Icon, IconType};
 use connected_core::telephony::{ActiveCallState, CallAction};
 use connected_core::MediaCommand;
 use controller::{app_controller, AppAction};
@@ -76,13 +81,13 @@ fn App() -> Element {
     let mut active_tab = use_signal(|| "devices".to_string());
     let mut device_detail_tab = use_signal(|| "clipboard".to_string());
     let mut transfer_status = use_signal(|| TransferStatus::Idle);
-    let mut clipboard_sync_enabled = use_signal(|| false);
+    let mut clipboard_sync_enabled = use_signal(|| get_clipboard_sync_enabled());
     let mut notifications = use_signal(Vec::<Notification>::new);
     let mut show_send_dialog = use_signal(|| false);
     let mut clipboard_text = use_signal(String::new);
 
     let discovery_active = use_signal(|| false);
-    let mut media_enabled = use_signal(|| false);
+    let mut media_enabled = use_signal(|| get_media_enabled_setting());
     let mut current_media_title = use_signal(|| "Not Playing".to_string());
     let mut current_media_artist = use_signal(|| String::new());
     let mut current_media_playing = use_signal(|| false);
@@ -100,8 +105,17 @@ fn App() -> Element {
     let mut phone_call_log = use_signal(Vec::<connected_core::telephony::CallLogEntry>::new);
     let mut selected_conversation = use_signal(|| None::<String>);
     let mut phone_messages = use_signal(Vec::<connected_core::telephony::SmsMessage>::new);
+    let mut last_message_count = use_signal(|| 0usize);
     let mut sms_compose_text = use_signal(String::new);
     let mut active_call = use_signal(|| None::<connected_core::telephony::ActiveCall>);
+
+    // Track last synced device to trigger sync on device change
+    let mut last_synced_device_id = use_signal(|| Option::<String>::None);
+
+    // Auto-sync settings (loaded from persistent storage)
+    let mut auto_sync_messages = use_signal(|| get_auto_sync_messages());
+    let mut auto_sync_calls = use_signal(|| get_auto_sync_calls());
+    let mut auto_sync_contacts = use_signal(|| get_auto_sync_contacts());
 
     // The Controller
     let action_tx =
@@ -109,9 +123,66 @@ fn App() -> Element {
             move |rx: UnboundedReceiver<AppAction>| async move { app_controller(rx).await },
         );
 
-    // Start Init
+    // Start Init and initialize settings-based features
     use_effect(move || {
         action_tx.send(AppAction::Init);
+
+        // Start media control if it was enabled in saved settings
+        if get_media_enabled_setting() {
+            action_tx.send(AppAction::ToggleMediaControl(true));
+        }
+    });
+
+    // Auto-sync phone data when entering phone tab on a device
+    use_effect(move || {
+        let current_tab = device_detail_tab.read().clone();
+        let current_sub = phone_sub_tab.read().clone();
+
+        if current_tab == "phone" {
+            if let Some(ref dev) = *selected_device.read() {
+                let dev_id = dev.id.clone();
+                let dev_ip = dev.ip.clone();
+                let dev_port = dev.port;
+
+                // Check if this is a new device or first time on phone tab
+                let last_id = last_synced_device_id.read().clone();
+                let is_new_device = last_id.as_ref() != Some(&dev_id);
+
+                if is_new_device {
+                    last_synced_device_id.set(Some(dev_id));
+
+                    // Trigger sync for the current sub-tab if auto-sync enabled and data is empty
+                    if current_sub == "messages"
+                        && *auto_sync_messages.read()
+                        && phone_conversations.read().is_empty()
+                    {
+                        action_tx.send(AppAction::RequestConversationsSync {
+                            ip: dev_ip.clone(),
+                            port: dev_port,
+                        });
+                    }
+                    if current_sub == "calls"
+                        && *auto_sync_calls.read()
+                        && phone_call_log.read().is_empty()
+                    {
+                        action_tx.send(AppAction::RequestCallLog {
+                            ip: dev_ip.clone(),
+                            port: dev_port,
+                            limit: 50,
+                        });
+                    }
+                    if current_sub == "contacts"
+                        && *auto_sync_contacts.read()
+                        && phone_contacts.read().is_empty()
+                    {
+                        action_tx.send(AppAction::RequestContactsSync {
+                            ip: dev_ip,
+                            port: dev_port,
+                        });
+                    }
+                }
+            }
+        }
     });
 
     // UI Poller
@@ -169,7 +240,22 @@ fn App() -> Element {
             // Update messages for selected conversation
             if let Some(thread_id) = selected_conversation.read().clone() {
                 if let Some(msgs) = get_phone_messages().lock().unwrap().get(&thread_id) {
+                    let new_count = msgs.len();
+                    let old_count = *last_message_count.read();
                     phone_messages.set(msgs.clone());
+                    // Auto-scroll when messages first load or when new messages arrive
+                    if new_count > 0 && new_count != old_count {
+                        spawn(async move {
+                            // Delay to let DOM update
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            let js = r#"
+                                let el = document.getElementById('messages-container');
+                                if (el) { el.scrollTop = el.scrollHeight; }
+                            "#;
+                            let _ = document::eval(js);
+                        });
+                    }
+                    last_message_count.set(new_count);
                 }
             }
 
@@ -223,6 +309,7 @@ fn App() -> Element {
         let current = *clipboard_sync_enabled.read();
         let new_state = !current;
         clipboard_sync_enabled.set(new_state);
+        set_clipboard_sync_enabled(new_state); // Save to disk
         action_tx.send(AppAction::SetClipboardSync(new_state));
         if new_state {
             *get_last_clipboard().lock().unwrap() = get_system_clipboard();
@@ -239,7 +326,9 @@ fn App() -> Element {
 
     let toggle_media = move |_| {
         let current = *media_enabled.read();
-        action_tx.send(AppAction::ToggleMediaControl(!current));
+        let new_state = !current;
+        set_media_enabled_setting(new_state); // Save to disk
+        action_tx.send(AppAction::ToggleMediaControl(new_state));
     };
 
     rsx! {
@@ -271,23 +360,104 @@ fn App() -> Element {
                     }
                 }
 
-                // Navigation - Simplified to Devices and Settings only
+                // Navigation
                 nav {
                     class: "sidebar-nav",
                     button {
-                        class: if *active_tab.read() == "devices" { "nav-item active" } else { "nav-item" },
+                        class: if *active_tab.read() == "devices" && selected_device.read().is_none() { "nav-item active" } else { "nav-item" },
                         onclick: move |_| {
                             active_tab.set("devices".to_string());
                             selected_device.set(None);
                         },
+                        Icon { icon: IconType::NavDevices, size: 18, color: "currentColor".to_string() }
                         span { "Devices" }
                         if !devices_list.read().is_empty() {
                             span { class: "nav-badge", "{devices_list.read().len()}" }
                         }
                     }
+
+                    // Show device feature tabs when a device is selected
+                    if selected_device.read().is_some() {
+                        div { class: "nav-divider" }
+                        if let Some(ref dev) = *selected_device.read() {
+                            div {
+                                class: "nav-device-name",
+                                "{dev.name}"
+                            }
+                        }
+                        button {
+                            class: if *active_tab.read() == "devices" && *device_detail_tab.read() == "clipboard" { "nav-item active" } else { "nav-item" },
+                            onclick: move |_| {
+                                active_tab.set("devices".to_string());
+                                device_detail_tab.set("clipboard".to_string());
+                            },
+                            Icon { icon: IconType::NavClipboard, size: 18, color: "currentColor".to_string() }
+                            span { "Clipboard" }
+                        }
+                        button {
+                            class: if *active_tab.read() == "devices" && *device_detail_tab.read() == "transfers" { "nav-item active" } else { "nav-item" },
+                            onclick: move |_| {
+                                active_tab.set("devices".to_string());
+                                device_detail_tab.set("transfers".to_string());
+                            },
+                            Icon { icon: IconType::NavTransfers, size: 18, color: "currentColor".to_string() }
+                            span { "Transfers" }
+                        }
+                        button {
+                            class: if *active_tab.read() == "devices" && *device_detail_tab.read() == "files" { "nav-item active" } else { "nav-item" },
+                            onclick: move |_| {
+                                active_tab.set("devices".to_string());
+                                device_detail_tab.set("files".to_string());
+                            },
+                            Icon { icon: IconType::NavFiles, size: 18, color: "currentColor".to_string() }
+                            span { "Files" }
+                        }
+                        button {
+                            class: if *active_tab.read() == "devices" && *device_detail_tab.read() == "media" { "nav-item active" } else { "nav-item" },
+                            onclick: move |_| {
+                                active_tab.set("devices".to_string());
+                                device_detail_tab.set("media".to_string());
+                            },
+                            Icon { icon: IconType::NavMedia, size: 18, color: "currentColor".to_string() }
+                            span { "Media" }
+                        }
+                        button {
+                            class: if *active_tab.read() == "devices" && *device_detail_tab.read() == "phone" { "nav-item active" } else { "nav-item" },
+                            onclick: move |_| {
+                                active_tab.set("devices".to_string());
+                                device_detail_tab.set("phone".to_string());
+                                // Trigger auto-sync for the current phone sub-tab if enabled and data is empty
+                                if let Some(ref dev) = *selected_device.read() {
+                                    let current_sub = phone_sub_tab.read().clone();
+                                    if current_sub == "messages" && *auto_sync_messages.read() && phone_conversations.read().is_empty() {
+                                        action_tx.send(AppAction::RequestConversationsSync {
+                                            ip: dev.ip.clone(),
+                                            port: dev.port,
+                                        });
+                                    } else if current_sub == "calls" && *auto_sync_calls.read() && phone_call_log.read().is_empty() {
+                                        action_tx.send(AppAction::RequestCallLog {
+                                            ip: dev.ip.clone(),
+                                            port: dev.port,
+                                            limit: 50,
+                                        });
+                                    } else if current_sub == "contacts" && *auto_sync_contacts.read() && phone_contacts.read().is_empty() {
+                                        action_tx.send(AppAction::RequestContactsSync {
+                                            ip: dev.ip.clone(),
+                                            port: dev.port,
+                                        });
+                                    }
+                                }
+                            },
+                            Icon { icon: IconType::NavPhone, size: 18, color: "currentColor".to_string() }
+                            span { "Phone" }
+                        }
+                        div { class: "nav-divider" }
+                    }
+
                     button {
                         class: if *active_tab.read() == "settings" { "nav-item active" } else { "nav-item" },
                         onclick: move |_| active_tab.set("settings".to_string()),
+                        Icon { icon: IconType::NavSettings, size: 18, color: "currentColor".to_string() }
                         span { "Settings" }
                     }
                 }
@@ -321,7 +491,10 @@ fn App() -> Element {
                     if devices_list.read().is_empty() {
                         div {
                             class: "empty-state",
-                            div { class: "empty-icon searching", "📡" }
+                            div {
+                                class: "empty-icon searching",
+                                Icon { icon: IconType::Searching, size: 64, color: "var(--text-tertiary)".to_string() }
+                            }
                             h3 { "Looking for Devices" }
                             p { "Make sure other devices are on the same network." }
                             div { class: "searching-indicator",
@@ -359,7 +532,7 @@ fn App() -> Element {
                         div {
                             class: "device-detail-view",
 
-                            // Header with back button and device info
+                            // Compact header with device info and actions
                             div {
                                 class: "device-detail-header",
                                 button {
@@ -368,15 +541,13 @@ fn App() -> Element {
                                         selected_device.set(None);
                                         active_tab.set("devices".to_string());
                                     },
-                                    "← Back to Devices"
+                                    Icon { icon: IconType::Back, size: 14, color: "currentColor".to_string() }
                                 }
                                 div {
                                     class: "device-detail-info",
-                                    h2 { "{device.name}" }
                                     span { class: "device-address", "{device.ip}:{device.port}" }
                                     span { class: "device-type-badge", "{device.device_type}" }
                                 }
-                                // More options dropdown
                                 div {
                                     class: "device-detail-actions",
                                     button {
@@ -389,7 +560,7 @@ fn App() -> Element {
                                                 selected_device.set(None);
                                             }
                                         },
-                                        "💔 Unpair"
+                                        Icon { icon: IconType::Unpair, size: 14, color: "currentColor".to_string() }
                                     }
                                     button {
                                         class: "header-action-btn warning",
@@ -401,7 +572,7 @@ fn App() -> Element {
                                                 selected_device.set(None);
                                             }
                                         },
-                                        "🔄 Forget"
+                                        Icon { icon: IconType::Refresh, size: 14, color: "currentColor".to_string() }
                                     }
                                     button {
                                         class: "header-action-btn danger",
@@ -413,42 +584,12 @@ fn App() -> Element {
                                                 selected_device.set(None);
                                             }
                                         },
-                                        "🚫 Block"
+                                        Icon { icon: IconType::Block, size: 14, color: "currentColor".to_string() }
                                     }
                                 }
                             }
 
-                            // Sub-tabs for device features
-                            div {
-                                class: "device-detail-tabs",
-                                button {
-                                    class: if *device_detail_tab.read() == "clipboard" { "detail-tab active" } else { "detail-tab" },
-                                    onclick: move |_| device_detail_tab.set("clipboard".to_string()),
-                                    "📋 Clipboard"
-                                }
-                                button {
-                                    class: if *device_detail_tab.read() == "transfers" { "detail-tab active" } else { "detail-tab" },
-                                    onclick: move |_| device_detail_tab.set("transfers".to_string()),
-                                    "📤 Transfers"
-                                }
-                                button {
-                                    class: if *device_detail_tab.read() == "files" { "detail-tab active" } else { "detail-tab" },
-                                    onclick: move |_| device_detail_tab.set("files".to_string()),
-                                    "📂 Browse Files"
-                                }
-                                button {
-                                    class: if *device_detail_tab.read() == "media" { "detail-tab active" } else { "detail-tab" },
-                                    onclick: move |_| device_detail_tab.set("media".to_string()),
-                                    "🎵 Media"
-                                }
-                                button {
-                                    class: if *device_detail_tab.read() == "phone" { "detail-tab active" } else { "detail-tab" },
-                                    onclick: move |_| device_detail_tab.set("phone".to_string()),
-                                    "📱 Phone"
-                                }
-                            }
-
-                            // Device detail content
+                            // Full-width content area (no secondary sidebar)
                             div {
                                 class: "device-detail-content",
 
@@ -459,9 +600,15 @@ fn App() -> Element {
                                         div {
                                             class: if *clipboard_sync_enabled.read() { "sync-status active" } else { "sync-status" },
                                             if *clipboard_sync_enabled.read() {
-                                                div { class: "sync-icon", "🔄" }
+                                                div {
+                                                    class: "sync-icon",
+                                                    Icon { icon: IconType::Sync, size: 32, color: "var(--accent)".to_string() }
+                                                }
                                             } else {
-                                                div { class: "sync-icon muted", "📋" }
+                                                div {
+                                                    class: "sync-icon muted",
+                                                    Icon { icon: IconType::NavClipboard, size: 32, color: "var(--text-tertiary)".to_string() }
+                                                }
                                             }
 
                                             div {
@@ -498,7 +645,8 @@ fn App() -> Element {
                                                 button {
                                                     class: "secondary-button",
                                                     onclick: move |_| clipboard_text.set(get_system_clipboard()),
-                                                    "📋 Paste from Clipboard"
+                                                    Icon { icon: IconType::Paste, size: 14, color: "currentColor".to_string() }
+                                                    span { " Paste from Clipboard" }
                                                 }
                                                 button {
                                                     class: "primary-button",
@@ -511,11 +659,12 @@ fn App() -> Element {
                                                             let text = clipboard_text.read().clone();
                                                             if !text.is_empty() {
                                                                 action_tx.send(AppAction::SendClipboard { ip, port, text });
-                                                                add_notification("Clipboard", "Sending...", "📤");
+                                                                add_notification("Clipboard", "Sending...", "send");
                                                             }
                                                         }
                                                     },
-                                                    "Send"
+                                                    Icon { icon: IconType::Send, size: 14, color: "currentColor".to_string() }
+                                                    span { " Send" }
                                                 }
                                             }
                                         }
@@ -530,14 +679,20 @@ fn App() -> Element {
                                             TransferStatus::Idle => rsx! {
                                                 div {
                                                     class: "transfer-idle",
-                                                    div { class: "transfer-icon", "📂" }
+                                                    div {
+                                                        class: "transfer-icon",
+                                                        Icon { icon: IconType::Folder, size: 48, color: "var(--text-tertiary)".to_string() }
+                                                    }
                                                     p { "No active transfers" }
                                                 }
                                             },
                                             TransferStatus::Starting(filename) => rsx! {
                                                 div {
                                                     class: "transfer-active",
-                                                    div { class: "transfer-icon spinning", "⏳" }
+                                                    div {
+                                                        class: "transfer-icon spinning",
+                                                        Icon { icon: IconType::Sync, size: 48, color: "var(--accent)".to_string() }
+                                                    }
                                                     p { "Starting transfer: {filename}" }
                                                 }
                                             },
@@ -560,14 +715,20 @@ fn App() -> Element {
                                             TransferStatus::Completed(filename) => rsx! {
                                                 div {
                                                     class: "transfer-complete",
-                                                    div { class: "transfer-icon", "✅" }
+                                                    div {
+                                                        class: "transfer-icon",
+                                                        Icon { icon: IconType::Check, size: 48, color: "var(--success)".to_string() }
+                                                    }
                                                     p { "{filename} received successfully!" }
                                                 }
                                             },
                                             TransferStatus::Failed(error) => rsx! {
                                                 div {
                                                     class: "transfer-failed",
-                                                    div { class: "transfer-icon", "❌" }
+                                                    div {
+                                                        class: "transfer-icon",
+                                                        Icon { icon: IconType::Error, size: 48, color: "var(--error)".to_string() }
+                                                    }
                                                     p { "Transfer failed: {error}" }
                                                 }
                                             },
@@ -579,7 +740,8 @@ fn App() -> Element {
                                             button {
                                                 class: "primary-button",
                                                 onclick: move |_| show_send_dialog.set(true),
-                                                "Choose File"
+                                                Icon { icon: IconType::Upload, size: 14, color: "currentColor".to_string() }
+                                                span { " Choose File" }
                                             }
                                         }
 
@@ -594,160 +756,123 @@ fn App() -> Element {
                                     }
                                 }
 
-                                // Media sub-tab
+                                // Media sub-tab - Control Android device media from desktop
                                 if *device_detail_tab.read() == "media" {
                                     div {
                                         class: "media-section",
-                                        // Toggle Share
+
+                                        // Unified Android Media Control Card
                                         div {
-                                            class: if *media_enabled.read() { "sync-status active" } else { "sync-status" },
-                                            if *media_enabled.read() {
-                                                div { class: "sync-icon", "🎵" }
-                                            } else {
-                                                div { class: "sync-icon muted", "🔇" }
+                                            class: "media-controls",
+                                            h3 {
+                                                Icon { icon: IconType::Music, size: 20, color: "var(--accent)".to_string() }
+                                                span { " Control {device.name}" }
                                             }
+
+                                            // Show what's playing on the Android device
                                             div {
-                                                class: "sync-info",
-                                                span {
-                                                    class: if *media_enabled.read() { "sync-label" } else { "sync-label muted" },
-                                                    "Share Media Status"
-                                                }
-                                                span { class: "sync-hint", "Allow others to see and control what's playing" }
-                                            }
-                                            label {
-                                                class: "toggle-switch",
-                                                input {
-                                                    r#type: "checkbox",
-                                                    checked: "{media_enabled}",
-                                                    oninput: toggle_media,
-                                                }
-                                                span { class: "slider" }
-                                            }
-                                        }
-
-                                        // Local Media Status with Controls
-                                        if *media_enabled.read() {
-                                             div {
-                                                class: "info-card",
-                                                h3 { "Playing Now" }
-                                                div { class: "media-info",
-                                                    if current_media_title.read().as_str() == "Not Playing" {
-                                                        div { class: "muted", "No media playing" }
-                                                    } else {
+                                                class: "media-info",
+                                                if current_media_title.read().as_str() == "Not Playing" || current_media_source_id.read().as_str() != device.id {
+                                                    div { class: "muted", "No media playing on this device" }
+                                                } else {
+                                                    div {
+                                                        div { class: "media-title", "{current_media_title}" }
+                                                        div { class: "media-artist", "{current_media_artist}" }
                                                         div {
-                                                            div { class: "media-title", "{current_media_title}" }
-                                                            div { class: "media-artist", "{current_media_artist}" }
-                                                            div { class: "media-status",
-                                                                if *current_media_playing.read() { "▶ Playing" } else { "⏸ Paused" }
-                                                            }
-
-                                                            // Controls for Playing Now
-                                                            div {
-                                                                class: "control-buttons small-controls",
-                                                                button { class: "control-btn", onclick: {
-                                                                    let source = current_media_source_id.read().clone();
-                                                                    let list = devices_list.read().clone();
-                                                                    move |_| {
-                                                                        if source == "local" {
-                                                                            action_tx.send(AppAction::ControlLocalMedia(MediaCommand::Previous));
-                                                                        } else {
-                                                                            if let Some(device) = list.iter().find(|d| d.id == source) {
-                                                                                if let Ok(port) = device.port.to_string().parse() {
-                                                                                    action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Previous });
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }, "⏮" }
-
-                                                                button { class: "control-btn", onclick: {
-                                                                    let source = current_media_source_id.read().clone();
-                                                                    let list = devices_list.read().clone();
-                                                                    move |_| {
-                                                                        if source == "local" {
-                                                                            action_tx.send(AppAction::ControlLocalMedia(MediaCommand::PlayPause));
-                                                                        } else {
-                                                                            if let Some(device) = list.iter().find(|d| d.id == source) {
-                                                                                if let Ok(port) = device.port.to_string().parse() {
-                                                                                    action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::PlayPause });
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }, "⏯" }
-
-                                                                button { class: "control-btn", onclick: {
-                                                                    let source = current_media_source_id.read().clone();
-                                                                    let list = devices_list.read().clone();
-                                                                    move |_| {
-                                                                        if source == "local" {
-                                                                            action_tx.send(AppAction::ControlLocalMedia(MediaCommand::Next));
-                                                                        } else {
-                                                                            if let Some(device) = list.iter().find(|d| d.id == source) {
-                                                                                if let Ok(port) = device.port.to_string().parse() {
-                                                                                    action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Next });
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }, "⏭" }
+                                                            class: "media-status",
+                                                            if *current_media_playing.read() {
+                                                                Icon { icon: IconType::Play, size: 12, color: "var(--success)".to_string() }
+                                                                span { " Playing" }
+                                                            } else {
+                                                                Icon { icon: IconType::Pause, size: 12, color: "var(--text-secondary)".to_string() }
+                                                                span { " Paused" }
                                                             }
                                                         }
                                                     }
                                                 }
-                                             }
-                                        }
+                                            }
 
-                                        // Remote Control for selected device
-                                        div {
-                                            class: "media-controls",
-                                            h3 { "Control {device.name}" }
+                                            // Playback Controls
                                             div {
                                                 class: "control-buttons",
-                                                button { class: "control-btn", onclick: {
-                                                    let device = device.clone();
-                                                    move |_| {
-                                                         if let Ok(port) = device.port.to_string().parse() {
-                                                             action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Previous });
-                                                         }
-                                                    }
-                                                }, "⏮" }
-                                                button { class: "control-btn", onclick: {
-                                                    let device = device.clone();
-                                                    move |_| {
-                                                         if let Ok(port) = device.port.to_string().parse() {
-                                                             action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::PlayPause });
-                                                         }
-                                                    }
-                                                }, "⏯" }
-                                                button { class: "control-btn", onclick: {
-                                                    let device = device.clone();
-                                                    move |_| {
-                                                         if let Ok(port) = device.port.to_string().parse() {
-                                                             action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Next });
-                                                         }
-                                                    }
-                                                }, "⏭" }
+                                                button {
+                                                    class: "control-btn",
+                                                    title: "Previous",
+                                                    onclick: {
+                                                        let device = device.clone();
+                                                        move |_| {
+                                                            if let Ok(port) = device.port.to_string().parse() {
+                                                                action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Previous });
+                                                            }
+                                                        }
+                                                    },
+                                                    Icon { icon: IconType::Previous, size: 24, color: "currentColor".to_string() }
+                                                }
+                                                button {
+                                                    class: "control-btn",
+                                                    title: "Play/Pause",
+                                                    onclick: {
+                                                        let device = device.clone();
+                                                        move |_| {
+                                                            if let Ok(port) = device.port.to_string().parse() {
+                                                                action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::PlayPause });
+                                                            }
+                                                        }
+                                                    },
+                                                    Icon { icon: IconType::Play, size: 24, color: "currentColor".to_string() }
+                                                }
+                                                button {
+                                                    class: "control-btn",
+                                                    title: "Next",
+                                                    onclick: {
+                                                        let device = device.clone();
+                                                        move |_| {
+                                                            if let Ok(port) = device.port.to_string().parse() {
+                                                                action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Next });
+                                                            }
+                                                        }
+                                                    },
+                                                    Icon { icon: IconType::Next, size: 24, color: "currentColor".to_string() }
+                                                }
                                             }
+
+                                            // Volume Controls
                                             div {
                                                 class: "control-buttons secondary",
-                                                button { class: "control-btn small", onclick: {
-                                                    let device = device.clone();
-                                                    move |_| {
-                                                         if let Ok(port) = device.port.to_string().parse() {
-                                                             action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::VolumeDown });
-                                                         }
-                                                    }
-                                                }, "🔉" }
-                                                button { class: "control-btn small", onclick: {
-                                                    let device = device.clone();
-                                                    move |_| {
-                                                         if let Ok(port) = device.port.to_string().parse() {
-                                                             action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::VolumeUp });
-                                                         }
-                                                    }
-                                                }, "🔊" }
+                                                button {
+                                                    class: "control-btn small",
+                                                    title: "Volume Down",
+                                                    onclick: {
+                                                        let device = device.clone();
+                                                        move |_| {
+                                                            if let Ok(port) = device.port.to_string().parse() {
+                                                                action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::VolumeDown });
+                                                            }
+                                                        }
+                                                    },
+                                                    Icon { icon: IconType::VolumeDown, size: 20, color: "currentColor".to_string() }
+                                                }
+                                                button {
+                                                    class: "control-btn small",
+                                                    title: "Volume Up",
+                                                    onclick: {
+                                                        let device = device.clone();
+                                                        move |_| {
+                                                            if let Ok(port) = device.port.to_string().parse() {
+                                                                action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::VolumeUp });
+                                                            }
+                                                        }
+                                                    },
+                                                    Icon { icon: IconType::VolumeUp, size: 20, color: "currentColor".to_string() }
+                                                }
                                             }
+                                        }
+
+                                        // Note about media control
+                                        div {
+                                            class: "phone-note",
+                                            span { class: "note-icon", "ℹ️" }
+                                            span { "Control media playback on your Android device. Make sure a media app is playing on the device." }
                                         }
                                     }
                                 }
@@ -770,18 +895,64 @@ fn App() -> Element {
                                             class: "phone-tabs",
                                             button {
                                                 class: if *phone_sub_tab.read() == "messages" { "phone-tab active" } else { "phone-tab" },
-                                                onclick: move |_| phone_sub_tab.set("messages".to_string()),
-                                                "💬 Messages"
+                                                onclick: {
+                                                    let device_id = device.id.clone();
+                                                    move |_| {
+                                                        phone_sub_tab.set("messages".to_string());
+                                                        // Only sync if auto-sync enabled AND data is empty
+                                                        if *auto_sync_messages.read() && phone_conversations.read().is_empty() {
+                                                            if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                action_tx.send(AppAction::RequestConversationsSync {
+                                                                    ip: fresh_device.ip.clone(),
+                                                                    port: fresh_device.port,
+                                                                });
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                Icon { icon: IconType::Message, size: 16, color: "currentColor".to_string() }
+                                                span { " Messages" }
                                             }
                                             button {
                                                 class: if *phone_sub_tab.read() == "calls" { "phone-tab active" } else { "phone-tab" },
-                                                onclick: move |_| phone_sub_tab.set("calls".to_string()),
-                                                "📞 Calls"
+                                                onclick: {
+                                                    let device_id = device.id.clone();
+                                                    move |_| {
+                                                        phone_sub_tab.set("calls".to_string());
+                                                        // Only sync if auto-sync enabled AND data is empty
+                                                        if *auto_sync_calls.read() && phone_call_log.read().is_empty() {
+                                                            if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                action_tx.send(AppAction::RequestCallLog {
+                                                                    ip: fresh_device.ip.clone(),
+                                                                    port: fresh_device.port,
+                                                                    limit: 50,
+                                                                });
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                Icon { icon: IconType::Call, size: 16, color: "currentColor".to_string() }
+                                                span { " Calls" }
                                             }
                                             button {
                                                 class: if *phone_sub_tab.read() == "contacts" { "phone-tab active" } else { "phone-tab" },
-                                                onclick: move |_| phone_sub_tab.set("contacts".to_string()),
-                                                "👤 Contacts"
+                                                onclick: {
+                                                    let device_id = device.id.clone();
+                                                    move |_| {
+                                                        phone_sub_tab.set("contacts".to_string());
+                                                        // Only sync if auto-sync enabled AND data is empty
+                                                        if *auto_sync_contacts.read() && phone_contacts.read().is_empty() {
+                                                            if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                action_tx.send(AppAction::RequestContactsSync {
+                                                                    ip: fresh_device.ip.clone(),
+                                                                    port: fresh_device.port,
+                                                                });
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                Icon { icon: IconType::Contact, size: 16, color: "currentColor".to_string() }
+                                                span { " Contacts" }
                                             }
                                         }
 
@@ -814,8 +985,11 @@ fn App() -> Element {
                                                                     onclick: move |_| {
                                                                         selected_conversation.set(None);
                                                                         sms_compose_text.set(String::new());
+                                                                        last_message_count.set(0);
+                                                                        phone_messages.set(Vec::new());
                                                                     },
-                                                                    "← Back"
+                                                                    Icon { icon: IconType::Back, size: 14, color: "currentColor".to_string() }
+                                                                    span { " Back" }
                                                                 }
                                                                 div {
                                                                     class: "thread-contact",
@@ -833,17 +1007,18 @@ fn App() -> Element {
 
                                                             // Messages list
                                                             div {
+                                                                id: "messages-container",
                                                                 class: "messages-container",
                                                                 if phone_messages.read().is_empty() {
                                                                     div {
                                                                         class: "empty-state",
-                                                                        span { class: "empty-icon", "💬" }
+                                                                        span { class: "empty-icon", Icon { icon: IconType::Message, size: 48, color: "var(--text-tertiary)".to_string() } }
                                                                         p { "Loading messages..." }
                                                                     }
                                                                 } else {
                                                                     div {
                                                                         class: "messages-list",
-                                                                        for msg in phone_messages.read().iter().rev() {
+                                                                        for msg in phone_messages.read().iter() {
                                                                             {
                                                                                 let is_outgoing = msg.is_outgoing;
                                                                                 let body = msg.body.clone();
@@ -918,32 +1093,39 @@ fn App() -> Element {
                                                     div {
                                                         class: "phone-header",
                                                         h4 { "Messages" }
-                                                        button {
-                                                            class: "sync-button",
-                                                            onclick: {
-                                                                let device_id = device.id.clone();
-                                                                move |_| {
-                                                                    if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
-                                                                        action_tx.send(AppAction::RequestConversationsSync {
-                                                                            ip: fresh_device.ip.clone(),
-                                                                            port: fresh_device.port,
-                                                                        });
-                                                                    } else {
-                                                                        add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                        if !*auto_sync_messages.read() {
+                                                            button {
+                                                                class: "sync-button",
+                                                                onclick: {
+                                                                    let device_id = device.id.clone();
+                                                                    move |_| {
+                                                                        if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                            action_tx.send(AppAction::RequestConversationsSync {
+                                                                                ip: fresh_device.ip.clone(),
+                                                                                port: fresh_device.port,
+                                                                            });
+                                                                        } else {
+                                                                            add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                                        }
                                                                     }
-                                                                }
-                                                            },
-                                                            "🔄 Sync"
+                                                                },
+                                                                Icon { icon: IconType::Refresh, size: 14, color: "currentColor".to_string() }
+                                                                span { " Sync" }
+                                                            }
                                                         }
                                                     }
 
                                                     if phone_conversations.read().is_empty() {
-                                                        div {
-                                                            class: "empty-state",
-                                                            span { class: "empty-icon", "💬" }
-                                                            p { "No messages synced" }
-                                                            p { class: "empty-hint", "Click Sync to load your messages" }
-                                                        }
+                                                            div {
+                                                                class: "empty-state",
+                                                                span { class: "empty-icon", Icon { icon: IconType::Message, size: 48, color: "var(--text-tertiary)".to_string() } }
+                                                                p { "No messages synced" }
+                                                                if *auto_sync_messages.read() {
+                                                                    p { class: "empty-hint", "Messages will sync automatically" }
+                                                                } else {
+                                                                    p { class: "empty-hint", "Click Sync to load your messages" }
+                                                                }
+                                                            }
                                                     } else {
                                                         div {
                                                             class: "conversation-list",
@@ -965,6 +1147,8 @@ fn App() -> Element {
                                                                                 let device_id = device.id.clone();
                                                                                 move |_| {
                                                                                     selected_conversation.set(Some(cid.clone()));
+                                                                                    last_message_count.set(0); // Reset to trigger scroll on load
+                                                                                    phone_messages.set(Vec::new()); // Clear old messages
                                                                                     if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
                                                                                         action_tx.send(AppAction::RequestMessages {
                                                                                             ip: fresh_device.ip.clone(),
@@ -1011,32 +1195,39 @@ fn App() -> Element {
                                                 div {
                                                     class: "phone-header",
                                                     h4 { "Call Log" }
-                                                    button {
-                                                        class: "sync-button",
-                                                        onclick: {
-                                                            let device_id = device.id.clone();
-                                                            move |_| {
-                                                                if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
-                                                                    action_tx.send(AppAction::RequestCallLog {
-                                                                        ip: fresh_device.ip.clone(),
-                                                                        port: fresh_device.port,
-                                                                        limit: 50,
-                                                                    });
-                                                                } else {
-                                                                    add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                    if !*auto_sync_calls.read() {
+                                                        button {
+                                                            class: "sync-button",
+                                                            onclick: {
+                                                                let device_id = device.id.clone();
+                                                                move |_| {
+                                                                    if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                        action_tx.send(AppAction::RequestCallLog {
+                                                                            ip: fresh_device.ip.clone(),
+                                                                            port: fresh_device.port,
+                                                                            limit: 50,
+                                                                        });
+                                                                    } else {
+                                                                        add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                                    }
                                                                 }
-                                                            }
-                                                        },
-                                                        "🔄 Sync"
+                                                            },
+                                                            Icon { icon: IconType::Refresh, size: 14, color: "currentColor".to_string() }
+                                                            span { " Sync" }
+                                                        }
                                                     }
                                                 }
 
                                                 if phone_call_log.read().is_empty() {
                                                     div {
                                                         class: "empty-state",
-                                                        span { class: "empty-icon", "📞" }
+                                                        span { class: "empty-icon", Icon { icon: IconType::Call, size: 48, color: "var(--text-tertiary)".to_string() } }
                                                         p { "No call history synced" }
-                                                        p { class: "empty-hint", "Click Sync to load your call log" }
+                                                        if *auto_sync_calls.read() {
+                                                            p { class: "empty-hint", "Call log will sync automatically" }
+                                                        } else {
+                                                            p { class: "empty-hint", "Click Sync to load your call log" }
+                                                        }
                                                     }
                                                 } else {
                                                     div {
@@ -1110,31 +1301,38 @@ fn App() -> Element {
                                                 div {
                                                     class: "phone-header",
                                                     h4 { "Contacts ({phone_contacts.read().len()})" }
-                                                    button {
-                                                        class: "sync-button",
-                                                        onclick: {
-                                                            let device_id = device.id.clone();
-                                                            move |_| {
-                                                                if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
-                                                                    action_tx.send(AppAction::RequestContactsSync {
-                                                                        ip: fresh_device.ip.clone(),
-                                                                        port: fresh_device.port,
-                                                                    });
-                                                                } else {
-                                                                    add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                    if !*auto_sync_contacts.read() {
+                                                        button {
+                                                            class: "sync-button",
+                                                            onclick: {
+                                                                let device_id = device.id.clone();
+                                                                move |_| {
+                                                                    if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                        action_tx.send(AppAction::RequestContactsSync {
+                                                                            ip: fresh_device.ip.clone(),
+                                                                            port: fresh_device.port,
+                                                                        });
+                                                                    } else {
+                                                                        add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                                    }
                                                                 }
-                                                            }
-                                                        },
-                                                        "🔄 Sync"
+                                                            },
+                                                            Icon { icon: IconType::Refresh, size: 14, color: "currentColor".to_string() }
+                                                            span { " Sync" }
+                                                        }
                                                     }
                                                 }
 
                                                 if phone_contacts.read().is_empty() {
                                                     div {
                                                         class: "empty-state",
-                                                        span { class: "empty-icon", "👤" }
+                                                        span { class: "empty-icon", Icon { icon: IconType::Contact, size: 48, color: "var(--text-tertiary)".to_string() } }
                                                         p { "No contacts synced" }
-                                                        p { class: "empty-hint", "Click Sync to load your contacts" }
+                                                        if *auto_sync_contacts.read() {
+                                                            p { class: "empty-hint", "Contacts will sync automatically" }
+                                                        } else {
+                                                            p { class: "empty-hint", "Click Sync to load your contacts" }
+                                                        }
                                                     }
                                                 } else {
                                                     div {
@@ -1203,13 +1401,6 @@ fn App() -> Element {
                                                     }
                                                 }
                                             }
-                                        }
-
-                                        // Note about permissions
-                                        div {
-                                            class: "phone-note",
-                                            span { class: "note-icon", "ℹ️" }
-                                            span { "Make sure Phone Link is enabled in the phone's Connected app settings." }
                                         }
                                     }
                                 }
@@ -1294,6 +1485,66 @@ fn App() -> Element {
                                 }
                             }
                             p { class: "settings-hint", "Allow other devices to see and control your media." }
+                        }
+
+                        div {
+                            class: "info-card",
+                            h3 { "📱 Phone Auto-Sync" }
+                            div {
+                                class: "info-grid",
+                                div { class: "info-label", "Messages" }
+                                div {
+                                    class: "info-value",
+                                    label {
+                                        class: "toggle-switch",
+                                        input {
+                                            r#type: "checkbox",
+                                            checked: "{auto_sync_messages}",
+                                            oninput: move |_| {
+                                                let new_val = !*auto_sync_messages.read();
+                                                auto_sync_messages.set(new_val);
+                                                set_auto_sync_messages(new_val);
+                                            },
+                                        }
+                                        span { class: "slider" }
+                                    }
+                                }
+                                div { class: "info-label", "Calls" }
+                                div {
+                                    class: "info-value",
+                                    label {
+                                        class: "toggle-switch",
+                                        input {
+                                            r#type: "checkbox",
+                                            checked: "{auto_sync_calls}",
+                                            oninput: move |_| {
+                                                let new_val = !*auto_sync_calls.read();
+                                                auto_sync_calls.set(new_val);
+                                                set_auto_sync_calls(new_val);
+                                            },
+                                        }
+                                        span { class: "slider" }
+                                    }
+                                }
+                                div { class: "info-label", "Contacts" }
+                                div {
+                                    class: "info-value",
+                                    label {
+                                        class: "toggle-switch",
+                                        input {
+                                            r#type: "checkbox",
+                                            checked: "{auto_sync_contacts}",
+                                            oninput: move |_| {
+                                                let new_val = !*auto_sync_contacts.read();
+                                                auto_sync_contacts.set(new_val);
+                                                set_auto_sync_contacts(new_val);
+                                            },
+                                        }
+                                        span { class: "slider" }
+                                    }
+                                }
+                            }
+                            p { class: "settings-hint", "Automatically sync phone data when opening a device. Hides manual sync buttons when enabled." }
                         }
                     }
                 }

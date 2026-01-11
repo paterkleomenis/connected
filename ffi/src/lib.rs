@@ -631,15 +631,22 @@ pub trait MediaControlCallback: Send + Sync {
 #[uniffi::export(callback_interface)]
 pub trait TelephonyCallback: Send + Sync {
     /// Called when contacts sync is requested
-    fn on_contacts_sync_request(&self, from_device: String);
+    fn on_contacts_sync_request(&self, from_device: String, from_ip: String, from_port: u16);
     /// Called when contacts are received
     fn on_contacts_received(&self, from_device: String, contacts: Vec<FfiContact>);
     /// Called when conversations sync is requested
-    fn on_conversations_sync_request(&self, from_device: String);
+    fn on_conversations_sync_request(&self, from_device: String, from_ip: String, from_port: u16);
     /// Called when conversations are received
     fn on_conversations_received(&self, from_device: String, conversations: Vec<FfiConversation>);
     /// Called when messages for a thread are requested
-    fn on_messages_request(&self, from_device: String, thread_id: String, limit: u32);
+    fn on_messages_request(
+        &self,
+        from_device: String,
+        from_ip: String,
+        from_port: u16,
+        thread_id: String,
+        limit: u32,
+    );
     /// Called when messages are received
     fn on_messages_received(
         &self,
@@ -648,19 +655,38 @@ pub trait TelephonyCallback: Send + Sync {
         messages: Vec<FfiSmsMessage>,
     );
     /// Called when a request to send SMS is received
-    fn on_send_sms_request(&self, from_device: String, to: String, body: String);
+    fn on_send_sms_request(
+        &self,
+        from_device: String,
+        from_ip: String,
+        from_port: u16,
+        to: String,
+        body: String,
+    );
     /// Called when SMS send result is received
     fn on_sms_send_result(&self, success: bool, message_id: Option<String>, error: Option<String>);
     /// Called when a new SMS notification is received
     fn on_new_sms(&self, from_device: String, message: FfiSmsMessage);
     /// Called when call log is requested
-    fn on_call_log_request(&self, from_device: String, limit: u32);
+    fn on_call_log_request(&self, from_device: String, from_ip: String, from_port: u16, limit: u32);
     /// Called when call log is received
     fn on_call_log_received(&self, from_device: String, entries: Vec<FfiCallLogEntry>);
     /// Called when a call initiation is requested
-    fn on_initiate_call_request(&self, from_device: String, number: String);
+    fn on_initiate_call_request(
+        &self,
+        from_device: String,
+        from_ip: String,
+        from_port: u16,
+        number: String,
+    );
     /// Called when a call action is requested
-    fn on_call_action_request(&self, from_device: String, action: CallAction);
+    fn on_call_action_request(
+        &self,
+        from_device: String,
+        from_ip: String,
+        from_port: u16,
+        action: CallAction,
+    );
     /// Called when active call state is updated
     fn on_active_call_update(&self, from_device: String, call: Option<FfiActiveCall>);
 }
@@ -844,13 +870,15 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                     }
                     ConnectedEvent::Telephony {
                         from_device,
+                        from_ip,
+                        from_port,
                         message,
                     } => {
                         if let Some(cb) = TELEPHONY_CALLBACK.read().as_ref() {
                             use connected_core::TelephonyMessage;
                             match message {
                                 TelephonyMessage::ContactsSyncRequest => {
-                                    cb.on_contacts_sync_request(from_device);
+                                    cb.on_contacts_sync_request(from_device, from_ip, from_port);
                                 }
                                 TelephonyMessage::ContactsSyncResponse { contacts } => {
                                     let ffi_contacts: Vec<FfiContact> =
@@ -858,7 +886,11 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                                     cb.on_contacts_received(from_device, ffi_contacts);
                                 }
                                 TelephonyMessage::ConversationsSyncRequest => {
-                                    cb.on_conversations_sync_request(from_device);
+                                    cb.on_conversations_sync_request(
+                                        from_device,
+                                        from_ip.clone(),
+                                        from_port,
+                                    );
                                 }
                                 TelephonyMessage::ConversationsSyncResponse { conversations } => {
                                     let ffi_convos: Vec<FfiConversation> =
@@ -868,7 +900,13 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                                 TelephonyMessage::MessagesRequest {
                                     thread_id, limit, ..
                                 } => {
-                                    cb.on_messages_request(from_device, thread_id, limit);
+                                    cb.on_messages_request(
+                                        from_device,
+                                        from_ip.clone(),
+                                        from_port,
+                                        thread_id,
+                                        limit,
+                                    );
                                 }
                                 TelephonyMessage::MessagesResponse {
                                     thread_id,
@@ -879,7 +917,13 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                                     cb.on_messages_received(from_device, thread_id, ffi_msgs);
                                 }
                                 TelephonyMessage::SendSms { to, body } => {
-                                    cb.on_send_sms_request(from_device, to, body);
+                                    cb.on_send_sms_request(
+                                        from_device,
+                                        from_ip.clone(),
+                                        from_port,
+                                        to,
+                                        body,
+                                    );
                                 }
                                 TelephonyMessage::SmsSendResult {
                                     success,
@@ -892,7 +936,12 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                                     cb.on_new_sms(from_device, message.into());
                                 }
                                 TelephonyMessage::CallLogRequest { limit, .. } => {
-                                    cb.on_call_log_request(from_device, limit);
+                                    cb.on_call_log_request(
+                                        from_device,
+                                        from_ip.clone(),
+                                        from_port,
+                                        limit,
+                                    );
                                 }
                                 TelephonyMessage::CallLogResponse { entries } => {
                                     let ffi_entries: Vec<FfiCallLogEntry> =
@@ -900,10 +949,20 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                                     cb.on_call_log_received(from_device, ffi_entries);
                                 }
                                 TelephonyMessage::InitiateCall { number } => {
-                                    cb.on_initiate_call_request(from_device, number);
+                                    cb.on_initiate_call_request(
+                                        from_device,
+                                        from_ip.clone(),
+                                        from_port,
+                                        number,
+                                    );
                                 }
                                 TelephonyMessage::CallAction { action } => {
-                                    cb.on_call_action_request(from_device, action.into());
+                                    cb.on_call_action_request(
+                                        from_device,
+                                        from_ip.clone(),
+                                        from_port,
+                                        action.into(),
+                                    );
                                 }
                                 TelephonyMessage::ActiveCallUpdate { call } => {
                                     cb.on_active_call_update(from_device, call.map(|c| c.into()));
@@ -1717,6 +1776,35 @@ pub fn send_sms(
             })?;
 
     let msg = connected_core::TelephonyMessage::SendSms { to, body };
+
+    get_runtime().spawn(async move {
+        let _ = client.send_telephony(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_sms_send_result(
+    target_ip: String,
+    target_port: u16,
+    success: bool,
+    message_id: Option<String>,
+    error: Option<String>,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let msg = connected_core::TelephonyMessage::SmsSendResult {
+        success,
+        message_id,
+        error,
+    };
 
     get_runtime().spawn(async move {
         let _ = client.send_telephony(ip, target_port, msg).await;

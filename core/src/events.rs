@@ -62,6 +62,8 @@ pub enum ConnectedEvent {
     /// Telephony event (SMS, calls, contacts)
     Telephony {
         from_device: String,
+        from_ip: String,
+        from_port: u16,
         message: TelephonyMessage,
     },
     /// Critical error in a subsystem
