@@ -18,6 +18,7 @@ pub struct AppSettings {
     pub auto_sync_messages: bool,
     pub auto_sync_calls: bool,
     pub auto_sync_contacts: bool,
+    pub device_name: Option<String>,
 }
 
 static APP_SETTINGS: OnceLock<Arc<Mutex<AppSettings>>> = OnceLock::new();
@@ -441,4 +442,12 @@ pub fn get_auto_sync_contacts() -> bool {
 
 pub fn set_auto_sync_contacts(enabled: bool) {
     update_setting(|s| s.auto_sync_contacts = enabled);
+}
+
+pub fn get_device_name_setting() -> Option<String> {
+    get_app_settings().lock().unwrap().device_name.clone()
+}
+
+pub fn set_device_name_setting(name: String) {
+    update_setting(|s| s.device_name = Some(name));
 }

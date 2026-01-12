@@ -8,20 +8,20 @@ mod state;
 mod utils;
 
 use state::{
-    get_clipboard_sync_enabled, get_media_enabled_setting, set_clipboard_sync_enabled,
-    set_media_enabled_setting,
+    get_clipboard_sync_enabled, get_device_name_setting, get_media_enabled_setting,
+    set_clipboard_sync_enabled, set_media_enabled_setting,
 };
 
 use components::{DeviceCard, FileBrowser, FileDialog, Icon, IconType};
-use connected_core::telephony::{ActiveCallState, CallAction};
 use connected_core::MediaCommand;
-use controller::{app_controller, AppAction};
+use connected_core::telephony::{ActiveCallState, CallAction};
+use controller::{AppAction, app_controller};
 use dioxus::prelude::*;
 use state::*;
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::debug;
-use utils::get_system_clipboard;
+use utils::{get_hostname, get_system_clipboard};
 
 fn format_timestamp(ts: u64) -> String {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -74,7 +74,8 @@ fn main() {
 fn App() -> Element {
     // UI State
     let initialized = use_signal(|| false);
-    let local_device_name = use_signal(|| "Desktop".to_string());
+    let mut local_device_name =
+        use_signal(|| get_device_name_setting().unwrap_or_else(get_hostname));
     let local_device_ip = use_signal(|| String::new());
     let mut devices_list = use_signal(Vec::<DeviceInfo>::new);
     let mut selected_device = use_signal(|| None::<DeviceInfo>);
@@ -85,6 +86,8 @@ fn App() -> Element {
     let mut notifications = use_signal(Vec::<Notification>::new);
     let mut show_send_dialog = use_signal(|| false);
     let mut clipboard_text = use_signal(String::new);
+    let mut show_rename_dialog = use_signal(|| false);
+    let mut rename_text = use_signal(String::new);
 
     let discovery_active = use_signal(|| false);
     let mut media_enabled = use_signal(|| get_media_enabled_setting());
@@ -1419,7 +1422,20 @@ fn App() -> Element {
                             div {
                                 class: "info-grid",
                                 div { class: "info-label", "Name" }
-                                div { class: "info-value", "{local_device_name}" }
+                                div {
+                                    class: "info-value",
+                                    style: "display: flex; justify-content: space-between; align-items: center;",
+                                    span { "{local_device_name}" }
+                                    button {
+                                        class: "secondary-button",
+                                        style: "padding: 4px 8px; font-size: 0.8rem; margin-left: 8px;",
+                                        onclick: move |_| {
+                                            rename_text.set(local_device_name.read().clone());
+                                            show_rename_dialog.set(true);
+                                        },
+                                        "Rename"
+                                    }
+                                }
                                 div { class: "info-label", "IP" }
                                 div { class: "info-value", "{local_device_ip}" }
                             }
@@ -1796,6 +1812,46 @@ fn App() -> Element {
                                         }
                                     }
                                 },
+                            }
+                        }
+                    }
+                }
+            }
+
+            if *show_rename_dialog.read() {
+                div {
+                    class: "modal-overlay",
+                    div {
+                        class: "modal-content",
+                        h3 { "Rename Device" }
+                        div {
+                            style: "margin: 16px 0;",
+                            input {
+                                r#type: "text",
+                                style: "width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);",
+                                value: "{rename_text}",
+                                oninput: move |e| rename_text.set(e.value().clone()),
+                                placeholder: "Enter new name"
+                            }
+                        }
+                        div {
+                            class: "modal-actions",
+                            button {
+                                class: "secondary-button",
+                                onclick: move |_| show_rename_dialog.set(false),
+                                "Cancel"
+                            }
+                            button {
+                                class: "primary-button",
+                                onclick: move |_| {
+                                    let new_name = rename_text.read().trim().to_string();
+                                    if !new_name.is_empty() {
+                                        local_device_name.set(new_name.clone());
+                                        action_tx.send(AppAction::RenameDevice { new_name });
+                                        show_rename_dialog.set(false);
+                                    }
+                                },
+                                "Save"
                             }
                         }
                     }

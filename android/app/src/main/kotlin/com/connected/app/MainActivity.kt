@@ -424,6 +424,39 @@ fun SettingsScreen(
         }
     }
 
+    var showRenameDialog by remember { mutableStateOf(false) }
+
+    if (showRenameDialog) {
+        var newName by remember { mutableStateOf(connectedApp.getDeviceName()) }
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("Rename Device") },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("Device Name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (newName.isNotBlank()) {
+                        connectedApp.renameDevice(newName)
+                        showRenameDialog = false
+                    }
+                }) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                Button(onClick = { showRenameDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -434,6 +467,38 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.headlineMedium,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
+        }
+
+        // Device Name Section
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Device Name", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "This name will be visible to other devices",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            connectedApp.getDeviceName(),
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
+                        Button(onClick = { showRenameDialog = true }) {
+                            Text("Rename")
+                        }
+                    }
+                }
+            }
         }
 
         // Clipboard Sync Section

@@ -1,15 +1,16 @@
 use crate::fs_provider::DesktopFilesystemProvider;
 use crate::state::{
+    DeviceInfo, FileTransferRequest, PairingRequest, PreviewData, RemoteMedia, TransferStatus,
     add_file_transfer_request, add_notification, get_current_media, get_current_remote_files,
-    get_current_remote_path, get_devices_store, get_last_clipboard, get_last_remote_update,
-    get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_call_log,
-    get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_files_update, get_transfer_status, mark_calls_synced, mark_contacts_synced,
-    mark_messages_synced, remove_file_transfer_request, set_active_call, set_phone_call_log,
-    set_phone_contacts, set_phone_conversations, set_phone_messages, DeviceInfo,
-    FileTransferRequest, PairingRequest, PreviewData, RemoteMedia, TransferStatus,
+    get_current_remote_path, get_device_name_setting, get_devices_store, get_last_clipboard,
+    get_last_remote_update, get_media_enabled, get_pairing_requests, get_pending_pairings,
+    get_phone_call_log, get_phone_conversations, get_phone_data_update, get_phone_messages,
+    get_preview_data, get_remote_files_update, get_transfer_status, mark_calls_synced,
+    mark_contacts_synced, mark_messages_synced, remove_file_transfer_request, set_active_call,
+    set_device_name_setting, set_phone_call_log, set_phone_contacts, set_phone_conversations,
+    set_phone_messages,
 };
-use crate::utils::set_system_clipboard;
+use crate::utils::{get_hostname, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
 use connected_core::telephony::{CallLogEntry, CallType};
 use connected_core::transport::UnpairReason;
@@ -27,6 +28,9 @@ use tracing::{error, info, warn};
 #[derive(Clone, Debug)]
 pub enum AppAction {
     Init,
+    RenameDevice {
+        new_name: String,
+    },
     SendFile {
         ip: String,
         port: u16,
@@ -141,6 +145,543 @@ pub enum AppAction {
     },
 }
 
+fn spawn_event_loop(
+    c: Arc<ConnectedClient>,
+    mut events: tokio::sync::broadcast::Receiver<ConnectedEvent>,
+) {
+    let c_clone = c.clone();
+    tokio::spawn(async move {
+        let last_player_identity = Arc::new(std::sync::Mutex::new(None::<String>));
+
+        while let Ok(event) = events.recv().await {
+            match event {
+                ConnectedEvent::DeviceFound(d) => {
+                    let mut info: DeviceInfo = d.clone().into();
+                    info.is_trusted = c_clone.is_device_trusted(&d.id);
+
+                    // If trusted, remove from pending
+                    if info.is_trusted {
+                        get_pending_pairings().lock().unwrap().remove(&info.id);
+                    }
+
+                    let mut store = get_devices_store().lock().unwrap();
+                    store.insert(info.id.clone(), info);
+                }
+                ConnectedEvent::DeviceLost(id) => {
+                    let mut store = get_devices_store().lock().unwrap();
+                    if let Some(d) = store.remove(&id) {
+                        add_notification("Device Lost", &format!("{} disconnected", d.name), "📴");
+                    }
+                }
+                ConnectedEvent::TransferStarting {
+                    filename,
+                    direction,
+                    ..
+                } => {
+                    use connected_core::events::TransferDirection;
+                    if direction == TransferDirection::Incoming {
+                        *get_transfer_status().lock().unwrap() =
+                            TransferStatus::Starting(filename.clone());
+                        add_notification(
+                            "Transfer Starting",
+                            &format!("Receiving {}", filename),
+                            "📥",
+                        );
+                    } else {
+                        *get_transfer_status().lock().unwrap() =
+                            TransferStatus::Starting(filename.clone());
+                    }
+                }
+                ConnectedEvent::TransferProgress {
+                    bytes_transferred,
+                    total_size,
+                    id: _,
+                } => {
+                    let percent = if total_size > 0 {
+                        (bytes_transferred as f32 / total_size as f32) * 100.0
+                    } else {
+                        0.0
+                    };
+                    let mut status = get_transfer_status().lock().unwrap();
+                    let current_filename = match &*status {
+                        TransferStatus::Starting(f) => Some(f.clone()),
+                        TransferStatus::InProgress { filename, .. } => Some(filename.clone()),
+                        _ => None,
+                    };
+                    if let Some(filename) = current_filename {
+                        *status = TransferStatus::InProgress { filename, percent };
+                    }
+                }
+                ConnectedEvent::TransferCompleted { filename, .. } => {
+                    *get_transfer_status().lock().unwrap() =
+                        TransferStatus::Completed(filename.clone());
+                    add_notification("Transfer Complete", &format!("{} finished", filename), "✅");
+                }
+                ConnectedEvent::TransferFailed { error, .. } => {
+                    *get_transfer_status().lock().unwrap() = TransferStatus::Failed(error.clone());
+                    add_notification("Transfer Failed", &error, "❌");
+                }
+                ConnectedEvent::ClipboardReceived {
+                    content,
+                    from_device,
+                } => {
+                    set_system_clipboard(&content);
+                    *get_last_clipboard().lock().unwrap() = content.clone();
+                    *get_last_remote_update().lock().unwrap() = Instant::now();
+                    add_notification("Clipboard", &format!("Received from {}", from_device), "📋");
+                }
+                ConnectedEvent::Error(msg) => {
+                    error!("System error: {}", msg);
+                }
+                ConnectedEvent::PairingRequest {
+                    device_name,
+                    fingerprint,
+                    device_id,
+                } => {
+                    add_notification(
+                        "Pairing Request",
+                        &format!("{} wants to connect.", device_name),
+                        "🔐",
+                    );
+                    get_pairing_requests().lock().unwrap().push(PairingRequest {
+                        fingerprint,
+                        device_name,
+                        device_id,
+                    });
+                }
+                ConnectedEvent::PairingModeChanged(enabled) => {
+                    info!("Pairing mode changed: {}", enabled);
+                }
+                ConnectedEvent::DeviceUnpaired {
+                    device_id,
+                    device_name,
+                    reason,
+                } => {
+                    // Update local store - device is no longer trusted
+                    {
+                        let mut store = get_devices_store().lock().unwrap();
+                        if let Some(d) = store.get_mut(&device_id) {
+                            d.is_trusted = false;
+                        }
+                    }
+
+                    let reason_str = match reason {
+                        UnpairReason::Unpaired => "unpaired from",
+                        UnpairReason::Forgotten => "forgotten by",
+                        UnpairReason::Blocked => "blocked by",
+                    };
+                    add_notification(
+                        "Device Disconnected",
+                        &format!("You were {} {}", reason_str, device_name),
+                        "💔",
+                    );
+                }
+                ConnectedEvent::TransferRequest {
+                    id,
+                    filename,
+                    size,
+                    from_device,
+                    from_fingerprint,
+                } => {
+                    add_notification(
+                        "File Transfer Request",
+                        &format!(
+                            "{} wants to send {} ({} bytes)",
+                            from_device, filename, size
+                        ),
+                        "📁",
+                    );
+                    // Store the request for UI to display
+                    add_file_transfer_request(FileTransferRequest {
+                        id: id.clone(),
+                        filename,
+                        size,
+                        from_device,
+                        from_fingerprint,
+                        timestamp: Instant::now(),
+                    });
+                }
+                ConnectedEvent::MediaControl { from_device, event } => {
+                    info!("EVENT: Received MediaControl event from {}", from_device);
+                    // Only process if media control is enabled locally
+                    if *get_media_enabled().lock().unwrap() {
+                        match event {
+                            MediaControlMessage::Command(cmd) => {
+                                info!("COMMAND: Executing {:?} from {}", cmd, from_device);
+
+                                let last_identity = last_player_identity.clone();
+
+                                // Execute command via MPRIS with manual scan
+                                tokio::task::spawn_blocking(move || {
+                                    use dbus::ffidisp::{BusType, Connection};
+                                    use mpris::Player;
+                                    use std::rc::Rc;
+
+                                    let conn = match Connection::get_private(BusType::Session) {
+                                        Ok(c) => Rc::new(c),
+                                        Err(e) => {
+                                            warn!("DBus Connection Error: {}", e);
+                                            return;
+                                        }
+                                    };
+
+                                    // ListNames
+                                    use dbus::Message;
+                                    let msg = Message::new_method_call(
+                                        "org.freedesktop.DBus",
+                                        "/org/freedesktop/DBus",
+                                        "org.freedesktop.DBus",
+                                        "ListNames",
+                                    )
+                                    .unwrap();
+                                    let names: Vec<String> =
+                                        match conn.send_with_reply_and_block(msg, 5000) {
+                                            Ok(reply) => match reply.get1() {
+                                                Some(n) => n,
+                                                None => return,
+                                            },
+                                            Err(e) => {
+                                                warn!("DBus ListNames Error: {}", e);
+                                                return;
+                                            }
+                                        };
+
+                                    let mpris_names: Vec<&String> = names
+                                        .iter()
+                                        .filter(|n| {
+                                            n.starts_with("org.mpris.MediaPlayer2.")
+                                                && !n.contains("playerctld")
+                                                && !n.contains("kdeconnect")
+                                        })
+                                        .collect();
+
+                                    let last_id = last_identity.lock().unwrap().clone();
+
+                                    let mut playing_player: Option<Player> = None;
+
+                                    let mut preferred_player: Option<Player> = None;
+
+                                    let mut generic_paused: Option<Player> = None;
+
+                                    let mut generic_any: Option<Player> = None;
+
+                                    for name in mpris_names {
+                                        if let Ok(p_conn) =
+                                            Connection::get_private(BusType::Session)
+                                        {
+                                            if let Ok(player) =
+                                                Player::new(p_conn, name.clone().into(), 2000)
+                                            {
+                                                let identity = player.identity().to_string();
+
+                                                let is_last = last_id.as_ref() == Some(&identity);
+
+                                                match player.get_playback_status() {
+                                                    Ok(status) => match status {
+                                                        PlaybackStatus::Playing => {
+                                                            playing_player = Some(player);
+
+                                                            break;
+                                                        }
+
+                                                        PlaybackStatus::Paused => {
+                                                            if is_last {
+                                                                preferred_player = Some(player);
+                                                            } else if generic_paused.is_none() {
+                                                                generic_paused = Some(player);
+                                                            }
+                                                        }
+
+                                                        _ => {
+                                                            if is_last {
+                                                                preferred_player = Some(player);
+                                                            } else if generic_any.is_none() {
+                                                                generic_any = Some(player);
+                                                            }
+                                                        }
+                                                    },
+                                                    _ => {
+                                                        if is_last {
+                                                            preferred_player = Some(player);
+                                                        } else if generic_any.is_none() {
+                                                            generic_any = Some(player);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    let target_player = playing_player
+                                        .or(preferred_player)
+                                        .or(generic_paused)
+                                        .or(generic_any);
+
+                                    if let Some(player) = target_player {
+                                        // Update last identity
+
+                                        *last_identity.lock().unwrap() =
+                                            Some(player.identity().to_string());
+
+                                        info!("MPRIS: Controlling player: {}", player.identity());
+
+                                        let res = match cmd {
+                                            MediaCommand::Play => player.play(),
+                                            MediaCommand::Pause => player.pause(),
+                                            MediaCommand::PlayPause => player.play_pause(),
+                                            MediaCommand::Next => player.next(),
+                                            MediaCommand::Previous => player.previous(),
+                                            MediaCommand::Stop => player.stop(),
+                                            MediaCommand::VolumeUp => {
+                                                let _ = player.set_volume(
+                                                    player.get_volume().unwrap_or(0.0) + 0.05,
+                                                );
+                                                Ok(())
+                                            }
+                                            MediaCommand::VolumeDown => {
+                                                let _ = player.set_volume(
+                                                    player.get_volume().unwrap_or(0.0) - 0.05,
+                                                );
+                                                Ok(())
+                                            }
+                                        };
+                                        if let Err(e) = res {
+                                            warn!("MPRIS Command Failed: {}", e);
+                                        }
+                                    } else {
+                                        warn!("MPRIS: No controllable player found");
+                                    }
+                                });
+                            }
+
+                            MediaControlMessage::StateUpdate(state) => {
+                                info!(
+                                    "STATE: Remote state update from {}: {:?}",
+                                    from_device, state.title
+                                );
+
+                                // Find device ID by name
+                                let device_id = {
+                                    let store = get_devices_store().lock().unwrap();
+                                    store
+                                        .values()
+                                        .find(|d| d.name == from_device)
+                                        .map(|d| d.id.clone())
+                                        .unwrap_or_else(|| "unknown".to_string())
+                                };
+
+                                *get_current_media().lock().unwrap() = Some(RemoteMedia {
+                                    state,
+                                    source_device_id: device_id,
+                                });
+                            }
+                        }
+                    } else {
+                        warn!("IGNORED: Media control is disabled in settings");
+                    }
+                }
+                ConnectedEvent::Telephony {
+                    from_device,
+                    from_ip: _,
+                    from_port: _,
+                    message,
+                } => {
+                    info!(
+                        "Received telephony event from {}: {:?}",
+                        from_device, message
+                    );
+                    use connected_core::TelephonyMessage;
+                    match message {
+                        TelephonyMessage::ContactsSyncResponse { contacts } => {
+                            let count = contacts.len();
+                            set_phone_contacts(contacts);
+                            mark_contacts_synced();
+                            // Silent sync - no notification needed
+                        }
+                        TelephonyMessage::ConversationsSyncResponse { conversations } => {
+                            set_phone_conversations(conversations);
+                            mark_messages_synced();
+                            // Silent sync - no notification needed
+                        }
+                        TelephonyMessage::MessagesResponse {
+                            thread_id,
+                            messages,
+                        } => {
+                            set_phone_messages(thread_id, messages);
+                            // Silent load - no notification needed
+                        }
+                        TelephonyMessage::NewSmsNotification { message } => {
+                            info!(
+                                "NEW SMS NOTIFICATION: from={}, body={}",
+                                message.address,
+                                &message.body[..std::cmp::min(30, message.body.len())]
+                            );
+                            let sender = message
+                                .contact_name
+                                .clone()
+                                .unwrap_or(message.address.clone());
+                            let preview = if message.body.len() > 50 {
+                                format!("{}...", &message.body[..50])
+                            } else {
+                                message.body.clone()
+                            };
+                            let thread_id = message.thread_id.clone();
+                            let msg_timestamp = message.timestamp;
+                            let msg_body = message.body.clone();
+                            let msg_address = message.address.clone();
+                            let msg_contact = message.contact_name.clone();
+
+                            // Add to existing messages for this thread
+                            {
+                                let mut msgs = get_phone_messages().lock().unwrap();
+                                if let Some(thread_msgs) = msgs.get_mut(&thread_id) {
+                                    thread_msgs.push(message);
+                                }
+                            }
+
+                            // Update conversation list with new message
+                            {
+                                let mut convos = get_phone_conversations().lock().unwrap();
+
+                                // Helper to normalize phone numbers for comparison
+                                let normalize_phone = |s: &str| -> String {
+                                    s.chars().filter(|c| c.is_ascii_digit()).collect()
+                                };
+                                let normalized_address = normalize_phone(&msg_address);
+
+                                // Find conversation by thread_id first, then by phone address
+                                let existing_convo = convos.iter_mut().find(|c| {
+                                    c.id == thread_id
+                                        || c.addresses
+                                            .iter()
+                                            .any(|a| normalize_phone(a) == normalized_address)
+                                });
+
+                                if let Some(convo) = existing_convo {
+                                    // Update existing conversation
+                                    convo.last_message = Some(msg_body.clone());
+                                    convo.last_timestamp = msg_timestamp;
+                                    convo.unread_count += 1;
+                                } else {
+                                    // Create new conversation entry
+                                    use connected_core::telephony::Conversation;
+                                    let new_convo = Conversation {
+                                        id: thread_id,
+                                        addresses: vec![msg_address],
+                                        contact_names: msg_contact
+                                            .map(|n| vec![n])
+                                            .unwrap_or_default(),
+                                        last_message: Some(msg_body.clone()),
+                                        last_timestamp: msg_timestamp,
+                                        unread_count: 1,
+                                    };
+                                    convos.push(new_convo);
+                                }
+                                // Sort by timestamp descending
+                                convos.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
+                            }
+
+                            *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+                            info!("Adding notification for SMS from: {}", sender);
+                            add_notification(
+                                "New SMS",
+                                &format!("From {}: {}", sender, preview),
+                                "💬",
+                            );
+                            info!("Notification added successfully");
+                        }
+                        TelephonyMessage::CallLogResponse { entries } => {
+                            set_phone_call_log(entries);
+                            mark_calls_synced();
+                            // Silent sync - no notification needed
+                        }
+                        TelephonyMessage::ActiveCallUpdate { call } => {
+                            use connected_core::telephony::ActiveCallState;
+
+                            if let Some(ref c) = call {
+                                let caller = c.contact_name.clone().unwrap_or(c.number.clone());
+
+                                // If call ended, add to call log
+                                if c.state == ActiveCallState::Ended {
+                                    let entry = CallLogEntry {
+                                        id: format!(
+                                            "call_{}",
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap()
+                                                .as_millis()
+                                        ),
+                                        number: c.number.clone(),
+                                        contact_name: c.contact_name.clone(),
+                                        call_type: if c.is_incoming {
+                                            CallType::Incoming
+                                        } else {
+                                            CallType::Outgoing
+                                        },
+                                        timestamp: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap()
+                                            .as_millis()
+                                            as u64,
+                                        duration: c.duration,
+                                        is_read: false,
+                                    };
+                                    // Add to beginning of call log
+                                    let mut log = get_phone_call_log().lock().unwrap();
+                                    log.insert(0, entry);
+                                } else {
+                                    add_notification(
+                                        "Phone Call",
+                                        &format!("{:?} call from {}", c.state, caller),
+                                        "📞",
+                                    );
+                                }
+                            }
+                            // Store the active call state
+                            set_active_call(call.clone());
+                        }
+                        _ => {
+                            // Other telephony messages (requests, etc.)
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
+    let device_type = if cfg!(target_os = "linux") {
+        DeviceType::Linux
+    } else if cfg!(target_os = "windows") {
+        DeviceType::Windows
+    } else if cfg!(target_os = "macos") {
+        DeviceType::MacOS
+    } else {
+        DeviceType::Unknown
+    };
+
+    // Use default persistence path (None -> ~/.config/connected)
+    match ConnectedClient::new(name.clone(), device_type, 0, None).await {
+        Ok(c) => {
+            info!("Core initialized");
+
+            // Register Filesystem Provider
+            c.register_filesystem_provider(Box::new(DesktopFilesystemProvider::new()));
+
+            // Spawn event loop
+            spawn_event_loop(c.clone(), c.subscribe());
+
+            Some(c)
+        }
+        Err(e) => {
+            error!("Failed to init: {}", e);
+            add_notification("Init Failed", &e.to_string(), "❌");
+            None
+        }
+    }
+}
+
 pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
     let mut client: Option<Arc<ConnectedClient>> = None;
 
@@ -150,661 +691,15 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if client.is_some() {
                     continue;
                 }
-
-                let name = std::env::var("HOSTNAME")
-                    .or_else(|_| std::env::var("HOST"))
-                    .or_else(|_| std::env::var("COMPUTERNAME"))
-                    .unwrap_or_else(|_| "Desktop".into());
-
-                // Detect device type based on OS
-                let device_type = if cfg!(target_os = "linux") {
-                    DeviceType::Linux
-                } else if cfg!(target_os = "windows") {
-                    DeviceType::Windows
-                } else if cfg!(target_os = "macos") {
-                    DeviceType::MacOS
-                } else {
-                    DeviceType::Unknown
-                };
-
-                // Use default persistence path (None -> ~/.config/connected)
-                match ConnectedClient::new(name.clone(), device_type, 0, None).await {
-                    Ok(c) => {
-                        info!("Core initialized");
-
-                        // Register Filesystem Provider
-                        c.register_filesystem_provider(Box::new(DesktopFilesystemProvider::new()));
-
-                        client = Some(c.clone());
-
-                        // Subscribe to events
-                        let events = c.subscribe();
-                        let mut events = events;
-                        let c_clone = c.clone();
-
-                        // Spawn event loop
-                        tokio::spawn(async move {
-                            let last_player_identity =
-                                Arc::new(std::sync::Mutex::new(None::<String>));
-
-                            while let Ok(event) = events.recv().await {
-                                match event {
-                                    ConnectedEvent::DeviceFound(d) => {
-                                        let mut info: DeviceInfo = d.clone().into();
-                                        info.is_trusted = c_clone.is_device_trusted(&d.id);
-
-                                        // If trusted, remove from pending
-                                        if info.is_trusted {
-                                            get_pending_pairings().lock().unwrap().remove(&info.id);
-                                        }
-
-                                        let mut store = get_devices_store().lock().unwrap();
-                                        store.insert(info.id.clone(), info);
-                                    }
-                                    ConnectedEvent::DeviceLost(id) => {
-                                        let mut store = get_devices_store().lock().unwrap();
-                                        if let Some(d) = store.remove(&id) {
-                                            add_notification(
-                                                "Device Lost",
-                                                &format!("{} disconnected", d.name),
-                                                "📴",
-                                            );
-                                        }
-                                    }
-                                    ConnectedEvent::TransferStarting {
-                                        filename,
-                                        direction,
-                                        ..
-                                    } => {
-                                        use connected_core::events::TransferDirection;
-                                        if direction == TransferDirection::Incoming {
-                                            *get_transfer_status().lock().unwrap() =
-                                                TransferStatus::Starting(filename.clone());
-                                            add_notification(
-                                                "Transfer Starting",
-                                                &format!("Receiving {}", filename),
-                                                "📥",
-                                            );
-                                        } else {
-                                            *get_transfer_status().lock().unwrap() =
-                                                TransferStatus::Starting(filename.clone());
-                                        }
-                                    }
-                                    ConnectedEvent::TransferProgress {
-                                        bytes_transferred,
-                                        total_size,
-                                        id: _,
-                                    } => {
-                                        let percent = if total_size > 0 {
-                                            (bytes_transferred as f32 / total_size as f32) * 100.0
-                                        } else {
-                                            0.0
-                                        };
-                                        let mut status = get_transfer_status().lock().unwrap();
-                                        let current_filename = match &*status {
-                                            TransferStatus::Starting(f) => Some(f.clone()),
-                                            TransferStatus::InProgress { filename, .. } => {
-                                                Some(filename.clone())
-                                            }
-                                            _ => None,
-                                        };
-                                        if let Some(filename) = current_filename {
-                                            *status =
-                                                TransferStatus::InProgress { filename, percent };
-                                        }
-                                    }
-                                    ConnectedEvent::TransferCompleted { filename, .. } => {
-                                        *get_transfer_status().lock().unwrap() =
-                                            TransferStatus::Completed(filename.clone());
-                                        add_notification(
-                                            "Transfer Complete",
-                                            &format!("{} finished", filename),
-                                            "✅",
-                                        );
-                                    }
-                                    ConnectedEvent::TransferFailed { error, .. } => {
-                                        *get_transfer_status().lock().unwrap() =
-                                            TransferStatus::Failed(error.clone());
-                                        add_notification("Transfer Failed", &error, "❌");
-                                    }
-                                    ConnectedEvent::ClipboardReceived {
-                                        content,
-                                        from_device,
-                                    } => {
-                                        set_system_clipboard(&content);
-                                        *get_last_clipboard().lock().unwrap() = content.clone();
-                                        *get_last_remote_update().lock().unwrap() = Instant::now();
-                                        add_notification(
-                                            "Clipboard",
-                                            &format!("Received from {}", from_device),
-                                            "📋",
-                                        );
-                                    }
-                                    ConnectedEvent::Error(msg) => {
-                                        error!("System error: {}", msg);
-                                    }
-                                    ConnectedEvent::PairingRequest {
-                                        device_name,
-                                        fingerprint,
-                                        device_id,
-                                    } => {
-                                        add_notification(
-                                            "Pairing Request",
-                                            &format!("{} wants to connect.", device_name),
-                                            "🔐",
-                                        );
-                                        get_pairing_requests().lock().unwrap().push(
-                                            PairingRequest {
-                                                fingerprint,
-                                                device_name,
-                                                device_id,
-                                            },
-                                        );
-                                    }
-                                    ConnectedEvent::PairingModeChanged(enabled) => {
-                                        info!("Pairing mode changed: {}", enabled);
-                                    }
-                                    ConnectedEvent::DeviceUnpaired {
-                                        device_id,
-                                        device_name,
-                                        reason,
-                                    } => {
-                                        // Update local store - device is no longer trusted
-                                        {
-                                            let mut store = get_devices_store().lock().unwrap();
-                                            if let Some(d) = store.get_mut(&device_id) {
-                                                d.is_trusted = false;
-                                            }
-                                        }
-
-                                        let reason_str = match reason {
-                                            UnpairReason::Unpaired => "unpaired from",
-                                            UnpairReason::Forgotten => "forgotten by",
-                                            UnpairReason::Blocked => "blocked by",
-                                        };
-                                        add_notification(
-                                            "Device Disconnected",
-                                            &format!("You were {} {}", reason_str, device_name),
-                                            "💔",
-                                        );
-                                    }
-                                    ConnectedEvent::TransferRequest {
-                                        id,
-                                        filename,
-                                        size,
-                                        from_device,
-                                        from_fingerprint,
-                                    } => {
-                                        add_notification(
-                                            "File Transfer Request",
-                                            &format!(
-                                                "{} wants to send {} ({} bytes)",
-                                                from_device, filename, size
-                                            ),
-                                            "📁",
-                                        );
-                                        // Store the request for UI to display
-                                        add_file_transfer_request(FileTransferRequest {
-                                            id: id.clone(),
-                                            filename,
-                                            size,
-                                            from_device,
-                                            from_fingerprint,
-                                            timestamp: Instant::now(),
-                                        });
-                                    }
-                                    ConnectedEvent::MediaControl { from_device, event } => {
-                                        info!(
-                                            "EVENT: Received MediaControl event from {}",
-                                            from_device
-                                        );
-                                        // Only process if media control is enabled locally
-                                        if *get_media_enabled().lock().unwrap() {
-                                            match event {
-                                                MediaControlMessage::Command(cmd) => {
-                                                    info!(
-                                                        "COMMAND: Executing {:?} from {}",
-                                                        cmd, from_device
-                                                    );
-
-                                                    let last_identity =
-                                                        last_player_identity.clone();
-
-                                                    // Execute command via MPRIS with manual scan
-                                                    tokio::task::spawn_blocking(move || {
-                                                        use dbus::ffidisp::{BusType, Connection};
-                                                        use mpris::Player;
-                                                        use std::rc::Rc;
-
-                                                        let conn = match Connection::get_private(
-                                                            BusType::Session,
-                                                        ) {
-                                                            Ok(c) => Rc::new(c),
-                                                            Err(e) => {
-                                                                warn!(
-                                                                    "DBus Connection Error: {}",
-                                                                    e
-                                                                );
-                                                                return;
-                                                            }
-                                                        };
-
-                                                        // ListNames
-                                                        use dbus::Message;
-                                                        let msg = Message::new_method_call(
-                                                            "org.freedesktop.DBus",
-                                                            "/org/freedesktop/DBus",
-                                                            "org.freedesktop.DBus",
-                                                            "ListNames",
-                                                        )
-                                                        .unwrap();
-                                                        let names: Vec<String> = match conn
-                                                            .send_with_reply_and_block(msg, 5000)
-                                                        {
-                                                            Ok(reply) => match reply.get1() {
-                                                                Some(n) => n,
-                                                                None => return,
-                                                            },
-                                                            Err(e) => {
-                                                                warn!(
-                                                                    "DBus ListNames Error: {}",
-                                                                    e
-                                                                );
-                                                                return;
-                                                            }
-                                                        };
-
-                                                        let mpris_names: Vec<&String> = names
-                                                            .iter()
-                                                            .filter(|n| {
-                                                                n.starts_with(
-                                                                    "org.mpris.MediaPlayer2.",
-                                                                ) && !n.contains("playerctld")
-                                                                    && !n.contains("kdeconnect")
-                                                            })
-                                                            .collect();
-
-                                                        let last_id =
-                                                            last_identity.lock().unwrap().clone();
-
-                                                        let mut playing_player: Option<Player> =
-                                                            None;
-
-                                                        let mut preferred_player: Option<Player> =
-                                                            None;
-
-                                                        let mut generic_paused: Option<Player> =
-                                                            None;
-
-                                                        let mut generic_any: Option<Player> = None;
-
-                                                        for name in mpris_names {
-                                                            if let Ok(p_conn) =
-                                                                Connection::get_private(
-                                                                    BusType::Session,
-                                                                )
-                                                            {
-                                                                if let Ok(player) = Player::new(
-                                                                    p_conn,
-                                                                    name.clone().into(),
-                                                                    2000,
-                                                                ) {
-                                                                    let identity = player
-                                                                        .identity()
-                                                                        .to_string();
-
-                                                                    let is_last = last_id.as_ref()
-                                                                        == Some(&identity);
-
-                                                                    match player.get_playback_status()
-                                                                    { Ok(status) => {
-                                                                        match status {
-
-                                                                                                                                    PlaybackStatus::Playing => {
-
-                                                                                                                                        playing_player = Some(player);
-
-                                                                                                                                        break;
-
-                                                                                                                                    }
-
-                                                                                                                                    PlaybackStatus::Paused => {
-
-                                                                                                                                        if is_last {
-
-                                                                                                                                            preferred_player = Some(player);
-
-                                                                                                                                        } else if generic_paused.is_none() {
-
-                                                                                                                                            generic_paused = Some(player);
-
-                                                                                                                                        }
-
-                                                                                                                                    }
-
-                                                                                                                                    _ => {
-
-                                                                                                                                        if is_last {
-
-                                                                                                                                            preferred_player = Some(player);
-
-                                                                                                                                        } else if generic_any.is_none() {
-
-                                                                                                                                            generic_any = Some(player);
-
-                                                                                                                                        }
-
-                                                                                                                                    }
-
-                                                                                                                                }
-                                                                    } _ => {
-                                                                        if is_last {
-                                                                            preferred_player =
-                                                                                Some(player);
-                                                                        } else if generic_any
-                                                                            .is_none()
-                                                                        {
-                                                                            generic_any =
-                                                                                Some(player);
-                                                                        }
-                                                                    }}
-                                                                }
-                                                            }
-                                                        }
-
-                                                        let target_player = playing_player
-                                                            .or(preferred_player)
-                                                            .or(generic_paused)
-                                                            .or(generic_any);
-
-                                                        if let Some(player) = target_player {
-                                                            // Update last identity
-
-                                                            *last_identity.lock().unwrap() =
-                                                                Some(player.identity().to_string());
-
-                                                            info!(
-                                                                "MPRIS: Controlling player: {}",
-                                                                player.identity()
-                                                            );
-
-                                                            let res = match cmd {
-                                                                MediaCommand::Play => player.play(),
-                                                                MediaCommand::Pause => {
-                                                                    player.pause()
-                                                                }
-                                                                MediaCommand::PlayPause => {
-                                                                    player.play_pause()
-                                                                }
-                                                                MediaCommand::Next => player.next(),
-                                                                MediaCommand::Previous => {
-                                                                    player.previous()
-                                                                }
-                                                                MediaCommand::Stop => player.stop(),
-                                                                MediaCommand::VolumeUp => {
-                                                                    let _ = player.set_volume(
-                                                                        player
-                                                                            .get_volume()
-                                                                            .unwrap_or(0.0)
-                                                                            + 0.05,
-                                                                    );
-                                                                    Ok(())
-                                                                }
-                                                                MediaCommand::VolumeDown => {
-                                                                    let _ = player.set_volume(
-                                                                        player
-                                                                            .get_volume()
-                                                                            .unwrap_or(0.0)
-                                                                            - 0.05,
-                                                                    );
-                                                                    Ok(())
-                                                                }
-                                                            };
-                                                            if let Err(e) = res {
-                                                                warn!(
-                                                                    "MPRIS Command Failed: {}",
-                                                                    e
-                                                                );
-                                                            }
-                                                        } else {
-                                                            warn!("MPRIS: No controllable player found");
-                                                        }
-                                                    });
-                                                }
-
-                                                MediaControlMessage::StateUpdate(state) => {
-                                                    info!(
-                                                        "STATE: Remote state update from {}: {:?}",
-                                                        from_device, state.title
-                                                    );
-
-                                                    // Find device ID by name
-                                                    let device_id = {
-                                                        let store =
-                                                            get_devices_store().lock().unwrap();
-                                                        store
-                                                            .values()
-                                                            .find(|d| d.name == from_device)
-                                                            .map(|d| d.id.clone())
-                                                            .unwrap_or_else(|| {
-                                                                "unknown".to_string()
-                                                            })
-                                                    };
-
-                                                    *get_current_media().lock().unwrap() =
-                                                        Some(RemoteMedia {
-                                                            state,
-                                                            source_device_id: device_id,
-                                                        });
-                                                }
-                                            }
-                                        } else {
-                                            warn!("IGNORED: Media control is disabled in settings");
-                                        }
-                                    }
-                                    ConnectedEvent::Telephony {
-                                        from_device,
-                                        from_ip: _,
-                                        from_port: _,
-                                        message,
-                                    } => {
-                                        info!(
-                                            "Received telephony event from {}: {:?}",
-                                            from_device, message
-                                        );
-                                        use connected_core::TelephonyMessage;
-                                        match message {
-                                            TelephonyMessage::ContactsSyncResponse { contacts } => {
-                                                let count = contacts.len();
-                                                set_phone_contacts(contacts);
-                                                mark_contacts_synced();
-                                                // Silent sync - no notification needed
-                                            }
-                                            TelephonyMessage::ConversationsSyncResponse {
-                                                conversations,
-                                            } => {
-                                                set_phone_conversations(conversations);
-                                                mark_messages_synced();
-                                                // Silent sync - no notification needed
-                                            }
-                                            TelephonyMessage::MessagesResponse {
-                                                thread_id,
-                                                messages,
-                                            } => {
-                                                set_phone_messages(thread_id, messages);
-                                                // Silent load - no notification needed
-                                            }
-                                            TelephonyMessage::NewSmsNotification { message } => {
-                                                info!(
-                                                    "NEW SMS NOTIFICATION: from={}, body={}",
-                                                    message.address,
-                                                    &message.body
-                                                        [..std::cmp::min(30, message.body.len())]
-                                                );
-                                                let sender = message
-                                                    .contact_name
-                                                    .clone()
-                                                    .unwrap_or(message.address.clone());
-                                                let preview = if message.body.len() > 50 {
-                                                    format!("{}...", &message.body[..50])
-                                                } else {
-                                                    message.body.clone()
-                                                };
-                                                let thread_id = message.thread_id.clone();
-                                                let msg_timestamp = message.timestamp;
-                                                let msg_body = message.body.clone();
-                                                let msg_address = message.address.clone();
-                                                let msg_contact = message.contact_name.clone();
-
-                                                // Add to existing messages for this thread
-                                                {
-                                                    let mut msgs =
-                                                        get_phone_messages().lock().unwrap();
-                                                    if let Some(thread_msgs) =
-                                                        msgs.get_mut(&thread_id)
-                                                    {
-                                                        thread_msgs.push(message);
-                                                    }
-                                                }
-
-                                                // Update conversation list with new message
-                                                {
-                                                    let mut convos =
-                                                        get_phone_conversations().lock().unwrap();
-
-                                                    // Helper to normalize phone numbers for comparison
-                                                    let normalize_phone = |s: &str| -> String {
-                                                        s.chars()
-                                                            .filter(|c| c.is_ascii_digit())
-                                                            .collect()
-                                                    };
-                                                    let normalized_address =
-                                                        normalize_phone(&msg_address);
-
-                                                    // Find conversation by thread_id first, then by phone address
-                                                    let existing_convo =
-                                                        convos.iter_mut().find(|c| {
-                                                            c.id == thread_id
-                                                                || c.addresses.iter().any(|a| {
-                                                                    normalize_phone(a)
-                                                                        == normalized_address
-                                                                })
-                                                        });
-
-                                                    if let Some(convo) = existing_convo {
-                                                        // Update existing conversation
-                                                        convo.last_message = Some(msg_body.clone());
-                                                        convo.last_timestamp = msg_timestamp;
-                                                        convo.unread_count += 1;
-                                                    } else {
-                                                        // Create new conversation entry
-                                                        use connected_core::telephony::Conversation;
-                                                        let new_convo = Conversation {
-                                                            id: thread_id,
-                                                            addresses: vec![msg_address],
-                                                            contact_names: msg_contact
-                                                                .map(|n| vec![n])
-                                                                .unwrap_or_default(),
-                                                            last_message: Some(msg_body.clone()),
-                                                            last_timestamp: msg_timestamp,
-                                                            unread_count: 1,
-                                                        };
-                                                        convos.push(new_convo);
-                                                    }
-                                                    // Sort by timestamp descending
-                                                    convos.sort_by(|a, b| {
-                                                        b.last_timestamp.cmp(&a.last_timestamp)
-                                                    });
-                                                }
-
-                                                *get_phone_data_update().lock().unwrap() =
-                                                    std::time::Instant::now();
-                                                info!(
-                                                    "Adding notification for SMS from: {}",
-                                                    sender
-                                                );
-                                                add_notification(
-                                                    "New SMS",
-                                                    &format!("From {}: {}", sender, preview),
-                                                    "💬",
-                                                );
-                                                info!("Notification added successfully");
-                                            }
-                                            TelephonyMessage::CallLogResponse { entries } => {
-                                                set_phone_call_log(entries);
-                                                mark_calls_synced();
-                                                // Silent sync - no notification needed
-                                            }
-                                            TelephonyMessage::ActiveCallUpdate { call } => {
-                                                use connected_core::telephony::ActiveCallState;
-
-                                                if let Some(ref c) = call {
-                                                    let caller = c
-                                                        .contact_name
-                                                        .clone()
-                                                        .unwrap_or(c.number.clone());
-
-                                                    // If call ended, add to call log
-                                                    if c.state == ActiveCallState::Ended {
-                                                        let entry = CallLogEntry {
-                                                            id: format!(
-                                                                "call_{}",
-                                                                std::time::SystemTime::now()
-                                                                    .duration_since(
-                                                                        std::time::UNIX_EPOCH
-                                                                    )
-                                                                    .unwrap()
-                                                                    .as_millis()
-                                                            ),
-                                                            number: c.number.clone(),
-                                                            contact_name: c.contact_name.clone(),
-                                                            call_type: if c.is_incoming {
-                                                                CallType::Incoming
-                                                            } else {
-                                                                CallType::Outgoing
-                                                            },
-                                                            timestamp: std::time::SystemTime::now()
-                                                                .duration_since(
-                                                                    std::time::UNIX_EPOCH,
-                                                                )
-                                                                .unwrap()
-                                                                .as_millis()
-                                                                as u64,
-                                                            duration: c.duration,
-                                                            is_read: false,
-                                                        };
-                                                        // Add to beginning of call log
-                                                        let mut log =
-                                                            get_phone_call_log().lock().unwrap();
-                                                        log.insert(0, entry);
-                                                    } else {
-                                                        add_notification(
-                                                            "Phone Call",
-                                                            &format!(
-                                                                "{:?} call from {}",
-                                                                c.state, caller
-                                                            ),
-                                                            "📞",
-                                                        );
-                                                    }
-                                                }
-                                                // Store the active call state
-                                                set_active_call(call.clone());
-                                            }
-                                            _ => {
-                                                // Other telephony messages (requests, etc.)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        error!("Failed to init: {}", e);
-                        add_notification("Init Failed", &e.to_string(), "❌");
-                    }
+                let name = get_device_name_setting().unwrap_or_else(get_hostname);
+                client = start_core(name).await;
+            }
+            AppAction::RenameDevice { new_name } => {
+                if let Some(c) = client.take() {
+                    c.shutdown().await;
                 }
+                set_device_name_setting(new_name.clone());
+                client = start_core(new_name).await;
             }
             AppAction::SendFile { ip, port, path } => {
                 if let Some(c) = &client {
@@ -833,7 +728,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         match c.broadcast_clipboard(text).await {
                             Ok(count) => {
                                 if count == 0 {
-                                    info!("Clipboard broadcast sent to 0 devices (no trusted peers found)");
+                                    info!(
+                                        "Clipboard broadcast sent to 0 devices (no trusted peers found)"
+                                    );
                                 } else {
                                     info!("Clipboard broadcast sent to {} devices", count);
                                 }
@@ -903,43 +800,46 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             } => {
                 if let Some(c) = &client {
                     match c.trust_device(fingerprint.clone(), Some(device_id.clone()), name.clone())
-                    { Err(e) => {
-                        error!("Failed to trust: {}", e);
-                        add_notification("Trust Failed", &e.to_string(), "❌");
-                    } _ => {
-                        // Remove from pairing requests
-                        {
-                            let mut requests = get_pairing_requests().lock().unwrap();
-                            requests.retain(|r| r.fingerprint != fingerprint);
+                    {
+                        Err(e) => {
+                            error!("Failed to trust: {}", e);
+                            add_notification("Trust Failed", &e.to_string(), "❌");
                         }
-
-                        // Update device trust status in store
-                        {
-                            let mut store = get_devices_store().lock().unwrap();
-                            if let Some(d) = store.get_mut(&device_id) {
-                                d.is_trusted = true;
+                        _ => {
+                            // Remove from pairing requests
+                            {
+                                let mut requests = get_pairing_requests().lock().unwrap();
+                                requests.retain(|r| r.fingerprint != fingerprint);
                             }
-                        }
 
-                        add_notification("Paired", "Device trusted successfully", "✅");
-
-                        // Send trust confirmation (HandshakeAck) to the other device
-                        // This is NOT a new handshake - it confirms we accepted their pairing request
-                        let c_clone = c.clone();
-                        let did = device_id.clone();
-                        tokio::spawn(async move {
-                            let devices = c_clone.get_discovered_devices();
-                            if let Some(d) = devices.iter().find(|d| d.id == did) {
-                                if let Some(ip) = d.ip_addr() {
-                                    if let Err(e) =
-                                        c_clone.send_trust_confirmation(ip, d.port).await
-                                    {
-                                        warn!("Failed to send trust confirmation: {}", e);
-                                    }
+                            // Update device trust status in store
+                            {
+                                let mut store = get_devices_store().lock().unwrap();
+                                if let Some(d) = store.get_mut(&device_id) {
+                                    d.is_trusted = true;
                                 }
                             }
-                        });
-                    }}
+
+                            add_notification("Paired", "Device trusted successfully", "✅");
+
+                            // Send trust confirmation (HandshakeAck) to the other device
+                            // This is NOT a new handshake - it confirms we accepted their pairing request
+                            let c_clone = c.clone();
+                            let did = device_id.clone();
+                            tokio::spawn(async move {
+                                let devices = c_clone.get_discovered_devices();
+                                if let Some(d) = devices.iter().find(|d| d.id == did) {
+                                    if let Some(ip) = d.ip_addr() {
+                                        if let Err(e) =
+                                            c_clone.send_trust_confirmation(ip, d.port).await
+                                        {
+                                            warn!("Failed to send trust confirmation: {}", e);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
                 }
             }
             AppAction::RejectDevice { fingerprint } => {
@@ -949,11 +849,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         let mut requests = get_pairing_requests().lock().unwrap();
                         requests.retain(|r| r.fingerprint != fingerprint);
                     }
-                    match c.block_device(fingerprint) { Err(e) => {
-                        error!("Failed to block device: {}", e);
-                    } _ => {
-                        add_notification("Blocked", "Device has been blocked", "🚫");
-                    }}
+                    match c.block_device(fingerprint) {
+                        Err(e) => {
+                            error!("Failed to block device: {}", e);
+                        }
+                        _ => {
+                            add_notification("Blocked", "Device has been blocked", "🚫");
+                        }
+                    }
                 }
             }
             AppAction::UnpairDevice {
@@ -969,41 +872,44 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         store.get(&device_id).cloned()
                     };
 
-                    match c.unpair_device_by_id(&device_id) { Err(e) => {
-                        error!("Failed to unpair: {}", e);
-                        add_notification("Unpair Failed", &e.to_string(), "❌");
-                    } _ => {
-                        // Remove from UI store so it shows as disconnected
-                        {
-                            let mut store = get_devices_store().lock().unwrap();
-                            if let Some(d) = store.get_mut(&device_id) {
-                                d.is_trusted = false;
-                            }
+                    match c.unpair_device_by_id(&device_id) {
+                        Err(e) => {
+                            error!("Failed to unpair: {}", e);
+                            add_notification("Unpair Failed", &e.to_string(), "❌");
                         }
-
-                        // Notify the other device so they also update their UI
-                        // Using UnpairReason::Unpaired which preserves backend trust
-                        if let Some(info) = device_info {
-                            let c_clone = c.clone();
-                            tokio::spawn(async move {
-                                if let Ok(ip) = info.ip.parse() {
-                                    let _ = c_clone
-                                        .send_unpair_notification(
-                                            ip,
-                                            info.port,
-                                            UnpairReason::Unpaired,
-                                        )
-                                        .await;
+                        _ => {
+                            // Remove from UI store so it shows as disconnected
+                            {
+                                let mut store = get_devices_store().lock().unwrap();
+                                if let Some(d) = store.get_mut(&device_id) {
+                                    d.is_trusted = false;
                                 }
-                            });
-                        }
+                            }
 
-                        add_notification(
-                            "Disconnected",
-                            "Device disconnected - can reconnect anytime",
-                            "💔",
-                        );
-                    }}
+                            // Notify the other device so they also update their UI
+                            // Using UnpairReason::Unpaired which preserves backend trust
+                            if let Some(info) = device_info {
+                                let c_clone = c.clone();
+                                tokio::spawn(async move {
+                                    if let Ok(ip) = info.ip.parse() {
+                                        let _ = c_clone
+                                            .send_unpair_notification(
+                                                ip,
+                                                info.port,
+                                                UnpairReason::Unpaired,
+                                            )
+                                            .await;
+                                    }
+                                });
+                            }
+
+                            add_notification(
+                                "Disconnected",
+                                "Device disconnected - can reconnect anytime",
+                                "💔",
+                            );
+                        }
+                    }
                 }
             }
             AppAction::SetPairingMode(enabled) => {
@@ -1034,40 +940,43 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         store.get(&device_id).cloned()
                     };
 
-                    match c.forget_device(&fingerprint) { Err(e) => {
-                        error!("Failed to forget device: {}", e);
-                        add_notification("Forget Failed", &e.to_string(), "❌");
-                    } _ => {
-                        // Update local store to reflect change
-                        {
-                            let mut store = get_devices_store().lock().unwrap();
-                            if let Some(d) = store.get_mut(&device_id) {
-                                d.is_trusted = false;
-                            }
+                    match c.forget_device(&fingerprint) {
+                        Err(e) => {
+                            error!("Failed to forget device: {}", e);
+                            add_notification("Forget Failed", &e.to_string(), "❌");
                         }
-
-                        // Notify the other device that we forgot them
-                        if let Some(info) = device_info {
-                            let c_clone = c.clone();
-                            tokio::spawn(async move {
-                                if let Ok(ip) = info.ip.parse() {
-                                    let _ = c_clone
-                                        .send_unpair_notification(
-                                            ip,
-                                            info.port,
-                                            UnpairReason::Forgotten,
-                                        )
-                                        .await;
+                        _ => {
+                            // Update local store to reflect change
+                            {
+                                let mut store = get_devices_store().lock().unwrap();
+                                if let Some(d) = store.get_mut(&device_id) {
+                                    d.is_trusted = false;
                                 }
-                            });
-                        }
+                            }
 
-                        add_notification(
-                            "Device Forgotten",
-                            "Device will require re-pairing approval",
-                            "🔄",
-                        );
-                    }}
+                            // Notify the other device that we forgot them
+                            if let Some(info) = device_info {
+                                let c_clone = c.clone();
+                                tokio::spawn(async move {
+                                    if let Ok(ip) = info.ip.parse() {
+                                        let _ = c_clone
+                                            .send_unpair_notification(
+                                                ip,
+                                                info.port,
+                                                UnpairReason::Forgotten,
+                                            )
+                                            .await;
+                                    }
+                                });
+                            }
+
+                            add_notification(
+                                "Device Forgotten",
+                                "Device will require re-pairing approval",
+                                "🔄",
+                            );
+                        }
+                    }
                 }
             }
             AppAction::BlockDevice {
@@ -1093,38 +1002,41 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         store.get(&device_id).cloned()
                     };
 
-                    match c.block_device(fingerprint) { Err(e) => {
-                        error!("Failed to block device: {}", e);
-                        add_notification("Block Failed", &e.to_string(), "❌");
-                    } _ => {
-                        // Remove from local store
-                        {
-                            let mut store = get_devices_store().lock().unwrap();
-                            store.remove(&device_id);
+                    match c.block_device(fingerprint) {
+                        Err(e) => {
+                            error!("Failed to block device: {}", e);
+                            add_notification("Block Failed", &e.to_string(), "❌");
                         }
+                        _ => {
+                            // Remove from local store
+                            {
+                                let mut store = get_devices_store().lock().unwrap();
+                                store.remove(&device_id);
+                            }
 
-                        // Notify the other device that we blocked them
-                        if let Some(info) = device_info {
-                            let c_clone = c.clone();
-                            tokio::spawn(async move {
-                                if let Ok(ip) = info.ip.parse() {
-                                    let _ = c_clone
-                                        .send_unpair_notification(
-                                            ip,
-                                            info.port,
-                                            UnpairReason::Blocked,
-                                        )
-                                        .await;
-                                }
-                            });
+                            // Notify the other device that we blocked them
+                            if let Some(info) = device_info {
+                                let c_clone = c.clone();
+                                tokio::spawn(async move {
+                                    if let Ok(ip) = info.ip.parse() {
+                                        let _ = c_clone
+                                            .send_unpair_notification(
+                                                ip,
+                                                info.port,
+                                                UnpairReason::Blocked,
+                                            )
+                                            .await;
+                                    }
+                                });
+                            }
+
+                            add_notification(
+                                "Device Blocked",
+                                "Device will no longer be able to connect",
+                                "🚫",
+                            );
                         }
-
-                        add_notification(
-                            "Device Blocked",
-                            "Device will no longer be able to connect",
-                            "🚫",
-                        );
-                    }}
+                    }
                 }
             }
             AppAction::AcceptFileTransfer { transfer_id } => {
@@ -1141,11 +1053,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if let Some(c) = &client {
                     // Remove from pending requests
                     remove_file_transfer_request(&transfer_id);
-                    match c.reject_file_transfer(&transfer_id) { Err(e) => {
-                        error!("Failed to reject file transfer: {}", e);
-                    } _ => {
-                        add_notification("Transfer Rejected", "File transfer declined", "🚫");
-                    }}
+                    match c.reject_file_transfer(&transfer_id) {
+                        Err(e) => {
+                            error!("Failed to reject file transfer: {}", e);
+                        }
+                        _ => {
+                            add_notification("Transfer Rejected", "File transfer declined", "🚫");
+                        }
+                    }
                 }
             }
             AppAction::SetAutoAcceptFiles(enabled) => {
@@ -1533,8 +1448,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     for name in mpris_names {
                         if let Ok(p_conn) = Connection::get_private(BusType::Session) {
                             if let Ok(player) = Player::new(p_conn, name.clone().into(), 2000) {
-                                match player.get_playback_status() { Ok(status) => {
-                                    match status {
+                                match player.get_playback_status() {
+                                    Ok(status) => match status {
                                         PlaybackStatus::Playing => {
                                             playing_player = Some(player);
                                             break;
@@ -1549,10 +1464,13 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                 any_player = Some(player);
                                             }
                                         }
+                                    },
+                                    _ => {
+                                        if any_player.is_none() {
+                                            any_player = Some(player);
+                                        }
                                     }
-                                } _ => if any_player.is_none() {
-                                    any_player = Some(player);
-                                }}
+                                }
                             }
                         }
                     }

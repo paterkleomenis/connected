@@ -98,6 +98,31 @@ class ConnectedApp(private val context: Context) {
     private val PREF_CLIPBOARD_SYNC = "clipboard_sync"
     private val PREF_MEDIA_CONTROL = "media_control"
     private val PREF_TELEPHONY_ENABLED = "telephony_enabled"
+    private val PREF_DEVICE_NAME = "device_name"
+
+    fun getDeviceName(): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val customName = prefs.getString(PREF_DEVICE_NAME, null)
+        if (customName != null) return customName
+
+        val manufacturer = android.os.Build.MANUFACTURER
+        val model = android.os.Build.MODEL
+        if (model.startsWith(manufacturer, ignoreCase = true)) {
+            return model.replaceFirstChar { it.uppercase() }
+        }
+        return "${manufacturer.replaceFirstChar { it.uppercase() }} $model"
+    }
+
+    fun renameDevice(newName: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(PREF_DEVICE_NAME, newName).apply()
+
+        // Restart service to apply new name
+        cleanup()
+        initialize()
+
+        android.widget.Toast.makeText(context, "Device renamed to $newName", android.widget.Toast.LENGTH_SHORT).show()
+    }
 
     // Helper to find device by name or fall back to first trusted device
     private fun findDeviceByName(fromDevice: String): DiscoveredDevice? {
@@ -1075,7 +1100,7 @@ class ConnectedApp(private val context: Context) {
             val storagePath = context.getExternalFilesDir(null)?.absolutePath ?: ""
 
             uniffi.connected_ffi.initialize(
-                "Android Device",
+                getDeviceName(),
                 "Mobile",
                 0u.toUShort(),
                 storagePath

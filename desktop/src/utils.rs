@@ -128,3 +128,19 @@ pub fn format_file_size(bytes: u64) -> String {
     let s = bytes as f64 / 1024.0f64.powi(i as i32);
     format!("{:.1} {}", s, UNITS[i])
 }
+
+pub fn get_hostname() -> String {
+    if let Ok(name) = std::env::var("HOSTNAME") {
+        return name;
+    }
+    if let Ok(name) = std::env::var("COMPUTERNAME") {
+        // Windows
+        return name;
+    }
+    if let Ok(output) = std::process::Command::new("hostname").output() {
+        if output.status.success() {
+            return String::from_utf8_lossy(&output.stdout).trim().to_string();
+        }
+    }
+    "Desktop".to_string()
+}
