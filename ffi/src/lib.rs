@@ -702,6 +702,13 @@ pub fn initialize(
     bind_port: u16,
     storage_path: String,
 ) -> Result<(), ConnectedFfiError> {
+    // Check if already initialized
+    if INSTANCE.get_or_init(|| RwLock::new(None)).read().is_some() {
+        return Err(ConnectedFfiError::InitializationError {
+            msg: "Client already initialized".into(),
+        });
+    }
+
     init_android_logging();
 
     let runtime = get_runtime();
@@ -735,6 +742,13 @@ pub fn initialize_with_ip(
     ip_address: String,
     storage_path: String,
 ) -> Result<(), ConnectedFfiError> {
+    // Check if already initialized
+    if INSTANCE.get_or_init(|| RwLock::new(None)).read().is_some() {
+        return Err(ConnectedFfiError::InitializationError {
+            msg: "Client already initialized".into(),
+        });
+    }
+
     init_android_logging();
     let runtime = get_runtime();
     let dtype = DeviceType::from_str(&device_type);

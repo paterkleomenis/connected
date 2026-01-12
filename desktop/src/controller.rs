@@ -179,6 +179,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                         // Spawn event loop
                         tokio::spawn(async move {
+                            let last_player_identity =
+                                Arc::new(std::sync::Mutex::new(None::<String>));
+
                             while let Ok(event) = events.recv().await {
                                 match event {
                                     ConnectedEvent::DeviceFound(d) => {
@@ -191,13 +194,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         }
 
                                         let mut store = get_devices_store().lock().unwrap();
-                                        if !store.contains_key(&info.id) {
-                                            add_notification(
-                                                "Device Found",
-                                                &format!("{} available", info.name),
-                                                "📱",
-                                            );
-                                        }
                                         store.insert(info.id.clone(), info);
                                     }
                                     ConnectedEvent::DeviceLost(id) => {
@@ -365,6 +361,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                         "COMMAND: Executing {:?} from {}",
                                                         cmd, from_device
                                                     );
+
+                                                    let last_identity =
+                                                        last_player_identity.clone();
+
                                                     // Execute command via MPRIS with manual scan
                                                     tokio::task::spawn_blocking(move || {
                                                         use dbus::ffidisp::{BusType, Connection};
@@ -415,15 +415,25 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                                 n.starts_with(
                                                                     "org.mpris.MediaPlayer2.",
                                                                 ) && !n.contains("playerctld")
+                                                                    && !n.contains("kdeconnect")
                                                             })
                                                             .collect();
 
-                                                        // Find a player to control (prefer playing one)
-                                                        let mut target_player: Option<Player> =
+                                                        let last_id =
+                                                            last_identity.lock().unwrap().clone();
+
+                                                        let mut playing_player: Option<Player> =
                                                             None;
 
+                                                        let mut preferred_player: Option<Player> =
+                                                            None;
+
+                                                        let mut generic_paused: Option<Player> =
+                                                            None;
+
+                                                        let mut generic_any: Option<Player> = None;
+
                                                         for name in mpris_names {
-                                                            // Use fresh connection for Player
                                                             if let Ok(p_conn) =
                                                                 Connection::get_private(
                                                                     BusType::Session,
@@ -434,30 +444,86 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                                     name.clone().into(),
                                                                     2000,
                                                                 ) {
+                                                                    let identity = player
+                                                                        .identity()
+                                                                        .to_string();
+
+                                                                    let is_last = last_id.as_ref()
+                                                                        == Some(&identity);
+
                                                                     if let Ok(status) =
                                                                         player.get_playback_status()
                                                                     {
-                                                                        if status
-                                                                            == PlaybackStatus::Playing
-                                                                        {
-                                                                            target_player =
+                                                                        match status {
+
+                                                                                                                                    PlaybackStatus::Playing => {
+
+                                                                                                                                        playing_player = Some(player);
+
+                                                                                                                                        break;
+
+                                                                                                                                    }
+
+                                                                                                                                    PlaybackStatus::Paused => {
+
+                                                                                                                                        if is_last {
+
+                                                                                                                                            preferred_player = Some(player);
+
+                                                                                                                                        } else if generic_paused.is_none() {
+
+                                                                                                                                            generic_paused = Some(player);
+
+                                                                                                                                        }
+
+                                                                                                                                    }
+
+                                                                                                                                    _ => {
+
+                                                                                                                                        if is_last {
+
+                                                                                                                                            preferred_player = Some(player);
+
+                                                                                                                                        } else if generic_any.is_none() {
+
+                                                                                                                                            generic_any = Some(player);
+
+                                                                                                                                        }
+
+                                                                                                                                    }
+
+                                                                                                                                }
+                                                                    } else {
+                                                                        if is_last {
+                                                                            preferred_player =
                                                                                 Some(player);
-                                                                            break;
+                                                                        } else if generic_any
+                                                                            .is_none()
+                                                                        {
+                                                                            generic_any =
+                                                                                Some(player);
                                                                         }
-                                                                    }
-                                                                    if target_player.is_none() {
-                                                                        target_player =
-                                                                            Some(player);
                                                                     }
                                                                 }
                                                             }
                                                         }
 
+                                                        let target_player = playing_player
+                                                            .or(preferred_player)
+                                                            .or(generic_paused)
+                                                            .or(generic_any);
+
                                                         if let Some(player) = target_player {
+                                                            // Update last identity
+
+                                                            *last_identity.lock().unwrap() =
+                                                                Some(player.identity().to_string());
+
                                                             info!(
                                                                 "MPRIS: Controlling player: {}",
                                                                 player.identity()
                                                             );
+
                                                             let res = match cmd {
                                                                 MediaCommand::Play => player.play(),
                                                                 MediaCommand::Pause => {
@@ -1425,27 +1491,44 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     let mpris_names: Vec<&String> = names
                         .iter()
                         .filter(|n| {
-                            n.starts_with("org.mpris.MediaPlayer2.") && !n.contains("playerctld")
+                            n.starts_with("org.mpris.MediaPlayer2.")
+                                && !n.contains("playerctld")
+                                && !n.contains("kdeconnect")
                         })
                         .collect();
 
-                    let mut target_player: Option<Player> = None;
+                    let mut playing_player: Option<Player> = None;
+                    let mut paused_player: Option<Player> = None;
+                    let mut any_player: Option<Player> = None;
 
                     for name in mpris_names {
                         if let Ok(p_conn) = Connection::get_private(BusType::Session) {
                             if let Ok(player) = Player::new(p_conn, name.clone().into(), 2000) {
                                 if let Ok(status) = player.get_playback_status() {
-                                    if status == PlaybackStatus::Playing {
-                                        target_player = Some(player);
-                                        break;
+                                    match status {
+                                        PlaybackStatus::Playing => {
+                                            playing_player = Some(player);
+                                            break;
+                                        }
+                                        PlaybackStatus::Paused => {
+                                            if paused_player.is_none() {
+                                                paused_player = Some(player);
+                                            }
+                                        }
+                                        _ => {
+                                            if any_player.is_none() {
+                                                any_player = Some(player);
+                                            }
+                                        }
                                     }
-                                }
-                                if target_player.is_none() {
-                                    target_player = Some(player);
+                                } else if any_player.is_none() {
+                                    any_player = Some(player);
                                 }
                             }
                         }
                     }
+
+                    let target_player = playing_player.or(paused_player).or(any_player);
 
                     if let Some(player) = target_player {
                         info!(

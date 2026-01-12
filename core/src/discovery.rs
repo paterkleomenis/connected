@@ -601,18 +601,6 @@ impl DiscoveryService {
             info!("Cleared {} discovered devices", count);
         }
     }
-
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
-    }
-
-    pub fn is_announced(&self) -> bool {
-        self.announced.load(Ordering::SeqCst)
-    }
-
-    pub fn device_count(&self) -> usize {
-        self.discovered_devices.read().len()
-    }
 }
 
 impl Drop for DiscoveryService {

@@ -118,15 +118,13 @@ pub fn get_file_icon(filename: &str) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub fn format_file_size(bytes: u64) -> String {
-    if bytes >= 1_000_000_000 {
-        format!("{:.1} GB", bytes as f64 / 1_000_000_000.0)
-    } else if bytes >= 1_000_000 {
-        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
-    } else if bytes >= 1_000 {
-        format!("{:.1} KB", bytes as f64 / 1_000.0)
-    } else {
-        format!("{} B", bytes)
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    if bytes == 0 {
+        return "0 B".to_string();
     }
+    let i = (bytes as f64).log(1024.0).floor() as usize;
+    let i = i.min(UNITS.len() - 1);
+    let s = bytes as f64 / 1024.0f64.powi(i as i32);
+    format!("{:.1} {}", s, UNITS[i])
 }

@@ -356,7 +356,7 @@ impl QuicTransport {
         let start = std::time::Instant::now();
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
 
         let connection = self.connect(target_addr).await?;

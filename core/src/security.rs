@@ -177,7 +177,7 @@ impl KeyStore {
                 name,
                 last_seen: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs(),
             },
         );
@@ -197,7 +197,7 @@ impl KeyStore {
                     name: None,
                     last_seen: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
+                        .unwrap_or_default()
                         .as_secs(),
                 },
             );
@@ -238,7 +238,7 @@ impl KeyStore {
             peer.status = PeerStatus::Forgotten;
             peer.last_seen = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs();
         } else {
             // If not known, add as forgotten to prevent auto-trust
@@ -251,7 +251,7 @@ impl KeyStore {
                     name: None,
                     last_seen: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
+                        .unwrap_or_default()
                         .as_secs(),
                 },
             );

@@ -347,10 +347,19 @@ pub fn get_phone_sync_state() -> &'static Arc<Mutex<PhoneSyncState>> {
 }
 
 pub fn set_phone_data_device(device_id: Option<String>) {
-    let current = get_phone_data_device_id().lock().unwrap().clone();
-    if current != device_id {
+    let should_clear = {
+        let mut id_guard = get_phone_data_device_id().lock().unwrap();
+        if *id_guard != device_id {
+            *id_guard = device_id;
+            true
+        } else {
+            false
+        }
+    };
+
+    if should_clear {
         // Device changed, clear cached data and sync state
-        *get_phone_data_device_id().lock().unwrap() = device_id;
+        // We do this outside the id_guard lock to prevent deadlocks
         *get_phone_sync_state().lock().unwrap() = PhoneSyncState::default();
         *get_phone_contacts().lock().unwrap() = Vec::new();
         *get_phone_conversations().lock().unwrap() = Vec::new();

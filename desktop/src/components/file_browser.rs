@@ -4,6 +4,7 @@ use crate::state::{
     get_current_remote_files, get_current_remote_path, get_preview_data, get_remote_files_update,
     DeviceInfo, PreviewData,
 };
+use crate::utils::format_file_size;
 use base64::Engine as _;
 use connected_core::filesystem::{FsEntry, FsEntryType};
 use dioxus::prelude::*;
@@ -195,7 +196,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                         Icon { icon: icon_type, size: 18, color: icon_color.to_string() }
                                     }
                                     span { class: "name", "{entry.name}" }
-                                    span { class: "size", "{format_size(entry.size)}" }
+                                    span { class: "size", "{format_file_size(entry.size)}" }
                                 }
                             }
                         }
@@ -291,28 +292,16 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     "{String::from_utf8_lossy(&data.data)}"
                                 }
                             } else {
-                                div {
-                                    class: "empty-state",
-                                    Icon { icon: IconType::File, size: 48, color: "var(--text-tertiary)".to_string() }
-                                    p { "Preview not available for {data.mime_type}" }
-                                    p { class: "muted", "Size: {format_size(data.data.len() as u64)}" }
-                                }
-                            }
-                        }
-                    }
+                                                                    div {
+                                                                    class: "empty-state",
+                                                                    Icon { icon: IconType::File, size: 48, color: "var(--text-tertiary)".to_string() }
+                                                                    p { "Preview not available for {data.mime_type}" }
+                                                                    p { class: "muted", "Size: {format_file_size(data.data.len() as u64)}" }
+                                                                }
+                                                            }
+                                                        }                    }
                 }
             }
         }
     }
-}
-
-fn format_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    if bytes == 0 {
-        return "—".to_string();
-    }
-    let i = (bytes as f64).log(1024.0).floor() as usize;
-    let i = i.min(UNITS.len() - 1);
-    let s = bytes as f64 / 1024.0f64.powi(i as i32);
-    format!("{:.1} {}", s, UNITS[i])
 }
