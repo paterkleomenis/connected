@@ -87,6 +87,8 @@ class ConnectedApp(private val context: Context) {
     val currentRemotePath = mutableStateOf("/")
     val isBrowsingRemote = mutableStateOf(false)
     private var browsingDevice: DiscoveredDevice? = null
+    val thumbnails = androidx.compose.runtime.mutableStateMapOf<String, android.graphics.Bitmap>()
+    private val requestedThumbnails = mutableSetOf<String>()
 
     private val PREFS_NAME = "ConnectedPrefs"
     private val PREF_ROOT_URI = "root_uri"
@@ -417,6 +419,9 @@ class ConnectedApp(private val context: Context) {
         isBrowsingRemote.value = true
         currentRemotePath.value = path
 
+        // Clear thumbnails/requested for new directory if needed,
+        // but here we keep them cached for session
+
         scope.launch(Dispatchers.IO) {
             try {
                 val files = uniffi.connected_ffi.requestListDir(device.ip, device.port.toUShort(), path)
@@ -441,10 +446,36 @@ class ConnectedApp(private val context: Context) {
         isBrowsingRemote.value = false
         browsingDevice = null
         remoteFiles.clear()
+        thumbnails.clear()
+        requestedThumbnails.clear()
     }
 
     fun getBrowsingDevice(): DiscoveredDevice? {
         return browsingDevice
+    }
+
+    fun getThumbnail(path: String) {
+        if (thumbnails.containsKey(path) || requestedThumbnails.contains(path)) return
+        val device = browsingDevice ?: return
+
+        requestedThumbnails.add(path)
+        scope.launch(Dispatchers.IO) {
+            try {
+                // Mark as requested/loading (optional, could use a separate set or placeholder)
+                // For now just fetch
+                val bytes = uniffi.connected_ffi.requestGetThumbnail(device.ip, device.port.toUShort(), path)
+                if (bytes.isNotEmpty()) {
+                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    if (bitmap != null) {
+                        runOnMainThread {
+                            thumbnails[path] = bitmap
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to get thumbnail for $path: ${e.message}")
+            }
+        }
     }
 
     private val discoveryCallback = object : DiscoveryCallback {
@@ -945,11 +976,22 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    fun sendSmsSendResult(device: DiscoveredDevice, success: Boolean, messageId: String?, error: String?) {
+    fun sendSmsSendResult(
+        device: DiscoveredDevice,
+        success: Boolean,
+        messageId: String?,
+        error: String?
+    ) {
         sendSmsSendResult(device.ip, device.port, success, messageId, error)
     }
 
-    fun sendSmsSendResult(ip: String, port: UShort, success: Boolean, messageId: String?, error: String?) {
+    fun sendSmsSendResult(
+        ip: String,
+        port: UShort,
+        success: Boolean,
+        messageId: String?,
+        error: String?
+    ) {
         try {
             uniffi.connected_ffi.sendSmsSendResult(ip, port.toUShort(), success, messageId, error)
         } catch (e: Exception) {
@@ -1069,7 +1111,11 @@ class ConnectedApp(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 withContext(Dispatchers.Main) {
-                    android.widget.Toast.makeText(context, "Downloading...", android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(
+                        context,
+                        "Downloading...",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
                 }
 
                 val fileName = remotePath.substringAfterLast('/')
@@ -1112,7 +1158,11 @@ class ConnectedApp(private val context: Context) {
             context.startActivity(intent)
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Failed to open file", e)
-            android.widget.Toast.makeText(context, "Cannot open file", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(
+                context,
+                "Cannot open file",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -1214,7 +1264,11 @@ class ConnectedApp(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Pairing failed", e)
-            android.widget.Toast.makeText(context, "Pairing failed: ${e.message}", android.widget.Toast.LENGTH_SHORT)
+            android.widget.Toast.makeText(
+                context,
+                "Pairing failed: ${e.message}",
+                android.widget.Toast.LENGTH_SHORT
+            )
                 .show()
         }
     }
@@ -1263,7 +1317,11 @@ class ConnectedApp(private val context: Context) {
             ).show()
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Forget device failed", e)
-            android.widget.Toast.makeText(context, "Forget failed: ${e.message}", android.widget.Toast.LENGTH_SHORT)
+            android.widget.Toast.makeText(
+                context,
+                "Forget failed: ${e.message}",
+                android.widget.Toast.LENGTH_SHORT
+            )
                 .show()
         }
     }
@@ -1292,7 +1350,11 @@ class ConnectedApp(private val context: Context) {
             ).show()
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Block device failed", e)
-            android.widget.Toast.makeText(context, "Block failed: ${e.message}", android.widget.Toast.LENGTH_SHORT)
+            android.widget.Toast.makeText(
+                context,
+                "Block failed: ${e.message}",
+                android.widget.Toast.LENGTH_SHORT
+            )
                 .show()
         }
     }
@@ -1338,7 +1400,11 @@ class ConnectedApp(private val context: Context) {
     fun rejectDevice(request: PairingRequest) {
         try {
             uniffi.connected_ffi.blockDevice(request.fingerprint)
-            android.widget.Toast.makeText(context, "Blocked ${request.deviceName}", android.widget.Toast.LENGTH_SHORT)
+            android.widget.Toast.makeText(
+                context,
+                "Blocked ${request.deviceName}",
+                android.widget.Toast.LENGTH_SHORT
+            )
                 .show()
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Block device failed", e)
@@ -1481,7 +1547,8 @@ class ConnectedApp(private val context: Context) {
         try {
             val cursor = context.contentResolver.query(uri, null, null, null, null)
             cursor?.use {
-                val nameIndex = it.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME)
+                val nameIndex =
+                    it.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME)
                 if (nameIndex >= 0) {
                     it.moveToFirst()
                     return it.getString(nameIndex)
@@ -1522,7 +1589,8 @@ class ConnectedApp(private val context: Context) {
 
         runOnMainThread {
             try {
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clipboard =
+                    context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 clipboard.primaryClip?.getItemAt(0)?.text?.toString()?.let {
                     lastLocalClipboard = it
                 }
@@ -1564,7 +1632,11 @@ class ConnectedApp(private val context: Context) {
                                         clipboardCallback
                                     )
                                 } catch (e: Exception) {
-                                    Log.e("ConnectedApp", "Failed to sync clipboard to ${device.name}", e)
+                                    Log.e(
+                                        "ConnectedApp",
+                                        "Failed to sync clipboard to ${device.name}",
+                                        e
+                                    )
                                 }
                             }
                         }
@@ -1576,7 +1648,11 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        android.widget.Toast.makeText(context, "Clipboard Sync Started", android.widget.Toast.LENGTH_SHORT).show()
+        android.widget.Toast.makeText(
+            context,
+            "Clipboard Sync Started",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun stopClipboardSync() {
@@ -1585,6 +1661,10 @@ class ConnectedApp(private val context: Context) {
         clipboardSyncJob = null
         lastLocalClipboard = ""
         lastRemoteClipboard = ""
-        android.widget.Toast.makeText(context, "Clipboard Sync Stopped", android.widget.Toast.LENGTH_SHORT).show()
+        android.widget.Toast.makeText(
+            context,
+            "Clipboard Sync Stopped",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
     }
 }

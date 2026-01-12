@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,6 +21,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
@@ -107,6 +110,15 @@ fun RemoteFileBrowser(app: ConnectedApp) {
             }
 
             items(app.remoteFiles) { file ->
+                // Check if it's an image
+                val ext = file.name.substringAfterLast('.', "").lowercase()
+                val isImage = ext in listOf("jpg", "jpeg", "png", "gif", "webp", "bmp")
+
+                // Request thumbnail if needed
+                if (isImage && file.entryType == uniffi.connected_ffi.FfiFsEntryType.FILE) {
+                    app.getThumbnail(file.path)
+                }
+
                 Card(
                     modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth(),
                     onClick = {
@@ -125,12 +137,25 @@ fun RemoteFileBrowser(app: ConnectedApp) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            val iconRes =
-                                if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) R.drawable.ic_folder else R.drawable.ic_file
-                            val iconTint =
-                                if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                            Icon(painterResource(iconRes), contentDescription = null, tint = iconTint)
-                            Spacer(modifier = Modifier.width(8.dp))
+                            if (isImage && app.thumbnails.containsKey(file.path)) {
+                                val bitmap = app.thumbnails[file.path]!!
+                                Image(
+                                    bitmap = bitmap.asImageBitmap(),
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .padding(end = 8.dp)
+                                )
+                            } else {
+                                val iconRes =
+                                    if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) R.drawable.ic_folder else R.drawable.ic_file
+                                val iconTint =
+                                    if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                Icon(painterResource(iconRes), contentDescription = null, tint = iconTint)
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+
                             Text(file.name)
                         }
                         Text(if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) "" else "${file.size} B")
@@ -640,10 +665,36 @@ fun SettingsScreen(
                         Text("Select Specific Folder")
                     }
 
+                    if (connectedApp.isFsProviderRegistered.value) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(
+                            onClick = { connectedApp.stopSharing() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Stop Sharing", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
                 }
             }
         }
 
+        // About Section
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("ℹ️ About", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Connected allows you to seamlessly share files, clipboard, control media, send texts, and make calls between your devices.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
     }
 }
 

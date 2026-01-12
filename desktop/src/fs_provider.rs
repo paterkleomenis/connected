@@ -158,4 +158,44 @@ impl FilesystemProvider for DesktopFilesystemProvider {
             modified,
         })
     }
+
+    fn get_thumbnail(&self, path: &str) -> Result<Vec<u8>> {
+        let full_path = self.resolve_path(path)?;
+
+        // Basic extension check
+        let ext = full_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+
+        if !["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico"].contains(&ext.as_str()) {
+            return Ok(Vec::new());
+        }
+
+        // We use a closure to map image errors to our error type
+        let generate = || -> std::result::Result<Vec<u8>, image::ImageError> {
+            let img = image::open(&full_path)?;
+            let thumb = img.thumbnail(96, 96);
+
+            let mut buffer = std::io::Cursor::new(Vec::new());
+            thumb.write_to(&mut buffer, image::ImageOutputFormat::Jpeg(80))?;
+            Ok(buffer.into_inner())
+        };
+
+        match generate() {
+            Ok(data) => Ok(data),
+            Err(e) => {
+                // Log warning but don't fail hard, just return empty or error
+                // returning error allows caller to handle it (e.g. show default icon)
+                // but "NotImplemented" is what caused the issue before.
+                // Let's return a specific error or empty if we just can't decode it.
+                // A specialized error would be better but Filesystem(String) is fine.
+                Err(connected_core::ConnectedError::Filesystem(format!(
+                    "Thumbnail generation failed: {}",
+                    e
+                )))
+            }
+        }
+    }
 }
