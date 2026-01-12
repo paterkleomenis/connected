@@ -298,13 +298,13 @@ impl QuicTransport {
 
     pub fn invalidate_connection(&self, addr: &SocketAddr) {
         let mut cache = self.connection_cache.write();
-        if let Some(connection) = cache.remove(addr) {
+        match cache.remove(addr) { Some(connection) => {
             // Close the QUIC connection gracefully
             connection.close(VarInt::from_u32(0), b"unpaired");
             info!("Closed and invalidated connection to {}", addr);
-        } else {
+        } _ => {
             debug!("No cached connection to invalidate for {}", addr);
-        }
+        }}
     }
 
     pub async fn get_connection_fingerprint(&self, addr: SocketAddr) -> Option<String> {

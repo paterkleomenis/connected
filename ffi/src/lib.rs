@@ -1262,20 +1262,20 @@ pub fn forget_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
 
 #[uniffi::export]
 pub fn is_device_forgotten(fingerprint: String) -> bool {
-    if let Ok(client) = get_client() {
+    match get_client() { Ok(client) => {
         client.is_device_forgotten(&fingerprint)
-    } else {
+    } _ => {
         false
-    }
+    }}
 }
 
 #[uniffi::export]
 pub fn is_device_trusted(device_id: String) -> bool {
-    if let Ok(client) = get_client() {
+    match get_client() { Ok(client) => {
         client.is_device_trusted(&device_id)
-    } else {
+    } _ => {
         false
-    }
+    }}
 }
 
 #[uniffi::export]

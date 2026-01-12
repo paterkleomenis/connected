@@ -194,11 +194,11 @@ impl DiscoveryService {
 
                 while running_announce.load(Ordering::SeqCst) {
                     if announced.load(Ordering::SeqCst) {
-                        if let Err(e) = Self::do_announce(&daemon, &local_device) {
+                        match Self::do_announce(&daemon, &local_device) { Err(e) => {
                             debug!("Re-announcement failed: {}", e);
-                        } else {
+                        } _ => {
                             debug!("Re-announced device on mDNS");
-                        }
+                        }}
                     }
                     std::thread::sleep(REANNOUNCE_INTERVAL);
                 }

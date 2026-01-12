@@ -456,9 +456,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                                     let is_last = last_id.as_ref()
                                                                         == Some(&identity);
 
-                                                                    if let Ok(status) =
-                                                                        player.get_playback_status()
-                                                                    {
+                                                                    match player.get_playback_status()
+                                                                    { Ok(status) => {
                                                                         match status {
 
                                                                                                                                     PlaybackStatus::Playing => {
@@ -498,7 +497,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                                                                                                     }
 
                                                                                                                                 }
-                                                                    } else {
+                                                                    } _ => {
                                                                         if is_last {
                                                                             preferred_player =
                                                                                 Some(player);
@@ -508,7 +507,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                                             generic_any =
                                                                                 Some(player);
                                                                         }
-                                                                    }
+                                                                    }}
                                                                 }
                                                             }
                                                         }
@@ -903,12 +902,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 device_id,
             } => {
                 if let Some(c) = &client {
-                    if let Err(e) =
-                        c.trust_device(fingerprint.clone(), Some(device_id.clone()), name.clone())
-                    {
+                    match c.trust_device(fingerprint.clone(), Some(device_id.clone()), name.clone())
+                    { Err(e) => {
                         error!("Failed to trust: {}", e);
                         add_notification("Trust Failed", &e.to_string(), "❌");
-                    } else {
+                    } _ => {
                         // Remove from pairing requests
                         {
                             let mut requests = get_pairing_requests().lock().unwrap();
@@ -941,7 +939,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 }
                             }
                         });
-                    }
+                    }}
                 }
             }
             AppAction::RejectDevice { fingerprint } => {
@@ -951,11 +949,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         let mut requests = get_pairing_requests().lock().unwrap();
                         requests.retain(|r| r.fingerprint != fingerprint);
                     }
-                    if let Err(e) = c.block_device(fingerprint) {
+                    match c.block_device(fingerprint) { Err(e) => {
                         error!("Failed to block device: {}", e);
-                    } else {
+                    } _ => {
                         add_notification("Blocked", "Device has been blocked", "🚫");
-                    }
+                    }}
                 }
             }
             AppAction::UnpairDevice {
@@ -971,10 +969,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         store.get(&device_id).cloned()
                     };
 
-                    if let Err(e) = c.unpair_device_by_id(&device_id) {
+                    match c.unpair_device_by_id(&device_id) { Err(e) => {
                         error!("Failed to unpair: {}", e);
                         add_notification("Unpair Failed", &e.to_string(), "❌");
-                    } else {
+                    } _ => {
                         // Remove from UI store so it shows as disconnected
                         {
                             let mut store = get_devices_store().lock().unwrap();
@@ -1005,7 +1003,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             "Device disconnected - can reconnect anytime",
                             "💔",
                         );
-                    }
+                    }}
                 }
             }
             AppAction::SetPairingMode(enabled) => {
@@ -1036,10 +1034,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         store.get(&device_id).cloned()
                     };
 
-                    if let Err(e) = c.forget_device(&fingerprint) {
+                    match c.forget_device(&fingerprint) { Err(e) => {
                         error!("Failed to forget device: {}", e);
                         add_notification("Forget Failed", &e.to_string(), "❌");
-                    } else {
+                    } _ => {
                         // Update local store to reflect change
                         {
                             let mut store = get_devices_store().lock().unwrap();
@@ -1069,7 +1067,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             "Device will require re-pairing approval",
                             "🔄",
                         );
-                    }
+                    }}
                 }
             }
             AppAction::BlockDevice {
@@ -1095,10 +1093,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         store.get(&device_id).cloned()
                     };
 
-                    if let Err(e) = c.block_device(fingerprint) {
+                    match c.block_device(fingerprint) { Err(e) => {
                         error!("Failed to block device: {}", e);
                         add_notification("Block Failed", &e.to_string(), "❌");
-                    } else {
+                    } _ => {
                         // Remove from local store
                         {
                             let mut store = get_devices_store().lock().unwrap();
@@ -1126,7 +1124,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             "Device will no longer be able to connect",
                             "🚫",
                         );
-                    }
+                    }}
                 }
             }
             AppAction::AcceptFileTransfer { transfer_id } => {
@@ -1143,11 +1141,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if let Some(c) = &client {
                     // Remove from pending requests
                     remove_file_transfer_request(&transfer_id);
-                    if let Err(e) = c.reject_file_transfer(&transfer_id) {
+                    match c.reject_file_transfer(&transfer_id) { Err(e) => {
                         error!("Failed to reject file transfer: {}", e);
-                    } else {
+                    } _ => {
                         add_notification("Transfer Rejected", "File transfer declined", "🚫");
-                    }
+                    }}
                 }
             }
             AppAction::SetAutoAcceptFiles(enabled) => {
@@ -1535,7 +1533,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     for name in mpris_names {
                         if let Ok(p_conn) = Connection::get_private(BusType::Session) {
                             if let Ok(player) = Player::new(p_conn, name.clone().into(), 2000) {
-                                if let Ok(status) = player.get_playback_status() {
+                                match player.get_playback_status() { Ok(status) => {
                                     match status {
                                         PlaybackStatus::Playing => {
                                             playing_player = Some(player);
@@ -1552,9 +1550,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             }
                                         }
                                     }
-                                } else if any_player.is_none() {
+                                } _ => if any_player.is_none() {
                                     any_player = Some(player);
-                                }
+                                }}
                             }
                         }
                     }
