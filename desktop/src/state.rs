@@ -153,6 +153,8 @@ static REMOTE_FILES_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock:
 static PREVIEW_DATA: OnceLock<Arc<Mutex<Option<PreviewData>>>> = OnceLock::new();
 static MEDIA_ENABLED: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
 static CURRENT_MEDIA: OnceLock<Arc<Mutex<Option<RemoteMedia>>>> = OnceLock::new();
+static THUMBNAILS: OnceLock<Arc<Mutex<HashMap<String, Vec<u8>>>>> = OnceLock::new();
+static THUMBNAILS_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 
 // Telephony state
 static PHONE_CONTACTS: OnceLock<Arc<Mutex<Vec<Contact>>>> = OnceLock::new();
@@ -281,6 +283,14 @@ pub fn get_remote_files_update() -> &'static Arc<Mutex<std::time::Instant>> {
 
 pub fn get_preview_data() -> &'static Arc<Mutex<Option<PreviewData>>> {
     PREVIEW_DATA.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+pub fn get_thumbnails() -> &'static Arc<Mutex<HashMap<String, Vec<u8>>>> {
+    THUMBNAILS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn get_thumbnails_update() -> &'static Arc<Mutex<std::time::Instant>> {
+    THUMBNAILS_UPDATE.get_or_init(|| Arc::new(Mutex::new(std::time::Instant::now())))
 }
 
 // Telephony getters

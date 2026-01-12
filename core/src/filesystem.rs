@@ -53,6 +53,12 @@ pub enum FilesystemMessage {
     DeleteRequest {
         path: String,
     },
+    GetThumbnailRequest {
+        path: String,
+    },
+    GetThumbnailResponse {
+        data: Vec<u8>,
+    },
     Error {
         message: String,
     },
@@ -67,5 +73,8 @@ pub trait FilesystemProvider: Send + Sync {
     fn read_file(&self, path: &str, offset: u64, size: u64) -> crate::error::Result<Vec<u8>>;
     fn write_file(&self, path: &str, offset: u64, data: &[u8]) -> crate::error::Result<u64>;
     fn get_metadata(&self, path: &str) -> crate::error::Result<FsEntry>;
-    // Add other methods as needed
+
+    fn get_thumbnail(&self, _path: &str) -> crate::error::Result<Vec<u8>> {
+        Err(crate::error::ConnectedError::NotImplemented)
+    }
 }

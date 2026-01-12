@@ -2,10 +2,16 @@ package com.connected.app
 
 import android.content.Context
 import android.net.Uri
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import androidx.documentfile.provider.DocumentFile
 import uniffi.connected_ffi.*
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.InputStream
 
 class AndroidFilesystemProvider(private val context: Context, private val rootUri: Uri) : FilesystemProviderCallback {
 
@@ -155,6 +161,114 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
                 size = file.length().toULong(),
                 modified = (file.lastModified() / 1000).toULong()
             )
+        }
+    }
+
+    override fun getThumbnail(path: String): ByteArray {
+        val THUMB_SIZE = 96 // Target size 96x96
+
+        val ext = path.substringAfterLast('.', "").lowercase()
+        if (ext !in listOf("jpg", "jpeg", "png", "gif", "webp", "bmp")) {
+            return ByteArray(0)
+        }
+
+        try {
+            // 1. Determine rotation
+            var rotation = 0f
+            if (isRawFile) {
+                val file = resolveRawFile(path) ?: return ByteArray(0)
+                if (!file.exists()) return ByteArray(0)
+                val exif = ExifInterface(file.absolutePath)
+                rotation = getRotationFromExif(exif)
+            } else {
+                val file = resolveDocumentFile(path) ?: return ByteArray(0)
+                // ExifInterface requires InputStream or FileDescriptor
+                // API 24+ supports InputStream
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                    context.contentResolver.openInputStream(file.uri)?.use {
+                        val exif = ExifInterface(it)
+                        rotation = getRotationFromExif(exif)
+                    }
+                }
+            }
+
+            // 2. Decode bounds
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+
+            if (isRawFile) {
+                val file = resolveRawFile(path) ?: return ByteArray(0)
+                BitmapFactory.decodeFile(file.absolutePath, options)
+            } else {
+                val file = resolveDocumentFile(path) ?: return ByteArray(0)
+                context.contentResolver.openInputStream(file.uri)?.use {
+                    BitmapFactory.decodeStream(it, null, options)
+                } ?: return ByteArray(0)
+            }
+
+            if (options.outWidth <= 0 || options.outHeight <= 0) return ByteArray(0)
+
+            // 3. Calculate sample size
+            var inSampleSize = 1
+            if (options.outHeight > THUMB_SIZE || options.outWidth > THUMB_SIZE) {
+                val halfHeight = options.outHeight / 2
+                val halfWidth = options.outWidth / 2
+                while (halfHeight / inSampleSize >= THUMB_SIZE && halfWidth / inSampleSize >= THUMB_SIZE) {
+                    inSampleSize *= 2
+                }
+            }
+
+            // 4. Decode bitmap
+            options.inJustDecodeBounds = false
+            options.inSampleSize = inSampleSize
+
+            var bitmap = if (isRawFile) {
+                val file = resolveRawFile(path)!!
+                BitmapFactory.decodeFile(file.absolutePath, options)
+            } else {
+                val file = resolveDocumentFile(path)!!
+                context.contentResolver.openInputStream(file.uri)?.use {
+                    BitmapFactory.decodeStream(it, null, options)
+                }
+            }
+
+            if (bitmap != null) {
+                // 5. Apply rotation if needed
+                if (rotation != 0f) {
+                    val matrix = Matrix()
+                    matrix.postRotate(rotation)
+                    val rotatedBitmap = Bitmap.createBitmap(
+                        bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+                    )
+                    if (rotatedBitmap != bitmap) {
+                        bitmap.recycle()
+                        bitmap = rotatedBitmap
+                    }
+                }
+
+                // 6. Compress
+                val stream = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+                bitmap.recycle()
+                return stream.toByteArray()
+            }
+        } catch (e: Exception) {
+            // Ignore errors
+        }
+        return ByteArray(0)
+    }
+
+    private fun getRotationFromExif(exif: ExifInterface): Float {
+        val orientation = exif.getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_NORMAL
+        )
+        return when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
         }
     }
 }

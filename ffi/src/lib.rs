@@ -1445,6 +1445,7 @@ pub trait FilesystemProviderCallback: Send + Sync {
     fn read_file(&self, path: String, offset: u64, size: u64) -> Result<Vec<u8>, FilesystemError>;
     fn write_file(&self, path: String, offset: u64, data: Vec<u8>) -> Result<u64, FilesystemError>;
     fn get_metadata(&self, path: String) -> Result<FfiFsEntry, FilesystemError>;
+    fn get_thumbnail(&self, path: String) -> Result<Vec<u8>, FilesystemError>;
 }
 
 static FS_PROVIDER: RwLock<Option<Box<dyn FilesystemProviderCallback>>> = RwLock::new(None);
@@ -1496,6 +1497,17 @@ impl connected_core::filesystem::FilesystemProvider for FfiFilesystemProviderBri
             cb.get_metadata(path.to_string())
                 .map_err(|e| connected_core::ConnectedError::Filesystem(e.to_string()))
                 .map(Into::into)
+        } else {
+            Err(connected_core::ConnectedError::Filesystem(
+                "No provider registered".to_string(),
+            ))
+        }
+    }
+
+    fn get_thumbnail(&self, path: &str) -> connected_core::Result<Vec<u8>> {
+        if let Some(cb) = FS_PROVIDER.read().as_ref() {
+            cb.get_thumbnail(path.to_string())
+                .map_err(|e| connected_core::ConnectedError::Filesystem(e.to_string()))
         } else {
             Err(connected_core::ConnectedError::Filesystem(
                 "No provider registered".to_string(),
@@ -1558,6 +1570,26 @@ pub fn request_download_file(
     })?;
 
     Ok(bytes)
+}
+
+#[uniffi::export]
+pub fn request_get_thumbnail(
+    target_ip: String,
+    target_port: u16,
+    path: String,
+) -> Result<Vec<u8>, ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let data =
+        get_runtime().block_on(async { client.fs_get_thumbnail(ip, target_port, path).await })?;
+
+    Ok(data)
 }
 
 #[uniffi::export]

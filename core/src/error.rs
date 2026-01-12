@@ -82,6 +82,9 @@ pub enum ConnectedError {
 
     #[error("Filesystem error: {0}")]
     Filesystem(String),
+
+    #[error("Not implemented")]
+    NotImplemented,
 }
 
 pub type Result<T> = std::result::Result<T, ConnectedError>;

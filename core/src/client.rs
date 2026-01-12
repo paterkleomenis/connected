@@ -258,6 +258,29 @@ impl ConnectedClient {
         Ok(offset)
     }
 
+    pub async fn fs_get_thumbnail(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        path: String,
+    ) -> Result<Vec<u8>> {
+        use crate::filesystem::{FilesystemMessage, STREAM_TYPE_FS};
+
+        let addr = SocketAddr::new(target_ip, target_port);
+        let (mut send, mut recv) = self.transport.open_stream(addr, STREAM_TYPE_FS).await?;
+
+        let req = FilesystemMessage::GetThumbnailRequest { path };
+        crate::file_transfer::send_message(&mut send, &req).await?;
+
+        let resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+
+        match resp {
+            FilesystemMessage::GetThumbnailResponse { data } => Ok(data),
+            FilesystemMessage::Error { message } => Err(ConnectedError::Protocol(message)),
+            _ => Err(ConnectedError::Protocol("Unexpected response".to_string())),
+        }
+    }
+
     pub fn is_auto_accept_files(&self) -> bool {
         self.auto_accept_files.load(Ordering::SeqCst)
     }
@@ -1446,6 +1469,18 @@ impl ConnectedClient {
                                                     Ok(entry) => {
                                                         FilesystemMessage::GetMetadataResponse {
                                                             entry,
+                                                        }
+                                                    }
+                                                    Err(e) => FilesystemMessage::Error {
+                                                        message: e.to_string(),
+                                                    },
+                                                }
+                                            }
+                                            FilesystemMessage::GetThumbnailRequest { path } => {
+                                                match p.get_thumbnail(&path) {
+                                                    Ok(data) => {
+                                                        FilesystemMessage::GetThumbnailResponse {
+                                                            data,
                                                         }
                                                     }
                                                     Err(e) => FilesystemMessage::Error {

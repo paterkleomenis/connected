@@ -2,12 +2,13 @@ use crate::components::icon::{get_file_icon_type, Icon, IconType};
 use crate::controller::AppAction;
 use crate::state::{
     get_current_remote_files, get_current_remote_path, get_preview_data, get_remote_files_update,
-    DeviceInfo, PreviewData,
+    get_thumbnails, get_thumbnails_update, DeviceInfo, PreviewData,
 };
 use crate::utils::format_file_size;
 use base64::Engine as _;
 use connected_core::filesystem::{FsEntry, FsEntryType};
 use dioxus::prelude::*;
+use std::collections::{HashMap, HashSet};
 
 #[component]
 pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
@@ -18,6 +19,11 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let mut last_update_seen = use_signal(|| *get_remote_files_update().lock().unwrap());
     let mut context_menu = use_signal(|| Option::<(String, String, i32, i32)>::None);
     let mut preview_content = use_signal(|| Option::<PreviewData>::None);
+
+    // Thumbnail state
+    let mut thumbnails = use_signal(|| HashMap::<String, String>::new()); // path -> base64
+    let mut last_thumbnails_update = use_signal(|| *get_thumbnails_update().lock().unwrap());
+    let mut requested_thumbnails = use_signal(|| HashSet::<String>::new());
 
     use_effect(use_reactive(&device, move |device| {
         loading.set(true);
@@ -31,6 +37,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     use_future(move || async move {
         loop {
             let global_update = *get_remote_files_update().lock().unwrap();
+            let thumbnails_ts = *get_thumbnails_update().lock().unwrap();
             let new_files = get_current_remote_files().lock().unwrap().clone();
             let new_path = get_current_remote_path().lock().unwrap().clone();
 
@@ -64,7 +71,29 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
 
             if new_path != *current_path.read() {
                 current_path.set(new_path);
+                // Clear requested thumbnails for new path to allow re-requesting if revisited (or handle cleanup)
+                // Actually, caching in `state::THUMBNAILS` is persistent for the session,
+                // so we don't strictly need to clear `requested` unless we want to retry failed ones.
+                // But for simplicity, we keep `requested` to avoid spamming the same request.
             }
+
+            // Sync thumbnails if updated
+            if thumbnails_ts != *last_thumbnails_update.read() {
+                let thumbs_lock = get_thumbnails().lock().unwrap();
+                // We only need to convert thumbnails relevant to current files to avoid massive map
+                // But `THUMBNAILS` global store grows. For UI signal, let's just copy all for now
+                // or optimize to only what's visible? Dioxus diffing handles it well usually.
+                let mut new_thumbs = HashMap::new();
+                for (k, v) in thumbs_lock.iter() {
+                    new_thumbs.insert(
+                        k.clone(),
+                        base64::engine::general_purpose::STANDARD.encode(v),
+                    );
+                }
+                thumbnails.set(new_thumbs);
+                last_thumbnails_update.set(thumbnails_ts);
+            }
+
             async_std::task::sleep(std::time::Duration::from_millis(200)).await;
         }
     });
@@ -151,6 +180,25 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                 FsEntryType::Directory => "var(--accent)",
                                 _ => "var(--text-secondary)",
                             };
+
+                            let is_image = ["jpg", "jpeg", "png", "gif", "webp", "bmp"]
+                                .contains(&entry.name.split('.').last().unwrap_or("").to_lowercase().as_str());
+
+                            // Request thumbnail if needed
+                            if is_image && matches!(entry.entry_type, FsEntryType::File) {
+                                let has_thumb = thumbnails.read().contains_key(&entry.path);
+                                let already_requested = requested_thumbnails.read().contains(&entry.path);
+
+                                if !has_thumb && !already_requested {
+                                    requested_thumbnails.write().insert(entry.path.clone());
+                                    action_tx.send(AppAction::GetThumbnail {
+                                        ip: device.ip.clone(),
+                                        port: device.port,
+                                        path: entry.path.clone(),
+                                    });
+                                }
+                            }
+
                             rsx! {
                                 div {
                                     class: "{entry_class}",
@@ -193,7 +241,14 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     },
                                     span {
                                         class: "icon",
-                                        Icon { icon: icon_type, size: 18, color: icon_color.to_string() }
+                                        if is_image && thumbnails.read().contains_key(&entry.path) {
+                                            img {
+                                                src: "data:image/jpeg;base64,{thumbnails.read().get(&entry.path).unwrap()}",
+                                                style: "width: 24px; height: 24px; object-fit: cover; border-radius: 4px; display: block;"
+                                            }
+                                        } else {
+                                            Icon { icon: icon_type, size: 18, color: icon_color.to_string() }
+                                        }
                                     }
                                     span { class: "name", "{entry.name}" }
                                     span { class: "size", "{format_file_size(entry.size)}" }

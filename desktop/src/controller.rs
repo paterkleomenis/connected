@@ -90,6 +90,11 @@ pub enum AppAction {
         remote_path: String,
         filename: String,
     },
+    GetThumbnail {
+        ip: String,
+        port: u16,
+        path: String,
+    },
     ClosePreview,
     ToggleMediaControl(bool),
     SendMediaCommand {
@@ -1263,6 +1268,32 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 Err(e) => {
                                     error!("Failed to preview file: {}", e);
                                     add_notification("Preview Failed", &e.to_string(), "❌");
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            AppAction::GetThumbnail { ip, port, path } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    let ip_str = ip.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip_str.parse() {
+                            // Don't fetch if we already have it (though controller logic usually implies intent to fetch)
+                            // But strictly speaking, the UI might check before sending action.
+                            // Here we just fetch.
+                            match c.fs_get_thumbnail(ip_addr, port, path.clone()).await {
+                                Ok(data) => {
+                                    if !data.is_empty() {
+                                        use crate::state::{get_thumbnails, get_thumbnails_update};
+                                        get_thumbnails().lock().unwrap().insert(path, data);
+                                        *get_thumbnails_update().lock().unwrap() =
+                                            std::time::Instant::now();
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to get thumbnail for {}: {}", path, e);
                                 }
                             }
                         }
