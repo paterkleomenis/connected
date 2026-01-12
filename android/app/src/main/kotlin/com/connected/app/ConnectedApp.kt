@@ -90,6 +90,9 @@ class ConnectedApp(private val context: Context) {
     val thumbnails = androidx.compose.runtime.mutableStateMapOf<String, android.graphics.Bitmap>()
     private val requestedThumbnails = mutableSetOf<String>()
 
+    // Network State
+    private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
+
     private val PREFS_NAME = "ConnectedPrefs"
     private val PREF_ROOT_URI = "root_uri"
     private val PREF_CLIPBOARD_SYNC = "clipboard_sync"
@@ -1053,6 +1056,14 @@ class ConnectedApp(private val context: Context) {
 
     fun initialize() {
         try {
+            // Acquire MulticastLock for mDNS
+            val wifiManager =
+                context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            multicastLock = wifiManager.createMulticastLock("ConnectedMulticastLock")
+            multicastLock?.setReferenceCounted(true)
+            multicastLock?.acquire()
+            Log.d("ConnectedApp", "Multicast lock acquired")
+
             // Create a dedicated download directory in the app's private storage
             // The core will append "downloads" to the storage path we provide
             downloadDir = File(context.getExternalFilesDir(null), "downloads")
@@ -1501,6 +1512,97 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    fun sendFolderToDevice(device: DiscoveredDevice, treeUri: Uri) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val documentFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+                if (documentFile == null) {
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Invalid folder selection",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    return@launch
+                }
+
+                val folderName = documentFile.name ?: "Folder"
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Preparing folder: $folderName...",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+
+                // Create a temporary directory structure
+                val tempRoot = File(context.cacheDir, "folder_transfers")
+                if (tempRoot.exists()) {
+                    tempRoot.deleteRecursively()
+                }
+                tempRoot.mkdirs()
+
+                val destFolder = File(tempRoot, folderName)
+
+                if (copyDocumentFileToLocal(documentFile, destFolder)) {
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Sending folder: $folderName",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    uniffi.connected_ffi.sendFile(device.ip, device.port.toUShort(), destFolder.absolutePath)
+                } else {
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Failed to prepare folder",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Send folder failed", e)
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Failed to send folder: ${e.message}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun copyDocumentFileToLocal(source: androidx.documentfile.provider.DocumentFile, dest: File): Boolean {
+        if (source.isDirectory) {
+            if (!dest.exists() && !dest.mkdirs()) return false
+
+            val files = source.listFiles()
+            for (child in files) {
+                val childDest = File(dest, child.name ?: "unknown")
+                if (!copyDocumentFileToLocal(child, childDest)) return false
+            }
+            return true
+        } else {
+            // Copy file content
+            return try {
+                context.contentResolver.openInputStream(source.uri)?.use { input ->
+                    dest.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                true
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to copy file ${source.name}", e)
+                false
+            }
+        }
+    }
+
     // Helper method to get real path from content URI
     private fun getRealPathFromUri(contentUri: String): String? {
         try {
@@ -1567,6 +1669,13 @@ class ConnectedApp(private val context: Context) {
     fun cleanup() {
         stopClipboardSync()
         uniffi.connected_ffi.shutdown()
+
+        try {
+            multicastLock?.release()
+            Log.d("ConnectedApp", "Multicast lock released")
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Error releasing multicast lock", e)
+        }
     }
 
     fun toggleClipboardSync() {

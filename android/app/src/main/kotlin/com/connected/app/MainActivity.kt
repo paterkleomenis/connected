@@ -50,6 +50,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val sendFolderLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let { selectedUri ->
+            connectedApp.getSelectedDeviceForFileTransfer()?.let { device ->
+                connectedApp.sendFolderToDevice(device, selectedUri)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -62,7 +70,7 @@ class MainActivity : ComponentActivity() {
                     if (connectedApp.isBrowsingRemote.value) {
                         RemoteFileBrowser(connectedApp)
                     } else {
-                        MainAppNavigation(connectedApp, filePickerLauncher, folderPickerLauncher)
+                        MainAppNavigation(connectedApp, filePickerLauncher, folderPickerLauncher, sendFolderLauncher)
                     }
                 }
             }
@@ -192,7 +200,8 @@ enum class Screen {
 fun MainAppNavigation(
     connectedApp: ConnectedApp,
     filePickerLauncher: ActivityResultLauncher<String>? = null,
-    folderPickerLauncher: ActivityResultLauncher<Uri?>? = null
+    folderPickerLauncher: ActivityResultLauncher<Uri?>? = null,
+    sendFolderLauncher: ActivityResultLauncher<Uri?>? = null
 ) {
     var currentScreen by remember { mutableStateOf(Screen.Home) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -231,7 +240,7 @@ fun MainAppNavigation(
     ) { paddingValues ->
         Box(modifier = Modifier.padding(paddingValues)) {
             when (currentScreen) {
-                Screen.Home -> HomeScreen(connectedApp, filePickerLauncher)
+                Screen.Home -> HomeScreen(connectedApp, filePickerLauncher, sendFolderLauncher)
                 Screen.Settings -> SettingsScreen(connectedApp, folderPickerLauncher)
             }
         }
@@ -282,7 +291,8 @@ fun MainAppNavigation(
 @Composable
 fun HomeScreen(
     connectedApp: ConnectedApp,
-    filePickerLauncher: ActivityResultLauncher<String>? = null
+    filePickerLauncher: ActivityResultLauncher<String>? = null,
+    sendFolderLauncher: ActivityResultLauncher<Uri?>? = null
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text(
@@ -316,7 +326,7 @@ fun HomeScreen(
         } else {
             LazyColumn(modifier = Modifier.weight(1f)) {
                 items(connectedApp.devices) { device ->
-                    DeviceItem(device, connectedApp, filePickerLauncher)
+                    DeviceItem(device, connectedApp, filePickerLauncher, sendFolderLauncher)
                 }
             }
         }
@@ -696,7 +706,8 @@ fun PermissionStatusRow(label: String, granted: Boolean) {
 fun DeviceItem(
     device: DiscoveredDevice,
     app: ConnectedApp,
-    filePickerLauncher: ActivityResultLauncher<String>? = null
+    filePickerLauncher: ActivityResultLauncher<String>? = null,
+    sendFolderLauncher: ActivityResultLauncher<Uri?>? = null
 ) {
     val isTrusted = app.trustedDevices.contains(device.id)
     val isPending = app.pendingPairing.contains(device.id)
@@ -769,6 +780,20 @@ fun DeviceItem(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("Send Folder") },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_folder),
+                                        contentDescription = null
+                                    )
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    app.setSelectedDeviceForFileTransfer(device)
+                                    sendFolderLauncher?.launch(null)
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Send Clipboard") },
                                 leadingIcon = {
