@@ -215,7 +215,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                                     path: entry.path.clone(),
                                                 });
                                             } else {
-                                                action_tx.send(AppAction::DownloadFile {
+                                                action_tx.send(AppAction::PreviewFile {
                                                     ip: ip.clone(),
                                                     port,
                                                     remote_path: entry.path.clone(),
@@ -269,27 +269,6 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 div {
                     class: "context-menu",
                     style: "top: {y}px; left: {x}px;",
-                    div {
-                        class: "menu-item",
-                        onclick: {
-                            let ip = device.ip.clone();
-                            let port = device.port;
-                            let path = path.clone();
-                            let name = name.clone();
-                            move |evt: Event<MouseData>| {
-                                evt.stop_propagation();
-                                context_menu.set(None);
-                                action_tx.send(AppAction::PreviewFile {
-                                    ip: ip.clone(),
-                                    port,
-                                    remote_path: path.clone(),
-                                    filename: name.clone(),
-                                });
-                            }
-                        },
-                        Icon { icon: IconType::Search, size: 14, color: "currentColor".to_string() }
-                        span { " Preview" }
-                    }
                     div {
                         class: "menu-item",
                         onclick: {
