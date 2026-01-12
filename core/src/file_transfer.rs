@@ -75,17 +75,110 @@ impl FileTransfer {
         file_path: P,
         progress_tx: Option<mpsc::UnboundedSender<TransferProgress>>,
     ) -> Result<()> {
-        let path = file_path.as_ref();
+        let mut path = file_path.as_ref().to_path_buf();
+        let mut is_temp_file = false;
+
+        // Check if directory
+        if path.is_dir() {
+            let dir_path = path.clone();
+            let dir_name = dir_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("folder")
+                .to_string();
+
+            info!("Archiving directory: {}", dir_name);
+
+            // Notify compression start (optional, maybe use a distinct state later)
+            if let Some(ref tx) = progress_tx {
+                let _ = tx.send(TransferProgress::Pending {
+                    filename: format!("{}.zip", dir_name),
+                    total_size: 0,
+                    mime_type: Some("application/zip".to_string()),
+                });
+            }
+
+            // Run compression in blocking thread
+            let temp_archive_path =
+                tokio::task::spawn_blocking(move || -> std::io::Result<std::path::PathBuf> {
+                    let temp_dir = std::env::temp_dir();
+                    let archive_name = format!("{}.zip", dir_name);
+                    let archive_path = temp_dir.join(archive_name);
+
+                    let file = std::fs::File::create(&archive_path)?;
+                    let mut zip = zip::ZipWriter::new(file);
+                    let options = zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated)
+                        .unix_permissions(0o755);
+
+                    let walk_dir = walkdir::WalkDir::new(&dir_path);
+                    let it = walk_dir.into_iter();
+
+                    for entry in it {
+                        let entry =
+                            entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                        let path = entry.path();
+                        let name = path
+                            .strip_prefix(&dir_path.parent().unwrap_or(&dir_path))
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+                            .to_string_lossy()
+                            .into_owned();
+
+                        if path.is_file() {
+                            zip.start_file(name, options)
+                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                            let mut f = std::fs::File::open(path)?;
+                            std::io::copy(&mut f, &mut zip)?;
+                        } else if !name.is_empty() {
+                            zip.add_directory(name, options)
+                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                        }
+                    }
+                    zip.finish()
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+                    Ok(archive_path)
+                })
+                .await
+                .map_err(|e| {
+                    ConnectedError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
+                })??;
+
+            path = temp_archive_path;
+            is_temp_file = true;
+        }
 
         // Open and get file metadata
-        let mut file = File::open(path).await?;
-        let metadata = file.metadata().await?;
+        let mut file = match File::open(&path).await {
+            Ok(f) => f,
+            Err(e) => {
+                if is_temp_file {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+                return Err(ConnectedError::Io(e));
+            }
+        };
+
+        let metadata = match file.metadata().await {
+            Ok(m) => m,
+            Err(e) => {
+                if is_temp_file {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+                return Err(ConnectedError::Io(e));
+            }
+        };
         let file_size = metadata.len();
 
         let filename = path
             .file_name()
             .and_then(|n| n.to_str())
-            .ok_or_else(|| ConnectedError::InvalidAddress("Invalid filename".to_string()))?
+            .ok_or_else(|| {
+                if is_temp_file {
+                    // Try to clean up best effort, though we can't await easily in closure if we panic but here we are ok
+                }
+                ConnectedError::InvalidAddress("Invalid filename".to_string())
+            })?
             .to_string();
 
         info!("Starting file transfer: {} ({} bytes)", filename, file_size);
@@ -99,22 +192,53 @@ impl FileTransfer {
         }
 
         // Open bidirectional stream for file transfer
-        let (mut send, mut recv) = self.connection.open_bi().await?;
+
+        let (mut send, mut recv) = match self.connection.open_bi().await {
+            Ok(s) => s,
+
+            Err(e) => {
+                if is_temp_file {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+
+                return Err(ConnectedError::QuicConnection(e));
+            }
+        };
 
         // Write Stream Type Prefix
-        send.write_all(&[STREAM_TYPE_FILE]).await?;
+
+        if let Err(e) = send.write_all(&[STREAM_TYPE_FILE]).await {
+            if is_temp_file {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
+
+            return Err(ConnectedError::QuicWrite(e));
+        }
 
         // Send transfer request
         let request = FileTransferMessage::SendRequest {
             filename: filename.clone(),
             size: file_size,
-            mime_type: mime_guess::from_path(path).first().map(|m| m.to_string()),
+            mime_type: mime_guess::from_path(&path).first().map(|m| m.to_string()),
         };
 
-        send_message(&mut send, &request).await?;
+        if let Err(e) = send_message(&mut send, &request).await {
+            if is_temp_file {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
+            return Err(e);
+        }
 
         // Wait for accept/reject
-        let response: FileTransferMessage = recv_message(&mut recv).await?;
+        let response: FileTransferMessage = match recv_message(&mut recv).await {
+            Ok(r) => r,
+            Err(e) => {
+                if is_temp_file {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+                return Err(e);
+            }
+        };
 
         match response {
             FileTransferMessage::Accept => {
@@ -127,9 +251,15 @@ impl FileTransfer {
                         error: format!("Rejected: {}", reason),
                     });
                 }
+                if is_temp_file {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
                 return Err(ConnectedError::TransferRejected(reason));
             }
             _ => {
+                if is_temp_file {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
                 return Err(ConnectedError::Protocol(
                     "Unexpected response to file transfer request".to_string(),
                 ));
@@ -143,14 +273,30 @@ impl FileTransfer {
         let mut last_progress_update = std::time::Instant::now();
 
         loop {
-            let bytes_read = file.read(&mut buffer).await?;
+            let bytes_read = match file.read(&mut buffer).await {
+                Ok(n) => n,
+                Err(e) => {
+                    if is_temp_file {
+                        let _ = tokio::fs::remove_file(&path).await;
+                    }
+                    return Err(ConnectedError::Io(e));
+                }
+            };
             if bytes_read == 0 {
                 break;
             }
 
             let chunk = &buffer[..bytes_read];
+
             hasher.update(chunk);
-            send.write_all(chunk).await?;
+
+            if let Err(e) = send.write_all(chunk).await {
+                if is_temp_file {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+
+                return Err(ConnectedError::QuicWrite(e));
+            }
 
             offset += bytes_read as u64;
 
@@ -177,10 +323,29 @@ impl FileTransfer {
         // Send completion with checksum
         let checksum = hasher.finalize().to_string();
         let complete = FileTransferMessage::Complete { checksum };
-        send_message(&mut send, &complete).await?;
+        if let Err(e) = send_message(&mut send, &complete).await {
+            if is_temp_file {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
+            return Err(e);
+        }
 
         // Wait for acknowledgment
-        let ack: FileTransferMessage = recv_message(&mut recv).await?;
+        let ack: FileTransferMessage = match recv_message(&mut recv).await {
+            Ok(r) => r,
+            Err(e) => {
+                if is_temp_file {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+                return Err(e);
+            }
+        };
+
+        // Clean up temp file regardless of outcome now
+        if is_temp_file {
+            let _ = tokio::fs::remove_file(&path).await;
+        }
+
         match ack {
             FileTransferMessage::Ack => {
                 info!("File transfer completed successfully");
