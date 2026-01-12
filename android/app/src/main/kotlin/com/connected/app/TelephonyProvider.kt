@@ -78,15 +78,10 @@ class TelephonyProvider(private val context: Context) {
     }
 
     fun hasAnswerPhoneCallsPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ANSWER_PHONE_CALLS
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            // Permission not required on older versions
-            true
-        }
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ANSWER_PHONE_CALLS
+        ) == PackageManager.PERMISSION_GRANTED
     }
 
     fun getRequiredPermissions(): Array<String> {
@@ -134,10 +129,12 @@ class TelephonyProvider(private val context: Context) {
             val hasPhoneIndex = it.getColumnIndex(ContactsContract.Contacts.HAS_PHONE_NUMBER)
 
             while (it.moveToNext()) {
+                if (idIndex < 0) continue
                 val id = it.getString(idIndex) ?: continue
-                val name = it.getString(nameIndex) ?: "Unknown"
-                val starred = it.getInt(starredIndex) == 1
-                val hasPhone = it.getInt(hasPhoneIndex) > 0
+
+                val name = if (nameIndex >= 0) it.getString(nameIndex) ?: "Unknown" else "Unknown"
+                val starred = if (starredIndex >= 0) it.getInt(starredIndex) == 1 else false
+                val hasPhone = if (hasPhoneIndex >= 0) it.getInt(hasPhoneIndex) > 0 else false
 
                 val phoneNumbers = if (hasPhone) getPhoneNumbers(resolver, id) else emptyList()
                 val emails = getEmails(resolver, id)
@@ -176,16 +173,19 @@ class TelephonyProvider(private val context: Context) {
             val numberIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
             val typeIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.TYPE)
 
-            while (it.moveToNext()) {
-                val number = it.getString(numberIndex) ?: continue
-                val type = it.getInt(typeIndex)
+            if (numberIndex >= 0) {
+                while (it.moveToNext()) {
+                    val number = it.getString(numberIndex) ?: continue
+                    val type =
+                        if (typeIndex >= 0) it.getInt(typeIndex) else ContactsContract.CommonDataKinds.Phone.TYPE_OTHER
 
-                numbers.add(
-                    FfiPhoneNumber(
-                        number = number,
-                        label = mapPhoneType(type)
+                    numbers.add(
+                        FfiPhoneNumber(
+                            number = number,
+                            label = mapPhoneType(type)
+                        )
                     )
-                )
+                }
             }
         }
 
@@ -206,10 +206,12 @@ class TelephonyProvider(private val context: Context) {
         cursor?.use {
             val emailIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Email.ADDRESS)
 
-            while (it.moveToNext()) {
-                val email = it.getString(emailIndex)
-                if (!email.isNullOrEmpty()) {
-                    emails.add(email)
+            if (emailIndex >= 0) {
+                while (it.moveToNext()) {
+                    val email = it.getString(emailIndex)
+                    if (!email.isNullOrEmpty()) {
+                        emails.add(email)
+                    }
                 }
             }
         }
@@ -255,23 +257,25 @@ class TelephonyProvider(private val context: Context) {
             val threadIdIndex = it.getColumnIndex(Telephony.Sms.Conversations.THREAD_ID)
             val snippetIndex = it.getColumnIndex(Telephony.Sms.Conversations.SNIPPET)
 
-            while (it.moveToNext()) {
-                val threadId = it.getLong(threadIdIndex).toString()
-                val snippet = it.getString(snippetIndex)
+            if (threadIdIndex >= 0) {
+                while (it.moveToNext()) {
+                    val threadId = it.getLong(threadIdIndex).toString()
+                    val snippet = if (snippetIndex >= 0) it.getString(snippetIndex) else ""
 
-                // Get thread details
-                val threadDetails = getThreadDetails(resolver, threadId)
+                    // Get thread details
+                    val threadDetails = getThreadDetails(resolver, threadId)
 
-                conversations.add(
-                    FfiConversation(
-                        id = threadId,
-                        addresses = threadDetails.addresses,
-                        contactNames = threadDetails.contactNames,
-                        lastMessage = snippet,
-                        lastTimestamp = threadDetails.lastTimestamp,
-                        unreadCount = threadDetails.unreadCount.toUInt()
+                    conversations.add(
+                        FfiConversation(
+                            id = threadId,
+                            addresses = threadDetails.addresses,
+                            contactNames = threadDetails.contactNames,
+                            lastMessage = snippet,
+                            lastTimestamp = threadDetails.lastTimestamp,
+                            unreadCount = threadDetails.unreadCount.toUInt()
+                        )
                     )
-                )
+                }
             }
         }
 
@@ -308,19 +312,23 @@ class TelephonyProvider(private val context: Context) {
             val readIndex = it.getColumnIndex(Telephony.Sms.READ)
 
             while (it.moveToNext()) {
-                val address = it.getString(addressIndex)
+                val address = if (addressIndex >= 0) it.getString(addressIndex) else null
                 if (!address.isNullOrEmpty()) {
                     addresses.add(address)
                 }
 
-                val date = it.getLong(dateIndex)
-                if (date > lastTimestamp) {
-                    lastTimestamp = date
+                if (dateIndex >= 0) {
+                    val date = it.getLong(dateIndex)
+                    if (date > lastTimestamp) {
+                        lastTimestamp = date
+                    }
                 }
 
-                val read = it.getInt(readIndex)
-                if (read == 0) {
-                    unreadCount++
+                if (readIndex >= 0) {
+                    val read = it.getInt(readIndex)
+                    if (read == 0) {
+                        unreadCount++
+                    }
                 }
             }
         }
@@ -377,14 +385,16 @@ class TelephonyProvider(private val context: Context) {
                 val statusIndex = it.getColumnIndex(Telephony.Sms.STATUS)
 
                 while (it.moveToNext()) {
+                    if (idIndex < 0) continue
                     val id = it.getString(idIndex) ?: continue
-                    val thread = it.getString(threadIndex) ?: threadId
-                    val address = it.getString(addressIndex) ?: ""
-                    val body = it.getString(bodyIndex) ?: ""
-                    val date = it.getLong(dateIndex)
-                    val type = it.getInt(typeIndex)
-                    val read = it.getInt(readIndex) == 1
-                    val status = it.getInt(statusIndex)
+
+                    val thread = if (threadIndex >= 0) it.getString(threadIndex) ?: threadId else threadId
+                    val address = if (addressIndex >= 0) it.getString(addressIndex) ?: "" else ""
+                    val body = if (bodyIndex >= 0) it.getString(bodyIndex) ?: "" else ""
+                    val date = if (dateIndex >= 0) it.getLong(dateIndex) else 0L
+                    val type = if (typeIndex >= 0) it.getInt(typeIndex) else 0
+                    val read = if (readIndex >= 0) it.getInt(readIndex) == 1 else false
+                    val status = if (statusIndex >= 0) it.getInt(statusIndex) else -1
 
                     val isOutgoing = type == Telephony.Sms.MESSAGE_TYPE_SENT ||
                             type == Telephony.Sms.MESSAGE_TYPE_OUTBOX
@@ -489,13 +499,15 @@ class TelephonyProvider(private val context: Context) {
             val readIndex = it.getColumnIndex(CallLog.Calls.IS_READ)
 
             while (it.moveToNext()) {
+                if (idIndex < 0) continue
                 val id = it.getString(idIndex) ?: continue
-                val number = it.getString(numberIndex) ?: ""
-                val name = it.getString(nameIndex)
-                val type = it.getInt(typeIndex)
-                val date = it.getLong(dateIndex)
-                val duration = it.getInt(durationIndex)
-                val read = it.getInt(readIndex) == 1
+
+                val number = if (numberIndex >= 0) it.getString(numberIndex) ?: "" else ""
+                val name = if (nameIndex >= 0) it.getString(nameIndex) else null
+                val type = if (typeIndex >= 0) it.getInt(typeIndex) else CallLog.Calls.INCOMING_TYPE
+                val date = if (dateIndex >= 0) it.getLong(dateIndex) else 0L
+                val duration = if (durationIndex >= 0) it.getInt(durationIndex) else 0
+                val read = if (readIndex >= 0) it.getInt(readIndex) == 1 else false
 
                 entries.add(
                     FfiCallLogEntry(
@@ -559,21 +571,30 @@ class TelephonyProvider(private val context: Context) {
 
             when (action) {
                 CallAction.Answer -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        telecomManager.acceptRingingCall()
+                    try {
+                        // Use reflection to avoid deprecation warning for acceptRingingCall
+                        val method = telecomManager.javaClass.getMethod("acceptRingingCall")
+                        method.invoke(telecomManager)
                         Log.d("TelephonyProvider", "Call answered via TelecomManager")
                         true
-                    } else {
-                        Log.w("TelephonyProvider", "Answer call not supported on this Android version")
+                    } catch (e: Exception) {
+                        Log.w("TelephonyProvider", "Failed to answer call: ${e.message}")
                         false
                     }
                 }
 
                 CallAction.Reject, CallAction.HangUp -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        val result = telecomManager.endCall()
-                        Log.d("TelephonyProvider", "Call ended via TelecomManager: $result")
-                        result
+                        try {
+                            // Use reflection to avoid deprecation warning for endCall
+                            val method = telecomManager.javaClass.getMethod("endCall")
+                            val result = method.invoke(telecomManager) as? Boolean ?: false
+                            Log.d("TelephonyProvider", "Call ended via TelecomManager: $result")
+                            result
+                        } catch (e: Exception) {
+                            Log.w("TelephonyProvider", "Failed to end call: ${e.message}")
+                            false
+                        }
                     } else {
                         // For older versions, we'd need to use reflection or ITelephony
                         Log.w("TelephonyProvider", "End call not supported on this Android version")
@@ -600,6 +621,31 @@ class TelephonyProvider(private val context: Context) {
     // Helpers
     // ========================================================================
 
+    private fun getLastIncomingCallNumber(): String {
+        if (!hasCallLogPermission()) return ""
+
+        try {
+            val cursor = context.contentResolver.query(
+                CallLog.Calls.CONTENT_URI,
+                arrayOf(CallLog.Calls.NUMBER),
+                "${CallLog.Calls.TYPE} = ?",
+                arrayOf(CallLog.Calls.INCOMING_TYPE.toString()),
+                "${CallLog.Calls.DATE} DESC LIMIT 1"
+            )
+
+            return cursor?.use {
+                if (it.moveToFirst()) {
+                    it.getString(0) ?: ""
+                } else {
+                    ""
+                }
+            } ?: ""
+        } catch (e: Exception) {
+            Log.e("TelephonyProvider", "Error getting last call number", e)
+            return ""
+        }
+    }
+
     private fun getContactNameForNumber(phoneNumber: String): String? {
         if (!hasContactsPermission() || phoneNumber.isEmpty()) {
             return null
@@ -620,7 +666,12 @@ class TelephonyProvider(private val context: Context) {
 
         return cursor?.use {
             if (it.moveToFirst()) {
-                it.getString(it.getColumnIndex(ContactsContract.PhoneLookup.DISPLAY_NAME))
+                val index = it.getColumnIndex(ContactsContract.PhoneLookup.DISPLAY_NAME)
+                if (index >= 0) {
+                    it.getString(index)
+                } else {
+                    null
+                }
             } else {
                 null
             }
@@ -668,8 +719,14 @@ class TelephonyProvider(private val context: Context) {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     if (intent?.action == TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
                         val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE)
-                        val number =
-                            intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER) ?: ""
+                        // Use string literal to avoid deprecation warning for EXTRA_INCOMING_NUMBER
+                        var number = intent.getStringExtra("incoming_number") ?: ""
+
+                        // Fallback to CallLog if number is missing (Android 9+)
+                        if (number.isEmpty() && state == TelephonyManager.EXTRA_STATE_RINGING) {
+                            // Small delay might be needed for CallLog to update, but we try anyway
+                            number = getLastIncomingCallNumber()
+                        }
 
                         val activeCall = when (state) {
                             TelephonyManager.EXTRA_STATE_RINGING -> FfiActiveCall(

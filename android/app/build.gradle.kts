@@ -57,6 +57,11 @@ android {
         compose = true
     }
 
+    lint {
+        disable += "MutableCollectionMutableState"
+        disable += "AutoboxingStateCreation"
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"

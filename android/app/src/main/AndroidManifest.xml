@@ -9,6 +9,12 @@
         android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"
     />
 
+    <!-- Declare telephony as optional for tablets/ChromeOS -->
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="false"
+    />
+
     <!-- For local network device discovery (Android 12+) -->
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
@@ -55,6 +61,15 @@
         xmlns:tools="http://schemas.android.com/tools"
     />
 
+    <!-- For foreground services (Android 9+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
+    />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+    />
+
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher_foreground"
@@ -65,6 +80,13 @@
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config"
     >
+
+        <service
+            android:name=".ConnectedService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|dataSync"
+        />
 
         <service
             android:name=".MediaObserverService"

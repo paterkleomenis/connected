@@ -290,27 +290,10 @@ class ConnectedSdk private constructor() {
             Log.w(TAG, "ConnectivityManager method failed: ${e.message}")
         }
 
-        // Method 2: Try WifiManager (older approach)
-        try {
-            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            if (wifiManager != null) {
-                val wifiInfo = wifiManager.connectionInfo
-                val ipInt = wifiInfo.ipAddress
-                if (ipInt != 0) {
-                    val ip = String.format(
-                        "%d.%d.%d.%d",
-                        ipInt and 0xff,
-                        ipInt shr 8 and 0xff,
-                        ipInt shr 16 and 0xff,
-                        ipInt shr 24 and 0xff
-                    )
-                    Log.d(TAG, "Found IP via WifiManager: $ip")
-                    return ip
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "WifiManager method failed: ${e.message}")
-        }
+        // Method 2: Try WifiManager (older approach) - REMOVED due to deprecation
+
+        // We rely on ConnectivityManager (Method 1) and NetworkInterface (Method 3)
+
 
         // Method 3: Enumerate network interfaces
         try {
