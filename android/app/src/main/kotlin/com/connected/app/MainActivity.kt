@@ -640,36 +640,10 @@ fun SettingsScreen(
                         Text("Select Specific Folder")
                     }
 
-                    if (connectedApp.isFsProviderRegistered.value) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        TextButton(
-                            onClick = { connectedApp.stopSharing() },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Stop Sharing", color = MaterialTheme.colorScheme.error)
-                        }
-                    }
                 }
             }
         }
 
-        // About Section
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("ℹ️ About", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Connected allows you to seamlessly share files, clipboard, control media, send texts, and make calls between your devices.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
     }
 }
 
