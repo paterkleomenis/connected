@@ -90,6 +90,9 @@ class ConnectedApp(private val context: Context) {
 
     private val PREFS_NAME = "ConnectedPrefs"
     private val PREF_ROOT_URI = "root_uri"
+    private val PREF_CLIPBOARD_SYNC = "clipboard_sync"
+    private val PREF_MEDIA_CONTROL = "media_control"
+    private val PREF_TELEPHONY_ENABLED = "telephony_enabled"
 
     // Helper to find device by name or fall back to first trusted device
     private fun findDeviceByName(fromDevice: String): DiscoveredDevice? {
@@ -168,7 +171,13 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        override fun onMessagesRequest(fromDevice: String, fromIp: String, fromPort: UShort, threadId: String, limit: UInt) {
+        override fun onMessagesRequest(
+            fromDevice: String,
+            fromIp: String,
+            fromPort: UShort,
+            threadId: String,
+            limit: UInt
+        ) {
             Log.d("ConnectedApp", "onMessagesRequest from: $fromDevice ($fromIp:$fromPort), threadId: $threadId")
             // Cache the device address for sending notifications back
             trustedDeviceAddresses[fromDevice] = Pair(fromIp, fromPort)
@@ -197,7 +206,13 @@ class ConnectedApp(private val context: Context) {
             trustedDeviceAddresses[fromDevice] = Pair(fromIp, fromPort)
             val result = telephonyProvider.sendSms(to, body)
             try {
-                sendSmsSendResult(fromIp, fromPort, result.isSuccess, result.getOrNull(), result.exceptionOrNull()?.message)
+                sendSmsSendResult(
+                    fromIp,
+                    fromPort,
+                    result.isSuccess,
+                    result.getOrNull(),
+                    result.exceptionOrNull()?.message
+                )
             } catch (e: Exception) {
                 Log.e("ConnectedApp", "Failed to send SMS result: ${e.message}")
             }
@@ -272,7 +287,10 @@ class ConnectedApp(private val context: Context) {
         override fun onNewSmsReceived(message: FfiSmsMessage) {
             // Notify connected devices about new SMS
             Log.d("ConnectedApp", "onNewSmsReceived: ${message.address} - ${message.body.take(30)}")
-            Log.d("ConnectedApp", "Trusted devices: ${trustedDevices.size}, Discovered devices: ${devices.size}, Cached addresses: ${trustedDeviceAddresses.size}")
+            Log.d(
+                "ConnectedApp",
+                "Trusted devices: ${trustedDevices.size}, Discovered devices: ${devices.size}, Cached addresses: ${trustedDeviceAddresses.size}"
+            )
 
             // First, try to notify using cached addresses (most reliable)
             trustedDeviceAddresses.forEach { (deviceName, address) ->
@@ -289,7 +307,10 @@ class ConnectedApp(private val context: Context) {
             trustedDevices.forEach { deviceId ->
                 val device = devices.find { it.id == deviceId }
                 if (device != null && !trustedDeviceAddresses.containsKey(device.name)) {
-                    Log.d("ConnectedApp", "Sending new SMS notification to ${device.name} (${device.ip}:${device.port}) via discovery")
+                    Log.d(
+                        "ConnectedApp",
+                        "Sending new SMS notification to ${device.name} (${device.ip}:${device.port}) via discovery"
+                    )
                     notifyNewSms(device, message)
                 }
             }
@@ -777,6 +798,13 @@ class ConnectedApp(private val context: Context) {
 
     fun toggleMediaControl() {
         isMediaControlEnabled.value = !isMediaControlEnabled.value
+
+        // Persist state
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_MEDIA_CONTROL, isMediaControlEnabled.value)
+            .apply()
+
         val msg = if (isMediaControlEnabled.value) "Media Control Enabled" else "Media Control Disabled"
         android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
 
@@ -831,6 +859,13 @@ class ConnectedApp(private val context: Context) {
     fun toggleTelephony() {
         val enabled = !isTelephonyEnabled.value
         isTelephonyEnabled.value = enabled
+
+        // Persist state
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_TELEPHONY_ENABLED, enabled)
+            .apply()
+
         if (enabled) {
             telephonyProvider.setListener(telephonyListener)
             telephonyProvider.registerReceivers()
@@ -1003,6 +1038,28 @@ class ConnectedApp(private val context: Context) {
             getPersistedRootUri()?.let { uri ->
                 registerFsProvider(uri)
             }
+
+            // Load persisted settings
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+            // Restore Clipboard Sync
+            if (prefs.getBoolean(PREF_CLIPBOARD_SYNC, false)) {
+                startClipboardSync()
+            }
+
+            // Restore Media Control
+            isMediaControlEnabled.value = prefs.getBoolean(PREF_MEDIA_CONTROL, false)
+
+            // Restore Telephony
+            if (prefs.getBoolean(PREF_TELEPHONY_ENABLED, false)) {
+                isTelephonyEnabled.value = true
+                telephonyProvider.setListener(telephonyListener)
+                telephonyProvider.registerReceivers()
+                // Use the fully qualified name or the imported function if available
+                // Assuming registerTelephonyCallback is available from uniffi.connected_ffi.*
+                uniffi.connected_ffi.registerTelephonyCallback(telephonyCallback)
+            }
+
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Initialization failed", e)
         }
@@ -1451,6 +1508,12 @@ class ConnectedApp(private val context: Context) {
         } else {
             startClipboardSync()
         }
+
+        // Persist state
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_CLIPBOARD_SYNC, isClipboardSyncEnabled.value)
+            .apply()
     }
 
     private fun startClipboardSync() {

@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -76,7 +77,7 @@ fun RemoteFileBrowser(app: ConnectedApp) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { app.closeRemoteBrowser() }) {
-                Text("⬅", style = MaterialTheme.typography.titleLarge)
+                Icon(painterResource(R.drawable.ic_back), contentDescription = "Back")
             }
             Text("Remote Files: ${app.currentRemotePath.value}", style = MaterialTheme.typography.titleMedium)
         }
@@ -92,8 +93,14 @@ fun RemoteFileBrowser(app: ConnectedApp) {
                             app.browseRemoteFiles(app.getBrowsingDevice()!!, parent)
                         }
                     ) {
-                        Row(modifier = Modifier.padding(16.dp)) {
-                            Text("📁 ..")
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                painterResource(R.drawable.ic_folder),
+                                contentDescription = "Folder",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("..")
                         }
                     }
                 }
@@ -114,10 +121,16 @@ fun RemoteFileBrowser(app: ConnectedApp) {
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row {
-                            Text(if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) "📁 " else "📄 ")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val iconRes =
+                                if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) R.drawable.ic_folder else R.drawable.ic_file
+                            val iconTint =
+                                if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            Icon(painterResource(iconRes), contentDescription = null, tint = iconTint)
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(file.name)
                         }
                         Text(if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) "" else "${file.size} B")
@@ -125,6 +138,22 @@ fun RemoteFileBrowser(app: ConnectedApp) {
                 }
             }
         }
+    }
+}
+
+fun getDeviceIcon(type: String): Int {
+    return when (type.lowercase()) {
+        "android", "phone", "mobile" -> R.drawable.ic_android
+        "ios", "iphone" -> R.drawable.ic_ios
+        "macos", "mac" -> R.drawable.ic_macos
+        "windows", "pc" -> R.drawable.ic_windows
+        "linux" -> R.drawable.ic_linux
+        "tablet", "ipad" -> R.drawable.ic_tablet
+        "desktop" -> R.drawable.ic_desktop
+        "laptop" -> R.drawable.ic_laptop
+        "tv" -> R.drawable.ic_tv
+        "watch" -> R.drawable.ic_watch
+        else -> R.drawable.ic_device_unknown
     }
 }
 
@@ -161,13 +190,13 @@ fun MainAppNavigation(
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Home, contentDescription = "Devices") },
+                    icon = { Icon(painterResource(R.drawable.ic_nav_devices), contentDescription = "Devices") },
                     label = { Text("Devices") },
                     selected = currentScreen == Screen.Home,
                     onClick = { currentScreen = Screen.Home }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                    icon = { Icon(painterResource(R.drawable.ic_nav_settings), contentDescription = "Settings") },
                     label = { Text("Settings") },
                     selected = currentScreen == Screen.Settings,
                     onClick = { currentScreen = Screen.Settings }
@@ -243,7 +272,12 @@ fun HomeScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("📡", style = MaterialTheme.typography.displayLarge)
+                    Icon(
+                        painterResource(R.drawable.ic_nav_devices),
+                        contentDescription = "Searching",
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                    )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         "Searching for devices...",
@@ -376,11 +410,17 @@ fun SettingsScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Icon(
+                            painterResource(R.drawable.ic_nav_clipboard),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("📋 Clipboard Sync", style = MaterialTheme.typography.titleMedium)
+                            Text("Clipboard Sync", style = MaterialTheme.typography.titleMedium)
                             Text(
                                 "Automatically sync clipboard with trusted devices",
                                 style = MaterialTheme.typography.bodySmall,
@@ -405,11 +445,17 @@ fun SettingsScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Icon(
+                            painterResource(R.drawable.ic_nav_media),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("🎵 Media Control", style = MaterialTheme.typography.titleMedium)
+                            Text("Media Control", style = MaterialTheme.typography.titleMedium)
                             Text(
                                 "Allow other devices to control media playback",
                                 style = MaterialTheme.typography.bodySmall,
@@ -453,11 +499,17 @@ fun SettingsScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Icon(
+                            painterResource(R.drawable.ic_nav_phone),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("📱 Phone Link", style = MaterialTheme.typography.titleMedium)
+                            Text("Phone Link", style = MaterialTheme.typography.titleMedium)
                             Text(
                                 "SMS, calls, and contacts sync",
                                 style = MaterialTheme.typography.bodySmall,
@@ -536,7 +588,16 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("📁 Shared Folder", style = MaterialTheme.typography.titleMedium)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            painterResource(R.drawable.ic_folder),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text("Shared Folder", style = MaterialTheme.typography.titleMedium)
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
 
                     if (connectedApp.isFsProviderRegistered.value) {
@@ -567,7 +628,7 @@ fun SettingsScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(if (connectedApp.isFullAccessGranted()) "📱 Use Full Access" else "🔓 Grant Full Access")
+                            Text(if (connectedApp.isFullAccessGranted()) "Use Full Access" else "🔓 Grant Full Access")
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                     }
@@ -576,7 +637,7 @@ fun SettingsScreen(
                         onClick = { folderPickerLauncher?.launch(null) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("📂 Select Specific Folder")
+                        Text("Select Specific Folder")
                     }
 
                     if (connectedApp.isFsProviderRegistered.value) {
@@ -585,7 +646,7 @@ fun SettingsScreen(
                             onClick = { connectedApp.stopSharing() },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("🚫 Stop Sharing", color = MaterialTheme.colorScheme.error)
+                            Text("Stop Sharing", color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
@@ -649,15 +710,32 @@ fun DeviceItem(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = device.name, style = MaterialTheme.typography.bodyLarge)
-                Text(text = "${device.ip}:${device.port}", style = MaterialTheme.typography.bodySmall)
-                if (isTrusted) {
-                    Text(
-                        text = "✓ Trusted",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                // Device Type Icon
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .padding(end = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painterResource(getDeviceIcon(device.deviceType)),
+                        contentDescription = device.deviceType,
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.primary
                     )
+                }
+
+                Column {
+                    Text(text = device.name, style = MaterialTheme.typography.bodyLarge)
+                    Text(text = "${device.ip}:${device.port}", style = MaterialTheme.typography.bodySmall)
+                    if (isTrusted) {
+                        Text(
+                            text = "✓ Trusted",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
 
@@ -667,13 +745,13 @@ fun DeviceItem(
                     if (app.isMediaControlEnabled.value) {
                         IconButton(onClick = {
                             app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.PREVIOUS)
-                        }) { Text("⏮") }
+                        }) { Icon(painterResource(R.drawable.ic_previous), contentDescription = "Previous") }
                         IconButton(onClick = {
                             app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.PLAY_PAUSE)
-                        }) { Text("⏯") }
+                        }) { Icon(painterResource(R.drawable.ic_play), contentDescription = "Play/Pause") }
                         IconButton(onClick = {
                             app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.NEXT)
-                        }) { Text("⏭") }
+                        }) { Icon(painterResource(R.drawable.ic_next), contentDescription = "Next") }
                     }
 
                     // Send file button
@@ -681,48 +759,79 @@ fun DeviceItem(
                         app.setSelectedDeviceForFileTransfer(device)
                         filePickerLauncher?.launch("*/*")
                     }) {
-                        Text("📁", style = MaterialTheme.typography.titleLarge)
+                        Icon(painterResource(R.drawable.ic_send), contentDescription = "Send File")
                     }
 
                     // More options dropdown
                     Box {
                         IconButton(onClick = { showMenu = true }) {
-                            Text("⋮", style = MaterialTheme.typography.titleLarge)
+                            Icon(painterResource(R.drawable.ic_settings), contentDescription = "Options")
                         }
                         DropdownMenu(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("📋 Send Clipboard") },
+                                text = { Text("Send Clipboard") },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_nav_clipboard),
+                                        contentDescription = null
+                                    )
+                                },
                                 onClick = {
                                     showMenu = false
                                     app.sendClipboard(device)
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("📂 Browse Files") },
+                                text = { Text("Browse Files") },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_folder),
+                                        contentDescription = null
+                                    )
+                                },
                                 onClick = {
                                     showMenu = false
                                     app.browseRemoteFiles(device)
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("💔 Unpair") },
+                                text = { Text("Unpair") },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_unpair),
+                                        contentDescription = null
+                                    )
+                                },
                                 onClick = {
                                     showMenu = false
                                     app.unpairDevice(device)
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("🔄 Forget") },
+                                text = { Text("Forget") },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_refresh),
+                                        contentDescription = null
+                                    )
+                                },
                                 onClick = {
                                     showMenu = false
                                     app.forgetDevice(device)
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("🚫 Block", color = MaterialTheme.colorScheme.error) },
+                                text = { Text("Block", color = MaterialTheme.colorScheme.error) },
+                                leadingIcon = {
+                                    Icon(
+                                        painterResource(R.drawable.ic_block),
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                },
                                 onClick = {
                                     showMenu = false
                                     app.blockDevice(device)
