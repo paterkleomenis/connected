@@ -17,6 +17,12 @@ use components::{DeviceCard, FileBrowser, FileDialog, Icon, IconType};
 use connected_core::MediaCommand;
 use connected_core::telephony::{ActiveCallState, CallAction};
 use controller::{AppAction, app_controller};
+#[cfg(target_os = "linux")]
+use dioxus::desktop::trayicon;
+#[cfg(target_os = "linux")]
+use dioxus::desktop::trayicon::menu::{Menu, MenuItem};
+#[cfg(target_os = "linux")]
+use dioxus::desktop::{use_tray_menu_event_handler, use_window};
 use dioxus::prelude::*;
 use state::*;
 use std::path::PathBuf;
@@ -61,13 +67,18 @@ fn main() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
-    let config = dioxus::desktop::Config::new()
+    let mut config = dioxus::desktop::Config::new()
         .with_window(
             dioxus::desktop::WindowBuilder::new()
                 .with_title("Connected")
                 .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0)),
         )
         .with_disable_context_menu(true);
+    #[cfg(target_os = "linux")]
+    {
+        config =
+            config.with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::LastWindowHides);
+    }
 
     LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
@@ -193,6 +204,41 @@ fn App() -> Element {
             }
         });
     });
+
+    #[cfg(target_os = "linux")]
+    {
+        let window = use_window();
+        let mut tray_initialized = use_signal(|| false);
+
+        use_effect(move || {
+            if *tray_initialized.read() {
+                return;
+            }
+
+            let menu = Menu::new();
+            let show_item = MenuItem::with_id("tray_show", "Show Connected", true, None);
+            let hide_item = MenuItem::with_id("tray_hide", "Hide Connected", true, None);
+            let quit_item = MenuItem::with_id("tray_quit", "Quit", true, None);
+            let _ = menu.append_items(&[&show_item, &hide_item, &quit_item]);
+
+            trayicon::init_tray_icon(menu, None);
+            tray_initialized.set(true);
+        });
+
+        use_tray_menu_event_handler(move |event| match event.id().as_ref() {
+            "tray_show" => {
+                window.set_visible(true);
+                window.set_focus();
+            }
+            "tray_hide" => {
+                window.set_visible(false);
+            }
+            "tray_quit" => {
+                std::process::exit(0);
+            }
+            _ => {}
+        });
+    }
 
     // Auto-sync phone data when entering phone tab on a device
     use_effect(move || {
