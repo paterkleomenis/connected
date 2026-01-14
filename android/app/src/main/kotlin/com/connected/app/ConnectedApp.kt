@@ -697,6 +697,12 @@ class ConnectedApp(private val context: Context) {
         override fun onTransferCompleted(filename: String, totalSize: ULong) {
             transferStatus.value = "Completed: $filename"
             moveToDownloads(filename)
+            scope.launch {
+                delay(2000)
+                if (transferStatus.value.startsWith("Completed: $filename")) {
+                    transferStatus.value = "Idle"
+                }
+            }
         }
 
         override fun onTransferFailed(errorMsg: String) {
