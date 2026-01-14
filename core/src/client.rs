@@ -1,5 +1,5 @@
 use crate::device::{Device, DeviceType};
-use crate::discovery::{DiscoveryEvent, DiscoveryService};
+use crate::discovery::{DiscoveryEvent, DiscoveryService, DiscoverySource};
 use crate::error::{ConnectedError, Result};
 use crate::events::{ConnectedEvent, TransferDirection};
 use crate::file_transfer::{FileTransfer, TransferProgress};
@@ -7,10 +7,10 @@ use crate::security::KeyStore;
 use crate::transport::{Message, QuicTransport, UnpairReason};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -48,7 +48,15 @@ impl ConnectedClient {
             ConnectedError::InitializationError("Could not determine local IP".to_string())
         })?;
 
-        Self::new_with_ip(device_name, device_type, port, local_ip, storage_path).await
+        Self::new_with_ip_and_bind(
+            device_name,
+            device_type,
+            port,
+            local_ip,
+            local_ip,
+            storage_path,
+        )
+        .await
     }
 
     pub async fn new_with_ip(
@@ -56,6 +64,64 @@ impl ConnectedClient {
         device_type: DeviceType,
         port: u16,
         local_ip: IpAddr,
+        storage_path: Option<PathBuf>,
+    ) -> Result<Arc<Self>> {
+        Self::new_with_ip_and_bind(
+            device_name,
+            device_type,
+            port,
+            local_ip,
+            local_ip,
+            storage_path,
+        )
+        .await
+    }
+
+    pub async fn new_with_bind_all(
+        device_name: String,
+        device_type: DeviceType,
+        port: u16,
+        storage_path: Option<PathBuf>,
+    ) -> Result<Arc<Self>> {
+        let local_ip = get_local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        let bind_ip = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+
+        Self::new_with_ip_and_bind(
+            device_name,
+            device_type,
+            port,
+            local_ip,
+            bind_ip,
+            storage_path,
+        )
+        .await
+    }
+
+    pub async fn new_with_bind_ip(
+        device_name: String,
+        device_type: DeviceType,
+        port: u16,
+        local_ip: IpAddr,
+        bind_ip: IpAddr,
+        storage_path: Option<PathBuf>,
+    ) -> Result<Arc<Self>> {
+        Self::new_with_ip_and_bind(
+            device_name,
+            device_type,
+            port,
+            local_ip,
+            bind_ip,
+            storage_path,
+        )
+        .await
+    }
+
+    async fn new_with_ip_and_bind(
+        device_name: String,
+        device_type: DeviceType,
+        port: u16,
+        local_ip: IpAddr,
+        bind_ip: IpAddr,
         storage_path: Option<PathBuf>,
     ) -> Result<Arc<Self>> {
         // Load KeyStore first to get the persisted device_id
@@ -74,7 +140,7 @@ impl ConnectedClient {
 
         // 1. Initialize Transport (QUIC)
         // If port is 0, OS assigns one. We need to know it for mDNS.
-        let bind_addr = SocketAddr::new(local_ip, port);
+        let bind_addr = SocketAddr::new(bind_ip, port);
         let transport = QuicTransport::new(bind_addr, device_id.clone(), key_store.clone()).await?;
         let actual_port = transport.local_addr()?.port();
 
@@ -125,6 +191,41 @@ impl ConnectedClient {
 
     pub fn clear_discovered_devices(&self) {
         self.discovery.clear_discovered_devices()
+    }
+
+    pub fn inject_proximity_device(
+        &self,
+        device_id: String,
+        device_name: String,
+        device_type: DeviceType,
+        ip: IpAddr,
+        port: u16,
+    ) -> Result<()> {
+        if device_id == self.local_device.id {
+            return Ok(());
+        }
+
+        let device = Device::new(device_id, device_name, ip, port, device_type);
+        if let Some(event) = self
+            .discovery
+            .upsert_device_endpoint(device, DiscoverySource::Proximity)
+        {
+            match event {
+                DiscoveryEvent::DeviceFound(d) => {
+                    let _ = self.event_tx.send(ConnectedEvent::DeviceFound(d));
+                }
+                DiscoveryEvent::DeviceLost(id) => {
+                    let _ = self.event_tx.send(ConnectedEvent::DeviceLost(id));
+                }
+                DiscoveryEvent::Error(msg) => {
+                    let _ = self
+                        .event_tx
+                        .send(ConnectedEvent::Error(format!("Discovery error: {}", msg)));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub fn get_fingerprint(&self) -> String {
@@ -216,7 +317,7 @@ impl ConnectedClient {
             _ => {
                 return Err(ConnectedError::Protocol(
                     "Unexpected metadata response".to_string(),
-                ))
+                ));
             }
         };
 
@@ -248,7 +349,7 @@ impl ConnectedClient {
                     offset += data.len() as u64;
                 }
                 FilesystemMessage::Error { message } => {
-                    return Err(ConnectedError::Protocol(message))
+                    return Err(ConnectedError::Protocol(message));
                 }
                 _ => return Err(ConnectedError::Protocol("Unexpected response".to_string())),
             }
@@ -789,7 +890,7 @@ impl ConnectedClient {
         }
 
         let addr = SocketAddr::new(target_ip, target_port);
-        let connection = self.transport.connect(addr).await?;
+        let connection = self.transport.connect_allow_unknown(addr).await?;
 
         let event_tx = self.event_tx.clone();
         let transfer_id = uuid::Uuid::new_v4().to_string();
@@ -1159,6 +1260,7 @@ impl ConnectedClient {
         let local_id = self.local_device.id.clone();
         let local_name = self.local_device.name.clone();
         let pending_handshakes = self.pending_handshakes.clone();
+        let discovery = self.discovery.clone();
 
         // Handle Control Messages
         tokio::spawn(async move {
@@ -1169,6 +1271,38 @@ impl ConnectedClient {
                         device_id,
                         device_name,
                     } => {
+                        let (resolved_name, resolved_type) = discovery
+                            .get_device_by_id(&device_id)
+                            .map(|d| (d.name, d.device_type))
+                            .unwrap_or_else(|| (device_name.clone(), DeviceType::Unknown));
+
+                        let device = Device::new(
+                            device_id.clone(),
+                            resolved_name,
+                            addr.ip(),
+                            addr.port(),
+                            resolved_type,
+                        );
+
+                        if let Some(event) =
+                            discovery.upsert_device_endpoint(device, DiscoverySource::Proximity)
+                        {
+                            match event {
+                                DiscoveryEvent::DeviceFound(d) => {
+                                    let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
+                                }
+                                DiscoveryEvent::DeviceLost(id) => {
+                                    let _ = event_tx.send(ConnectedEvent::DeviceLost(id));
+                                }
+                                DiscoveryEvent::Error(msg) => {
+                                    let _ = event_tx.send(ConnectedEvent::Error(format!(
+                                        "Discovery error: {}",
+                                        msg
+                                    )));
+                                }
+                            }
+                        }
+
                         let is_trusted = key_store.read().is_trusted(&fingerprint);
                         let is_forgotten = key_store.read().is_forgotten(&fingerprint);
                         let _needs_pairing = key_store.read().needs_pairing_request(&fingerprint);
@@ -1279,7 +1413,10 @@ impl ConnectedClient {
                             if should_auto_trust {
                                 info!(
                                     "Auto-trusting peer from HandshakeAck: {} - {} (pairing_mode={}, pending={})",
-                                    device_name, fingerprint, key_store.read().is_pairing_mode(), has_pending
+                                    device_name,
+                                    fingerprint,
+                                    key_store.read().is_pairing_mode(),
+                                    has_pending
                                 );
 
                                 // Remove from pending handshakes
@@ -1533,14 +1670,16 @@ impl ConnectedClient {
             while let Some((fingerprint, send, recv)) = file_rx.recv().await {
                 let is_trusted = key_store.read().is_trusted(&fingerprint);
                 if !is_trusted {
-                    error!("Rejected File Stream from untrusted peer: {}", fingerprint);
-                    continue;
+                    info!(
+                        "Allowing File Stream from untrusted peer (approval required): {}",
+                        fingerprint
+                    );
                 }
 
                 let event_tx = event_tx.clone();
                 let download_dir = download_dir.clone();
                 let fingerprint_clone = fingerprint.clone();
-                let should_auto_accept = auto_accept.load(Ordering::SeqCst);
+                let should_auto_accept = is_trusted && auto_accept.load(Ordering::SeqCst);
                 let pending = pending_transfers.clone();
                 let peer_name = key_store
                     .read()

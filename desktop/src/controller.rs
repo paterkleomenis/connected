@@ -1,4 +1,5 @@
 use crate::fs_provider::DesktopFilesystemProvider;
+use crate::proximity;
 use crate::state::{
     DeviceInfo, FileTransferRequest, PairingRequest, PreviewData, RemoteMedia, TransferStatus,
     add_file_transfer_request, add_notification, get_current_media, get_current_remote_files,
@@ -20,8 +21,10 @@ use connected_core::{
 use dioxus::prelude::*;
 use futures_util::StreamExt;
 use mpris::PlaybackStatus;
+use once_cell::sync::Lazy;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Instant;
 use tracing::{error, info, warn};
 
@@ -143,6 +146,21 @@ pub enum AppAction {
         port: u16,
         action: CallAction,
     },
+}
+
+static PROXIMITY_HANDLE: Lazy<Mutex<Option<proximity::ProximityHandle>>> =
+    Lazy::new(|| Mutex::new(None));
+
+fn start_proximity(client: Arc<ConnectedClient>) {
+    let handle = proximity::start(client);
+    let mut guard = PROXIMITY_HANDLE.lock().unwrap();
+    *guard = handle;
+}
+
+fn stop_proximity() {
+    if let Some(handle) = PROXIMITY_HANDLE.lock().unwrap().take() {
+        handle.stop();
+    }
 }
 
 fn spawn_event_loop(
@@ -672,6 +690,9 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
             // Spawn event loop
             spawn_event_loop(c.clone(), c.subscribe());
 
+            // Start proximity discovery (platform-specific)
+            start_proximity(c.clone());
+
             Some(c)
         }
         Err(e) => {
@@ -696,6 +717,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::RenameDevice { new_name } => {
                 if let Some(c) = client.take() {
+                    stop_proximity();
                     c.shutdown().await;
                 }
                 set_device_name_setting(new_name.clone());
@@ -703,6 +725,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::SendFile { ip, port, path } => {
                 if let Some(c) = &client {
+                    if ip == "0.0.0.0" {
+                        add_notification(
+                            "Offline Mode",
+                            "Offline transfer not supported. Connect to same network.",
+                            "⚠️",
+                        );
+                        return;
+                    }
                     let c = c.clone();
                     tokio::spawn(async move {
                         if let Ok(ip_addr) = ip.parse() {
@@ -713,6 +743,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::SendClipboard { ip, port, text } => {
                 if let Some(c) = &client {
+                    if ip == "0.0.0.0" {
+                        add_notification(
+                            "Offline Mode",
+                            "Offline transfer not supported. Connect to same network.",
+                            "⚠️",
+                        );
+                        return;
+                    }
                     let c = c.clone();
                     tokio::spawn(async move {
                         if let Ok(ip_addr) = ip.parse() {
@@ -748,6 +786,16 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             AppAction::PairWithDevice { ip, port } => {
                 if let Some(c) = &client {
                     let c = c.clone();
+
+                    if ip == "0.0.0.0" {
+                        add_notification(
+                            "Offline Mode",
+                            "Offline pairing not yet supported on Linux. Please connect devices to the same network or use Hotspot.",
+                            "⚠️",
+                        );
+                        warn!("Offline pairing requested but not implemented for Linux");
+                        return;
+                    }
 
                     // Find device ID by IP/Port to add to pending
                     let device_id = {

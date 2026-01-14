@@ -1,4 +1,4 @@
-use crate::components::icon::{get_device_icon_type, Icon, IconType};
+use crate::components::icon::{Icon, IconType, get_device_icon_type};
 use crate::state::DeviceInfo;
 use dioxus::prelude::*;
 
@@ -8,6 +8,7 @@ pub fn DeviceCard(
     is_selected: bool,
     on_select: EventHandler<DeviceInfo>,
     on_pair: EventHandler<DeviceInfo>,
+    on_send_file: EventHandler<DeviceInfo>,
 ) -> Element {
     let device_icon = get_device_icon_type(&device.device_type);
     let mut is_hovered = use_signal(|| false);
@@ -46,7 +47,13 @@ pub fn DeviceCard(
             div {
                 class: "device-card-info",
                 h3 { class: "device-name", "{device.name}" }
-                p { class: "device-address", "{device.ip}:{device.port}" }
+                p { class: "device-address",
+                    if device.ip == "0.0.0.0" {
+                        "Offline (BLE)"
+                    } else {
+                        "{device.ip}:{device.port}"
+                    }
+                }
                 p { class: "device-type", "{device.device_type}" }
                 if device.is_trusted {
                     p {
@@ -86,6 +93,19 @@ pub fn DeviceCard(
                             },
                             Icon { icon: IconType::Pair, size: 14, color: "currentColor".to_string() }
                             span { " Pair" }
+                        }
+                        button {
+                            class: "action-button",
+                            title: "Send a file without pairing",
+                            onclick: {
+                                let device = device.clone();
+                                move |evt: Event<MouseData>| {
+                                    evt.stop_propagation();
+                                    on_send_file.call(device.clone());
+                                }
+                            },
+                            Icon { icon: IconType::Send, size: 14, color: "currentColor".to_string() }
+                            span { " Send" }
                         }
                     }
                 }

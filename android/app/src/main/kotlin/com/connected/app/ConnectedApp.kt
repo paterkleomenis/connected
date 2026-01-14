@@ -15,6 +15,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -40,6 +42,9 @@ class ConnectedApp(private val context: Context) {
     // Cache of trusted device addresses (IP:Port) for sending notifications
     // Updated whenever we receive a message from a trusted device
     private val trustedDeviceAddresses = mutableMapOf<String, Pair<String, UShort>>() // deviceName -> (ip, port)
+    private val pendingPairingAwaitingIp = mutableSetOf<String>()
+    private val pendingFileTransfersAwaitingIp =
+        ConcurrentHashMap<String, ConcurrentLinkedQueue<String>>()
     val transferStatus = mutableStateOf("Idle")
     val clipboardContent = mutableStateOf("")
     val pairingRequest = mutableStateOf<PairingRequest?>(null)
@@ -92,6 +97,7 @@ class ConnectedApp(private val context: Context) {
 
     // Network State
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
+    private var proximityManager: ProximityManager? = null
 
     private val PREFS_NAME = "ConnectedPrefs"
     private val PREF_ROOT_URI = "root_uri"
@@ -542,8 +548,15 @@ class ConnectedApp(private val context: Context) {
                     // Automatically pair (handshake) to confirm connection
                     // Only do this when we first discover/trust the device in this session
                     try {
-                        Log.d("ConnectedApp", "Auto-connecting to trusted device ${device.name}")
-                        uniffi.connected_ffi.pairDevice(device.ip, device.port)
+                        if (isSyntheticIp(device.ip)) {
+                            Log.d(
+                                "ConnectedApp",
+                                "Skipping auto-connect for ${device.name}; waiting for proximity IP"
+                            )
+                        } else {
+                            Log.d("ConnectedApp", "Auto-connecting to trusted device ${device.name}")
+                            uniffi.connected_ffi.pairDevice(device.ip, device.port)
+                        }
                     } catch (e: Exception) {
                         Log.w("ConnectedApp", "Failed to auto-connect to trusted device", e)
                     }
@@ -558,11 +571,50 @@ class ConnectedApp(private val context: Context) {
                     Log.d("ConnectedApp", "Removed ${device.name} from trustedDevices (no longer trusted in backend)")
                 }
             }
+
+            if (!isSyntheticIp(device.ip) && pendingPairingAwaitingIp.remove(device.id)) {
+                Log.d("ConnectedApp", "Proximity IP ready; sending pair request to ${device.name}")
+                sendPairRequest(device)
+            }
+
+            if (!isSyntheticIp(device.ip)) {
+                pendingFileTransfersAwaitingIp.remove(device.id)?.let { queue ->
+                    var nextPath = queue.poll()
+                    while (nextPath != null) {
+                        try {
+                            Log.d(
+                                "ConnectedApp",
+                                "Proximity IP ready; sending queued file to ${device.name}"
+                            )
+                            uniffi.connected_ffi.sendFile(
+                                device.ip,
+                                device.port.toUShort(),
+                                nextPath
+                            )
+                            runOnMainThread {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Sending file to ${device.name}",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        } catch (e: Exception) {
+                            Log.e(
+                                "ConnectedApp",
+                                "Queued file send failed: ${e.message}"
+                            )
+                        }
+                        nextPath = queue.poll()
+                    }
+                }
+            }
         }
 
         override fun onDeviceLost(deviceId: String) {
             Log.d("ConnectedApp", "Device lost: $deviceId")
             devices.removeAll { it.id == deviceId }
+            pendingPairingAwaitingIp.remove(deviceId)
+            pendingFileTransfersAwaitingIp.remove(deviceId)
         }
 
         override fun onError(errorMsg: String) {
@@ -1111,6 +1163,7 @@ class ConnectedApp(private val context: Context) {
             uniffi.connected_ffi.registerPairingCallback(pairingCallback)
             uniffi.connected_ffi.registerUnpairCallback(unpairCallback)
             uniffi.connected_ffi.registerMediaControlCallback(mediaCallback)
+            startProximity()
 
             // Auto-register filesystem if permission exists
             getPersistedRootUri()?.let { uri ->
@@ -1279,6 +1332,22 @@ class ConnectedApp(private val context: Context) {
         android.os.Handler(android.os.Looper.getMainLooper()).post(action)
     }
 
+    private fun sendPairRequest(device: DiscoveredDevice) {
+        uniffi.connected_ffi.pairDevice(device.ip, device.port)
+        android.widget.Toast.makeText(
+            context,
+            "Pairing request sent to ${device.name}",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
+        if (!pendingPairing.contains(device.id)) {
+            pendingPairing.add(device.id)
+        }
+    }
+
+    private fun isSyntheticIp(ip: String): Boolean {
+        return ip == "0.0.0.0" || ip.startsWith("198.18.")
+    }
+
     fun startDiscovery() {        // Already started in initialize, but exposed if needed to restart
         try {
             uniffi.connected_ffi.startDiscovery(discoveryCallback)
@@ -1289,15 +1358,19 @@ class ConnectedApp(private val context: Context) {
 
     fun pairDevice(device: DiscoveredDevice) {
         try {
-            uniffi.connected_ffi.pairDevice(device.ip, device.port)
-            android.widget.Toast.makeText(
-                context,
-                "Pairing request sent to ${device.name}",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
-            if (!pendingPairing.contains(device.id)) {
-                pendingPairing.add(device.id)
+            if (isSyntheticIp(device.ip)) {
+                if (pendingPairingAwaitingIp.add(device.id)) {
+                    proximityManager?.requestConnect(device.id)
+                }
+                android.widget.Toast.makeText(
+                    context,
+                    "Waiting for direct link to ${device.name}…",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                return
             }
+
+            sendPairRequest(device)
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Pairing failed", e)
             android.widget.Toast.makeText(
@@ -1514,6 +1587,18 @@ class ConnectedApp(private val context: Context) {
             // Get the real file path from content URI
             val realPath = getRealPathFromUri(contentUri)
             if (realPath != null) {
+                if (isSyntheticIp(device.ip)) {
+                    pendingFileTransfersAwaitingIp
+                        .computeIfAbsent(device.id) { ConcurrentLinkedQueue() }
+                        .add(realPath)
+                    proximityManager?.requestConnect(device.id)
+                    android.widget.Toast.makeText(
+                        context,
+                        "Waiting for direct link to ${device.name}…",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    return
+                }
                 uniffi.connected_ffi.sendFile(device.ip, device.port.toUShort(), realPath)
                 android.widget.Toast.makeText(
                     context,
@@ -1577,6 +1662,20 @@ class ConnectedApp(private val context: Context) {
                             "Sending folder: $folderName",
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
+                    }
+                    if (isSyntheticIp(device.ip)) {
+                        pendingFileTransfersAwaitingIp
+                            .computeIfAbsent(device.id) { ConcurrentLinkedQueue() }
+                            .add(destFolder.absolutePath)
+                        proximityManager?.requestConnect(device.id)
+                        withContext(Dispatchers.Main) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "Waiting for direct link to ${device.name}…",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        return@launch
                     }
                     uniffi.connected_ffi.sendFile(device.ip, device.port.toUShort(), destFolder.absolutePath)
                 } else {
@@ -1691,8 +1790,37 @@ class ConnectedApp(private val context: Context) {
         return devices.size
     }
 
+    fun startProximity() {
+        if (proximityManager != null) {
+            return
+        }
+        proximityManager = ProximityManager(context).also { manager ->
+            manager.onPairingIntent = { deviceId ->
+                Log.d("ConnectedApp", "Received pairing intent from $deviceId")
+                // We need to act as if we want to pair, so we add to pending list
+                // When IP resolves (after P2P connects), we will send the Handshake.
+                // This ensures the Group Owner (who might be blind to our IP) receives a packet from us.
+                if (!pendingPairing.contains(deviceId)) {
+                    pendingPairingAwaitingIp.add(deviceId)
+                    android.widget.Toast.makeText(
+                        context,
+                        "Connecting to device...",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+            manager.start()
+        }
+    }
+
+    fun stopProximity() {
+        proximityManager?.stop()
+        proximityManager = null
+    }
+
     fun cleanup() {
         stopClipboardSync()
+        stopProximity()
         uniffi.connected_ffi.shutdown()
 
         try {

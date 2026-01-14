@@ -1,5 +1,6 @@
 use connected_core::{ConnectedClient, ConnectedError, ConnectedEvent, Device, DeviceType};
 use parking_lot::RwLock;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
@@ -715,7 +716,7 @@ pub fn initialize(
 
     // Parse device type
     let dtype = DeviceType::from_str(&device_type); // assuming helper exists or we implement logic
-                                                    // Actually DeviceType::from_str is available in core::device
+    // Actually DeviceType::from_str is available in core::device
 
     let path = if storage_path.is_empty() {
         None
@@ -723,8 +724,16 @@ pub fn initialize(
         Some(PathBuf::from(storage_path))
     };
 
-    let client = runtime
-        .block_on(async { ConnectedClient::new(device_name, dtype, bind_port, path).await })?;
+    let client = runtime.block_on(async {
+        #[cfg(target_os = "android")]
+        {
+            ConnectedClient::new_with_bind_all(device_name, dtype, bind_port, path).await
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            ConnectedClient::new(device_name, dtype, bind_port, path).await
+        }
+    })?;
 
     spawn_event_listener(client.clone(), runtime);
 
@@ -766,7 +775,22 @@ pub fn initialize_with_ip(
     };
 
     let client = runtime.block_on(async {
-        ConnectedClient::new_with_ip(device_name, dtype, bind_port, ip, path).await
+        #[cfg(target_os = "android")]
+        {
+            ConnectedClient::new_with_bind_ip(
+                device_name,
+                dtype,
+                bind_port,
+                ip,
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+                path,
+            )
+            .await
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            ConnectedClient::new_with_ip(device_name, dtype, bind_port, ip, path).await
+        }
     })?;
 
     spawn_event_listener(client.clone(), runtime);
@@ -1027,6 +1051,24 @@ pub fn start_discovery(callback: Box<dyn DiscoveryCallback>) -> Result<(), Conne
 }
 
 #[uniffi::export]
+pub fn inject_proximity_device(
+    device_id: String,
+    device_name: String,
+    device_type: String,
+    ip: String,
+    port: u16,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let dtype = DeviceType::from_str(&device_type);
+    let ip: IpAddr = ip.parse().map_err(|_| ConnectedFfiError::InvalidArgument {
+        msg: "Invalid IP".into(),
+    })?;
+
+    client.inject_proximity_device(device_id, device_name, dtype, ip, port)?;
+    Ok(())
+}
+
+#[uniffi::export]
 pub fn stop_discovery() {
     *DISCOVERY_CALLBACK.write() = None;
 }
@@ -1262,20 +1304,18 @@ pub fn forget_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
 
 #[uniffi::export]
 pub fn is_device_forgotten(fingerprint: String) -> bool {
-    match get_client() { Ok(client) => {
-        client.is_device_forgotten(&fingerprint)
-    } _ => {
-        false
-    }}
+    match get_client() {
+        Ok(client) => client.is_device_forgotten(&fingerprint),
+        _ => false,
+    }
 }
 
 #[uniffi::export]
 pub fn is_device_trusted(device_id: String) -> bool {
-    match get_client() { Ok(client) => {
-        client.is_device_trusted(&device_id)
-    } _ => {
-        false
-    }}
+    match get_client() {
+        Ok(client) => client.is_device_trusted(&device_id),
+        _ => false,
+    }
 }
 
 #[uniffi::export]

@@ -7,8 +7,8 @@ use quinn::{
     VarInt,
 };
 
-use rustls::pki_types::CertificateDer;
 use rustls::DistinguishedName;
+use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -149,6 +149,7 @@ pub struct QuicTransport {
     endpoint: Endpoint,
     local_id: String,
     client_config: ClientConfig,
+    client_config_allow_unknown: ClientConfig,
     connection_cache: Arc<RwLock<ConnectionCache>>,
 }
 
@@ -159,7 +160,8 @@ impl QuicTransport {
         key_store: Arc<RwLock<KeyStore>>,
     ) -> Result<Self> {
         let (server_config, _) = Self::create_server_config(&key_store)?;
-        let client_config = Self::create_client_config(&key_store)?;
+        let client_config = Self::create_client_config(&key_store, false)?;
+        let client_config_allow_unknown = Self::create_client_config(&key_store, true)?;
 
         let mut endpoint = Endpoint::server(server_config, bind_addr)?;
         endpoint.set_default_client_config(client_config.clone());
@@ -170,6 +172,7 @@ impl QuicTransport {
             endpoint,
             local_id,
             client_config,
+            client_config_allow_unknown,
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
         })
     }
@@ -232,7 +235,10 @@ impl QuicTransport {
         Ok((server_config, cert))
     }
 
-    fn create_client_config(key_store: &Arc<RwLock<KeyStore>>) -> Result<ClientConfig> {
+    fn create_client_config(
+        key_store: &Arc<RwLock<KeyStore>>,
+        allow_unknown: bool,
+    ) -> Result<ClientConfig> {
         let ks = key_store.read();
         let cert = ks.get_cert();
         let key = ks.get_key();
@@ -241,6 +247,7 @@ impl QuicTransport {
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(PeerVerifier {
                 key_store: key_store.clone(),
+                allow_unknown,
             }))
             .with_client_auth_cert(vec![cert], key.into())?;
 
@@ -296,15 +303,52 @@ impl QuicTransport {
         Ok(connection)
     }
 
+    pub async fn connect_allow_unknown(&self, addr: SocketAddr) -> Result<Connection> {
+        info!(
+            "Establishing new QUIC connection (allow unknown) to {}",
+            addr
+        );
+
+        let connecting = self.endpoint.connect_with(
+            self.client_config_allow_unknown.clone(),
+            addr,
+            "connected.local",
+        )?;
+
+        let connection = timeout(CONNECT_TIMEOUT, connecting)
+            .await
+            .map_err(|_| {
+                warn!(
+                    "Connection to {} timed out after {:?}",
+                    addr, CONNECT_TIMEOUT
+                );
+                ConnectedError::Timeout(format!(
+                    "Connection to {} timed out after {:?}. Ensure the device is online and reachable.",
+                    addr, CONNECT_TIMEOUT
+                ))
+            })?
+            .map_err(|e| {
+                warn!("Connection to {} failed: {}", addr, e);
+                ConnectedError::Connection(format!("Failed to connect to {}: {}", addr, e))
+            })?;
+
+        info!("Connected to {} (RTT: {:?})", addr, connection.rtt());
+
+        Ok(connection)
+    }
+
     pub fn invalidate_connection(&self, addr: &SocketAddr) {
         let mut cache = self.connection_cache.write();
-        match cache.remove(addr) { Some(connection) => {
-            // Close the QUIC connection gracefully
-            connection.close(VarInt::from_u32(0), b"unpaired");
-            info!("Closed and invalidated connection to {}", addr);
-        } _ => {
-            debug!("No cached connection to invalidate for {}", addr);
-        }}
+        match cache.remove(addr) {
+            Some(connection) => {
+                // Close the QUIC connection gracefully
+                connection.close(VarInt::from_u32(0), b"unpaired");
+                info!("Closed and invalidated connection to {}", addr);
+            }
+            _ => {
+                debug!("No cached connection to invalidate for {}", addr);
+            }
+        }
     }
 
     pub async fn get_connection_fingerprint(&self, addr: SocketAddr) -> Option<String> {
@@ -320,7 +364,10 @@ impl QuicTransport {
                         fp.as_ref().map(|s| &s[..16.min(s.len())])
                     );
                 } else {
-                    warn!("Connection to {} exists but could not get peer fingerprint (no peer identity?)", addr);
+                    warn!(
+                        "Connection to {} exists but could not get peer fingerprint (no peer identity?)",
+                        addr
+                    );
                 }
                 return fp;
             } else {
@@ -716,6 +763,7 @@ impl QuicTransport {
 #[derive(Debug)]
 struct PeerVerifier {
     key_store: Arc<RwLock<KeyStore>>,
+    allow_unknown: bool,
 }
 
 impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
@@ -756,8 +804,14 @@ impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
         }
 
         // Only allow unknown peers if pairing mode is enabled
-        if ks.is_pairing_mode() {
-            info!("Allowing unknown peer in PAIRING MODE: {}", fingerprint);
+        // or if this connection explicitly allows unknown peers (e.g. file transfer).
+        if self.allow_unknown || ks.is_pairing_mode() {
+            let reason = if self.allow_unknown {
+                "ALLOW_UNKNOWN"
+            } else {
+                "PAIRING_MODE"
+            };
+            info!("Allowing unknown peer ({}): {}", reason, fingerprint);
             return Ok(rustls::client::danger::ServerCertVerified::assertion());
         }
 

@@ -4,6 +4,7 @@
 mod components;
 mod controller;
 mod fs_provider;
+mod proximity;
 mod state;
 mod utils;
 
@@ -85,6 +86,7 @@ fn App() -> Element {
     let mut clipboard_sync_enabled = use_signal(|| get_clipboard_sync_enabled());
     let mut notifications = use_signal(Vec::<Notification>::new);
     let mut show_send_dialog = use_signal(|| false);
+    let mut send_target_device = use_signal(|| None::<DeviceInfo>);
     let mut clipboard_text = use_signal(String::new);
     let mut show_rename_dialog = use_signal(|| false);
     let mut rename_text = use_signal(String::new);
@@ -523,6 +525,10 @@ fn App() -> Element {
                                              action_tx.send(AppAction::PairWithDevice { ip: d.ip.clone(), port });
                                          }
                                     },
+                                    on_send_file: move |d: DeviceInfo| {
+                                        send_target_device.set(Some(d));
+                                        show_send_dialog.set(true);
+                                    },
                                 }
                             }
                         }
@@ -742,7 +748,13 @@ fn App() -> Element {
                                             h3 { "Send a File to {device.name}" }
                                             button {
                                                 class: "primary-button",
-                                                onclick: move |_| show_send_dialog.set(true),
+                                                onclick: {
+                                                    let device = device.clone();
+                                                    move |_| {
+                                                        send_target_device.set(Some(device.clone()));
+                                                        show_send_dialog.set(true);
+                                                    }
+                                                },
                                                 Icon { icon: IconType::Upload, size: 14, color: "currentColor".to_string() }
                                                 span { " Choose File" }
                                             }
@@ -1860,10 +1872,13 @@ fn App() -> Element {
 
             if *show_send_dialog.read() {
                 FileDialog {
-                    device: selected_device.read().clone(),
-                    on_close: move |_| show_send_dialog.set(false),
+                    device: send_target_device.read().clone(),
+                    on_close: move |_| {
+                        show_send_dialog.set(false);
+                        send_target_device.set(None);
+                    },
                     on_send: move |path: String| {
-                        if let Some(ref device) = *selected_device.read() {
+                        if let Some(ref device) = *send_target_device.read() {
                             action_tx.send(AppAction::SendFile {
                                 ip: device.ip.clone(),
                                 port: device.port,
@@ -1871,6 +1886,7 @@ fn App() -> Element {
                             });
                         }
                         show_send_dialog.set(false);
+                        send_target_device.set(None);
                     }
                 }
             }

@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
+import android.content.pm.PackageManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -29,12 +31,15 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
 import uniffi.connected_ffi.DiscoveredDevice
 
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
     private lateinit var connectedApp: ConnectedApp
+    private lateinit var proximityPermissionsLauncher: ActivityResultLauncher<Array<String>>
+    private var proximityPermissionsInFlight = false
 
     private val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { selectedUri ->
@@ -62,7 +67,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         connectedApp = ConnectedApp(this)
+        proximityPermissionsLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) {
+            proximityPermissionsInFlight = false
+            connectedApp.startProximity()
+        }
         connectedApp.initialize()
+        requestProximityPermissionsIfNeeded()
 
         setContent {
             ConnectedTheme {
@@ -80,6 +92,57 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         connectedApp.cleanup()
         super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        requestProximityPermissionsIfNeeded()
+    }
+
+    private fun requestProximityPermissionsIfNeeded() {
+        val missing = LinkedHashSet<String>()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                missing.add(Manifest.permission.BLUETOOTH_SCAN)
+            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                missing.add(Manifest.permission.BLUETOOTH_ADVERTISE)
+            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                missing.add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.NEARBY_WIFI_DEVICES) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                missing.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+            }
+        } else {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                missing.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+        }
+
+        if (missing.isEmpty()) {
+            connectedApp.startProximity()
+            return
+        }
+
+        if (!proximityPermissionsInFlight) {
+            proximityPermissionsInFlight = true
+            proximityPermissionsLauncher.launch(missing.toTypedArray())
+        }
     }
 }
 
@@ -928,16 +991,29 @@ fun DeviceItem(
                         }
                     }
                 }
-            } else if (isPending) {
-                Button(
-                    onClick = { },
-                    enabled = false
-                ) {
-                    Text("Waiting...")
-                }
             } else {
-                Button(onClick = { app.pairDevice(device) }) {
-                    Text("Pair")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = {
+                        app.setSelectedDeviceForFileTransfer(device)
+                        filePickerLauncher?.launch("*/*")
+                    }) {
+                        Text("Send File")
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    if (isPending) {
+                        Button(
+                            onClick = { },
+                            enabled = false
+                        ) {
+                            Text("Waiting...")
+                        }
+                    } else {
+                        Button(onClick = { app.pairDevice(device) }) {
+                            Text("Pair")
+                        }
+                    }
                 }
             }
         }

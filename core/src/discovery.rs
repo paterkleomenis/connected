@@ -4,8 +4,8 @@ use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -17,14 +17,46 @@ const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
 const BROWSE_TIMEOUT: Duration = Duration::from_millis(100);
 const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(60);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(2);
+const PROXIMITY_STALE_TIMEOUT: Duration = Duration::from_secs(60);
 const PROTOCOL_VERSION: u32 = 1;
 const MIN_COMPATIBLE_VERSION: u32 = 1;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiscoverySource {
+    Mdns,
+    Proximity,
+}
+
 #[derive(Clone)]
-struct TrackedDevice {
+struct TrackedEndpoint {
     device: Device,
     last_seen: Instant,
     ip: String, // Cached IP for deduplication
+}
+
+#[derive(Clone, Default)]
+struct TrackedDevice {
+    mdns: Option<TrackedEndpoint>,
+    proximity: Option<TrackedEndpoint>,
+}
+
+impl TrackedDevice {
+    fn active_source(&self) -> Option<DiscoverySource> {
+        if self.mdns.is_some() {
+            Some(DiscoverySource::Mdns)
+        } else if self.proximity.is_some() {
+            Some(DiscoverySource::Proximity)
+        } else {
+            None
+        }
+    }
+
+    fn active_device(&self) -> Option<Device> {
+        self.mdns
+            .as_ref()
+            .or(self.proximity.as_ref())
+            .map(|endpoint| endpoint.device.clone())
+    }
 }
 
 pub struct DiscoveryService {
@@ -99,6 +131,11 @@ impl DiscoveryService {
             .ip
             .parse()
             .map_err(|_| ConnectedError::InvalidAddress(self.local_device.ip.clone()))?;
+
+        if ip.is_unspecified() {
+            warn!("Local IP unspecified; skipping mDNS announce");
+            return Ok(());
+        }
 
         // Create the hostname - use a unique name for this device
         let hostname = format!("{}.local.", self.local_device.id);
@@ -194,11 +231,14 @@ impl DiscoveryService {
 
                 while running_announce.load(Ordering::SeqCst) {
                     if announced.load(Ordering::SeqCst) {
-                        match Self::do_announce(&daemon, &local_device) { Err(e) => {
-                            debug!("Re-announcement failed: {}", e);
-                        } _ => {
-                            debug!("Re-announced device on mDNS");
-                        }}
+                        match Self::do_announce(&daemon, &local_device) {
+                            Err(e) => {
+                                debug!("Re-announcement failed: {}", e);
+                            }
+                            _ => {
+                                debug!("Re-announced device on mDNS");
+                            }
+                        }
                     }
                     std::thread::sleep(REANNOUNCE_INTERVAL);
                 }
@@ -221,25 +261,13 @@ impl DiscoveryService {
                     }
 
                     let now = Instant::now();
-                    let stale_ids: Vec<String> = {
-                        let devices = discovered_cleanup.read();
-                        devices
-                            .iter()
-                            .filter(|(_, tracked)| {
-                                now.duration_since(tracked.last_seen) > DEVICE_STALE_TIMEOUT
-                            })
-                            .map(|(id, _)| id.clone())
-                            .collect()
+                    let events = {
+                        let mut devices = discovered_cleanup.write();
+                        Self::cleanup_stale_endpoints(&mut devices, now)
                     };
 
-                    for device_id in stale_ids {
-                        if let Some(tracked) = discovered_cleanup.write().remove(&device_id) {
-                            info!(
-                                "Removing stale device: {} ({})",
-                                tracked.device.name, device_id
-                            );
-                            let _ = event_tx_cleanup.send(DiscoveryEvent::DeviceLost(device_id));
-                        }
+                    for event in events {
+                        let _ = event_tx_cleanup.send(event);
                     }
                 }
                 debug!("Device cleanup thread stopped");
@@ -271,6 +299,11 @@ impl DiscoveryService {
             .parse()
             .map_err(|_| ConnectedError::InvalidAddress(device.ip.clone()))?;
 
+        if ip.is_unspecified() {
+            debug!("Local IP unspecified; skipping mDNS re-announce");
+            return Ok(());
+        }
+
         let service_info = ServiceInfo::new(
             SERVICE_TYPE,
             &instance_name,
@@ -282,6 +315,136 @@ impl DiscoveryService {
 
         daemon.register(service_info)?;
         Ok(())
+    }
+
+    pub(crate) fn upsert_device_endpoint(
+        &self,
+        device: Device,
+        source: DiscoverySource,
+    ) -> Option<DiscoveryEvent> {
+        let mut devices = self.discovered_devices.write();
+        Self::upsert_endpoint_locked(&mut devices, device, source)
+    }
+
+    fn transition_event(
+        device_id: &str,
+        prev_source: Option<DiscoverySource>,
+        prev_device: Option<Device>,
+        new_source: Option<DiscoverySource>,
+        new_device: Option<Device>,
+    ) -> Option<DiscoveryEvent> {
+        match (prev_device, new_device) {
+            (None, Some(device)) => Some(DiscoveryEvent::DeviceFound(device)),
+            (Some(_), None) => Some(DiscoveryEvent::DeviceLost(device_id.to_string())),
+            (Some(prev), Some(curr)) => {
+                if prev_source != new_source {
+                    Some(DiscoveryEvent::DeviceFound(curr))
+                } else if new_source == Some(DiscoverySource::Proximity) && prev != curr {
+                    Some(DiscoveryEvent::DeviceFound(curr))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn upsert_endpoint_locked(
+        devices: &mut HashMap<String, TrackedDevice>,
+        device: Device,
+        source: DiscoverySource,
+    ) -> Option<DiscoveryEvent> {
+        let device_id = device.id.clone();
+        let tracked = devices.entry(device_id.clone()).or_default();
+        let prev_source = tracked.active_source();
+        let prev_device = tracked.active_device();
+
+        let endpoint = TrackedEndpoint {
+            device: device.clone(),
+            last_seen: Instant::now(),
+            ip: device.ip.clone(),
+        };
+
+        match source {
+            DiscoverySource::Mdns => tracked.mdns = Some(endpoint),
+            DiscoverySource::Proximity => tracked.proximity = Some(endpoint),
+        }
+
+        let new_source = tracked.active_source();
+        let new_device = tracked.active_device();
+
+        Self::transition_event(&device_id, prev_source, prev_device, new_source, new_device)
+    }
+
+    fn remove_endpoint_locked(
+        devices: &mut HashMap<String, TrackedDevice>,
+        device_id: &str,
+        source: DiscoverySource,
+    ) -> Option<DiscoveryEvent> {
+        let Some(tracked) = devices.get_mut(device_id) else {
+            return None;
+        };
+
+        let prev_source = tracked.active_source();
+        let prev_device = tracked.active_device();
+
+        match source {
+            DiscoverySource::Mdns => tracked.mdns = None,
+            DiscoverySource::Proximity => tracked.proximity = None,
+        }
+
+        let new_source = tracked.active_source();
+        let new_device = tracked.active_device();
+
+        if tracked.mdns.is_none() && tracked.proximity.is_none() {
+            devices.remove(device_id);
+        }
+
+        Self::transition_event(device_id, prev_source, prev_device, new_source, new_device)
+    }
+
+    fn cleanup_stale_endpoints(
+        devices: &mut HashMap<String, TrackedDevice>,
+        now: Instant,
+    ) -> Vec<DiscoveryEvent> {
+        let mut events = Vec::new();
+        let ids: Vec<String> = devices.keys().cloned().collect();
+
+        for device_id in ids {
+            let Some(tracked) = devices.get_mut(&device_id) else {
+                continue;
+            };
+
+            let prev_source = tracked.active_source();
+            let prev_device = tracked.active_device();
+
+            if tracked.mdns.as_ref().is_some_and(|endpoint| {
+                now.duration_since(endpoint.last_seen) > DEVICE_STALE_TIMEOUT
+            }) {
+                tracked.mdns = None;
+            }
+
+            if tracked.proximity.as_ref().is_some_and(|endpoint| {
+                now.duration_since(endpoint.last_seen) > PROXIMITY_STALE_TIMEOUT
+            }) {
+                tracked.proximity = None;
+            }
+
+            let new_source = tracked.active_source();
+            let new_device = tracked.active_device();
+
+            if tracked.mdns.is_none() && tracked.proximity.is_none() {
+                devices.remove(&device_id);
+            }
+
+            if let Some(event) =
+                Self::transition_event(&device_id, prev_source, prev_device, new_source, new_device)
+            {
+                events.push(event);
+            }
+        }
+
+        events
     }
 
     fn handle_event(
@@ -454,14 +617,20 @@ impl DiscoveryService {
 
         // Check if this is a new device or an update
         // Also check for IP conflicts (same IP, different ID = device restarted)
-        let (is_new, old_device_to_remove) = {
+        let (event, old_device_to_remove) = {
             let mut devices = discovered.write();
 
             // Check if there's an existing device with same IP but different ID
             // This happens when a device restarts and gets a new UUID
             let old_id_with_same_ip: Option<String> = devices
                 .iter()
-                .find(|(id, tracked)| tracked.ip == ip_str && *id != &device_id)
+                .find(|(id, tracked)| {
+                    tracked
+                        .mdns
+                        .as_ref()
+                        .is_some_and(|endpoint| endpoint.ip == ip_str)
+                        && *id != &device_id
+                })
                 .map(|(id, _)| id.clone());
 
             // Remove old entry with same IP if exists
@@ -473,14 +642,10 @@ impl DiscoveryService {
                 devices.remove(old_id);
             }
 
-            let is_new = !devices.contains_key(&device_id);
-            let tracked = TrackedDevice {
-                device: device.clone(),
-                last_seen: Instant::now(),
-                ip: ip_str.clone(),
-            };
-            devices.insert(device_id.clone(), tracked);
-            (is_new, old_id_with_same_ip)
+            (
+                Self::upsert_endpoint_locked(&mut devices, device.clone(), DiscoverySource::Mdns),
+                old_id_with_same_ip,
+            )
         };
 
         // Notify about removed device if we replaced one
@@ -488,14 +653,15 @@ impl DiscoveryService {
             let _ = event_tx.send(DiscoveryEvent::DeviceLost(old_id));
         }
 
-        // Only send event for new devices (not updates)
-        if is_new {
-            info!(
-                "NEW device discovered: {} ({}) at {}:{}",
-                device_name, device_id, ip, info.port
-            );
-            if event_tx.send(DiscoveryEvent::DeviceFound(device)).is_err() {
-                error!("Event channel closed - cannot notify about new device!");
+        if let Some(event) = event {
+            if let DiscoveryEvent::DeviceFound(_) = &event {
+                info!(
+                    "Device active endpoint updated: {} ({}) at {}:{}",
+                    device_name, device_id, ip, info.port
+                );
+            }
+            if event_tx.send(event).is_err() {
+                error!("Event channel closed - cannot notify about device update!");
             }
         } else {
             trace!("Updated existing device: {} ({})", device_name, device_id);
@@ -527,9 +693,16 @@ impl DiscoveryService {
             return;
         };
 
-        if let Some(tracked) = discovered.write().remove(&device_id) {
-            info!("Device left: {} ({})", tracked.device.name, device_id);
-            let _ = event_tx.send(DiscoveryEvent::DeviceLost(device_id));
+        let event = {
+            let mut devices = discovered.write();
+            Self::remove_endpoint_locked(&mut devices, &device_id, DiscoverySource::Mdns)
+        };
+
+        if let Some(event) = event {
+            if let DiscoveryEvent::DeviceLost(_) = &event {
+                info!("Device left: ({})", device_id);
+            }
+            let _ = event_tx.send(event);
         }
     }
 
@@ -582,7 +755,7 @@ impl DiscoveryService {
         self.discovered_devices
             .read()
             .values()
-            .map(|tracked| tracked.device.clone())
+            .filter_map(|tracked| tracked.active_device())
             .collect()
     }
 
@@ -590,7 +763,7 @@ impl DiscoveryService {
         self.discovered_devices
             .read()
             .get(id)
-            .map(|tracked| tracked.device.clone())
+            .and_then(|tracked| tracked.active_device())
     }
 
     pub fn clear_discovered_devices(&self) {
