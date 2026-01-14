@@ -1686,17 +1686,19 @@ fn App() -> Element {
             }
 
             // Notifications
-            div {
-                class: "notifications-panel",
-                for notification in notifications.read().iter().rev().take(3) {
-                    div {
-                        class: "notification",
-                        key: "{notification.id}",
-                        span { class: "notification-icon", "{notification.icon}" }
+            if !cfg!(target_os = "linux") || *notifications_enabled.read() {
+                div {
+                    class: "notifications-panel",
+                    for notification in notifications.read().iter().rev().take(3) {
                         div {
-                            class: "notification-content",
-                            span { class: "notification-title", "{notification.title}" }
-                            span { class: "notification-message", "{notification.message}" }
+                            class: "notification",
+                            key: "{notification.id}",
+                            span { class: "notification-icon", "{notification.icon}" }
+                            div {
+                                class: "notification-content",
+                                span { class: "notification-title", "{notification.title}" }
+                                span { class: "notification-message", "{notification.message}" }
+                            }
                         }
                     }
                 }

@@ -31,7 +31,7 @@ impl Default for AppSettings {
             auto_sync_messages: false,
             auto_sync_calls: false,
             auto_sync_contacts: false,
-            notifications_enabled: true,
+            notifications_enabled: false,
             device_name: None,
         }
     }
