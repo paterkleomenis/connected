@@ -48,6 +48,7 @@ class ConnectedApp(private val context: Context) {
     val devices = mutableStateListOf<DiscoveredDevice>()
     val trustedDevices = mutableStateListOf<String>() // Set of trusted Device IDs
     val pendingPairing = mutableStateListOf<String>() // Set of pending Device IDs
+    val pendingShareUris = mutableStateListOf<String>()
 
     private val trustedDeviceAddresses = mutableMapOf<String, Pair<String, UShort>>()
     private val pendingPairingAwaitingIp = mutableSetOf<String>()
@@ -683,6 +684,24 @@ class ConnectedApp(private val context: Context) {
         uniffi.connected_ffi.pairDevice(device.ip, device.port)
         android.widget.Toast.makeText(context, "Pairing request sent", android.widget.Toast.LENGTH_SHORT).show()
         if (!pendingPairing.contains(device.id)) pendingPairing.add(device.id)
+    }
+
+    fun setPendingShare(uris: List<Uri>) {
+        pendingShareUris.clear()
+        pendingShareUris.addAll(uris.map { it.toString() })
+    }
+
+    fun clearPendingShare() {
+        pendingShareUris.clear()
+    }
+
+    fun sendPendingShareToDevice(device: DiscoveredDevice) {
+        val items = pendingShareUris.toList()
+        if (items.isEmpty()) return
+        items.forEach { uri ->
+            sendFileToDevice(device, uri)
+        }
+        pendingShareUris.clear()
     }
 
     // Missing method: isDeviceTrusted

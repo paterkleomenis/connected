@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -116,6 +117,7 @@ class MainActivity : ComponentActivity() {
         }
 
         requestProximityPermissionsIfNeeded()
+        handleShareIntent(intent)
 
         setContent {
             ConnectedTheme {
@@ -134,6 +136,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleShareIntent(intent)
     }
 
     override fun onDestroy() {
@@ -192,6 +200,32 @@ class MainActivity : ComponentActivity() {
         if (!proximityPermissionsInFlight) {
             proximityPermissionsInFlight = true
             proximityPermissionsLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    private fun handleShareIntent(intent: Intent?) {
+        if (intent == null) return
+        when (intent.action) {
+            Intent.ACTION_SEND -> {
+                val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                    ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+                if (uri != null) {
+                    connectedApp.setPendingShare(listOf(uri))
+                }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val uris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                    ?: intent.clipData?.let { clip ->
+                        ArrayList<Uri>(clip.itemCount).apply {
+                            for (i in 0 until clip.itemCount) {
+                                clip.getItemAt(i)?.uri?.let { add(it) }
+                            }
+                        }
+                    }
+                if (!uris.isNullOrEmpty()) {
+                    connectedApp.setPendingShare(uris)
+                }
+            }
         }
     }
 }
@@ -357,6 +391,52 @@ fun MainAppNavigation(
                 Screen.Home -> HomeScreen(connectedApp, filePickerLauncher, sendFolderLauncher)
                 Screen.Settings -> SettingsScreen(connectedApp, folderPickerLauncher, isServiceRunning)
             }
+        }
+
+        if (connectedApp.pendingShareUris.isNotEmpty()) {
+            val shareCount = connectedApp.pendingShareUris.size
+            AlertDialog(
+                onDismissRequest = { connectedApp.clearPendingShare() },
+                title = { Text("Send to device") },
+                text = {
+                    Column {
+                        Text(
+                            if (shareCount == 1) "Choose a device for 1 item."
+                            else "Choose a device for $shareCount items."
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        if (connectedApp.devices.isEmpty()) {
+                            Text("No devices available.")
+                        } else {
+                            LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                                items(connectedApp.devices) { device ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { connectedApp.sendPendingShareToDevice(device) }
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            painterResource(getDeviceIcon(device.deviceType)),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(device.name)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { connectedApp.clearPendingShare() }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
 
         // Pairing Request Dialog
