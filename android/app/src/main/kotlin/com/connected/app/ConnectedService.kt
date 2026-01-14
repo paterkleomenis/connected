@@ -23,8 +23,10 @@ class ConnectedService : Service() {
         super.onCreate()
         Log.d("ConnectedService", "Creating service")
 
-        // Initialize the app logic with Application Context
-        connectedApp = ConnectedApp(applicationContext)
+        // Initialize the app logic with Application Context via Singleton
+        connectedApp = ConnectedApp.getInstance(applicationContext)
+        // We generally expect the app to be initialized, but if the service starts fresh (e.g. boot),
+        // we must ensure it's initialized. initialize() should be idempotent-ish.
         connectedApp.initialize()
 
         startForegroundService()

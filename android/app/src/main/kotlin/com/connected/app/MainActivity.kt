@@ -1,6 +1,7 @@
 package com.connected.app
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -13,12 +14,25 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -63,17 +77,44 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun isServiceRunning(serviceClass: Class<*>): Boolean {
+        val manager = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        for (service in manager.getRunningServices(Int.MAX_VALUE)) {
+            if (serviceClass.name == service.service.className) {
+                return true
+            }
+        }
+        return false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        connectedApp = ConnectedApp(this)
+        // Initialize singleton with Application Context
+        connectedApp = ConnectedApp.getInstance(applicationContext)
+
+        // If service is running, we assume it has already initialized the app logic.
+        // If not, and run in background is off, we ensure initialization here.
+        // Since getInstance() guarantees initialization, we just need to ensure startProximity/initialize
+        // is called if it hasn't been.
+        // A simple check: if we are not running as a service, we initialize manually.
+        // However, ConnectedApp.initialize() is safe to call multiple times (it might re-register callbacks).
+        // Let's assume initialize() handles idempotency or we just call it.
+        // Better: Check if the service is running. If so, bind to it?
+        // Actually, with the Singleton pattern, we share the state in memory.
+        // As long as the process is alive, we share the ConnectedApp instance.
+
+        if (!isServiceRunning(ConnectedService::class.java)) {
+            connectedApp.initialize()
+        }
+
         proximityPermissionsLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) {
             proximityPermissionsInFlight = false
             connectedApp.startProximity()
         }
-        connectedApp.initialize()
+
         requestProximityPermissionsIfNeeded()
 
         setContent {
@@ -82,7 +123,13 @@ class MainActivity : ComponentActivity() {
                     if (connectedApp.isBrowsingRemote.value) {
                         RemoteFileBrowser(connectedApp)
                     } else {
-                        MainAppNavigation(connectedApp, filePickerLauncher, folderPickerLauncher, sendFolderLauncher)
+                        MainAppNavigation(
+                            connectedApp,
+                            filePickerLauncher,
+                            folderPickerLauncher,
+                            sendFolderLauncher,
+                            ::isServiceRunning
+                        )
                     }
                 }
             }
@@ -90,7 +137,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        connectedApp.cleanup()
+        // Only cleanup if we are NOT running as a service
+        if (!isServiceRunning(ConnectedService::class.java)) {
+            connectedApp.cleanup()
+        }
         super.onDestroy()
     }
 
@@ -264,7 +314,8 @@ fun MainAppNavigation(
     connectedApp: ConnectedApp,
     filePickerLauncher: ActivityResultLauncher<String>? = null,
     folderPickerLauncher: ActivityResultLauncher<Uri?>? = null,
-    sendFolderLauncher: ActivityResultLauncher<Uri?>? = null
+    sendFolderLauncher: ActivityResultLauncher<Uri?>? = null,
+    isServiceRunning: ((Class<*>) -> Boolean)? = null
 ) {
     var currentScreen by remember { mutableStateOf(Screen.Home) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -304,7 +355,7 @@ fun MainAppNavigation(
         Box(modifier = Modifier.padding(paddingValues)) {
             when (currentScreen) {
                 Screen.Home -> HomeScreen(connectedApp, filePickerLauncher, sendFolderLauncher)
-                Screen.Settings -> SettingsScreen(connectedApp, folderPickerLauncher)
+                Screen.Settings -> SettingsScreen(connectedApp, folderPickerLauncher, isServiceRunning)
             }
         }
 
@@ -350,6 +401,38 @@ fun MainAppNavigation(
     }
 }
 
+@Composable
+fun NotificationWarningCard(packageName: String) {
+    val context = LocalContext.current
+    androidx.compose.foundation.layout.Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 16.dp)
+            .background(MaterialTheme.colorScheme.errorContainer, MaterialTheme.shapes.medium)
+            .clickable {
+                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                    putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                }
+                context.startActivity(intent)
+            }
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.Warning,
+                contentDescription = "Warning",
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Column {
+                Text("Notifications Disabled", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                Text("Enable notifications to receive files.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -357,12 +440,33 @@ fun HomeScreen(
     filePickerLauncher: ActivityResultLauncher<String>? = null,
     sendFolderLauncher: ActivityResultLauncher<Uri?>? = null
 ) {
+    val context = LocalContext.current
+    var areNotificationsEnabled by remember { mutableStateOf(true) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                areNotificationsEnabled = notificationManager.areNotificationsEnabled()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text(
             "Nearby Devices",
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(bottom = 16.dp)
         )
+
+        if (!areNotificationsEnabled) {
+            NotificationWarningCard(context.packageName)
+        }
 
         if (connectedApp.devices.isEmpty()) {
             Box(
@@ -414,11 +518,29 @@ fun HomeScreen(
 @Composable
 fun SettingsScreen(
     connectedApp: ConnectedApp,
-    folderPickerLauncher: ActivityResultLauncher<Uri?>? = null
+    folderPickerLauncher: ActivityResultLauncher<Uri?>? = null,
+    isServiceRunning: ((Class<*>) -> Boolean)? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var isNotificationAccessGranted by remember { mutableStateOf(false) }
+    var isBackgroundServiceRunning by remember {
+        mutableStateOf(
+            isServiceRunning?.invoke(ConnectedService::class.java) ?: false
+        )
+    }
+
+    // Battery Optimization
+    val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+    var isIgnoringBatteryOptimizations by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                powerManager.isIgnoringBatteryOptimizations(context.packageName)
+            } else {
+                true
+            }
+        )
+    }
 
     // Telephony permissions
     var hasTelephonyPermissions by remember { mutableStateOf(false) }
@@ -427,6 +549,14 @@ fun SettingsScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                // Check background service
+                isBackgroundServiceRunning = isServiceRunning?.invoke(ConnectedService::class.java) ?: false
+
+                // Check battery optimizations
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    isIgnoringBatteryOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                }
+
                 // Check notification access
                 val componentName = android.content.ComponentName(context, MediaObserverService::class.java)
                 val enabledListeners = android.provider.Settings.Secure.getString(
@@ -558,6 +688,73 @@ fun SettingsScreen(
                         )
                         Button(onClick = { showRenameDialog = true }) {
                             Text("Rename")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Run in Background Section
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_refresh), // Using sync/refresh icon as placeholder
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Run in Background", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Keep app running to receive files anytime",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = isBackgroundServiceRunning,
+                            onCheckedChange = { enabled ->
+                                val intent = Intent(context, ConnectedService::class.java)
+                                if (enabled) {
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                        context.startForegroundService(intent)
+                                    } else {
+                                        context.startService(intent)
+                                    }
+                                } else {
+                                    context.stopService(intent)
+                                }
+                                isBackgroundServiceRunning = enabled
+                            }
+                        )
+                    }
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !isIgnoringBatteryOptimizations) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Disable Battery Optimizations")
                         }
                     }
                 }

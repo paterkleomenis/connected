@@ -1871,24 +1871,37 @@ fn get_local_ip() -> Option<IpAddr> {
     // Filter for IPv4 and non-loopback
     let ipv4_ifaces: Vec<_> = ifaces
         .into_iter()
-        .filter(|iface| !iface.is_loopback() && iface.ip().is_ipv4())
+        .filter(|iface| {
+            !iface.is_loopback()
+                && iface.ip().is_ipv4()
+                && !iface.ip().to_string().starts_with("127.")
+        })
         .collect();
 
-    // Try to find a private IP first
+    // Priority 1: Wi-Fi or Ethernet interfaces (wlan, eth, en)
+    // Priority 2: Private IPs (192.168, 172.16-31, 10.)
+    // Priority 3: Any other IPv4
+
     ipv4_ifaces
         .iter()
         .find(|iface| {
-            if let IpAddr::V4(ipv4) = iface.ip() {
-                let octets = ipv4.octets();
-                match octets[0] {
-                    10 => true,
-                    172 => octets[1] >= 16 && octets[1] <= 31,
-                    192 => octets[1] == 168,
-                    _ => false,
+            let name = iface.name.to_lowercase();
+            name.contains("wlan") || name.contains("eth") || name.contains("en")
+        })
+        .or_else(|| {
+            ipv4_ifaces.iter().find(|iface| {
+                if let IpAddr::V4(ipv4) = iface.ip() {
+                    let octets = ipv4.octets();
+                    match octets[0] {
+                        192 => octets[1] == 168,
+                        172 => octets[1] >= 16 && octets[1] <= 31,
+                        10 => true,
+                        _ => false,
+                    }
+                } else {
+                    false
                 }
-            } else {
-                false
-            }
+            })
         })
         .map(|iface| iface.ip())
         .or_else(|| {

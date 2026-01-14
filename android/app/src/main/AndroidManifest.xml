@@ -88,6 +88,11 @@
         android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"
     />
 
+    <!-- For ignoring battery optimizations -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+    />
+
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher_foreground"
@@ -118,6 +123,20 @@
                 />
             </intent-filter>
         </service>
+
+        <receiver
+            android:name=".TransferActionReceiver"
+            android:exported="false"
+        >
+            <intent-filter>
+                <action
+                    android:name="com.connected.app.ACTION_ACCEPT_TRANSFER"
+                />
+                <action
+                    android:name="com.connected.app.ACTION_REJECT_TRANSFER"
+                />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".MainActivity"
