@@ -136,6 +136,62 @@ fn App() -> Element {
         if get_media_enabled_setting() {
             action_tx.send(AppAction::ToggleMediaControl(true));
         }
+
+        // Poll for Bluetooth/Wi-Fi state changes
+        let action_tx_clone = action_tx.clone();
+        spawn(async move {
+            let mut last_bt_state = true; // Assume ON initially
+            let mut last_wifi_state = true;
+
+            loop {
+                // Check Bluetooth
+                let bt_status = tokio::process::Command::new("rfkill")
+                    .arg("list")
+                    .arg("bluetooth")
+                    .output()
+                    .await;
+
+                let bt_on = if let Ok(output) = bt_status {
+                    let out = String::from_utf8_lossy(&output.stdout);
+                    // If "Soft blocked: yes" or "Hard blocked: yes", it's OFF.
+                    !out.contains("Soft blocked: yes") && !out.contains("Hard blocked: yes")
+                } else {
+                    true // Default to true if rfkill fails (e.g. non-linux or permission issue)
+                };
+
+                // Check Wi-Fi (using nmcli if available, fallback to true)
+                let wifi_status = tokio::process::Command::new("nmcli")
+                    .arg("radio")
+                    .arg("wifi")
+                    .output()
+                    .await;
+
+                let wifi_on = if let Ok(output) = wifi_status {
+                    let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    out == "enabled"
+                } else {
+                    true
+                };
+
+                let any_turned_off = (last_bt_state && !bt_on) || (last_wifi_state && !wifi_on);
+                let any_turned_on = (!last_bt_state && bt_on) || (!last_wifi_state && wifi_on);
+
+                if any_turned_off {
+                    debug!("Adapter turned OFF (BT: {}, WiFi: {})", bt_on, wifi_on);
+                    action_tx_clone.send(AppAction::ClearDevices);
+                }
+
+                if any_turned_on {
+                    debug!("Adapter turned ON (BT: {}, WiFi: {})", bt_on, wifi_on);
+                    action_tx_clone.send(AppAction::RefreshDiscovery);
+                }
+
+                last_bt_state = bt_on;
+                last_wifi_state = wifi_on;
+
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        });
     });
 
     // Auto-sync phone data when entering phone tab on a device

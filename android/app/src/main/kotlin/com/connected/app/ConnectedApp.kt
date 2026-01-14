@@ -1,6 +1,7 @@
 package com.connected.app
 
 import android.content.Context
+import android.content.Intent
 import android.util.Log
 import android.net.Uri
 import android.database.Cursor
@@ -98,6 +99,62 @@ class ConnectedApp(private val context: Context) {
     // Network State
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
     private var proximityManager: ProximityManager? = null
+
+    private val networkStateReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED -> {
+                    val state = intent.getIntExtra(
+                        android.bluetooth.BluetoothAdapter.EXTRA_STATE,
+                        android.bluetooth.BluetoothAdapter.ERROR
+                    )
+                    when (state) {
+                        android.bluetooth.BluetoothAdapter.STATE_OFF -> {
+                            Log.d("ConnectedApp", "Bluetooth turned off - clearing device cache")
+                            stopProximity()
+                            runOnMainThread {
+                                devices.clear()
+                                // Keep trusted devices in the list of IDs, but they won't be visible in 'devices' list
+                                // until rediscovered. This effectively "clears cache from UI".
+                            }
+                        }
+
+                        android.bluetooth.BluetoothAdapter.STATE_ON -> {
+                            Log.d("ConnectedApp", "Bluetooth turned on - refreshing")
+                            startProximity()
+                            startDiscovery()
+                        }
+                    }
+                }
+
+                android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION -> {
+                    val state = intent.getIntExtra(
+                        android.net.wifi.WifiManager.EXTRA_WIFI_STATE,
+                        android.net.wifi.WifiManager.WIFI_STATE_UNKNOWN
+                    )
+                    when (state) {
+                        android.net.wifi.WifiManager.WIFI_STATE_DISABLED -> {
+                            Log.d("ConnectedApp", "Wi-Fi turned off - clearing device cache")
+                            stopProximity()
+                            runOnMainThread {
+                                devices.clear()
+                            }
+                        }
+
+                        android.net.wifi.WifiManager.WIFI_STATE_ENABLED -> {
+                            Log.d("ConnectedApp", "Wi-Fi turned on - refreshing")
+                            // Delay to allow P2P framework to settle
+                            scope.launch(Dispatchers.Main) {
+                                delay(2000)
+                                startProximity()
+                                startDiscovery()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     private val PREFS_NAME = "ConnectedPrefs"
     private val PREF_ROOT_URI = "root_uri"
@@ -1165,6 +1222,13 @@ class ConnectedApp(private val context: Context) {
             uniffi.connected_ffi.registerMediaControlCallback(mediaCallback)
             startProximity()
 
+            // Register network state receiver
+            val filter = android.content.IntentFilter().apply {
+                addAction(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED)
+                addAction(android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION)
+            }
+            context.registerReceiver(networkStateReceiver, filter)
+
             // Auto-register filesystem if permission exists
             getPersistedRootUri()?.let { uri ->
                 registerFsProvider(uri)
@@ -1819,6 +1883,12 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun cleanup() {
+        try {
+            context.unregisterReceiver(networkStateReceiver)
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to unregister network receiver", e)
+        }
+
         stopClipboardSync()
         stopProximity()
         uniffi.connected_ffi.shutdown()

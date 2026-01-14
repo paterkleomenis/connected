@@ -234,7 +234,11 @@ class ProximityManager(private val context: Context) {
     private fun stopAdvertising() {
         val callback = advertiseCallback
         if (callback != null) {
-            advertiser?.stopAdvertising(callback)
+            try {
+                advertiser?.stopAdvertising(callback)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to stop advertising: ${e.message}")
+            }
         }
         advertiseCallback = null
         lastAdvertisedSignature = null
@@ -275,7 +279,11 @@ class ProximityManager(private val context: Context) {
     private fun stopScanning() {
         val callback = scanCallback
         if (callback != null) {
-            scanner?.stopScan(callback)
+            try {
+                scanner?.stopScan(callback)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to stop scanning: ${e.message}")
+            }
         }
         scanCallback = null
     }
@@ -403,7 +411,12 @@ class ProximityManager(private val context: Context) {
         }
 
         context.registerReceiver(p2pReceiver, filter)
-        discoverPeers()
+        try {
+            discoverPeers()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to start discovery in startWifiDirect: ${e.message}")
+            scheduleDiscoveryRetry()
+        }
     }
 
     private fun stopWifiDirect() {
@@ -432,24 +445,32 @@ class ProximityManager(private val context: Context) {
         }
         lastDiscoveryAttempt = now
 
-        manager.discoverPeers(channel, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() {
-                Log.d(TAG, "Wi-Fi Direct peer discovery started")
-                handler.postDelayed({ requestPeers() }, 1000L)
-            }
+        try {
+            manager.discoverPeers(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.d(TAG, "Wi-Fi Direct peer discovery started")
+                    handler.postDelayed({ requestPeers() }, 1000L)
+                }
 
-            override fun onFailure(reason: Int) {
-                handleP2pFailure("peer discovery", reason)
-            }
-        })
+                override fun onFailure(reason: Int) {
+                    handleP2pFailure("peer discovery", reason)
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "discoverPeers failed: ${e.message}")
+        }
     }
 
     private fun requestPeers() {
         val manager = wifiP2pManager ?: return
         val channel = p2pChannel ?: return
-        manager.requestPeers(channel) { peers ->
-            val candidates = peers.deviceList.toList()
-            handler.post { handlePeerList(candidates) }
+        try {
+            manager.requestPeers(channel) { peers ->
+                val candidates = peers.deviceList.toList()
+                handler.post { handlePeerList(candidates) }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "requestPeers failed: ${e.message}")
         }
     }
 
@@ -522,17 +543,22 @@ class ProximityManager(private val context: Context) {
         Log.d(TAG, "Wi-Fi Direct connect to ${device.deviceName} (${device.deviceAddress})")
 
         val doConnect = {
-            manager.connect(channel, config, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    Log.d(TAG, "Wi-Fi Direct connect requested")
-                    p2pActionInFlight = false
-                }
+            try {
+                manager.connect(channel, config, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {
+                        Log.d(TAG, "Wi-Fi Direct connect requested")
+                        p2pActionInFlight = false
+                    }
 
-                override fun onFailure(reason: Int) {
-                    p2pActionInFlight = false
-                    handleP2pFailure("connect", reason)
-                }
-            })
+                    override fun onFailure(reason: Int) {
+                        p2pActionInFlight = false
+                        handleP2pFailure("connect", reason)
+                    }
+                })
+            } catch (e: Exception) {
+                Log.w(TAG, "connect failed: ${e.message}")
+                p2pActionInFlight = false
+            }
         }
 
         // On many devices, calling stopPeerDiscovery manually causes race conditions/BUSY errors.
@@ -613,7 +639,7 @@ class ProximityManager(private val context: Context) {
             else -> reason.toString()
         }
         Log.w(TAG, "Wi-Fi Direct $action failed: $reasonLabel")
-        if (reason == WifiP2pManager.BUSY || (action == "connect" && pendingPeerId != null)) {
+        if ((reason == WifiP2pManager.BUSY || reason == WifiP2pManager.ERROR) || (action == "connect" && pendingPeerId != null)) {
             scheduleDiscoveryRetry(force = true)
         }
         if (action == "connect" && pendingPeerId != null) {
@@ -710,50 +736,66 @@ class ProximityManager(private val context: Context) {
         }
         lastGroupCreateAttempt = now
         p2pActionInFlight = true
-        manager.requestGroupInfo(channel) { group ->
-            if (group != null && group.isGroupOwner) {
-                Log.d(TAG, "Wi-Fi Direct group already active; skipping create")
-                p2pConnected = true
-                p2pIsGroupOwner = true
-                p2pActionInFlight = false
-                groupCreateRetryAttempts = 0
-                return@requestGroupInfo
-            }
-
-            val doCreate = {
-                manager.createGroup(channel, object : WifiP2pManager.ActionListener {
-                    override fun onSuccess() {
-                        Log.d(TAG, "Wi-Fi Direct group creation requested")
-                        p2pActionInFlight = false
-                        groupCreateRetryAttempts = 0
-                        discoverPeers(force = true)
-                    }
-
-                    override fun onFailure(reason: Int) {
-                        p2pActionInFlight = false
-                        groupCreateRetryAttempts += 1
-                        handleP2pFailure("create group", reason)
-                        pendingPreferGroupOwner = false
-                    }
-                })
-            }
-
-            manager.stopPeerDiscovery(channel, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    doCreate()
+        try {
+            manager.requestGroupInfo(channel) { group ->
+                if (group != null && group.isGroupOwner) {
+                    Log.d(TAG, "Wi-Fi Direct group already active; skipping create")
+                    p2pConnected = true
+                    p2pIsGroupOwner = true
+                    p2pActionInFlight = false
+                    groupCreateRetryAttempts = 0
+                    return@requestGroupInfo
                 }
 
-                override fun onFailure(reason: Int) {
-                    if (reason == WifiP2pManager.BUSY) {
-                        Log.w(TAG, "Wi-Fi Direct stop discovery failed: BUSY")
+                val doCreate = {
+                    try {
+                        manager.createGroup(channel, object : WifiP2pManager.ActionListener {
+                            override fun onSuccess() {
+                                Log.d(TAG, "Wi-Fi Direct group creation requested")
+                                p2pActionInFlight = false
+                                groupCreateRetryAttempts = 0
+                                discoverPeers(force = true)
+                            }
+
+                            override fun onFailure(reason: Int) {
+                                p2pActionInFlight = false
+                                groupCreateRetryAttempts += 1
+                                handleP2pFailure("create group", reason)
+                                pendingPreferGroupOwner = false
+                            }
+                        })
+                    } catch (e: Exception) {
+                        Log.w(TAG, "createGroup failed: ${e.message}")
                         p2pActionInFlight = false
-                        groupCreateRetryAttempts += 1
-                        scheduleGroupCreateRetry()
-                        return
                     }
+                }
+
+                try {
+                    manager.stopPeerDiscovery(channel, object : WifiP2pManager.ActionListener {
+                        override fun onSuccess() {
+                            doCreate()
+                        }
+
+                        override fun onFailure(reason: Int) {
+                            if (reason == WifiP2pManager.BUSY) {
+                                Log.w(TAG, "Wi-Fi Direct stop discovery failed: BUSY")
+                                p2pActionInFlight = false
+                                groupCreateRetryAttempts += 1
+                                scheduleGroupCreateRetry()
+                                return
+                            }
+                            doCreate()
+                        }
+                    })
+                } catch (e: Exception) {
+                    Log.w(TAG, "stopPeerDiscovery failed: ${e.message}")
+                    // Try creating anyway if stop failed (e.g. not discovering)
                     doCreate()
                 }
-            })
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "requestGroupInfo failed: ${e.message}")
+            p2pActionInFlight = false
         }
     }
 

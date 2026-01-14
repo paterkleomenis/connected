@@ -146,6 +146,8 @@ pub enum AppAction {
         port: u16,
         action: CallAction,
     },
+    ClearDevices,
+    RefreshDiscovery,
 }
 
 static PROXIMITY_HANDLE: Lazy<Mutex<Option<proximity::ProximityHandle>>> =
@@ -1738,6 +1740,35 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             }
                         }
                     });
+                }
+            }
+            AppAction::ClearDevices => {
+                // Clear discovered devices from the store
+                let mut store = get_devices_store().lock().unwrap();
+                store.retain(|_, d| d.is_trusted); // Keep trusted, clear others? Or clear all non-connected?
+                // The prompt says "clear the devives cache from ui".
+                // We'll clear non-trusted ones to be safe, or maybe just mark them as offline?
+                // If the adapter is OFF, they are definitely offline.
+                // Let's clear the whole list to reflect "OFF" state dramatically as requested.
+                // But keeping trusted ones might be useful for "reconnect".
+                // However, "clear the devices cache" implies removing them.
+                store.clear();
+                info!("Cleared device cache due to adapter state change");
+
+                // Also stop proximity if running
+                stop_proximity();
+            }
+            AppAction::RefreshDiscovery => {
+                if let Some(c) = &client {
+                    // Restart proximity
+                    stop_proximity();
+                    start_proximity(c.clone());
+
+                    // Trigger core discovery refresh if needed (core runs MDNS continuously usually)
+                    // But we can force a re-scan if the core supports it, or just rely on new proximity/mdns events.
+                    // Re-injecting local MDNS service might be needed if IP changed.
+                    // For now, restarting proximity is key for BLE/WiFi-Direct.
+                    info!("Refreshed discovery due to adapter state change");
                 }
             }
         }
