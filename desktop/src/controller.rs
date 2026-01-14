@@ -2,14 +2,14 @@ use crate::fs_provider::DesktopFilesystemProvider;
 use crate::proximity;
 use crate::state::{
     DeviceInfo, FileTransferRequest, PairingRequest, PreviewData, RemoteMedia, TransferStatus,
-    add_file_transfer_request, add_notification, get_current_media, get_current_remote_files,
-    get_current_remote_path, get_device_name_setting, get_devices_store, get_last_clipboard,
-    get_last_remote_update, get_media_enabled, get_pairing_requests, get_pending_pairings,
-    get_phone_call_log, get_phone_conversations, get_phone_data_update, get_phone_messages,
-    get_preview_data, get_remote_files_update, get_transfer_status, mark_calls_synced,
-    mark_contacts_synced, mark_messages_synced, remove_file_transfer_request, set_active_call,
-    set_device_name_setting, set_phone_call_log, set_phone_contacts, set_phone_conversations,
-    set_phone_messages,
+    add_file_transfer_request, add_notification, get_auto_sync_messages, get_current_media,
+    get_current_remote_files, get_current_remote_path, get_device_name_setting, get_devices_store,
+    get_last_clipboard, get_last_remote_update, get_media_enabled, get_pairing_requests,
+    get_pending_pairings, get_phone_call_log, get_phone_conversations, get_phone_data_update,
+    get_phone_messages, get_preview_data, get_remote_files_update, get_transfer_status,
+    mark_calls_synced, mark_contacts_synced, mark_messages_synced, remove_file_transfer_request,
+    set_active_call, set_device_name_setting, set_phone_call_log, set_phone_contacts,
+    set_phone_conversations, set_phone_messages,
 };
 use crate::utils::{get_hostname, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -502,8 +502,8 @@ fn spawn_event_loop(
                 }
                 ConnectedEvent::Telephony {
                     from_device,
-                    from_ip: _,
-                    from_port: _,
+                    from_ip,
+                    from_port,
                     message,
                 } => {
                     info!(
@@ -513,7 +513,6 @@ fn spawn_event_loop(
                     use connected_core::TelephonyMessage;
                     match message {
                         TelephonyMessage::ContactsSyncResponse { contacts } => {
-                            let count = contacts.len();
                             set_phone_contacts(contacts);
                             mark_contacts_synced();
                             // Silent sync - no notification needed
@@ -586,7 +585,7 @@ fn spawn_event_loop(
                                     // Create new conversation entry
                                     use connected_core::telephony::Conversation;
                                     let new_convo = Conversation {
-                                        id: thread_id,
+                                        id: thread_id.clone(),
                                         addresses: vec![msg_address],
                                         contact_names: msg_contact
                                             .map(|n| vec![n])
@@ -609,6 +608,20 @@ fn spawn_event_loop(
                                 "💬",
                             );
                             info!("Notification added successfully");
+
+                            if get_auto_sync_messages() {
+                                if let Ok(ip_addr) = from_ip.parse() {
+                                    let msg = TelephonyMessage::MessagesRequest {
+                                        thread_id: thread_id.clone(),
+                                        limit: 200,
+                                        before_timestamp: None,
+                                    };
+                                    let c = c_clone.clone();
+                                    tokio::spawn(async move {
+                                        let _ = c.send_telephony(ip_addr, from_port, msg).await;
+                                    });
+                                }
+                            }
                         }
                         TelephonyMessage::CallLogResponse { entries } => {
                             set_phone_call_log(entries);
@@ -1566,7 +1579,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             match c.send_telephony(ip_addr, port, msg).await {
                                 Ok(_) => {
                                     info!("Contacts sync request sent to {}:{}", ip, port);
-                                    add_notification("Phone", "Requesting contacts...", "👤");
                                 }
                                 Err(e) => {
                                     error!(
@@ -1594,7 +1606,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             match c.send_telephony(ip_addr, port, msg).await {
                                 Ok(_) => {
                                     info!("Conversations sync request sent to {}:{}", ip, port);
-                                    add_notification("Phone", "Requesting messages...", "💬");
                                 }
                                 Err(e) => {
                                     error!(
@@ -1625,7 +1636,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             match c.send_telephony(ip_addr, port, msg).await {
                                 Ok(_) => {
                                     info!("Call log request sent to {}:{}", ip, port);
-                                    add_notification("Phone", "Requesting call log...", "📞");
                                 }
                                 Err(e) => {
                                     error!("Failed to request call log to {}:{}: {}", ip, port, e);

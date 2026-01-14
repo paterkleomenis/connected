@@ -11,14 +11,30 @@ use std::sync::{Arc, Mutex, OnceLock};
 // Persistent Settings
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     pub clipboard_sync_enabled: bool,
     pub media_enabled: bool,
     pub auto_sync_messages: bool,
     pub auto_sync_calls: bool,
     pub auto_sync_contacts: bool,
+    pub notifications_enabled: bool,
     pub device_name: Option<String>,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            clipboard_sync_enabled: false,
+            media_enabled: false,
+            auto_sync_messages: false,
+            auto_sync_calls: false,
+            auto_sync_contacts: false,
+            notifications_enabled: true,
+            device_name: None,
+        }
+    }
 }
 
 static APP_SETTINGS: OnceLock<Arc<Mutex<AppSettings>>> = OnceLock::new();
@@ -249,6 +265,9 @@ pub fn remove_file_transfer_request(id: &str) -> Option<FileTransferRequest> {
 }
 
 pub fn add_notification(title: &str, message: &str, icon: &'static str) {
+    if cfg!(target_os = "linux") && !get_notifications_enabled_setting() {
+        return;
+    }
     let mut counter = get_notification_counter().lock().unwrap();
     *counter += 1;
     let id = *counter;
@@ -442,6 +461,14 @@ pub fn get_auto_sync_contacts() -> bool {
 
 pub fn set_auto_sync_contacts(enabled: bool) {
     update_setting(|s| s.auto_sync_contacts = enabled);
+}
+
+pub fn get_notifications_enabled_setting() -> bool {
+    get_app_settings().lock().unwrap().notifications_enabled
+}
+
+pub fn set_notifications_enabled_setting(enabled: bool) {
+    update_setting(|s| s.notifications_enabled = enabled);
 }
 
 pub fn get_device_name_setting() -> Option<String> {

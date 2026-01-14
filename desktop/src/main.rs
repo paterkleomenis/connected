@@ -125,13 +125,11 @@ fn App() -> Element {
     let mut sms_compose_text = use_signal(String::new);
     let mut active_call = use_signal(|| None::<connected_core::telephony::ActiveCall>);
 
-    // Track last synced device to trigger sync on device change
-    let mut last_synced_device_id = use_signal(|| Option::<String>::None);
-
     // Auto-sync settings (loaded from persistent storage)
     let mut auto_sync_messages = use_signal(|| get_auto_sync_messages());
     let mut auto_sync_calls = use_signal(|| get_auto_sync_calls());
     let mut auto_sync_contacts = use_signal(|| get_auto_sync_contacts());
+    let mut notifications_enabled = use_signal(|| get_notifications_enabled_setting());
 
     // The Controller
     let action_tx =
@@ -240,55 +238,34 @@ fn App() -> Element {
         });
     }
 
-    // Auto-sync phone data when entering phone tab on a device
+    // Auto-sync phone data when a device is selected
     use_effect(move || {
-        let current_tab = device_detail_tab.read().clone();
-        let current_sub = phone_sub_tab.read().clone();
+        if let Some(ref dev) = *selected_device.read() {
+            set_phone_data_device(Some(dev.id.clone()));
+            let dev_ip = dev.ip.clone();
+            let dev_port = dev.port;
 
-        if current_tab == "phone" {
-            if let Some(ref dev) = *selected_device.read() {
-                let dev_id = dev.id.clone();
-                let dev_ip = dev.ip.clone();
-                let dev_port = dev.port;
-
-                // Check if this is a new device or first time on phone tab
-                let last_id = last_synced_device_id.read().clone();
-                let is_new_device = last_id.as_ref() != Some(&dev_id);
-
-                if is_new_device {
-                    last_synced_device_id.set(Some(dev_id));
-
-                    // Trigger sync for the current sub-tab if auto-sync enabled and data is empty
-                    if current_sub == "messages"
-                        && *auto_sync_messages.read()
-                        && phone_conversations.read().is_empty()
-                    {
-                        action_tx.send(AppAction::RequestConversationsSync {
-                            ip: dev_ip.clone(),
-                            port: dev_port,
-                        });
-                    }
-                    if current_sub == "calls"
-                        && *auto_sync_calls.read()
-                        && phone_call_log.read().is_empty()
-                    {
-                        action_tx.send(AppAction::RequestCallLog {
-                            ip: dev_ip.clone(),
-                            port: dev_port,
-                            limit: 50,
-                        });
-                    }
-                    if current_sub == "contacts"
-                        && *auto_sync_contacts.read()
-                        && phone_contacts.read().is_empty()
-                    {
-                        action_tx.send(AppAction::RequestContactsSync {
-                            ip: dev_ip,
-                            port: dev_port,
-                        });
-                    }
-                }
+            if *auto_sync_messages.read() && !is_messages_synced() {
+                action_tx.send(AppAction::RequestConversationsSync {
+                    ip: dev_ip.clone(),
+                    port: dev_port,
+                });
             }
+            if *auto_sync_calls.read() && !is_calls_synced() {
+                action_tx.send(AppAction::RequestCallLog {
+                    ip: dev_ip.clone(),
+                    port: dev_port,
+                    limit: 200,
+                });
+            }
+            if *auto_sync_contacts.read() && !is_contacts_synced() {
+                action_tx.send(AppAction::RequestContactsSync {
+                    ip: dev_ip,
+                    port: dev_port,
+                });
+            }
+        } else {
+            set_phone_data_device(None);
         }
     });
 
@@ -545,7 +522,7 @@ fn App() -> Element {
                                         action_tx.send(AppAction::RequestCallLog {
                                             ip: dev.ip.clone(),
                                             port: dev.port,
-                                            limit: 50,
+                                            limit: 200,
                                         });
                                     } else if current_sub == "contacts" && *auto_sync_contacts.read() && phone_contacts.read().is_empty() {
                                         action_tx.send(AppAction::RequestContactsSync {
@@ -1042,7 +1019,7 @@ fn App() -> Element {
                                                                 action_tx.send(AppAction::RequestCallLog {
                                                                     ip: fresh_device.ip.clone(),
                                                                     port: fresh_device.port,
-                                                                    limit: 50,
+                                                                    limit: 200,
                                                                 });
                                                             }
                                                         }
@@ -1271,7 +1248,7 @@ fn App() -> Element {
                                                                                             ip: fresh_device.ip.clone(),
                                                                                             port: fresh_device.port,
                                                                                             thread_id: cid.clone(),
-                                                                                            limit: 50,
+                                                                                            limit: 200,
                                                                                         });
                                                                                     }
                                                                                 }
@@ -1322,7 +1299,7 @@ fn App() -> Element {
                                                                         action_tx.send(AppAction::RequestCallLog {
                                                                             ip: fresh_device.ip.clone(),
                                                                             port: fresh_device.port,
-                                                                            limit: 50,
+                                                                            limit: 200,
                                                                         });
                                                                     } else {
                                                                         add_notification("Phone", "Device not found. Try refreshing.", "❌");
@@ -1615,6 +1592,34 @@ fn App() -> Element {
                                 }
                             }
                             p { class: "settings-hint", "Allow other devices to see and control your media." }
+                        }
+
+                        if cfg!(target_os = "linux") {
+                            div {
+                                class: "info-card",
+                                h3 { "🔔 Notifications" }
+                                div {
+                                    class: "info-grid",
+                                    div { class: "info-label", "Enable" }
+                                    div {
+                                        class: "info-value",
+                                        label {
+                                            class: "toggle-switch",
+                                            input {
+                                                r#type: "checkbox",
+                                                checked: "{notifications_enabled}",
+                                                oninput: move |_| {
+                                                    let new_val = !*notifications_enabled.read();
+                                                    notifications_enabled.set(new_val);
+                                                    set_notifications_enabled_setting(new_val);
+                                                },
+                                            }
+                                            span { class: "slider" }
+                                        }
+                                    }
+                                }
+                                p { class: "settings-hint", "Show in-app notifications on this device." }
+                            }
                         }
 
                         div {
