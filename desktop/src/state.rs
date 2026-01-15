@@ -31,7 +31,7 @@ impl Default for AppSettings {
             auto_sync_messages: false,
             auto_sync_calls: false,
             auto_sync_contacts: false,
-            notifications_enabled: false,
+            notifications_enabled: true,
             device_name: None,
         }
     }
@@ -268,6 +268,24 @@ pub fn add_notification(title: &str, message: &str, icon: &'static str) {
     if cfg!(target_os = "linux") && !get_notifications_enabled_setting() {
         return;
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        if get_notifications_enabled_setting() {
+            let summary = title.to_string();
+            let body = format!("{} {}", icon, message);
+            std::thread::spawn(move || {
+                if let Err(e) = notify_rust::Notification::new()
+                    .summary(&summary)
+                    .body(&body)
+                    .show()
+                {
+                    tracing::warn!("Failed to show system notification: {}", e);
+                }
+            });
+        }
+    }
+
     let mut counter = get_notification_counter().lock().unwrap();
     *counter += 1;
     let id = *counter;

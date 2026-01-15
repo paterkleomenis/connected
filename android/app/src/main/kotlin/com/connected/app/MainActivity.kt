@@ -154,7 +154,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        connectedApp.setAppInForeground(true)
         requestProximityPermissionsIfNeeded()
+    }
+
+    override fun onPause() {
+        connectedApp.setAppInForeground(false)
+        super.onPause()
     }
 
     private fun requestProximityPermissionsIfNeeded() {
@@ -841,41 +847,6 @@ fun SettingsScreen(
             }
         }
 
-        // Clipboard Sync Section
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_nav_clipboard),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Clipboard Sync", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Automatically sync clipboard with trusted devices",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = connectedApp.isClipboardSyncEnabled.value,
-                            onCheckedChange = { connectedApp.toggleClipboardSync() }
-                        )
-                    }
-                }
-            }
-        }
-
         // Media Control Section
         item {
             Card(
@@ -1015,6 +986,30 @@ fun SettingsScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(if (shouldOpenSettings()) "Open App Settings" else "Grant Permissions")
+                        }
+                    }
+
+                    if (connectedApp.isTelephonyEnabled.value && !isNotificationAccessGranted) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            "RCS preview requires Notification Access (Google Messages).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                val intent =
+                                    android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                                context.startActivity(intent)
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Enable Notification Access")
                         }
                     }
                 }

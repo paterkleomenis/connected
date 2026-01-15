@@ -19,6 +19,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -90,6 +91,8 @@ class ConnectedApp(private val context: Context) {
 
     @Volatile
     private var lastRemoteClipboard: String = ""
+
+    private val isAppInForeground = AtomicBoolean(false)
     private val scope =
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
 
@@ -114,7 +117,6 @@ class ConnectedApp(private val context: Context) {
 
     private val PREFS_NAME = "ConnectedPrefs"
     private val PREF_ROOT_URI = "root_uri"
-    private val PREF_CLIPBOARD_SYNC = "clipboard_sync"
     private val PREF_MEDIA_CONTROL = "media_control"
     private val PREF_TELEPHONY_ENABLED = "telephony_enabled"
     private val PREF_DEVICE_NAME = "device_name"
@@ -453,9 +455,6 @@ class ConnectedApp(private val context: Context) {
 
             getPersistedRootUri()?.let { registerFsProvider(it) }
 
-            if (prefs.getBoolean(PREF_CLIPBOARD_SYNC, false)) {
-                startClipboardSync()
-            }
             isMediaControlEnabled.value = prefs.getBoolean(PREF_MEDIA_CONTROL, false)
 
         } catch (e: Exception) {
@@ -802,6 +801,34 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    fun relayRcsNotification(title: String, body: String, timestampMs: Long) {
+        if (!isTelephonyEnabled.value) {
+            return
+        }
+        val threadId = "rcs:${title.trim()}"
+        val messageId = "rcs:${timestampMs}:${body.hashCode()}"
+        val msg = FfiSmsMessage(
+            id = messageId,
+            threadId = threadId,
+            address = title,
+            contactName = title,
+            body = body,
+            timestamp = timestampMs.toULong(),
+            isOutgoing = false,
+            isRead = false,
+            status = SmsStatus.RECEIVED
+        )
+
+        // Broadcast to connected devices if trusted
+        devices.forEach { device ->
+            if (isDeviceTrusted(device)) {
+                try {
+                    uniffi.connected_ffi.notifyNewSms(device.ip, device.port, msg)
+                } catch (e: Exception) {}
+            }
+        }
+    }
+
     private val telephonyCallback = object : TelephonyCallback {
         override fun onContactsSyncRequest(fromDevice: String, fromIp: String, fromPort: UShort) {
              scope.launch {
@@ -902,6 +929,10 @@ class ConnectedApp(private val context: Context) {
         isClipboardSyncEnabled.value = true
         clipboardSyncJob = scope.launch {
             while (isActive) {
+                if (!isAppInForeground.get()) {
+                    delay(1000)
+                    continue
+                }
                 val currentClip = getClipboardText()
                 if (currentClip.isNotEmpty() && currentClip != lastLocalClipboard && currentClip != lastRemoteClipboard) {
                     lastLocalClipboard = currentClip
@@ -926,6 +957,7 @@ class ConnectedApp(private val context: Context) {
     }
 
     private fun getClipboardText(): String {
+        if (!isAppInForeground.get()) return ""
         var text = ""
         val latch = java.util.concurrent.CountDownLatch(1)
         runOnMainThread {
@@ -974,16 +1006,14 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    fun toggleClipboardSync() {
-        val newState = !isClipboardSyncEnabled.value
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putBoolean(PREF_CLIPBOARD_SYNC, newState).apply()
-        if (newState) startClipboardSync() else stopClipboardSync()
-    }
-
     fun toggleMediaControl() {
         val newState = !isMediaControlEnabled.value
         isMediaControlEnabled.value = newState
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putBoolean(PREF_MEDIA_CONTROL, newState).apply()
+    }
+
+    fun setAppInForeground(isForeground: Boolean) {
+        isAppInForeground.set(isForeground)
     }
 
     // Media Observer
@@ -1015,6 +1045,16 @@ class ConnectedApp(private val context: Context) {
     // Send Clipboard Manually
     fun sendClipboard(device: DiscoveredDevice) {
         scope.launch {
+             if (!isAppInForeground.get()) {
+                 runOnMainThread {
+                     android.widget.Toast.makeText(
+                         context,
+                         "Open the app to access clipboard on Android 15",
+                         android.widget.Toast.LENGTH_SHORT
+                     ).show()
+                 }
+                 return@launch
+             }
              val clip = getClipboardText()
              if (clip.isNotEmpty()) {
                  try {

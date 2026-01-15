@@ -103,7 +103,10 @@ pub enum AppAction {
         path: String,
     },
     ClosePreview,
-    ToggleMediaControl(bool),
+    ToggleMediaControl {
+        enabled: bool,
+        notify: bool,
+    },
     SendMediaCommand {
         ip: String,
         port: u16,
@@ -526,23 +529,52 @@ fn spawn_event_loop(
                             thread_id,
                             messages,
                         } => {
+                            info!(
+                                "MessagesResponse received: thread_id={}, count={}",
+                                thread_id,
+                                messages.len()
+                            );
+                            if let Some(latest) =
+                                messages.iter().max_by_key(|m| m.timestamp).cloned()
+                            {
+                                let mut convos = get_phone_conversations().lock().unwrap();
+                                if let Some(convo) = convos.iter_mut().find(|c| c.id == thread_id) {
+                                    convo.last_message = Some(latest.body.clone());
+                                    convo.last_timestamp = latest.timestamp;
+                                }
+                                convos.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
+                            }
                             set_phone_messages(thread_id, messages);
                             // Silent load - no notification needed
                         }
                         TelephonyMessage::NewSmsNotification { message } => {
                             info!(
+                                "NewSmsNotification received: thread_id={}, from={}",
+                                message.thread_id, message.address
+                            );
+                            let log_preview = {
+                                let mut iter = message.body.chars();
+                                let mut s: String = iter.by_ref().take(30).collect();
+                                if iter.next().is_some() {
+                                    s.push_str("...");
+                                }
+                                s
+                            };
+                            info!(
                                 "NEW SMS NOTIFICATION: from={}, body={}",
-                                message.address,
-                                &message.body[..std::cmp::min(30, message.body.len())]
+                                message.address, log_preview
                             );
                             let sender = message
                                 .contact_name
                                 .clone()
                                 .unwrap_or(message.address.clone());
-                            let preview = if message.body.len() > 50 {
-                                format!("{}...", &message.body[..50])
-                            } else {
-                                message.body.clone()
+                            let preview = {
+                                let mut iter = message.body.chars();
+                                let mut s: String = iter.by_ref().take(50).collect();
+                                if iter.next().is_some() {
+                                    s.push_str("...");
+                                }
+                                s
                             };
                             let thread_id = message.thread_id.clone();
                             let msg_timestamp = message.timestamp;
@@ -550,11 +582,13 @@ fn spawn_event_loop(
                             let msg_address = message.address.clone();
                             let msg_contact = message.contact_name.clone();
 
-                            // Add to existing messages for this thread
+                            // Add to existing messages for this thread (or create thread)
                             {
                                 let mut msgs = get_phone_messages().lock().unwrap();
                                 if let Some(thread_msgs) = msgs.get_mut(&thread_id) {
-                                    thread_msgs.push(message);
+                                    thread_msgs.push(message.clone());
+                                } else {
+                                    msgs.insert(thread_id.clone(), vec![message.clone()]);
                                 }
                             }
 
@@ -1279,7 +1313,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             AppAction::ClosePreview => {
                 *get_preview_data().lock().unwrap() = None;
             }
-            AppAction::ToggleMediaControl(enabled) => {
+            AppAction::ToggleMediaControl { enabled, notify } => {
                 *get_media_enabled().lock().unwrap() = enabled;
                 if enabled {
                     info!("Media Poller Started");
@@ -1440,10 +1474,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             }
                             info!("Media poller stopped");
                         });
-                        add_notification("Media Control", "Media control enabled", "🎵");
+                        if notify {
+                            add_notification("Media Control", "Media control enabled", "🎵");
+                        }
                     }
                 } else {
-                    add_notification("Media Control", "Media control disabled", "🔇");
+                    if notify {
+                        add_notification("Media Control", "Media control disabled", "🔇");
+                    }
                 }
             }
             AppAction::SendMediaCommand { ip, port, command } => {

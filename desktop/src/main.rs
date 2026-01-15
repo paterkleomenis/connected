@@ -143,7 +143,10 @@ fn App() -> Element {
 
         // Start media control if it was enabled in saved settings
         if get_media_enabled_setting() {
-            action_tx.send(AppAction::ToggleMediaControl(true));
+            action_tx.send(AppAction::ToggleMediaControl {
+                enabled: true,
+                notify: false,
+            });
         }
 
         // Poll for Bluetooth/Wi-Fi state changes
@@ -412,7 +415,10 @@ fn App() -> Element {
         let current = *media_enabled.read();
         let new_state = !current;
         set_media_enabled_setting(new_state); // Save to disk
-        action_tx.send(AppAction::ToggleMediaControl(new_state));
+        action_tx.send(AppAction::ToggleMediaControl {
+            enabled: new_state,
+            notify: true,
+        });
     };
 
     rsx! {
@@ -1618,7 +1624,7 @@ fn App() -> Element {
                                         }
                                     }
                                 }
-                                p { class: "settings-hint", "Show in-app notifications on this device." }
+                                p { class: "settings-hint", "Show system notifications on this device." }
                             }
                         }
 
@@ -1685,8 +1691,8 @@ fn App() -> Element {
                 }
             }
 
-            // Notifications
-            if !cfg!(target_os = "linux") || *notifications_enabled.read() {
+            // Notifications (in-app)
+            if !cfg!(target_os = "linux") {
                 div {
                     class: "notifications-panel",
                     for notification in notifications.read().iter().rev().take(3) {
