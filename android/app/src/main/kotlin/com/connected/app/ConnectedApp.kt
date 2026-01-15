@@ -52,6 +52,8 @@ class ConnectedApp(private val context: Context) {
     val pendingShareUris = mutableStateListOf<String>()
 
     private val trustedDeviceAddresses = mutableMapOf<String, Pair<String, UShort>>()
+    private val lastHandshake = ConcurrentHashMap<String, Long>()
+    private var heartbeatJob: kotlinx.coroutines.Job? = null
     private val pendingPairingAwaitingIp = mutableSetOf<String>()
     private val locallyUnpairedDevices = mutableSetOf<String>()
     private val pendingFileTransfersAwaitingIp =
@@ -135,6 +137,7 @@ class ConnectedApp(private val context: Context) {
                             stopProximityManager()
                             runOnMainThread {
                                 devices.clear()
+                                trustedDevices.clear()
                             }
                         }
                         android.bluetooth.BluetoothAdapter.STATE_ON -> {
@@ -155,6 +158,7 @@ class ConnectedApp(private val context: Context) {
                             stopProximityManager()
                             runOnMainThread {
                                 devices.clear()
+                                trustedDevices.clear()
                             }
                         }
                         android.net.wifi.WifiManager.WIFI_STATE_ENABLED -> {
@@ -227,60 +231,147 @@ class ConnectedApp(private val context: Context) {
 
     // ... (rest of the class) ...
 
-    private val discoveryCallback = object : DiscoveryCallback {
-        override fun onDeviceFound(device: DiscoveredDevice) {
-            val existingIndex = devices.indexOfFirst { it.id == device.id }
-            if (existingIndex >= 0) {
-                devices[existingIndex] = device
-            } else {
-                val staleIndex = devices.indexOfFirst { it.ip == device.ip && it.port == device.port }
-                if (staleIndex >= 0) devices.removeAt(staleIndex)
-                devices.add(device)
-            }
+        private val discoveryCallback = object : DiscoveryCallback {
 
-            if (locallyUnpairedDevices.contains(device.id)) {
-                trustedDevices.remove(device.id)
-            } else if (isDeviceTrusted(device)) {
-                if (!trustedDevices.contains(device.id)) {
-                    trustedDevices.add(device.id)
-                    pendingPairing.remove(device.id)
-                    try {
-                        if (!isSyntheticIp(device.ip)) {
-                            uniffi.connected_ffi.pairDevice(device.ip, device.port)
-                        }
-                    } catch (e: Exception) {}
-                }
-            } else {
-                if (trustedDevices.contains(device.id)) {
-                    trustedDevices.remove(device.id)
-                }
-            }
+            override fun onDeviceFound(device: DiscoveredDevice) {
 
-            if (!isSyntheticIp(device.ip) && pendingPairingAwaitingIp.remove(device.id)) {
-                sendPairRequest(device)
-            }
+                runOnMainThread {
 
-            if (!isSyntheticIp(device.ip)) {
-                pendingFileTransfersAwaitingIp.remove(device.id)?.let { queue ->
-                    var nextPath = queue.poll()
-                    while (nextPath != null) {
-                        sendFileToDevice(device, "file://$nextPath") // Dummy URI reconstruction
-                        nextPath = queue.poll()
+                    val existingIndex = devices.indexOfFirst { it.id == device.id }
+
+                    if (existingIndex >= 0) {
+
+                        devices[existingIndex] = device
+
+                    } else {
+
+                        val staleIndex = devices.indexOfFirst { it.ip == device.ip && it.port == device.port }
+
+                        if (staleIndex >= 0) devices.removeAt(staleIndex)
+
+                        devices.add(device)
+
                     }
+
+
+
+                    if (locallyUnpairedDevices.contains(device.id)) {
+
+                        trustedDevices.remove(device.id)
+
+                    } else if (isDeviceTrusted(device)) {
+
+                        if (!trustedDevices.contains(device.id)) {
+
+                            trustedDevices.add(device.id)
+
+                            pendingPairing.remove(device.id)
+
+                        }
+
+
+
+                        // Always handshake with trusted devices to refresh session (e.g. if desktop restarted on new port)
+
+                        // Rate limited to once every 3 seconds to avoid spamming
+
+                        val now = System.currentTimeMillis()
+
+                        val last = lastHandshake[device.id] ?: 0L
+
+                        if (now - last > 3000) {
+
+                            lastHandshake[device.id] = now
+
+                            try {
+
+                                if (!isSyntheticIp(device.ip)) {
+
+                                    uniffi.connected_ffi.pairDevice(device.ip, device.port)
+
+                                }
+
+                            } catch (e: Exception) {}
+
+                        }
+
+                    } else {
+
+                        if (trustedDevices.contains(device.id)) {
+
+                            trustedDevices.remove(device.id)
+
+                        }
+
+                    }
+
+
+
+                    if (!isSyntheticIp(device.ip) && pendingPairingAwaitingIp.remove(device.id)) {
+
+                        sendPairRequest(device)
+
+                    }
+
+
+
+                    if (!isSyntheticIp(device.ip)) {
+
+                        pendingFileTransfersAwaitingIp.remove(device.id)?.let { queue ->
+
+                            var nextPath = queue.poll()
+
+                            while (nextPath != null) {
+
+                                sendFileToDevice(device, "file://$nextPath") // Dummy URI reconstruction
+
+                                nextPath = queue.poll()
+
+                            }
+
+                        }
+
+                    }
+
+
+
+                    if (isDeviceTrusted(device)) {
+
+                        sendLastMediaStateIfAvailable(device)
+
+                    }
+
                 }
+
             }
-        }
 
-        override fun onDeviceLost(deviceId: String) {
-            devices.removeAll { it.id == deviceId }
-            pendingPairingAwaitingIp.remove(deviceId)
-            pendingFileTransfersAwaitingIp.remove(deviceId)
-        }
 
-        override fun onError(errorMsg: String) {
-            Log.e("ConnectedApp", "Discovery error: $errorMsg")
+
+            override fun onDeviceLost(deviceId: String) {
+
+                runOnMainThread {
+
+                    devices.removeAll { it.id == deviceId }
+
+                    trustedDevices.remove(deviceId)
+
+                    pendingPairingAwaitingIp.remove(deviceId)
+
+                    pendingFileTransfersAwaitingIp.remove(deviceId)
+
+                }
+
+            }
+
+
+
+            override fun onError(errorMsg: String) {
+
+                Log.e("ConnectedApp", "Discovery error: $errorMsg")
+
+            }
+
         }
-    }
 
     private val transferCallback = object : FileTransferCallback {
         override fun onTransferRequest(transferId: String, filename: String, fileSize: ULong, fromDevice: String) {
@@ -457,8 +548,40 @@ class ConnectedApp(private val context: Context) {
 
             isMediaControlEnabled.value = prefs.getBoolean(PREF_MEDIA_CONTROL, false)
 
+            startHeartbeat()
+
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Initialization failed", e)
+        }
+    }
+
+    private fun startHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = scope.launch {
+            while (isActive) {
+                delay(10000) // Check every 10 seconds
+                // Create a copy to avoid concurrent modification during iteration
+                val currentTrusted = trustedDevices.toList()
+                val currentDiscovered = devices.toList()
+
+                for (deviceId in currentTrusted) {
+                    if (!isActive) break
+                    val device = currentDiscovered.find { it.id == deviceId }
+                    if (device != null && !isSyntheticIp(device.ip)) {
+                         try {
+                             uniffi.connected_ffi.pairDevice(device.ip, device.port)
+                         } catch (e: Exception) {
+                             if (e is kotlinx.coroutines.CancellationException) throw e
+                             // Ignore NotInitialized errors as they happen during shutdown
+                             if (e.toString().contains("NotInitialized")) {
+                                 Log.d("ConnectedApp", "Heartbeat stopped (shutdown)")
+                                 break
+                             }
+                             Log.e("ConnectedApp", "Heartbeat failed for ${device.name}", e)
+                         }
+                    }
+                }
+            }
         }
     }
 
@@ -466,6 +589,7 @@ class ConnectedApp(private val context: Context) {
         try { context.unregisterReceiver(networkStateReceiver) } catch (e: Exception) {}
         stopClipboardSync()
         stopProximityManager()
+        heartbeatJob?.cancel()
         uniffi.connected_ffi.shutdown()
         try { multicastLock?.release() } catch (e: Exception) {}
     }
@@ -1039,6 +1163,18 @@ class ConnectedApp(private val context: Context) {
             try {
                 uniffi.connected_ffi.sendMediaCommand(device.ip, device.port, command)
             } catch (e: Exception) { Log.e("ConnectedApp", "Media command failed", e) }
+        }
+    }
+
+    private fun sendLastMediaStateIfAvailable(device: DiscoveredDevice) {
+        val lastState = lastBroadcastMediaState ?: return
+        if (!isMediaControlEnabled.value || isSyntheticIp(device.ip)) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                uniffi.connected_ffi.sendMediaState(device.ip, device.port, lastState)
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to send media state", e)
+            }
         }
     }
 

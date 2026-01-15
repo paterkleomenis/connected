@@ -2,14 +2,15 @@ use crate::fs_provider::DesktopFilesystemProvider;
 use crate::mpris_server::{MprisUpdate, send_mpris_update};
 use crate::proximity;
 use crate::state::{
-    DeviceInfo, FileTransferRequest, PairingRequest, PreviewData, RemoteMedia, TransferStatus,
-    add_file_transfer_request, add_notification, get_auto_sync_messages, get_current_media,
-    get_current_remote_files, get_current_remote_path, get_device_name_setting, get_devices_store,
-    get_last_clipboard, get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
-    get_pairing_requests, get_pending_pairings, get_phone_call_log, get_phone_conversations,
-    get_phone_data_update, get_phone_messages, get_preview_data, get_remote_files_update,
-    get_transfer_status, mark_calls_synced, mark_contacts_synced, mark_messages_synced,
-    remove_file_transfer_request, set_active_call, set_device_name_setting, set_phone_call_log,
+    DeviceInfo, FileTransferRequest, PairingRequest, PreviewData, RemoteMedia, SavedDeviceInfo,
+    TransferStatus, add_file_transfer_request, add_notification, get_auto_sync_messages,
+    get_current_media, get_current_remote_files, get_current_remote_path, get_device_name_setting,
+    get_devices_store, get_last_clipboard, get_last_remote_media_device_id, get_last_remote_update,
+    get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_call_log,
+    get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
+    get_remote_files_update, get_saved_devices_setting, get_transfer_status, mark_calls_synced,
+    mark_contacts_synced, mark_messages_synced, remove_file_transfer_request,
+    save_device_to_settings, set_active_call, set_device_name_setting, set_phone_call_log,
     set_phone_contacts, set_phone_conversations, set_phone_messages,
 };
 use crate::utils::{get_hostname, set_system_clipboard};
@@ -191,6 +192,18 @@ fn spawn_event_loop(
 
                     let mut store = get_devices_store().lock().unwrap();
                     store.insert(info.id.clone(), info);
+
+                    if d.ip != "0.0.0.0" {
+                        save_device_to_settings(
+                            d.id.clone(),
+                            SavedDeviceInfo {
+                                name: d.name.clone(),
+                                ip: d.ip.clone(),
+                                port: d.port,
+                                device_type: d.device_type.as_str().to_string(),
+                            },
+                        );
+                    }
                 }
                 ConnectedEvent::DeviceLost(id) => {
                     let mut store = get_devices_store().lock().unwrap();
@@ -377,6 +390,7 @@ fn spawn_event_loop(
                                             n.starts_with("org.mpris.MediaPlayer2.")
                                                 && !n.contains("playerctld")
                                                 && !n.contains("kdeconnect")
+                                                && *n != "org.mpris.MediaPlayer2.connected"
                                         })
                                         .collect();
 
@@ -775,6 +789,26 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
                 let name = get_device_name_setting().unwrap_or_else(get_hostname);
                 client = start_core(name).await;
+                if let Some(c) = &client {
+                    let saved = get_saved_devices_setting();
+                    for (device_id, info) in saved {
+                        if info.ip == "0.0.0.0" {
+                            continue;
+                        }
+                        let device_type = connected_core::DeviceType::from_str(&info.device_type);
+                        let ip = match info.ip.parse() {
+                            Ok(ip) => ip,
+                            Err(_) => continue,
+                        };
+                        let _ = c.inject_proximity_device(
+                            device_id,
+                            info.name,
+                            device_type,
+                            ip,
+                            info.port,
+                        );
+                    }
+                }
             }
             AppAction::RenameDevice { new_name } => {
                 if let Some(c) = client.take() {
@@ -1384,6 +1418,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         .filter(|n| {
                                             n.starts_with("org.mpris.MediaPlayer2.")
                                                 && !n.contains("playerctld")
+                                                && *n != "org.mpris.MediaPlayer2.connected"
                                         })
                                         .collect();
 
@@ -1587,6 +1622,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             n.starts_with("org.mpris.MediaPlayer2.")
                                 && !n.contains("playerctld")
                                 && !n.contains("kdeconnect")
+                                && *n != "org.mpris.MediaPlayer2.connected"
                         })
                         .collect();
 

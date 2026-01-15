@@ -1,5 +1,5 @@
 use crate::error::{ConnectedError, Result};
-use rcgen::{generate_simple_self_signed, CertifiedKey};
+use rcgen::{CertifiedKey, generate_simple_self_signed};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

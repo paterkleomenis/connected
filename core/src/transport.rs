@@ -46,6 +46,7 @@ pub enum Message {
     Handshake {
         device_id: String,
         device_name: String,
+        listening_port: u16,
     },
     HandshakeAck {
         device_id: String,
@@ -114,25 +115,40 @@ impl ConnectionCache {
         }
     }
 
+    fn canonicalize_addr(addr: &SocketAddr) -> SocketAddr {
+        match addr.ip() {
+            std::net::IpAddr::V6(v6) => {
+                if let Some(v4) = v6.to_ipv4() {
+                    SocketAddr::new(std::net::IpAddr::V4(v4), addr.port())
+                } else {
+                    *addr
+                }
+            }
+            _ => *addr,
+        }
+    }
+
     fn get(&mut self, addr: &SocketAddr) -> Option<Connection> {
-        if let Some(cached) = self.connections.get_mut(addr) {
+        let key = Self::canonicalize_addr(addr);
+        if let Some(cached) = self.connections.get_mut(&key) {
             if cached.connection.close_reason().is_none() {
                 cached.last_used = std::time::Instant::now();
                 return Some(cached.connection.clone());
             } else {
-                self.connections.remove(addr);
+                self.connections.remove(&key);
             }
         }
         None
     }
 
     fn insert(&mut self, addr: SocketAddr, connection: Connection) {
+        let key = Self::canonicalize_addr(&addr);
         let cutoff = std::time::Instant::now() - Duration::from_secs(300);
         self.connections
             .retain(|_, v| v.last_used > cutoff && v.connection.close_reason().is_none());
 
         self.connections.insert(
-            addr,
+            key,
             CachedConnection {
                 connection,
                 last_used: std::time::Instant::now(),
@@ -141,7 +157,8 @@ impl ConnectionCache {
     }
 
     fn remove(&mut self, addr: &SocketAddr) -> Option<Connection> {
-        self.connections.remove(addr).map(|c| c.connection)
+        let key = Self::canonicalize_addr(addr);
+        self.connections.remove(&key).map(|c| c.connection)
     }
 }
 
@@ -490,19 +507,18 @@ impl QuicTransport {
         fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
     ) -> Result<()> {
         let endpoint = self.endpoint.clone();
-
         let local_id = self.local_id.clone();
+        let connection_cache = self.connection_cache.clone();
 
         tokio::spawn(async move {
             info!("QUIC server started, waiting for connections");
 
             while let Some(incoming) = endpoint.accept().await {
                 let tx = message_tx.clone();
-
                 let f_tx = file_stream_tx.clone();
                 let fs_tx = fs_stream_tx.clone();
-
                 let id = local_id.clone();
+                let cache = connection_cache.clone();
 
                 tokio::spawn(async move {
                     match incoming.accept() {
@@ -515,6 +531,12 @@ impl QuicTransport {
                                     remote_addr,
                                     connection.rtt()
                                 );
+
+                                // Cache the incoming connection so we can reuse it for outgoing requests
+                                {
+                                    let mut c = cache.write();
+                                    c.insert(remote_addr, connection.clone());
+                                }
 
                                 if let Err(e) = Self::handle_connection(
                                     connection,

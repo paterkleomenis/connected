@@ -208,7 +208,7 @@ impl ConnectedClient {
         let device = Device::new(device_id, device_name, ip, port, device_type);
         if let Some(event) = self
             .discovery
-            .upsert_device_endpoint(device, DiscoverySource::Proximity)
+            .upsert_device_endpoint(device, DiscoverySource::Discovered)
         {
             match event {
                 DiscoveryEvent::DeviceFound(d) => {
@@ -471,31 +471,79 @@ impl ConnectedClient {
         let addr = SocketAddr::new(target_ip, target_port);
 
         // Ensure pairing mode is enabled for outgoing handshakes
+
         if !self.is_pairing_mode() {
             self.set_pairing_mode(true);
         }
 
         // Track this as a pending handshake so we can auto-trust acks even if pairing mode times out
+
         self.pending_handshakes.write().insert(target_ip);
 
-        let result = self.send_handshake_internal(addr).await;
+        // 1. Fast Attempt: Try with a short timeout.
+
+        // If we have a valid cached connection (e.g., incoming from PC), this will succeed instantly.
+
+        // If we have a stale connection, this will hang/fail, and we'll invalidate it.
+
+        let fast_result =
+            tokio::time::timeout(Duration::from_secs(2), self.send_handshake_internal(addr)).await;
+
+        let result = match fast_result {
+            Ok(Ok(())) => Ok(()), // Success using existing (possibly incoming) connection!
+
+            Ok(Err(e)) => {
+                info!(
+                    "Handshake fast-attempt failed to {}: {}, invalidating and retrying...",
+                    addr, e
+                );
+
+                self.transport.invalidate_connection(&addr);
+
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+
+                self.send_handshake_internal(addr).await
+            }
+
+            Err(_) => {
+                info!(
+                    "Handshake fast-attempt timed out to {}, invalidating and retrying...",
+                    addr
+                );
+
+                self.transport.invalidate_connection(&addr);
+
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+
+                self.send_handshake_internal(addr).await
+            }
+        };
 
         // On success or permanent failure, remove from pending
+
         // Keep it on timeout so background handler can still process late acks
+
         match &result {
             Ok(()) | Err(ConnectedError::PairingFailed(_)) => {
                 self.pending_handshakes.write().remove(&target_ip);
             }
+
             Err(ConnectedError::Timeout(_)) => {
                 // Keep in pending_handshakes - background handler may receive ack later
+
                 // Schedule cleanup after extended timeout
+
                 let pending = self.pending_handshakes.clone();
+
                 let ip = target_ip;
+
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(300)).await; // 5 min cleanup
+
                     pending.write().remove(&ip);
                 });
             }
+
             _ => {
                 self.pending_handshakes.write().remove(&target_ip);
             }
@@ -522,6 +570,7 @@ impl ConnectedClient {
         let msg = Message::Handshake {
             device_id: self.local_device.id.clone(),
             device_name: self.local_device.name.clone(),
+            listening_port: self.local_device.port,
         };
 
         let data = serde_json::to_vec(&msg)
@@ -765,6 +814,29 @@ impl ConnectedClient {
         text: String,
     ) -> Result<()> {
         let addr = SocketAddr::new(target_ip, target_port);
+
+        // Try to send, retry once if connection fails
+        let result = self.send_clipboard_inner(addr, text.clone()).await;
+
+        if let Err(ref e) = result {
+            let should_retry = matches!(
+                e,
+                ConnectedError::Timeout(_) | ConnectedError::Connection(_) | ConnectedError::Io(_)
+            );
+
+            if should_retry {
+                info!(
+                    "Clipboard send to {} failed ({}), invalidating connection and retrying...",
+                    addr, e
+                );
+                self.transport.invalidate_connection(&addr);
+                return self.send_clipboard_inner(addr, text).await;
+            }
+        }
+        result
+    }
+
+    async fn send_clipboard_inner(&self, addr: SocketAddr, text: String) -> Result<()> {
         let (mut send, _recv) = self
             .transport
             .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
@@ -794,6 +866,33 @@ impl ConnectedClient {
         msg: crate::transport::MediaControlMessage,
     ) -> Result<()> {
         let addr = SocketAddr::new(target_ip, target_port);
+
+        // Try to send, retry once if connection fails
+        let result = self.send_media_control_inner(addr, msg.clone()).await;
+
+        if let Err(ref e) = result {
+            let should_retry = matches!(
+                e,
+                ConnectedError::Timeout(_) | ConnectedError::Connection(_) | ConnectedError::Io(_)
+            );
+
+            if should_retry {
+                info!(
+                    "Media control send to {} failed ({}), invalidating connection and retrying...",
+                    addr, e
+                );
+                self.transport.invalidate_connection(&addr);
+                return self.send_media_control_inner(addr, msg).await;
+            }
+        }
+        result
+    }
+
+    async fn send_media_control_inner(
+        &self,
+        addr: SocketAddr,
+        msg: crate::transport::MediaControlMessage,
+    ) -> Result<()> {
         let (mut send, _recv) = self
             .transport
             .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
@@ -1270,6 +1369,7 @@ impl ConnectedClient {
                     Message::Handshake {
                         device_id,
                         device_name,
+                        listening_port,
                     } => {
                         let (resolved_name, resolved_type) = discovery
                             .get_device_by_id(&device_id)
@@ -1280,12 +1380,12 @@ impl ConnectedClient {
                             device_id.clone(),
                             resolved_name,
                             addr.ip(),
-                            addr.port(),
+                            listening_port,
                             resolved_type,
                         );
 
                         if let Some(event) =
-                            discovery.upsert_device_endpoint(device, DiscoverySource::Proximity)
+                            discovery.upsert_device_endpoint(device, DiscoverySource::Connected)
                         {
                             match event {
                                 DiscoveryEvent::DeviceFound(d) => {
@@ -1439,6 +1539,9 @@ impl ConnectedClient {
                                     addr.port(),
                                     DeviceType::Unknown,
                                 );
+                                // Update discovery with trusted connection info
+                                let _ = discovery
+                                    .upsert_device_endpoint(d.clone(), DiscoverySource::Connected);
                                 let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
                             } else {
                                 info!(
@@ -1463,6 +1566,9 @@ impl ConnectedClient {
                                 addr.port(),
                                 DeviceType::Unknown,
                             );
+                            // Update discovery with trusted connection info
+                            let _ = discovery
+                                .upsert_device_endpoint(d.clone(), DiscoverySource::Connected);
                             let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
                         }
                     }

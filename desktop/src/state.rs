@@ -21,6 +21,7 @@ pub struct AppSettings {
     pub auto_sync_contacts: bool,
     pub notifications_enabled: bool,
     pub device_name: Option<String>,
+    pub saved_devices: HashMap<String, SavedDeviceInfo>,
 }
 
 impl Default for AppSettings {
@@ -33,6 +34,7 @@ impl Default for AppSettings {
             auto_sync_contacts: false,
             notifications_enabled: true,
             device_name: None,
+            saved_devices: HashMap::new(),
         }
     }
 }
@@ -84,6 +86,16 @@ pub fn update_setting<F: FnOnce(&mut AppSettings)>(f: F) {
     let mut guard = settings.lock().unwrap();
     f(&mut guard);
     save_settings(&guard);
+}
+
+pub fn get_saved_devices_setting() -> HashMap<String, SavedDeviceInfo> {
+    get_app_settings().lock().unwrap().saved_devices.clone()
+}
+
+pub fn save_device_to_settings(device_id: String, info: SavedDeviceInfo) {
+    update_setting(|s| {
+        s.saved_devices.insert(device_id, info);
+    });
 }
 
 // ============================================================================
@@ -206,6 +218,14 @@ pub fn get_media_enabled() -> &'static Arc<Mutex<bool>> {
 pub struct RemoteMedia {
     pub state: MediaState,
     pub source_device_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedDeviceInfo {
+    pub name: String,
+    pub ip: String,
+    pub port: u16,
+    pub device_type: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

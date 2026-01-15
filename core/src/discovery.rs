@@ -23,8 +23,8 @@ const MIN_COMPATIBLE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DiscoverySource {
-    Mdns,
-    Proximity,
+    Connected,
+    Discovered,
 }
 
 #[derive(Clone)]
@@ -36,25 +36,25 @@ struct TrackedEndpoint {
 
 #[derive(Clone, Default)]
 struct TrackedDevice {
-    mdns: Option<TrackedEndpoint>,
-    proximity: Option<TrackedEndpoint>,
+    connected: Option<TrackedEndpoint>,
+    discovered: Option<TrackedEndpoint>,
 }
 
 impl TrackedDevice {
     fn active_source(&self) -> Option<DiscoverySource> {
-        if self.mdns.is_some() {
-            Some(DiscoverySource::Mdns)
-        } else if self.proximity.is_some() {
-            Some(DiscoverySource::Proximity)
+        if self.connected.is_some() {
+            Some(DiscoverySource::Connected)
+        } else if self.discovered.is_some() {
+            Some(DiscoverySource::Discovered)
         } else {
             None
         }
     }
 
     fn active_device(&self) -> Option<Device> {
-        self.mdns
+        self.connected
             .as_ref()
-            .or(self.proximity.as_ref())
+            .or(self.discovered.as_ref())
             .map(|endpoint| endpoint.device.clone())
     }
 }
@@ -339,7 +339,7 @@ impl DiscoveryService {
             (Some(prev), Some(curr)) => {
                 if prev_source != new_source {
                     Some(DiscoveryEvent::DeviceFound(curr))
-                } else if new_source == Some(DiscoverySource::Proximity) && prev != curr {
+                } else if new_source == Some(DiscoverySource::Discovered) && prev != curr {
                     Some(DiscoveryEvent::DeviceFound(curr))
                 } else {
                     None
@@ -366,8 +366,8 @@ impl DiscoveryService {
         };
 
         match source {
-            DiscoverySource::Mdns => tracked.mdns = Some(endpoint),
-            DiscoverySource::Proximity => tracked.proximity = Some(endpoint),
+            DiscoverySource::Connected => tracked.connected = Some(endpoint),
+            DiscoverySource::Discovered => tracked.discovered = Some(endpoint),
         }
 
         let new_source = tracked.active_source();
@@ -389,14 +389,14 @@ impl DiscoveryService {
         let prev_device = tracked.active_device();
 
         match source {
-            DiscoverySource::Mdns => tracked.mdns = None,
-            DiscoverySource::Proximity => tracked.proximity = None,
+            DiscoverySource::Connected => tracked.connected = None,
+            DiscoverySource::Discovered => tracked.discovered = None,
         }
 
         let new_source = tracked.active_source();
         let new_device = tracked.active_device();
 
-        if tracked.mdns.is_none() && tracked.proximity.is_none() {
+        if tracked.connected.is_none() && tracked.discovered.is_none() {
             devices.remove(device_id);
         }
 
@@ -418,22 +418,23 @@ impl DiscoveryService {
             let prev_source = tracked.active_source();
             let prev_device = tracked.active_device();
 
-            if tracked.mdns.as_ref().is_some_and(|endpoint| {
+            if tracked.connected.as_ref().is_some_and(|endpoint| {
                 now.duration_since(endpoint.last_seen) > DEVICE_STALE_TIMEOUT
             }) {
-                tracked.mdns = None;
+                tracked.connected = None;
             }
 
-            if tracked.proximity.as_ref().is_some_and(|endpoint| {
-                now.duration_since(endpoint.last_seen) > PROXIMITY_STALE_TIMEOUT
+            if tracked.discovered.as_ref().is_some_and(|endpoint| {
+                now.duration_since(endpoint.last_seen) > DEVICE_STALE_TIMEOUT
             }) {
-                tracked.proximity = None;
+                tracked.discovered = None;
             }
 
             let new_source = tracked.active_source();
+
             let new_device = tracked.active_device();
 
-            if tracked.mdns.is_none() && tracked.proximity.is_none() {
+            if tracked.connected.is_none() && tracked.discovered.is_none() {
                 devices.remove(&device_id);
             }
 
@@ -626,7 +627,7 @@ impl DiscoveryService {
                 .iter()
                 .find(|(id, tracked)| {
                     tracked
-                        .mdns
+                        .discovered
                         .as_ref()
                         .is_some_and(|endpoint| endpoint.ip == ip_str)
                         && *id != &device_id
@@ -643,7 +644,11 @@ impl DiscoveryService {
             }
 
             (
-                Self::upsert_endpoint_locked(&mut devices, device.clone(), DiscoverySource::Mdns),
+                Self::upsert_endpoint_locked(
+                    &mut devices,
+                    device.clone(),
+                    DiscoverySource::Discovered,
+                ),
                 old_id_with_same_ip,
             )
         };
@@ -695,7 +700,7 @@ impl DiscoveryService {
 
         let event = {
             let mut devices = discovered.write();
-            Self::remove_endpoint_locked(&mut devices, &device_id, DiscoverySource::Mdns)
+            Self::remove_endpoint_locked(&mut devices, &device_id, DiscoverySource::Discovered)
         };
 
         if let Some(event) = event {
