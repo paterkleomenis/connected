@@ -1,15 +1,16 @@
 use crate::fs_provider::DesktopFilesystemProvider;
+use crate::mpris_server::{MprisUpdate, send_mpris_update};
 use crate::proximity;
 use crate::state::{
     DeviceInfo, FileTransferRequest, PairingRequest, PreviewData, RemoteMedia, TransferStatus,
     add_file_transfer_request, add_notification, get_auto_sync_messages, get_current_media,
     get_current_remote_files, get_current_remote_path, get_device_name_setting, get_devices_store,
-    get_last_clipboard, get_last_remote_update, get_media_enabled, get_pairing_requests,
-    get_pending_pairings, get_phone_call_log, get_phone_conversations, get_phone_data_update,
-    get_phone_messages, get_preview_data, get_remote_files_update, get_transfer_status,
-    mark_calls_synced, mark_contacts_synced, mark_messages_synced, remove_file_transfer_request,
-    set_active_call, set_device_name_setting, set_phone_call_log, set_phone_contacts,
-    set_phone_conversations, set_phone_messages,
+    get_last_clipboard, get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
+    get_pairing_requests, get_pending_pairings, get_phone_call_log, get_phone_conversations,
+    get_phone_data_update, get_phone_messages, get_preview_data, get_remote_files_update,
+    get_transfer_status, mark_calls_synced, mark_contacts_synced, mark_messages_synced,
+    remove_file_transfer_request, set_active_call, set_device_name_setting, set_phone_call_log,
+    set_phone_contacts, set_phone_conversations, set_phone_messages,
 };
 use crate::utils::{get_hostname, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -113,6 +114,7 @@ pub enum AppAction {
         command: MediaCommand,
     },
     ControlLocalMedia(MediaCommand),
+    ControlRemoteMedia(MediaCommand),
     // Telephony actions
     RequestContactsSync {
         ip: String,
@@ -493,9 +495,19 @@ fn spawn_event_loop(
                                         .unwrap_or_else(|| "unknown".to_string())
                                 };
 
+                                let state_for_mpris = state.clone();
+                                *get_last_remote_media_device_id().lock().unwrap() =
+                                    Some(device_id.clone());
                                 *get_current_media().lock().unwrap() = Some(RemoteMedia {
                                     state,
                                     source_device_id: device_id,
+                                });
+
+                                send_mpris_update(MprisUpdate {
+                                    title: state_for_mpris.title,
+                                    artist: state_for_mpris.artist,
+                                    album: state_for_mpris.album,
+                                    playing: state_for_mpris.playing,
                                 });
                             }
                         }
@@ -1498,6 +1510,42 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 .await;
                         }
                     });
+                }
+            }
+            AppAction::ControlRemoteMedia(command) => {
+                if let Some(c) = &client {
+                    let device = {
+                        let device_id = get_last_remote_media_device_id()
+                            .lock()
+                            .unwrap()
+                            .clone()
+                            .unwrap_or_default();
+                        if device_id.is_empty() || device_id == "local" || device_id == "unknown" {
+                            None
+                        } else {
+                            let store = get_devices_store().lock().unwrap();
+                            store.get(&device_id).cloned()
+                        }
+                    };
+
+                    if let Some(device) = device {
+                        if device.ip == "0.0.0.0" {
+                            warn!("Remote media control unavailable in offline mode");
+                            return;
+                        }
+                        let c = c.clone();
+                        tokio::spawn(async move {
+                            if let Ok(ip_addr) = device.ip.parse() {
+                                let _ = c
+                                    .send_media_control(
+                                        ip_addr,
+                                        device.port,
+                                        MediaControlMessage::Command(command),
+                                    )
+                                    .await;
+                            }
+                        });
+                    }
                 }
             }
             AppAction::ControlLocalMedia(command) => {

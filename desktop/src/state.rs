@@ -170,6 +170,7 @@ static REMOTE_FILES_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock:
 static PREVIEW_DATA: OnceLock<Arc<Mutex<Option<PreviewData>>>> = OnceLock::new();
 static MEDIA_ENABLED: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
 static CURRENT_MEDIA: OnceLock<Arc<Mutex<Option<RemoteMedia>>>> = OnceLock::new();
+static LAST_REMOTE_MEDIA_DEVICE_ID: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
 static THUMBNAILS: OnceLock<Arc<Mutex<HashMap<String, Vec<u8>>>>> = OnceLock::new();
 static THUMBNAILS_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 
@@ -252,6 +253,10 @@ pub fn get_file_transfer_requests() -> &'static Arc<Mutex<HashMap<String, FileTr
 
 pub fn get_current_media() -> &'static Arc<Mutex<Option<RemoteMedia>>> {
     CURRENT_MEDIA.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+pub fn get_last_remote_media_device_id() -> &'static Arc<Mutex<Option<String>>> {
+    LAST_REMOTE_MEDIA_DEVICE_ID.get_or_init(|| Arc::new(Mutex::new(None)))
 }
 
 pub fn add_file_transfer_request(request: FileTransferRequest) {

@@ -4,6 +4,7 @@
 mod components;
 mod controller;
 mod fs_provider;
+mod mpris_server;
 mod proximity;
 mod state;
 mod utils;
@@ -136,6 +137,18 @@ fn App() -> Element {
         use_coroutine(
             move |rx: UnboundedReceiver<AppAction>| async move { app_controller(rx).await },
         );
+    let (mpris_tx, mpris_rx) = std::sync::mpsc::channel();
+    if mpris_server::init_mpris(mpris_tx) {
+        let action_tx = action_tx.clone();
+        spawn(async move {
+            loop {
+                while let Ok(command) = mpris_rx.try_recv() {
+                    action_tx.send(AppAction::ControlRemoteMedia(command));
+                }
+                async_std::task::sleep(Duration::from_millis(100)).await;
+            }
+        });
+    }
 
     // Start Init and initialize settings-based features
     use_effect(move || {
