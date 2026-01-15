@@ -429,26 +429,6 @@ impl ConnectedClient {
             .trust_peer(fingerprint, device_id, Some(name))
     }
 
-    pub fn block_device(&self, fingerprint: String) -> Result<()> {
-        // Get device info before blocking for connection invalidation
-        let device_id = self
-            .key_store
-            .read()
-            .get_all_known_peers()
-            .iter()
-            .find(|p| p.fingerprint == fingerprint)
-            .and_then(|p| p.device_id.clone());
-
-        self.key_store.write().block_peer(fingerprint)?;
-
-        // Invalidate any cached connection to this device
-        if let Some(did) = device_id {
-            self.invalidate_connection_by_device_id(&did);
-        }
-
-        Ok(())
-    }
-
     pub fn is_device_trusted(&self, device_id: &str) -> bool {
         self.key_store
             .read()
@@ -1060,75 +1040,6 @@ impl ConnectedClient {
         Ok(())
     }
 
-    /// Disconnect from a device but keep it trusted.
-    /// Next time they connect, they're still trusted - no need to pair again.
-    pub fn disconnect_device(&self, fingerprint: &str) -> Result<()> {
-        // Get device info for connection invalidation
-        let device_id = self
-            .key_store
-            .read()
-            .get_trusted_peers()
-            .iter()
-            .find(|p| p.fingerprint == fingerprint)
-            .and_then(|p| p.device_id.clone());
-
-        // Only invalidate the connection, DO NOT remove trust
-        if let Some(did) = device_id {
-            self.invalidate_connection_by_device_id(&did);
-        }
-
-        info!("Disconnected from device (trust preserved)");
-        Ok(())
-    }
-
-    /// Disconnect from a device by ID but keep it trusted.
-    pub fn disconnect_device_by_id(&self, device_id: &str) -> Result<()> {
-        // Only invalidate the connection, DO NOT remove trust
-        self.invalidate_connection_by_device_id(device_id);
-        info!("Disconnected from device {} (trust preserved)", device_id);
-        Ok(())
-    }
-
-    /// Completely remove a peer from trusted list.
-    /// This is what "forget" should do - removes trust entirely.
-    pub fn remove_trusted_peer(&self, fingerprint: &str) -> Result<()> {
-        // Get device info before removing for connection invalidation
-        let device_id = self
-            .key_store
-            .read()
-            .get_trusted_peers()
-            .iter()
-            .find(|p| p.fingerprint == fingerprint)
-            .and_then(|p| p.device_id.clone());
-
-        self.key_store.write().remove_peer(fingerprint)?;
-
-        // Invalidate any cached connection to this device
-        if let Some(did) = device_id {
-            self.invalidate_connection_by_device_id(&did);
-        }
-
-        // Emit event so UI updates
-        let _ = self
-            .event_tx
-            .send(ConnectedEvent::PairingModeChanged(self.is_pairing_mode()));
-        Ok(())
-    }
-
-    /// Completely remove a peer by device_id from trusted list.
-    pub fn remove_trusted_peer_by_id(&self, device_id: &str) -> Result<()> {
-        self.key_store.write().remove_peer_by_id(device_id)?;
-
-        // Invalidate any cached connection to this device
-        self.invalidate_connection_by_device_id(device_id);
-
-        // Emit event so UI updates
-        let _ = self
-            .event_tx
-            .send(ConnectedEvent::PairingModeChanged(self.is_pairing_mode()));
-        Ok(())
-    }
-
     /// Invalidate cached connection for a device by looking up its IP from discovered devices
     fn invalidate_connection_by_device_id(&self, device_id: &str) {
         let discovered = self.discovery.get_discovered_devices();
@@ -1214,9 +1125,8 @@ impl ConnectedClient {
         Ok(())
     }
 
-    /// Completely remove a device from known peers
-    /// This allows re-pairing without any record (clean slate)
-    /// Use remove_trusted_peer or remove_trusted_peer_by_id for this
+    /// Completely remove a device from known peers.
+    /// This allows re-pairing without any record (clean slate).
     ///
     /// Difference between forget and remove:
     /// - forget: Device must go through pairing request (user approval required)
@@ -1271,34 +1181,6 @@ impl ConnectedClient {
             "Unpaired device {} - trust preserved, can reconnect anytime",
             device_id
         );
-        Ok(())
-    }
-
-    pub fn get_blocked_peers(&self) -> Vec<crate::security::PeerInfo> {
-        self.key_store.read().get_blocked_peers()
-    }
-
-    pub fn get_all_known_peers(&self) -> Vec<crate::security::PeerInfo> {
-        self.key_store.read().get_all_known_peers()
-    }
-
-    pub async fn send_handshake_ack(&self, send: &mut quinn::SendStream) -> Result<()> {
-        let msg = Message::HandshakeAck {
-            device_id: self.local_device.id.clone(),
-            device_name: self.local_device.name.clone(),
-        };
-
-        let data = serde_json::to_vec(&msg)
-            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
-        let len_bytes = (data.len() as u32).to_be_bytes();
-
-        send.write_all(&len_bytes)
-            .await
-            .map_err(|e| ConnectedError::Io(e.into()))?;
-        send.write_all(&data)
-            .await
-            .map_err(|e| ConnectedError::Io(e.into()))?;
-
         Ok(())
     }
 
@@ -1360,6 +1242,7 @@ impl ConnectedClient {
         let local_name = self.local_device.name.clone();
         let pending_handshakes = self.pending_handshakes.clone();
         let discovery = self.discovery.clone();
+        let transport = self.transport.clone();
 
         // Handle Control Messages
         tokio::spawn(async move {
@@ -1371,6 +1254,7 @@ impl ConnectedClient {
                         device_name,
                         listening_port,
                     } => {
+                        let mut send_stream = send_stream;
                         let (resolved_name, resolved_type) = discovery
                             .get_device_by_id(&device_id)
                             .map(|d| (d.name, d.device_type))
@@ -1384,8 +1268,8 @@ impl ConnectedClient {
                             resolved_type,
                         );
 
-                        if let Some(event) =
-                            discovery.upsert_device_endpoint(device, DiscoverySource::Connected)
+                        if let Some(event) = discovery
+                            .upsert_device_endpoint(device.clone(), DiscoverySource::Connected)
                         {
                             match event {
                                 DiscoveryEvent::DeviceFound(d) => {
@@ -1403,9 +1287,16 @@ impl ConnectedClient {
                             }
                         }
 
+                        // Register alias for the active connection if port differs
+                        if listening_port != 0 && listening_port != addr.port() {
+                            let listening_addr = SocketAddr::new(addr.ip(), listening_port);
+                            transport.register_connection_alias(addr, listening_addr);
+                        }
+
                         let is_trusted = key_store.read().is_trusted(&fingerprint);
                         let is_forgotten = key_store.read().is_forgotten(&fingerprint);
                         let _needs_pairing = key_store.read().needs_pairing_request(&fingerprint);
+                        let has_pending = pending_handshakes.read().contains(&addr.ip());
 
                         // If forgotten, always require re-pairing approval (don't auto-trust)
                         if is_forgotten {
@@ -1418,6 +1309,50 @@ impl ConnectedClient {
                                 device_name,
                                 device_id,
                             });
+                            continue;
+                        }
+
+                        if !is_trusted && has_pending {
+                            info!(
+                                "Auto-trusting peer from Handshake (pending outbound pairing): {} - {}",
+                                device_name, fingerprint
+                            );
+                            pending_handshakes.write().remove(&addr.ip());
+
+                            if let Err(e) = key_store.write().trust_peer(
+                                fingerprint.clone(),
+                                Some(device_id.clone()),
+                                Some(device_name.clone()),
+                            ) {
+                                error!("Failed to auto-trust peer: {}", e);
+                            }
+
+                            // Emit DeviceFound to refresh UI
+                            let d = Device::new(
+                                device_id,
+                                device_name.clone(),
+                                addr.ip(),
+                                addr.port(),
+                                DeviceType::Unknown,
+                            );
+                            let _ = discovery
+                                .upsert_device_endpoint(d.clone(), DiscoverySource::Connected);
+                            let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
+
+                            if let Some(mut send) = send_stream.take() {
+                                let msg = Message::HandshakeAck {
+                                    device_id: local_id.clone(),
+                                    device_name: local_name.clone(),
+                                };
+                                if let Ok(data) = serde_json::to_vec(&msg) {
+                                    let len_bytes = (data.len() as u32).to_be_bytes();
+                                    if send.write_all(&len_bytes).await.is_ok() {
+                                        let _ = send.write_all(&data).await;
+                                    }
+                                    let _ = send.finish();
+                                }
+                            }
+
                             continue;
                         }
 
@@ -1459,23 +1394,24 @@ impl ConnectedClient {
                             );
                             let _ = event_tx.send(ConnectedEvent::DeviceFound(device));
 
-                            // Send HandshakeAck to confirm we are connected on the same stream
-                            if let Some(mut send) = send_stream {
-                                let lid = local_id.clone();
-                                let lname = local_name.clone();
+                            // Register alias for the active connection if port differs
+                            if listening_port != 0 && listening_port != addr.port() {
+                                let listening_addr = SocketAddr::new(addr.ip(), listening_port);
+                                transport.register_connection_alias(addr, listening_addr);
+                            }
 
-                                tokio::spawn(async move {
-                                    let msg = Message::HandshakeAck {
-                                        device_id: lid,
-                                        device_name: lname,
-                                    };
-                                    if let Ok(data) = serde_json::to_vec(&msg) {
-                                        let len_bytes = (data.len() as u32).to_be_bytes();
-                                        let _ = send.write_all(&len_bytes).await;
+                            if let Some(mut send) = send_stream.take() {
+                                let msg = Message::HandshakeAck {
+                                    device_id: local_id.clone(),
+                                    device_name: local_name.clone(),
+                                };
+                                if let Ok(data) = serde_json::to_vec(&msg) {
+                                    let len_bytes = (data.len() as u32).to_be_bytes();
+                                    if send.write_all(&len_bytes).await.is_ok() {
                                         let _ = send.write_all(&data).await;
-                                        let _ = send.finish();
                                     }
-                                });
+                                    let _ = send.finish();
+                                }
                             }
                         }
                     }
@@ -1583,6 +1519,11 @@ impl ConnectedClient {
                                 content: text,
                                 from_device,
                             });
+                        } else {
+                            warn!(
+                                "Ignored clipboard from untrusted peer {} at {}",
+                                fingerprint, addr
+                            );
                         }
                     }
                     Message::MediaControl(media_msg) => {
@@ -1623,7 +1564,7 @@ impl ConnectedClient {
                             UnpairReason::Unpaired => {
                                 info!("Device {} unpaired (trust preserved)", device_id);
                             }
-                            UnpairReason::Forgotten | UnpairReason::Blocked => {
+                            UnpairReason::Forgotten => {
                                 if let Err(e) = key_store.write().remove_peer(&fingerprint) {
                                     error!("Failed to remove unpaired peer: {}", e);
                                 }

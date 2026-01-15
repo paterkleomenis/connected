@@ -17,7 +17,6 @@ const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
 const BROWSE_TIMEOUT: Duration = Duration::from_millis(100);
 const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(60);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(2);
-const PROXIMITY_STALE_TIMEOUT: Duration = Duration::from_secs(60);
 const PROTOCOL_VERSION: u32 = 1;
 const MIN_COMPATIBLE_VERSION: u32 = 1;
 
@@ -124,7 +123,7 @@ impl DiscoveryService {
             "type".to_string(),
             self.local_device.device_type.as_str().to_string(),
         );
-        properties.insert("version".to_string(), "1".to_string());
+        properties.insert("version".to_string(), PROTOCOL_VERSION.to_string());
 
         let ip: IpAddr = self
             .local_device
@@ -709,11 +708,6 @@ impl DiscoveryService {
             }
             let _ = event_tx.send(event);
         }
-    }
-
-    pub fn stop(&self) {
-        // Stop listening but keep announcing
-        self.running.store(false, Ordering::SeqCst);
     }
 
     pub fn shutdown(&self) {

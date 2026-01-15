@@ -51,9 +51,6 @@ class ConnectedApp(private val context: Context) {
     val pendingPairing = mutableStateListOf<String>() // Set of pending Device IDs
     val pendingShareUris = mutableStateListOf<String>()
 
-    private val trustedDeviceAddresses = mutableMapOf<String, Pair<String, UShort>>()
-    private val lastHandshake = ConcurrentHashMap<String, Long>()
-    private var heartbeatJob: kotlinx.coroutines.Job? = null
     private val pendingPairingAwaitingIp = mutableSetOf<String>()
     private val locallyUnpairedDevices = mutableSetOf<String>()
     private val pendingFileTransfersAwaitingIp =
@@ -270,30 +267,6 @@ class ConnectedApp(private val context: Context) {
                         }
 
 
-
-                        // Always handshake with trusted devices to refresh session (e.g. if desktop restarted on new port)
-
-                        // Rate limited to once every 3 seconds to avoid spamming
-
-                        val now = System.currentTimeMillis()
-
-                        val last = lastHandshake[device.id] ?: 0L
-
-                        if (now - last > 3000) {
-
-                            lastHandshake[device.id] = now
-
-                            try {
-
-                                if (!isSyntheticIp(device.ip)) {
-
-                                    uniffi.connected_ffi.pairDevice(device.ip, device.port)
-
-                                }
-
-                            } catch (e: Exception) {}
-
-                        }
 
                     } else {
 
@@ -548,40 +521,8 @@ class ConnectedApp(private val context: Context) {
 
             isMediaControlEnabled.value = prefs.getBoolean(PREF_MEDIA_CONTROL, false)
 
-            startHeartbeat()
-
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Initialization failed", e)
-        }
-    }
-
-    private fun startHeartbeat() {
-        heartbeatJob?.cancel()
-        heartbeatJob = scope.launch {
-            while (isActive) {
-                delay(10000) // Check every 10 seconds
-                // Create a copy to avoid concurrent modification during iteration
-                val currentTrusted = trustedDevices.toList()
-                val currentDiscovered = devices.toList()
-
-                for (deviceId in currentTrusted) {
-                    if (!isActive) break
-                    val device = currentDiscovered.find { it.id == deviceId }
-                    if (device != null && !isSyntheticIp(device.ip)) {
-                         try {
-                             uniffi.connected_ffi.pairDevice(device.ip, device.port)
-                         } catch (e: Exception) {
-                             if (e is kotlinx.coroutines.CancellationException) throw e
-                             // Ignore NotInitialized errors as they happen during shutdown
-                             if (e.toString().contains("NotInitialized")) {
-                                 Log.d("ConnectedApp", "Heartbeat stopped (shutdown)")
-                                 break
-                             }
-                             Log.e("ConnectedApp", "Heartbeat failed for ${device.name}", e)
-                         }
-                    }
-                }
-            }
         }
     }
 
@@ -589,7 +530,6 @@ class ConnectedApp(private val context: Context) {
         try { context.unregisterReceiver(networkStateReceiver) } catch (e: Exception) {}
         stopClipboardSync()
         stopProximityManager()
-        heartbeatJob?.cancel()
         uniffi.connected_ffi.shutdown()
         try { multicastLock?.release() } catch (e: Exception) {}
     }
@@ -1337,12 +1277,6 @@ class ConnectedApp(private val context: Context) {
                     android.widget.Toast.makeText(context, "Forget failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                 }
             }
-        }
-    }
-
-    fun blockDevice(device: DiscoveredDevice) {
-        scope.launch(Dispatchers.IO) {
-            try { uniffi.connected_ffi.blockDeviceById(device.id) } catch (e: Exception) {}
         }
     }
 

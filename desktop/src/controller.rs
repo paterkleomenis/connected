@@ -10,8 +10,8 @@ use crate::state::{
     get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
     get_remote_files_update, get_saved_devices_setting, get_transfer_status, mark_calls_synced,
     mark_contacts_synced, mark_messages_synced, remove_file_transfer_request,
-    save_device_to_settings, set_active_call, set_device_name_setting, set_phone_call_log,
-    set_phone_contacts, set_phone_conversations, set_phone_messages,
+    save_device_to_settings, set_active_call, set_device_name_setting, set_pairing_mode_state,
+    set_phone_call_log, set_phone_contacts, set_phone_conversations, set_phone_messages,
 };
 use crate::utils::{get_hostname, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone, Debug)]
 pub enum AppAction {
@@ -63,14 +63,9 @@ pub enum AppAction {
         fingerprint: String,
     },
     UnpairDevice {
-        fingerprint: String,
         device_id: String,
     },
     ForgetDevice {
-        fingerprint: String,
-        device_id: String,
-    },
-    BlockDevice {
         fingerprint: String,
         device_id: String,
     },
@@ -81,7 +76,6 @@ pub enum AppAction {
     RejectFileTransfer {
         transfer_id: String,
     },
-    SetAutoAcceptFiles(bool),
     ListRemoteFiles {
         ip: String,
         port: u16,
@@ -114,7 +108,6 @@ pub enum AppAction {
         port: u16,
         command: MediaCommand,
     },
-    ControlLocalMedia(MediaCommand),
     ControlRemoteMedia(MediaCommand),
     // Telephony actions
     RequestContactsSync {
@@ -289,6 +282,7 @@ fn spawn_event_loop(
                 }
                 ConnectedEvent::PairingModeChanged(enabled) => {
                     info!("Pairing mode changed: {}", enabled);
+                    set_pairing_mode_state(enabled);
                 }
                 ConnectedEvent::DeviceUnpaired {
                     device_id,
@@ -306,7 +300,6 @@ fn spawn_event_loop(
                     let reason_str = match reason {
                         UnpairReason::Unpaired => "unpaired from",
                         UnpairReason::Forgotten => "forgotten by",
-                        UnpairReason::Blocked => "blocked by",
                     };
                     add_notification(
                         "Device Disconnected",
@@ -846,16 +839,32 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         );
                         return;
                     }
+                    debug!(
+                        "Clipboard send requested to {}:{} (len: {})",
+                        ip,
+                        port,
+                        text.len()
+                    );
                     let c = c.clone();
                     tokio::spawn(async move {
                         if let Ok(ip_addr) = ip.parse() {
-                            let _ = c.send_clipboard(ip_addr, port, text).await;
+                            match c.send_clipboard(ip_addr, port, text).await {
+                                Ok(()) => {
+                                    debug!("Clipboard send succeeded to {}:{}", ip_addr, port);
+                                }
+                                Err(e) => {
+                                    warn!("Clipboard send failed to {}:{}: {}", ip_addr, port, e);
+                                }
+                            }
+                        } else {
+                            warn!("Clipboard send skipped: invalid IP {}", ip);
                         }
                     });
                 }
             }
             AppAction::BroadcastClipboard { text } => {
                 if let Some(c) = &client {
+                    debug!("Clipboard broadcast requested (len: {})", text.len());
                     let c = c.clone();
                     tokio::spawn(async move {
                         match c.broadcast_clipboard(text).await {
@@ -986,26 +995,17 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
             AppAction::RejectDevice { fingerprint } => {
-                if let Some(c) = &client {
+                if client.is_some() {
                     // Remove from pairing requests
                     {
                         let mut requests = get_pairing_requests().lock().unwrap();
                         requests.retain(|r| r.fingerprint != fingerprint);
                     }
-                    match c.block_device(fingerprint) {
-                        Err(e) => {
-                            error!("Failed to block device: {}", e);
-                        }
-                        _ => {
-                            add_notification("Blocked", "Device has been blocked", "🚫");
-                        }
-                    }
+                    // Just dismiss the request, don't block
+                    info!("Rejected device pairing request: {}", fingerprint);
                 }
             }
-            AppAction::UnpairDevice {
-                fingerprint: _,
-                device_id,
-            } => {
+            AppAction::UnpairDevice { device_id } => {
                 if let Some(c) = &client {
                     // Unpair = disconnect and remove from UI, but keep backend trust (can auto-reconnect later)
 
@@ -1122,66 +1122,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     }
                 }
             }
-            AppAction::BlockDevice {
-                fingerprint,
-                device_id,
-            } => {
-                if let Some(c) = &client {
-                    // If fingerprint is "TODO", look it up from device_id
-                    let fingerprint = if fingerprint == "TODO" {
-                        let peers = c.get_trusted_peers();
-                        peers
-                            .iter()
-                            .find(|p| p.device_id.as_deref() == Some(&device_id))
-                            .map(|p| p.fingerprint.clone())
-                            .unwrap_or(fingerprint)
-                    } else {
-                        fingerprint
-                    };
-
-                    // Get device info before blocking for notification
-                    let device_info = {
-                        let store = get_devices_store().lock().unwrap();
-                        store.get(&device_id).cloned()
-                    };
-
-                    match c.block_device(fingerprint) {
-                        Err(e) => {
-                            error!("Failed to block device: {}", e);
-                            add_notification("Block Failed", &e.to_string(), "❌");
-                        }
-                        _ => {
-                            // Remove from local store
-                            {
-                                let mut store = get_devices_store().lock().unwrap();
-                                store.remove(&device_id);
-                            }
-
-                            // Notify the other device that we blocked them
-                            if let Some(info) = device_info {
-                                let c_clone = c.clone();
-                                tokio::spawn(async move {
-                                    if let Ok(ip) = info.ip.parse() {
-                                        let _ = c_clone
-                                            .send_unpair_notification(
-                                                ip,
-                                                info.port,
-                                                UnpairReason::Blocked,
-                                            )
-                                            .await;
-                                    }
-                                });
-                            }
-
-                            add_notification(
-                                "Device Blocked",
-                                "Device will no longer be able to connect",
-                                "🚫",
-                            );
-                        }
-                    }
-                }
-            }
             AppAction::AcceptFileTransfer { transfer_id } => {
                 if let Some(c) = &client {
                     // Remove from pending requests
@@ -1204,17 +1144,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             add_notification("Transfer Rejected", "File transfer declined", "🚫");
                         }
                     }
-                }
-            }
-            AppAction::SetAutoAcceptFiles(enabled) => {
-                if let Some(c) = &client {
-                    c.set_auto_accept_files(enabled);
-                    let msg = if enabled {
-                        "Auto-accept enabled"
-                    } else {
-                        "Auto-accept disabled"
-                    };
-                    add_notification("Settings", msg, "⚙️");
                 }
             }
             AppAction::ListRemoteFiles { ip, port, path } => {
@@ -1582,115 +1511,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         });
                     }
                 }
-            }
-            AppAction::ControlLocalMedia(command) => {
-                tokio::task::spawn_blocking(move || {
-                    use dbus::ffidisp::{BusType, Connection};
-                    use mpris::Player;
-                    use std::rc::Rc;
-
-                    let conn = match Connection::get_private(BusType::Session) {
-                        Ok(c) => Rc::new(c),
-                        Err(e) => {
-                            warn!("DBus Connection Error: {}", e);
-                            return;
-                        }
-                    };
-
-                    use dbus::Message;
-                    let msg = Message::new_method_call(
-                        "org.freedesktop.DBus",
-                        "/org/freedesktop/DBus",
-                        "org.freedesktop.DBus",
-                        "ListNames",
-                    )
-                    .unwrap();
-                    let names: Vec<String> = match conn.send_with_reply_and_block(msg, 5000) {
-                        Ok(reply) => match reply.get1() {
-                            Some(n) => n,
-                            None => return,
-                        },
-                        Err(e) => {
-                            warn!("DBus ListNames Error: {}", e);
-                            return;
-                        }
-                    };
-
-                    let mpris_names: Vec<&String> = names
-                        .iter()
-                        .filter(|n| {
-                            n.starts_with("org.mpris.MediaPlayer2.")
-                                && !n.contains("playerctld")
-                                && !n.contains("kdeconnect")
-                                && *n != "org.mpris.MediaPlayer2.connected"
-                        })
-                        .collect();
-
-                    let mut playing_player: Option<Player> = None;
-                    let mut paused_player: Option<Player> = None;
-                    let mut any_player: Option<Player> = None;
-
-                    for name in mpris_names {
-                        if let Ok(p_conn) = Connection::get_private(BusType::Session) {
-                            if let Ok(player) = Player::new(p_conn, name.clone().into(), 2000) {
-                                match player.get_playback_status() {
-                                    Ok(status) => match status {
-                                        PlaybackStatus::Playing => {
-                                            playing_player = Some(player);
-                                            break;
-                                        }
-                                        PlaybackStatus::Paused => {
-                                            if paused_player.is_none() {
-                                                paused_player = Some(player);
-                                            }
-                                        }
-                                        _ => {
-                                            if any_player.is_none() {
-                                                any_player = Some(player);
-                                            }
-                                        }
-                                    },
-                                    _ => {
-                                        if any_player.is_none() {
-                                            any_player = Some(player);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    let target_player = playing_player.or(paused_player).or(any_player);
-
-                    if let Some(player) = target_player {
-                        info!(
-                            "Local Control: Executing {:?} on {}",
-                            command,
-                            player.identity()
-                        );
-                        let res = match command {
-                            MediaCommand::Play => player.play(),
-                            MediaCommand::Pause => player.pause(),
-                            MediaCommand::PlayPause => player.play_pause(),
-                            MediaCommand::Next => player.next(),
-                            MediaCommand::Previous => player.previous(),
-                            MediaCommand::Stop => player.stop(),
-                            MediaCommand::VolumeUp => {
-                                let _ =
-                                    player.set_volume(player.get_volume().unwrap_or(0.0) + 0.05);
-                                Ok(())
-                            }
-                            MediaCommand::VolumeDown => {
-                                let _ =
-                                    player.set_volume(player.get_volume().unwrap_or(0.0) - 0.05);
-                                Ok(())
-                            }
-                        };
-                        if let Err(e) = res {
-                            warn!("Local Control Failed: {}", e);
-                        }
-                    }
-                });
             }
             AppAction::RequestContactsSync { ip, port } => {
                 if let Some(c) = &client {

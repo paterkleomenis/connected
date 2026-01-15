@@ -598,16 +598,6 @@ class ConnectedSdk private constructor() {
         }
     }
 
-    fun blockDevice(fingerprint: String) {
-        checkInitialized()
-        try {
-            uniffi.connected_ffi.blockDevice(fingerprint)
-            Log.d(TAG, "Blocked device $fingerprint")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to block device: ${e.message}")
-        }
-    }
-
     private fun acquireMulticastLock() {
         if (multicastLock != null && multicastLock!!.isHeld) {
             Log.d(TAG, "Multicast lock already held")

@@ -28,7 +28,6 @@ dirs = "5"
 sha2 = "0.10.9"
 if-addrs = "0.14.0"
 blake3 = "1.8.2"
-flate2 = "1.1.8"
 zip = "7.0.0"
 walkdir = "2.5.0"
 

@@ -1,5 +1,6 @@
 use connected_core::{ConnectedClient, ConnectedError, ConnectedEvent, Device, DeviceType};
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -35,6 +36,7 @@ static INSTANCE: OnceLock<RwLock<Option<Arc<ConnectedClient>>>> = OnceLock::new(
 static DISCOVERY_CALLBACK: RwLock<Option<Box<dyn DiscoveryCallback>>> = RwLock::new(None);
 static CLIPBOARD_CALLBACK: RwLock<Option<Box<dyn ClipboardCallback>>> = RwLock::new(None);
 static TRANSFER_CALLBACK: RwLock<Option<Box<dyn FileTransferCallback>>> = RwLock::new(None);
+static TRANSFER_SIZES: OnceLock<RwLock<HashMap<String, u64>>> = OnceLock::new();
 static PAIRING_CALLBACK: RwLock<Option<Box<dyn PairingCallback>>> = RwLock::new(None);
 static UNPAIR_CALLBACK: RwLock<Option<Box<dyn UnpairCallback>>> = RwLock::new(None);
 static MEDIA_CALLBACK: RwLock<Option<Box<dyn MediaControlCallback>>> = RwLock::new(None);
@@ -53,6 +55,10 @@ fn get_client() -> Result<Arc<ConnectedClient>, ConnectedFfiError> {
     let lock = INSTANCE.get_or_init(|| RwLock::new(None));
     let read = lock.read();
     read.clone().ok_or(ConnectedFfiError::NotInitialized)
+}
+
+fn get_transfer_sizes() -> &'static RwLock<HashMap<String, u64>> {
+    TRANSFER_SIZES.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 // ============================================================================
@@ -843,29 +849,35 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                         }
                     }
                     ConnectedEvent::TransferStarting {
+                        id,
                         filename,
                         total_size,
                         ..
                     } => {
+                        get_transfer_sizes().write().insert(id, total_size);
                         if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
                             cb.on_transfer_starting(filename, total_size);
                         }
                     }
                     ConnectedEvent::TransferProgress {
+                        id,
                         bytes_transferred,
                         total_size,
                         ..
                     } => {
+                        get_transfer_sizes().write().insert(id, total_size);
                         if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
                             cb.on_transfer_progress(bytes_transferred, total_size);
                         }
                     }
-                    ConnectedEvent::TransferCompleted { filename, .. } => {
+                    ConnectedEvent::TransferCompleted { id, filename } => {
+                        let total_size = get_transfer_sizes().write().remove(&id).unwrap_or(0);
                         if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                            cb.on_transfer_completed(filename, 0);
+                            cb.on_transfer_completed(filename, total_size);
                         }
                     }
-                    ConnectedEvent::TransferFailed { error, .. } => {
+                    ConnectedEvent::TransferFailed { id, error } => {
+                        get_transfer_sizes().write().remove(&id);
                         if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
                             cb.on_transfer_failed(error);
                         }
@@ -888,7 +900,6 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                         let reason_str = match reason {
                             UnpairReason::Unpaired => "unpaired",
                             UnpairReason::Forgotten => "forgotten",
-                            UnpairReason::Blocked => "blocked",
                         };
                         if let Some(cb) = UNPAIR_CALLBACK.read().as_ref() {
                             cb.on_device_unpaired(device_id, device_name, reason_str.to_string());
@@ -1243,7 +1254,6 @@ pub fn send_unpair_notification(
 
     let unpair_reason = match reason.as_str() {
         "forgotten" => UnpairReason::Forgotten,
-        "blocked" => UnpairReason::Blocked,
         _ => UnpairReason::Unpaired,
     };
 
@@ -1319,31 +1329,6 @@ pub fn is_device_trusted(device_id: String) -> bool {
 }
 
 #[uniffi::export]
-pub fn block_device(fingerprint: String) -> Result<(), ConnectedFfiError> {
-    let client = get_client()?;
-    client.block_device(fingerprint).map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn block_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
-    let client = get_client()?;
-    // Look up fingerprint from device_id in trusted/known peers
-    let peers = client.get_all_known_peers();
-    let fingerprint = peers
-        .iter()
-        .find(|p| p.device_id.as_deref() == Some(&device_id))
-        .map(|p| p.fingerprint.clone());
-
-    if let Some(fp) = fingerprint {
-        client.block_device(fp).map_err(Into::into)
-    } else {
-        Err(ConnectedFfiError::InvalidArgument {
-            msg: format!("Device {} not found in known peers", device_id),
-        })
-    }
-}
-
-#[uniffi::export]
 pub fn accept_file_transfer(transfer_id: String) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
     client
@@ -1385,6 +1370,7 @@ pub fn shutdown() {
     *TRANSFER_CALLBACK.write() = None;
     *PAIRING_CALLBACK.write() = None;
     *UNPAIR_CALLBACK.write() = None;
+    get_transfer_sizes().write().clear();
 
     // Get and shutdown the client properly
     let client = {

@@ -111,7 +111,7 @@ fn App() -> Element {
     let mut current_media_source_id = use_signal(|| "local".to_string());
 
     // Pairing State
-    let pairing_mode = use_signal(|| false);
+    let mut pairing_mode = use_signal(|| *get_pairing_mode_state().lock().unwrap());
     let mut pairing_requests = use_signal(Vec::<PairingRequest>::new);
     let mut file_transfer_requests = use_signal(Vec::<FileTransferRequest>::new);
 
@@ -382,6 +382,8 @@ fn App() -> Element {
                 current_media_playing.set(false);
                 current_media_source_id.set("local".to_string());
             }
+
+            pairing_mode.set(*get_pairing_mode_state().lock().unwrap());
 
             // Clipboard Sync Check
             if *clipboard_sync_enabled.read() {
@@ -663,7 +665,7 @@ fn App() -> Element {
                                         onclick: {
                                             let device = device.clone();
                                             move |_| {
-                                                action_tx.send(AppAction::UnpairDevice { fingerprint: "TODO".to_string(), device_id: device.id.clone() });
+                                                action_tx.send(AppAction::UnpairDevice { device_id: device.id.clone() });
                                                 selected_device.set(None);
                                             }
                                         },
@@ -680,18 +682,6 @@ fn App() -> Element {
                                             }
                                         },
                                         Icon { icon: IconType::Refresh, size: 14, color: "currentColor".to_string() }
-                                    }
-                                    button {
-                                        class: "header-action-btn danger",
-                                        title: "Block device",
-                                        onclick: {
-                                            let device = device.clone();
-                                            move |_| {
-                                                action_tx.send(AppAction::BlockDevice { fingerprint: "TODO".to_string(), device_id: device.id.clone() });
-                                                selected_device.set(None);
-                                            }
-                                        },
-                                        Icon { icon: IconType::Block, size: 14, color: "currentColor".to_string() }
                                     }
                                 }
                             }

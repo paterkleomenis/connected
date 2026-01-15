@@ -1246,20 +1246,6 @@ fun DeviceItem(
                                     app.forgetDevice(device)
                                 }
                             )
-                            DropdownMenuItem(
-                                text = { Text("Block", color = MaterialTheme.colorScheme.error) },
-                                leadingIcon = {
-                                    Icon(
-                                        painterResource(R.drawable.ic_block),
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    app.blockDevice(device)
-                                }
-                            )
                         }
                     }
                 }

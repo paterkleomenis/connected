@@ -79,45 +79,6 @@ pub fn set_system_clipboard(text: &str) {
     }
 }
 
-pub fn get_device_icon(device_type: &str) -> &'static str {
-    match device_type.to_lowercase().as_str() {
-        "android" => "📱",
-        "ios" | "iphone" => "📱",
-        "ipad" => "📲",
-        "linux" => "🐧",
-        "windows" => "🖥️",
-        "macos" | "mac" => "💻",
-        "tablet" => "📲",
-        "desktop" => "🖥️",
-        "laptop" => "💻",
-        "tv" | "television" => "📺",
-        "watch" | "wearable" => "⌚",
-        "server" => "🖧",
-        _ => "🔌",
-    }
-}
-
-pub fn get_file_icon(filename: &str) -> &'static str {
-    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-    match ext.as_str() {
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "bmp" | "ico" => "🖼️",
-        "mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" => "🎬",
-        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" => "🎵",
-        "pdf" => "📕",
-        "doc" | "docx" | "odt" => "📝",
-        "xls" | "xlsx" | "ods" | "csv" => "📊",
-        "ppt" | "pptx" | "odp" => "📽️",
-        "zip" | "rar" | "7z" | "tar" | "gz" => "📦",
-        "exe" | "msi" | "dmg" | "deb" | "rpm" => "⚙️",
-        "txt" | "md" | "rtf" => "📄",
-        "html" | "htm" | "css" | "js" | "ts" => "🌐",
-        "rs" | "py" | "java" | "c" | "cpp" | "go" | "rb" => "💻",
-        "json" | "xml" | "yaml" | "yml" | "toml" => "📋",
-        "apk" => "📱",
-        _ => "📄",
-    }
-}
-
 pub fn format_file_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     if bytes == 0 {

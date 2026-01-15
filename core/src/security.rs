@@ -10,8 +10,6 @@ use tracing::info;
 pub enum PeerStatus {
     /// Device is trusted and can connect/transfer freely
     Trusted,
-    /// Device is blocked - cannot connect even in pairing mode
-    Blocked,
     /// Device was forgotten - completely removed, requires full pairing request flow
     Forgotten,
 }
@@ -184,27 +182,6 @@ impl KeyStore {
         self.save_peers()
     }
 
-    pub fn block_peer(&mut self, fingerprint: String) -> Result<()> {
-        if let Some(peer) = self.known_peers.peers.get_mut(&fingerprint) {
-            peer.status = PeerStatus::Blocked;
-        } else {
-            self.known_peers.peers.insert(
-                fingerprint.clone(),
-                PeerInfo {
-                    fingerprint,
-                    status: PeerStatus::Blocked,
-                    device_id: None,
-                    name: None,
-                    last_seen: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                },
-            );
-        }
-        self.save_peers()
-    }
-
     /// Remove peer completely from known peers list
     /// This allows re-pairing without any restrictions
     pub fn remove_peer(&mut self, fingerprint: &str) -> Result<()> {
@@ -290,13 +267,6 @@ impl KeyStore {
         false
     }
 
-    pub fn is_blocked(&self, fingerprint: &str) -> bool {
-        if let Some(peer) = self.known_peers.peers.get(fingerprint) {
-            return peer.status == PeerStatus::Blocked;
-        }
-        false
-    }
-
     /// Check if peer was forgotten (requires re-pairing with user confirmation)
     pub fn is_forgotten(&self, fingerprint: &str) -> bool {
         if let Some(peer) = self.known_peers.peers.get(fingerprint) {
@@ -318,11 +288,6 @@ impl KeyStore {
             .peers
             .get(fingerprint)
             .and_then(|p| p.name.clone())
-    }
-
-    // Legacy support / Convenience
-    pub fn is_known_fingerprint(&self, fingerprint: &str) -> bool {
-        self.known_peers.peers.contains_key(fingerprint)
     }
 
     pub fn fingerprint(&self) -> String {
@@ -356,15 +321,6 @@ impl KeyStore {
             .peers
             .values()
             .filter(|p| p.status == PeerStatus::Forgotten)
-            .cloned()
-            .collect()
-    }
-
-    pub fn get_blocked_peers(&self) -> Vec<PeerInfo> {
-        self.known_peers
-            .peers
-            .values()
-            .filter(|p| p.status == PeerStatus::Blocked)
             .cloned()
             .collect()
     }

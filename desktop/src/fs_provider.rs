@@ -1,39 +1,61 @@
-use connected_core::filesystem::{FilesystemProvider, FsEntry, FsEntryType};
 use connected_core::Result;
+use connected_core::filesystem::{FilesystemProvider, FsEntry, FsEntryType};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 pub struct DesktopFilesystemProvider {
     root: PathBuf,
+    root_canonical: PathBuf,
 }
 
 impl DesktopFilesystemProvider {
     pub fn new() -> Self {
         let root = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        Self { root }
+        let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
+        Self {
+            root,
+            root_canonical,
+        }
     }
 
     fn resolve_path(&self, path: &str) -> Result<PathBuf> {
-        // Prevent directory traversal attacks
         let safe_path = path.trim_start_matches('/');
-        let full_path = self.root.join(safe_path);
-
-        // Canonicalize to check if it's still under root
-        // Note: canonicalize requires file to exist.
-        // For listing/reading, it should exist.
-        // For writing, parent should exist.
-
-        // Simple check for now: just ensure no ".." components that go above root
-        // This is a naive check. A better one uses `canonicalize`.
-        if full_path
+        if Path::new(safe_path)
             .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
+            .any(|c| matches!(c, Component::ParentDir))
         {
-            // This blocks ".." usage even if inside root, which is safe but restrictive.
-            // But valid for now.
-            // Actually, "foo/../bar" stays in root if foo exists.
-            // But let's rely on canonicalize if possible, or just be strict.
+            return Err(connected_core::ConnectedError::Filesystem(
+                "Invalid path".to_string(),
+            ));
+        }
+
+        let full_path = if safe_path.is_empty() {
+            self.root.clone()
+        } else {
+            self.root.join(safe_path)
+        };
+
+        let canonical = if full_path.exists() {
+            full_path
+                .canonicalize()
+                .map_err(connected_core::ConnectedError::Io)?
+        } else if let Some(parent) = full_path.parent() {
+            let parent_canon = parent
+                .canonicalize()
+                .map_err(connected_core::ConnectedError::Io)?;
+            match full_path.file_name() {
+                Some(name) => parent_canon.join(name),
+                None => parent_canon,
+            }
+        } else {
+            full_path.clone()
+        };
+
+        if !canonical.starts_with(&self.root_canonical) {
+            return Err(connected_core::ConnectedError::Filesystem(
+                "Path escapes root".to_string(),
+            ));
         }
 
         Ok(full_path)

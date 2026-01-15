@@ -74,13 +74,6 @@ pub fn get_app_settings() -> &'static Arc<Mutex<AppSettings>> {
     APP_SETTINGS.get_or_init(|| Arc::new(Mutex::new(load_settings())))
 }
 
-pub fn initialize_runtime_from_settings() {
-    let settings = get_app_settings().lock().unwrap().clone();
-
-    // Sync runtime states with persistent settings
-    *get_media_enabled().lock().unwrap() = settings.media_enabled;
-}
-
 pub fn update_setting<F: FnOnce(&mut AppSettings)>(f: F) {
     let settings = get_app_settings();
     let mut guard = settings.lock().unwrap();
@@ -181,6 +174,7 @@ static REMOTE_PATH: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 static REMOTE_FILES_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 static PREVIEW_DATA: OnceLock<Arc<Mutex<Option<PreviewData>>>> = OnceLock::new();
 static MEDIA_ENABLED: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
+static PAIRING_MODE: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
 static CURRENT_MEDIA: OnceLock<Arc<Mutex<Option<RemoteMedia>>>> = OnceLock::new();
 static LAST_REMOTE_MEDIA_DEVICE_ID: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
 static THUMBNAILS: OnceLock<Arc<Mutex<HashMap<String, Vec<u8>>>>> = OnceLock::new();
@@ -212,6 +206,14 @@ pub fn get_media_enabled() -> &'static Arc<Mutex<bool>> {
         let settings = load_settings();
         Arc::new(Mutex::new(settings.media_enabled))
     })
+}
+
+pub fn get_pairing_mode_state() -> &'static Arc<Mutex<bool>> {
+    PAIRING_MODE.get_or_init(|| Arc::new(Mutex::new(false)))
+}
+
+pub fn set_pairing_mode_state(enabled: bool) {
+    *get_pairing_mode_state().lock().unwrap() = enabled;
 }
 
 #[derive(Debug, Clone, PartialEq)]

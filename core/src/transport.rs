@@ -96,7 +96,6 @@ pub struct MediaState {
 pub enum UnpairReason {
     Unpaired,
     Forgotten,
-    Blocked,
 }
 
 struct ConnectionCache {
@@ -106,6 +105,13 @@ struct ConnectionCache {
 struct CachedConnection {
     connection: Connection,
     last_used: std::time::Instant,
+}
+
+#[derive(Clone)]
+struct TransportHandlers {
+    message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message, Option<SendStream>)>,
+    file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
+    fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
 }
 
 impl ConnectionCache {
@@ -156,6 +162,27 @@ impl ConnectionCache {
         );
     }
 
+    fn register_alias(&mut self, original_addr: SocketAddr, alias_addr: SocketAddr) {
+        let key = Self::canonicalize_addr(&original_addr);
+        if let Some(cached) = self.connections.get(&key) {
+            let conn = cached.connection.clone();
+            let alias_key = Self::canonicalize_addr(&alias_addr);
+            self.connections.insert(
+                alias_key,
+                CachedConnection {
+                    connection: conn,
+                    last_used: std::time::Instant::now(),
+                },
+            );
+            debug!("Aliased connection {} -> {}", alias_addr, original_addr);
+        } else {
+            warn!(
+                "Could not alias {} -> {}: original not found",
+                alias_addr, original_addr
+            );
+        }
+    }
+
     fn remove(&mut self, addr: &SocketAddr) -> Option<Connection> {
         let key = Self::canonicalize_addr(addr);
         self.connections.remove(&key).map(|c| c.connection)
@@ -168,6 +195,7 @@ pub struct QuicTransport {
     client_config: ClientConfig,
     client_config_allow_unknown: ClientConfig,
     connection_cache: Arc<RwLock<ConnectionCache>>,
+    handlers: Arc<RwLock<Option<TransportHandlers>>>,
 }
 
 impl QuicTransport {
@@ -191,7 +219,37 @@ impl QuicTransport {
             client_config,
             client_config_allow_unknown,
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
+            handlers: Arc::new(RwLock::new(None)),
         })
+    }
+
+    fn spawn_connection_handler(&self, connection: Connection, remote_addr: SocketAddr) {
+        let handlers = { self.handlers.read().clone() };
+
+        let Some(handlers) = handlers else {
+            debug!(
+                "No transport handlers registered; skipping connection handler for {}",
+                remote_addr
+            );
+            return;
+        };
+
+        let local_id = self.local_id.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = Self::handle_connection(
+                connection,
+                remote_addr,
+                handlers.message_tx,
+                handlers.file_stream_tx,
+                handlers.fs_stream_tx,
+                local_id,
+            )
+            .await
+            {
+                warn!("Connection handler error: {}", e);
+            }
+        });
     }
 
     fn create_transport_config() -> TransportConfig {
@@ -215,13 +273,6 @@ impl QuicTransport {
         transport.mtu_discovery_config(Some(Default::default()));
 
         transport
-    }
-
-    pub fn create_server_config_detached(
-        key_store: &Arc<RwLock<KeyStore>>,
-    ) -> Result<ServerConfig> {
-        let (server_config, _) = Self::create_server_config(key_store)?;
-        Ok(server_config)
     }
 
     fn create_server_config(
@@ -317,6 +368,8 @@ impl QuicTransport {
             cache.insert(addr, connection.clone());
         }
 
+        self.spawn_connection_handler(connection.clone(), addr);
+
         Ok(connection)
     }
 
@@ -351,6 +404,8 @@ impl QuicTransport {
 
         info!("Connected to {} (RTT: {:?})", addr, connection.rtt());
 
+        self.spawn_connection_handler(connection.clone(), addr);
+
         Ok(connection)
     }
 
@@ -368,9 +423,16 @@ impl QuicTransport {
         }
     }
 
+    pub fn register_connection_alias(&self, original: SocketAddr, alias: SocketAddr) {
+        self.connection_cache
+            .write()
+            .register_alias(original, alias);
+    }
+
     pub async fn get_connection_fingerprint(&self, addr: SocketAddr) -> Option<String> {
         let cache = self.connection_cache.read();
-        if let Some(cached) = cache.connections.get(&addr) {
+        let key = ConnectionCache::canonicalize_addr(&addr);
+        if let Some(cached) = cache.connections.get(&key) {
             let close_reason = cached.connection.close_reason();
             if close_reason.is_none() {
                 let fp = Self::get_peer_fingerprint(&cached.connection);
@@ -506,6 +568,15 @@ impl QuicTransport {
         file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
         fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
     ) -> Result<()> {
+        {
+            let mut handlers = self.handlers.write();
+            *handlers = Some(TransportHandlers {
+                message_tx: message_tx.clone(),
+                file_stream_tx: file_stream_tx.clone(),
+                fs_stream_tx: fs_stream_tx.clone(),
+            });
+        }
+
         let endpoint = self.endpoint.clone();
         let local_id = self.local_id.clone();
         let connection_cache = self.connection_cache.clone();
@@ -576,7 +647,7 @@ impl QuicTransport {
         fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
         local_id: String,
     ) -> Result<()> {
-        let fingerprint =
+        let mut fingerprint =
             Self::get_peer_fingerprint(&connection).unwrap_or_else(|| "unknown".to_string());
 
         loop {
@@ -588,6 +659,12 @@ impl QuicTransport {
 
                     if recv.read_exact(&mut type_buf).await.is_err() {
                         continue;
+                    }
+
+                    if fingerprint == "unknown" {
+                        if let Some(fp) = Self::get_peer_fingerprint(&connection) {
+                            fingerprint = fp;
+                        }
                     }
 
                     match type_buf[0] {
@@ -637,10 +714,7 @@ impl QuicTransport {
 
                                     let len_bytes = (pong_data.len() as u32).to_be_bytes();
 
-                                    // Send Stream Type + Length + Data
-
-                                    send.write_all(&[Self::STREAM_TYPE_CONTROL]).await?;
-
+                                    // Send Length + Data (stream type already read on this stream)
                                     send.write_all(&len_bytes).await?;
 
                                     send.write_all(&pong_data).await?;
@@ -763,10 +837,6 @@ impl QuicTransport {
         self.endpoint.local_addr().map_err(ConnectedError::Io)
     }
 
-    pub fn endpoint(&self) -> &Endpoint {
-        &self.endpoint
-    }
-
     pub async fn shutdown(&self) {
         {
             let cache = self.connection_cache.read();
@@ -805,10 +875,10 @@ impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
         let ks = self.key_store.read();
 
         // Always reject blocked peers, regardless of pairing mode
-        if ks.is_blocked(&fingerprint) {
-            warn!("Rejected BLOCKED peer: {}", fingerprint);
-            return Err(rustls::Error::General("Peer is blocked".to_string()));
-        }
+        // if ks.is_blocked(&fingerprint) {
+        //    warn!("Rejected BLOCKED peer: {}", fingerprint);
+        //    return Err(rustls::Error::General("Peer is blocked".to_string()));
+        // }
 
         if ks.is_trusted(&fingerprint) {
             debug!("Accepted trusted peer: {}", fingerprint);
@@ -910,10 +980,10 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
         let ks = self.key_store.read();
 
         // Always reject blocked peers
-        if ks.is_blocked(&fingerprint) {
-            warn!("Rejected BLOCKED client: {}", fingerprint);
-            return Err(rustls::Error::General("Client is blocked".to_string()));
-        }
+        // if ks.is_blocked(&fingerprint) {
+        //    warn!("Rejected BLOCKED client: {}", fingerprint);
+        //    return Err(rustls::Error::General("Client is blocked".to_string()));
+        // }
 
         if ks.is_trusted(&fingerprint) {
             debug!("Accepted trusted client: {}", fingerprint);
