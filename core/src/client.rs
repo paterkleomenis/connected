@@ -1710,7 +1710,6 @@ impl ConnectedClient {
         let download_dir = self.download_dir.clone();
         let key_store_files = self.key_store.clone();
 
-        let auto_accept = self.auto_accept_files.clone();
         let pending_transfers = self.pending_transfers.clone();
         tokio::spawn(async move {
             let key_store = key_store_files;
@@ -1726,7 +1725,7 @@ impl ConnectedClient {
                 let event_tx = event_tx.clone();
                 let download_dir = download_dir.clone();
                 let fingerprint_clone = fingerprint.clone();
-                let should_auto_accept = is_trusted && auto_accept.load(Ordering::SeqCst);
+                let should_auto_accept = is_trusted;
                 let pending = pending_transfers.clone();
                 let peer_name = key_store
                     .read()
