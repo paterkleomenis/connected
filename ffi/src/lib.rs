@@ -1182,7 +1182,9 @@ pub fn register_unpair_callback(callback: Box<dyn UnpairCallback>) {
 #[uniffi::export]
 pub fn set_pairing_mode(enabled: bool) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
-    client.set_pairing_mode(enabled);
+    get_runtime().spawn(async move {
+        client.set_pairing_mode(enabled);
+    });
     Ok(())
 }
 

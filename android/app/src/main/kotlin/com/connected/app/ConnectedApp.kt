@@ -207,6 +207,11 @@ class ConnectedApp(private val context: Context) {
         proximityManager = ProximityManager(context).also { manager ->
             manager.onPairingIntent = { deviceId ->
                 if (!pendingPairing.contains(deviceId)) {
+                    try {
+                        uniffi.connected_ffi.setPairingMode(true)
+                    } catch (e: Exception) {
+                        Log.w("ConnectedApp", "Failed to enable pairing mode", e)
+                    }
                     pendingPairingAwaitingIp.add(deviceId)
                     runOnMainThread {
                         android.widget.Toast.makeText(context, "Connecting to device...", android.widget.Toast.LENGTH_SHORT).show()
@@ -744,6 +749,22 @@ class ConnectedApp(private val context: Context) {
     // Original methods that use DiscoveredDevice now delegate to these or extract props
 
     fun sendPairRequest(device: DiscoveredDevice) {
+        if (isSyntheticIp(device.ip)) {
+            try {
+                uniffi.connected_ffi.setPairingMode(true)
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to enable pairing mode", e)
+            }
+            pendingPairingAwaitingIp.add(device.id)
+            if (!pendingPairing.contains(device.id)) pendingPairing.add(device.id)
+            proximityManager?.requestConnect(device.id)
+            runOnMainThread {
+                android.widget.Toast
+                    .makeText(context, "Waiting for Wi-Fi Direct connection...", android.widget.Toast.LENGTH_SHORT)
+                    .show()
+            }
+            return
+        }
         uniffi.connected_ffi.pairDevice(device.ip, device.port)
         android.widget.Toast.makeText(context, "Pairing request sent", android.widget.Toast.LENGTH_SHORT).show()
         if (!pendingPairing.contains(device.id)) pendingPairing.add(device.id)
@@ -780,6 +801,19 @@ class ConnectedApp(private val context: Context) {
         if (path != null) {
             val file = File(path)
             if (file.exists()) {
+                if (isSyntheticIp(device.ip)) {
+                    val queue = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
+                        ConcurrentLinkedQueue()
+                    }
+                    queue.add(file.absolutePath)
+                    proximityManager?.requestConnect(device.id)
+                    runOnMainThread {
+                        android.widget.Toast
+                            .makeText(context, "Waiting for Wi-Fi Direct connection...", android.widget.Toast.LENGTH_SHORT)
+                            .show()
+                    }
+                    return
+                }
                 scope.launch(Dispatchers.IO) {
                     try {
                         uniffi.connected_ffi.sendFile(device.ip, device.port, file.absolutePath)
@@ -1220,12 +1254,29 @@ class ConnectedApp(private val context: Context) {
             if (file.isDirectory) {
                 walkAndSend(device, file)
             } else {
-                 try {
-                     val tempFile = File(context.cacheDir, file.name ?: "temp")
-                     if (copyDocumentFileToLocal(file, tempFile)) {
-                         uniffi.connected_ffi.sendFile(device.ip, device.port, tempFile.absolutePath)
-                     }
-                 } catch (e: Exception) {}
+                try {
+                    val tempFile = File(context.cacheDir, file.name ?: "temp")
+                    if (copyDocumentFileToLocal(file, tempFile)) {
+                        if (isSyntheticIp(device.ip)) {
+                            val queue = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
+                                ConcurrentLinkedQueue()
+                            }
+                            queue.add(tempFile.absolutePath)
+                            proximityManager?.requestConnect(device.id)
+                            runOnMainThread {
+                                android.widget.Toast
+                                    .makeText(
+                                        context,
+                                        "Waiting for Wi-Fi Direct connection...",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    )
+                                    .show()
+                            }
+                        } else {
+                            uniffi.connected_ffi.sendFile(device.ip, device.port, tempFile.absolutePath)
+                        }
+                    }
+                } catch (e: Exception) {}
             }
         }
     }
@@ -1233,7 +1284,7 @@ class ConnectedApp(private val context: Context) {
     // Device Management Wrappers
     fun pairDevice(device: DiscoveredDevice) {
         locallyUnpairedDevices.remove(device.id)
-        uniffi.connected_ffi.pairDevice(device.ip, device.port)
+        sendPairRequest(device)
     }
 
     fun unpairDevice(device: DiscoveredDevice) {

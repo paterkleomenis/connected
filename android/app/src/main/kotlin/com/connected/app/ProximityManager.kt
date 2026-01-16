@@ -532,6 +532,12 @@ class ProximityManager(private val context: Context) {
         if (p2pActionInFlight) {
             return
         }
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastConnectAttempt < CONNECT_COOLDOWN_MS) {
+            Log.d(TAG, "Wi-Fi Direct connect cooldown active; skipping connect")
+            return
+        }
+        lastConnectAttempt = now
         p2pActionInFlight = true
 
         val config = WifiP2pConfig().apply {
