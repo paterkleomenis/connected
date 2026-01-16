@@ -79,6 +79,7 @@ class ProximityManager(private val context: Context) {
     private val retryGroupCreateRunnable = Runnable { createGroupIfNeeded(force = true) }
 
     private val peersById = ConcurrentHashMap<String, ProximityPeer>()
+    private val p2pIpById = ConcurrentHashMap<String, String>()
     private var lastAdvertisedSignature: String? = null
 
     @Volatile
@@ -108,9 +109,6 @@ class ProximityManager(private val context: Context) {
 
     @Volatile
     private var p2pConnected = false
-
-    @Volatile
-    private var p2pIsGroupOwner = false
 
     @Volatile
     private var p2pEnabled = true
@@ -291,9 +289,10 @@ class ProximityManager(private val context: Context) {
     private fun handleScanResult(result: ScanResult) {
         val record = result.scanRecord ?: return
         val payload = record.getManufacturerSpecificData(MANUFACTURER_ID) ?: return
-        val serviceNameData = record.getServiceData(NAME_SERVICE_UUID) ?: return
-        val nameOverride = String(serviceNameData, Charsets.UTF_8)
-            .ifBlank { record.deviceName ?: result.device.name }
+        val serviceNameData = record.getServiceData(NAME_SERVICE_UUID)
+        val serviceName = serviceNameData?.let { String(it, Charsets.UTF_8) }
+        val nameOverride = serviceName?.ifBlank { null }
+            ?: runCatching { record.deviceName ?: result.device.name }.getOrNull()
         val peer = parsePayload(payload, nameOverride) ?: return
 
         val localId = runCatching { getLocalDevice().id }.getOrNull()
@@ -335,10 +334,11 @@ class ProximityManager(private val context: Context) {
             }
         }
 
-        val ipForInject = if (isUsableIp(peer.ip)) {
-            peer.ip!!
-        } else {
-            syntheticIpForDevice(peer.deviceId)
+        val p2pIpOverride = if (p2pConnected) p2pIpById[peer.deviceId] else null
+        val ipForInject = when {
+            isUsableIp(peer.ip) -> peer.ip!!
+            isUsableIp(p2pIpOverride) -> p2pIpOverride!!
+            else -> syntheticIpForDevice(peer.deviceId)
         }
         try {
             injectProximityDevice(
@@ -426,9 +426,11 @@ class ProximityManager(private val context: Context) {
         p2pReceiver = null
         p2pChannel = null
         p2pConnected = false
-        p2pIsGroupOwner = false
         pendingPreferGroupOwner = false
+        p2pIpById.clear()
         handler.removeCallbacks(retryDiscoveryRunnable)
+        handler.removeCallbacks(retryConnectRunnable)
+        handler.removeCallbacks(retryGroupCreateRunnable)
     }
 
     private fun discoverPeers(force: Boolean = false) {
@@ -499,6 +501,7 @@ class ProximityManager(private val context: Context) {
         }
         val candidate = when {
             match != null -> match
+            candidates.size == 1 -> candidates.first()
             !hasPendingTarget -> candidates.firstOrNull()
             else -> null
         }
@@ -522,6 +525,12 @@ class ProximityManager(private val context: Context) {
                 scheduleDiscoveryRetry()
             }
             return
+        }
+        if (match == null && hasPendingTarget && candidates.size == 1) {
+            Log.d(
+                TAG,
+                "No name match for '$targetName'; using sole Wi-Fi Direct peer ${candidate.deviceName}"
+            )
         }
         connectToPeer(candidate)
     }
@@ -577,7 +586,6 @@ class ProximityManager(private val context: Context) {
         val channel = p2pChannel ?: return
         manager.requestConnectionInfo(channel) { info ->
             p2pConnected = info.groupFormed
-            p2pIsGroupOwner = info.groupFormed && info.isGroupOwner
             if (info.groupFormed) {
                 refreshAdvertising()
                 if (!info.isGroupOwner) {
@@ -585,6 +593,7 @@ class ProximityManager(private val context: Context) {
                     val peer = peerId?.let { peersById[it] }
                     val groupOwnerIp = info.groupOwnerAddress?.hostAddress
                     if (peer != null && !groupOwnerIp.isNullOrEmpty()) {
+                        p2pIpById[peer.deviceId] = groupOwnerIp
                         try {
                             injectProximityDevice(
                                 peer.deviceId,
@@ -599,6 +608,7 @@ class ProximityManager(private val context: Context) {
                     }
                 }
             } else {
+                p2pIpById.clear()
                 refreshAdvertising()
             }
         }
@@ -625,7 +635,6 @@ class ProximityManager(private val context: Context) {
         pendingPeerId = peer.deviceId
         pendingPeerName = peer.matchName
         pendingPreferGroupOwner = shouldBeGroupOwner(peer.deviceId)
-        lastConnectAttempt = now
         if (p2pConnected) {
             Log.d(TAG, "Wi-Fi Direct already connected; skipping connect")
             return
@@ -747,7 +756,6 @@ class ProximityManager(private val context: Context) {
                 if (group != null && group.isGroupOwner) {
                     Log.d(TAG, "Wi-Fi Direct group already active; skipping create")
                     p2pConnected = true
-                    p2pIsGroupOwner = true
                     p2pActionInFlight = false
                     groupCreateRetryAttempts = 0
                     return@requestGroupInfo
@@ -935,15 +943,6 @@ class ProximityManager(private val context: Context) {
             3 -> "windows"
             4 -> "macos"
             else -> "unknown"
-        }
-    }
-
-    private fun matchPeerByName(deviceName: String?): ProximityPeer? {
-        if (deviceName.isNullOrBlank()) {
-            return null
-        }
-        return peersById.values.firstOrNull { peer ->
-            namesMatch(peer.matchName, deviceName)
         }
     }
 

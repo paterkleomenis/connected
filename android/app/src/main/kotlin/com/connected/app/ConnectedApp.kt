@@ -701,6 +701,9 @@ class ConnectedApp(private val context: Context) {
     fun getRealPathFromUri(contentUri: String): String? {
         try {
             val uri = Uri.parse(contentUri)
+            if (uri.scheme == "file") {
+                return uri.path
+            }
             context.contentResolver.query(uri, null, null, null, null)?.use {
                 val nameIndex = it.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DATA)
                 if (nameIndex >= 0) { it.moveToFirst(); return it.getString(nameIndex) }
