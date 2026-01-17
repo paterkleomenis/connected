@@ -1386,13 +1386,23 @@ impl ConnectedClient {
 
                             // Emit DeviceFound to refresh UI with trusted status
                             let device = Device::new(
-                                device_id,
+                                device_id.clone(),
                                 device_name.clone(),
                                 addr.ip(),
                                 addr.port(),
                                 DeviceType::Unknown,
                             );
                             let _ = event_tx.send(ConnectedEvent::DeviceFound(device));
+
+                            // ALSO emit PairingRequest even if trusted.
+                            // This signals to the UI that an *active connection attempt* is happening,
+                            // allowing it to clear any "locally unpaired" / hidden state if necessary.
+                            // The UI should auto-accept this if the device is already trusted.
+                            let _ = event_tx.send(ConnectedEvent::PairingRequest {
+                                fingerprint: fingerprint.clone(),
+                                device_name: device_name.clone(),
+                                device_id: device_id.clone(),
+                            });
 
                             // Register alias for the active connection if port differs
                             if listening_port != 0 && listening_port != addr.port() {
