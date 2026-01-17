@@ -588,6 +588,7 @@ class ConnectedSdk private constructor() {
         }
     }
 
+
     fun trustDevice(fingerprint: String, deviceId: String, name: String) {
         checkInitialized()
         try {
@@ -624,7 +625,6 @@ class ConnectedSdk private constructor() {
             Log.e(TAG, "Failed to acquire multicast lock: ${e.message}")
         }
     }
-
     private fun releaseMulticastLock() {
         try {
             multicastLock?.let { lock ->

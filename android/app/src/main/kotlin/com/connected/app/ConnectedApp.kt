@@ -131,7 +131,7 @@ class ConnectedApp(private val context: Context) {
                     when (state) {
                         android.bluetooth.BluetoothAdapter.STATE_OFF -> {
                             Log.d("ConnectedApp", "Bluetooth turned off - clearing device cache")
-                            stopProximityManager()
+                            // Do not stop manager; let it persist for Wi-Fi Direct
                             runOnMainThread {
                                 devices.clear()
                                 trustedDevices.clear()
@@ -139,8 +139,12 @@ class ConnectedApp(private val context: Context) {
                         }
                         android.bluetooth.BluetoothAdapter.STATE_ON -> {
                             Log.d("ConnectedApp", "Bluetooth turned on - refreshing")
-                            startProximityManager()
-                            beginDiscovery()
+                            scope.launch(Dispatchers.Main) {
+                                delay(1000)
+                                startProximityManager() // Ensures instance exists
+                                proximityManager?.start() // Triggers startBle() again
+                                beginDiscovery()
+                            }
                         }
                     }
                 }
@@ -152,7 +156,7 @@ class ConnectedApp(private val context: Context) {
                     when (state) {
                         android.net.wifi.WifiManager.WIFI_STATE_DISABLED -> {
                             Log.d("ConnectedApp", "Wi-Fi turned off - clearing device cache")
-                            stopProximityManager()
+                            // Do not stop manager; let it persist for BLE
                             runOnMainThread {
                                 devices.clear()
                                 trustedDevices.clear()
@@ -162,7 +166,8 @@ class ConnectedApp(private val context: Context) {
                             Log.d("ConnectedApp", "Wi-Fi turned on - refreshing")
                             scope.launch(Dispatchers.Main) {
                                 delay(2000)
-                                startProximityManager()
+                                startProximityManager() // Ensures instance exists
+                                proximityManager?.start() // Triggers startWifiDirect() again
                                 beginDiscovery()
                             }
                         }
@@ -218,6 +223,9 @@ class ConnectedApp(private val context: Context) {
                     }
                 }
             }
+            manager.hasIdeallyDiscoveredDevice = { deviceId ->
+                devices.any { it.id == deviceId && !isSyntheticIp(it.ip) }
+            }
             manager.start()
         }
     }
@@ -262,16 +270,19 @@ class ConnectedApp(private val context: Context) {
                         trustedDevices.remove(device.id)
 
                     } else if (isDeviceTrusted(device)) {
-
-                        if (!trustedDevices.contains(device.id)) {
-
-                            trustedDevices.add(device.id)
-
-                            pendingPairing.remove(device.id)
-
+                        if (pendingPairing.contains(device.id)) {
+                            // Core auto-trusted (we initiated), but user wants to confirm.
+                            // Trigger the dialog manually if not already shown.
+                            if (pairingRequest.value == null) {
+                                runOnMainThread {
+                                    pairingRequest.value = PairingRequest(device.name, "Verified (You initiated)", device.id)
+                                }
+                            }
+                        } else {
+                            if (!trustedDevices.contains(device.id)) {
+                                trustedDevices.add(device.id)
+                            }
                         }
-
-
 
                     } else {
 
@@ -468,7 +479,12 @@ class ConnectedApp(private val context: Context) {
 
     private val pairingCallback = object : PairingCallback {
         override fun onPairingRequest(deviceName: String, fingerprint: String, deviceId: String) {
-            pairingRequest.value = PairingRequest(deviceName, fingerprint, deviceId)
+            if (pendingPairing.contains(deviceId)) {
+                Log.d("ConnectedApp", "Auto-trusting pending device: $deviceName ($deviceId)")
+                trustDevice(PairingRequest(deviceName, fingerprint, deviceId))
+            } else {
+                pairingRequest.value = PairingRequest(deviceName, fingerprint, deviceId)
+            }
         }
     }
 
@@ -1292,14 +1308,20 @@ class ConnectedApp(private val context: Context) {
 
     fun unpairDevice(device: DiscoveredDevice) {
         scope.launch(Dispatchers.IO) {
+            // Notify first
+            try {
+                if (!isSyntheticIp(device.ip)) {
+                    uniffi.connected_ffi.sendUnpairNotification(device.ip, device.port, "unpaired")
+                }
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to send unpair notification: ${e.message}")
+            }
+
             locallyUnpairedDevices.add(device.id)
             trustedDevices.remove(device.id)
             pendingPairing.remove(device.id)
             try {
                 uniffi.connected_ffi.unpairDeviceById(device.id)
-                if (!isSyntheticIp(device.ip)) {
-                    uniffi.connected_ffi.sendUnpairNotification(device.ip, device.port, "unpaired")
-                }
                 runOnMainThread {
                     android.widget.Toast.makeText(context, "Device unpaired", android.widget.Toast.LENGTH_SHORT).show()
                 }
@@ -1314,15 +1336,20 @@ class ConnectedApp(private val context: Context) {
 
     fun forgetDevice(device: DiscoveredDevice) {
         scope.launch(Dispatchers.IO) {
-            locallyUnpairedDevices.remove(device.id)
+            // Try to send the notification first, before we remove trust and close the connection
+            try {
+                uniffi.connected_ffi.sendUnpairNotification(device.ip, device.port, "forgotten")
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to send unpair notification: ${e.message}")
+            }
+
+            locallyUnpairedDevices.add(device.id) // Ensure it's marked as locally unpaired
             trustedDevices.remove(device.id)
             pendingPairing.remove(device.id)
             try {
                 uniffi.connected_ffi.forgetDeviceById(device.id)
-                if (!isSyntheticIp(device.ip)) {
-                    uniffi.connected_ffi.sendUnpairNotification(device.ip, device.port, "forgotten")
-                }
                 runOnMainThread {
+                    // Do not remove from devices list; just update trusted state
                     android.widget.Toast.makeText(context, "Device forgotten", android.widget.Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
@@ -1341,7 +1368,9 @@ class ConnectedApp(private val context: Context) {
     fun trustDevice(request: PairingRequest) {
         scope.launch(Dispatchers.IO) {
             try {
-                uniffi.connected_ffi.trustDevice(request.fingerprint, request.deviceId, request.deviceName)
+                if (request.fingerprint != "Verified (You initiated)") {
+                    uniffi.connected_ffi.trustDevice(request.fingerprint, request.deviceId, request.deviceName)
+                }
                 val device = devices.find { it.id == request.deviceId }
                 if (device != null && !isSyntheticIp(device.ip)) {
                     uniffi.connected_ffi.sendTrustConfirmation(device.ip, device.port)
@@ -1349,6 +1378,7 @@ class ConnectedApp(private val context: Context) {
                 pairingRequest.value = null
                 runOnMainThread {
                      locallyUnpairedDevices.remove(request.deviceId)
+                     pendingPairing.remove(request.deviceId)
                      if (!trustedDevices.contains(request.deviceId)) {
                          trustedDevices.add(request.deviceId)
                      }

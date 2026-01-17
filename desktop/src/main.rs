@@ -677,7 +677,7 @@ fn App() -> Element {
                                         onclick: {
                                             let device = device.clone();
                                             move |_| {
-                                                action_tx.send(AppAction::ForgetDevice { fingerprint: "TODO".to_string(), device_id: device.id.clone() });
+                                                action_tx.send(AppAction::ForgetDevice { device_id: device.id.clone() });
                                                 selected_device.set(None);
                                             }
                                         },

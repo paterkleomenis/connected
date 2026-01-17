@@ -66,7 +66,6 @@ pub enum AppAction {
         device_id: String,
     },
     ForgetDevice {
-        fingerprint: String,
         device_id: String,
     },
     SetPairingMode(bool),
@@ -1060,30 +1059,15 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     c.set_pairing_mode(enabled);
                 }
             }
-            AppAction::ForgetDevice {
-                fingerprint,
-                device_id,
-            } => {
+            AppAction::ForgetDevice { device_id } => {
                 if let Some(c) = &client {
-                    // If fingerprint is "TODO", look it up from device_id
-                    let fingerprint = if fingerprint == "TODO" {
-                        let peers = c.get_trusted_peers();
-                        peers
-                            .iter()
-                            .find(|p| p.device_id.as_deref() == Some(&device_id))
-                            .map(|p| p.fingerprint.clone())
-                            .unwrap_or(fingerprint)
-                    } else {
-                        fingerprint
-                    };
-
                     // Get device info before forgetting for notification
                     let device_info = {
                         let store = get_devices_store().lock().unwrap();
                         store.get(&device_id).cloned()
                     };
 
-                    match c.forget_device(&fingerprint) {
+                    match c.forget_device_by_id(&device_id) {
                         Err(e) => {
                             error!("Failed to forget device: {}", e);
                             add_notification("Forget Failed", &e.to_string(), "❌");

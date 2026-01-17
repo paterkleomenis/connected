@@ -111,9 +111,13 @@ class ProximityManager(private val context: Context) {
     private var p2pConnected = false
 
     @Volatile
-    private var p2pEnabled = true
+    private var isGroupOwner = false
+
+    @Volatile
+    private var p2pEnabled = false
 
     var onPairingIntent: ((String) -> Unit)? = null
+    var hasIdeallyDiscoveredDevice: ((String) -> Boolean)? = null
 
     data class ProximityPeer(
         val deviceId: String,
@@ -154,6 +158,7 @@ class ProximityManager(private val context: Context) {
     }
 
     private fun startBle() {
+        stopBle()
         val adapter = bluetoothAdapter
         val enabled = try {
             adapter?.isEnabled == true
@@ -169,7 +174,8 @@ class ProximityManager(private val context: Context) {
         advertiser = adapter.bluetoothLeAdvertiser
         scanner = adapter.bluetoothLeScanner
         if (advertiser == null || scanner == null) {
-            Log.w(TAG, "BLE advertiser or scanner not available")
+            Log.w(TAG, "BLE advertiser or scanner not available; retrying...")
+            handler.postDelayed({ startBle() }, 2000)
             return
         }
 
@@ -335,9 +341,12 @@ class ProximityManager(private val context: Context) {
         }
 
         val p2pIpOverride = if (p2pConnected) p2pIpById[peer.deviceId] else null
+        val hasGoodIp = hasIdeallyDiscoveredDevice?.invoke(peer.deviceId) == true
         val ipForInject = when {
             isUsableIp(peer.ip) -> peer.ip!!
             isUsableIp(p2pIpOverride) -> p2pIpOverride!!
+            hasGoodIp -> UNKNOWN_IP
+            p2pConnected && isGroupOwner -> UNKNOWN_IP
             else -> syntheticIpForDevice(peer.deviceId)
         }
         try {
@@ -354,6 +363,7 @@ class ProximityManager(private val context: Context) {
     }
 
     private fun startWifiDirect() {
+        stopWifiDirect()
         if (wifiP2pManager == null) {
             return
         }
@@ -388,6 +398,7 @@ class ProximityManager(private val context: Context) {
                         p2pEnabled = state == WifiP2pManager.WIFI_P2P_STATE_ENABLED
                         if (state == WifiP2pManager.WIFI_P2P_STATE_ENABLED) {
                             discoverPeers()
+                            requestLocalDeviceInfo()
                         }
                     }
 
@@ -411,11 +422,26 @@ class ProximityManager(private val context: Context) {
         }
 
         context.registerReceiver(p2pReceiver, filter)
+        // Rely on sticky broadcast for initial discovery
+        if (p2pEnabled) {
+            requestLocalDeviceInfo()
+        }
+    }
+
+    private fun requestLocalDeviceInfo() {
+        val manager = wifiP2pManager ?: return
+        val channel = p2pChannel ?: return
         try {
-            discoverPeers()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                manager.requestDeviceInfo(channel) { device ->
+                    if (device != null && !device.deviceName.isNullOrBlank()) {
+                        localP2pDeviceName = device.deviceName
+                        Log.d(TAG, "Wi-Fi Direct local name (request): ${device.deviceName}")
+                    }
+                }
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to start discovery in startWifiDirect: ${e.message}")
-            scheduleDiscoveryRetry()
+            Log.w(TAG, "requestDeviceInfo failed: ${e.message}")
         }
     }
 
@@ -426,6 +452,7 @@ class ProximityManager(private val context: Context) {
         p2pReceiver = null
         p2pChannel = null
         p2pConnected = false
+        isGroupOwner = false
         pendingPreferGroupOwner = false
         p2pIpById.clear()
         handler.removeCallbacks(retryDiscoveryRunnable)
@@ -438,6 +465,10 @@ class ProximityManager(private val context: Context) {
         val channel = p2pChannel ?: return
         if (!hasP2pPermission()) {
             Log.w(TAG, "Missing Wi-Fi Direct permissions")
+            return
+        }
+        if (!p2pEnabled) {
+            Log.d(TAG, "Wi-Fi Direct not enabled; skipping discovery")
             return
         }
 
@@ -586,6 +617,7 @@ class ProximityManager(private val context: Context) {
         val channel = p2pChannel ?: return
         manager.requestConnectionInfo(channel) { info ->
             p2pConnected = info.groupFormed
+            isGroupOwner = info.isGroupOwner
             if (info.groupFormed) {
                 refreshAdvertising()
                 if (!info.isGroupOwner) {
@@ -756,6 +788,7 @@ class ProximityManager(private val context: Context) {
                 if (group != null && group.isGroupOwner) {
                     Log.d(TAG, "Wi-Fi Direct group already active; skipping create")
                     p2pConnected = true
+                    isGroupOwner = true
                     p2pActionInFlight = false
                     groupCreateRetryAttempts = 0
                     return@requestGroupInfo
@@ -841,14 +874,32 @@ class ProximityManager(private val context: Context) {
             ((PROTOCOL_VERSION and 0x0F) shl 4) or (deviceTypeCode(local.deviceType) and 0x0F)
         val portBytes = ByteBuffer.allocate(2).putShort(local.port.toShort()).array()
         val pairingFlag = if (SystemClock.elapsedRealtime() < pairingActiveUntil) 1 else 0
-        val payload = ByteArray(1 + 2 + 16 + 1)
+
+        val p2pIp = getWifiP2pIpAddress()
+        val ipBytes = if (p2pIp != null) {
+            try {
+                InetAddress.getByName(p2pIp).address
+            } catch (e: Exception) {
+                ByteArray(0)
+            }
+        } else {
+            ByteArray(0)
+        }
+        val hasIp = ipBytes.size == 4
+
+        val payload = ByteArray(1 + 2 + 16 + 1 + if (hasIp) 4 else 0)
         var offset = 0
         payload[offset++] = flags.toByte()
         payload[offset++] = portBytes[0]
         payload[offset++] = portBytes[1]
         System.arraycopy(uuidBytes, 0, payload, offset, uuidBytes.size)
         offset += uuidBytes.size
-        payload[offset] = pairingFlag.toByte()
+        payload[offset++] = pairingFlag.toByte()
+
+        if (hasIp) {
+            System.arraycopy(ipBytes, 0, payload, offset, 4)
+        }
+
         return payload
     }
 
@@ -888,6 +939,16 @@ class ProximityManager(private val context: Context) {
         }
         val acceptPairIntent = pairingIntent && shouldAcceptPairIntent(uuid)
 
+        // Extract IP if present in V3+
+        var ip: String? = null
+        if (protocol >= 3 && data.size >= 1 + 2 + 16 + 1 + 4) {
+            val ipBytes = data.copyOfRange(20, 24)
+            try {
+                ip = InetAddress.getByAddress(ipBytes).hostAddress
+            } catch (_: Exception) {
+            }
+        }
+
         if (protocol >= 2) {
             return ProximityPeer(
                 deviceId = uuid,
@@ -895,6 +956,7 @@ class ProximityManager(private val context: Context) {
                 deviceType = deviceTypeString(deviceTypeCode),
                 port = port,
                 protocolVersion = protocol,
+                ip = ip,
                 matchName = matchName,
                 pairingIntent = acceptPairIntent,
             )
@@ -912,7 +974,7 @@ class ProximityManager(private val context: Context) {
 
         val legacyName = String(data, nameStart, nameLen, Charsets.UTF_8)
         val ipBytes = data.copyOfRange(nameEnd, nameEnd + 4)
-        val ip = InetAddress.getByAddress(ipBytes).hostAddress
+        val legacyIp = InetAddress.getByAddress(ipBytes).hostAddress
 
         return ProximityPeer(
             deviceId = uuid,
@@ -920,10 +982,31 @@ class ProximityManager(private val context: Context) {
             deviceType = deviceTypeString(deviceTypeCode),
             port = port,
             protocolVersion = protocol,
-            ip = ip,
+            ip = legacyIp,
             matchName = matchName,
             pairingIntent = acceptPairIntent,
         )
+    }
+
+    private fun getWifiP2pIpAddress(): String? {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val iface = interfaces.nextElement()
+                if (iface.name.contains("p2p") || iface.name.contains("tun")) {
+                    val addresses = iface.inetAddresses
+                    while (addresses.hasMoreElements()) {
+                        val addr = addresses.nextElement()
+                        if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                            return addr.hostAddress
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get P2P IP", e)
+        }
+        return null
     }
 
     private fun deviceTypeCode(type: String): Int {
