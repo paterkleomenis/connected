@@ -271,12 +271,13 @@ class ConnectedApp(private val context: Context) {
 
                     } else if (isDeviceTrusted(device)) {
                         if (pendingPairing.contains(device.id)) {
-                            // Core auto-trusted (we initiated), but user wants to confirm.
-                            // Trigger the dialog manually if not already shown.
-                            if (pairingRequest.value == null) {
-                                runOnMainThread {
-                                    pairingRequest.value = PairingRequest(device.name, "Verified (You initiated)", device.id)
-                                }
+                            // Core auto-trusted (we initiated). Automatically finalize trusting in UI.
+                            if (!trustedDevices.contains(device.id)) {
+                                trustedDevices.add(device.id)
+                            }
+                            pendingPairing.remove(device.id)
+                            runOnMainThread {
+                                android.widget.Toast.makeText(context, "Paired with ${device.name}", android.widget.Toast.LENGTH_SHORT).show()
                             }
                         } else {
                             if (!trustedDevices.contains(device.id)) {
