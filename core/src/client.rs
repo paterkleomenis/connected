@@ -1082,44 +1082,98 @@ impl ConnectedClient {
     /// Forget a device - completely removes trust.
     /// The device will need to go through full pairing request flow again.
     /// This is what the UI "Forget" action should call.
-    pub fn forget_device(&self, fingerprint: &str) -> Result<()> {
-        // Get device info before removing for connection invalidation
-        let device_id = self
-            .key_store
-            .read()
-            .get_trusted_peers()
-            .iter()
-            .find(|p| p.fingerprint == fingerprint)
-            .and_then(|p| p.device_id.clone());
+    pub async fn forget_device(&self, fingerprint: &str) -> Result<()> {
+        let (device_id, device_name, target) = {
+            let ks = self.key_store.read();
+            let info = ks.get_peer_info(fingerprint);
+            if let Some(p) = info {
+                let did = p.device_id.unwrap_or_else(|| "unknown".to_string());
+                let name = p.name.unwrap_or_else(|| "Unknown".to_string());
 
-        // Completely remove from keystore (not just set to Forgotten status)
-        self.key_store.write().remove_peer(fingerprint)?;
+                // Try to find IP/Port
+                let target = self
+                    .discovery
+                    .get_device_by_id(&did)
+                    .and_then(|d| d.ip_addr().map(|ip| (ip, d.port)));
 
-        // Invalidate any cached connection to this device
-        if let Some(did) = device_id {
-            self.invalidate_connection_by_device_id(&did);
+                (did, name, target)
+            } else {
+                ("unknown".to_string(), "Unknown".to_string(), None)
+            }
+        };
+
+        // Try to send notification
+        if let Some((ip, port)) = target {
+            let _ = self
+                .send_unpair_notification(ip, port, UnpairReason::Forgotten)
+                .await;
         }
 
-        // Emit event so UI updates
-        let _ = self
-            .event_tx
-            .send(ConnectedEvent::PairingModeChanged(self.is_pairing_mode()));
+        // Remove from keystore
+        self.key_store.write().remove_peer(fingerprint)?;
 
-        info!("Forgot device - trust completely removed");
+        // Invalidate cached connection
+        self.invalidate_connection_by_device_id(&device_id);
+        self.transport
+            .invalidate_connection_by_fingerprint(fingerprint);
+
+        // Emit DeviceUnpaired event
+        let _ = self.event_tx.send(ConnectedEvent::DeviceUnpaired {
+            device_id: device_id.clone(),
+            device_name,
+            reason: UnpairReason::Forgotten,
+        });
+
+        info!("Forgot device {} - trust completely removed", device_id);
         Ok(())
     }
 
     /// Forget a device by its device_id - completely removes trust.
-    pub fn forget_device_by_id(&self, device_id: &str) -> Result<()> {
-        self.key_store.write().remove_peer_by_id(device_id)?;
+    pub async fn forget_device_by_id(&self, device_id: &str) -> Result<()> {
+        let (fingerprint, device_name, target) = {
+            let ks = self.key_store.read();
+            let peers = ks.get_all_known_peers();
+            if let Some(p) = peers
+                .into_iter()
+                .find(|p| p.device_id.as_deref() == Some(device_id))
+            {
+                let name = p.name.unwrap_or_else(|| "Unknown".to_string());
+
+                // Try to find IP/Port
+                let target = self
+                    .discovery
+                    .get_device_by_id(device_id)
+                    .and_then(|d| d.ip_addr().map(|ip| (ip, d.port)));
+
+                (Some(p.fingerprint), name, target)
+            } else {
+                (None, "Unknown".to_string(), None)
+            }
+        };
+
+        if let Some(fp) = fingerprint {
+            // Try to send notification
+            if let Some((ip, port)) = target {
+                let _ = self
+                    .send_unpair_notification(ip, port, UnpairReason::Forgotten)
+                    .await;
+            }
+
+            self.key_store.write().remove_peer(&fp)?;
+            self.transport.invalidate_connection_by_fingerprint(&fp);
+        } else {
+            // Even if not found in keystore, try to invalidate connection
+        }
 
         // Invalidate any cached connection to this device
         self.invalidate_connection_by_device_id(device_id);
 
         // Emit event so UI updates
-        let _ = self
-            .event_tx
-            .send(ConnectedEvent::PairingModeChanged(self.is_pairing_mode()));
+        let _ = self.event_tx.send(ConnectedEvent::DeviceUnpaired {
+            device_id: device_id.to_string(),
+            device_name,
+            reason: UnpairReason::Forgotten,
+        });
 
         info!("Forgot device {} - trust completely removed", device_id);
         Ok(())
@@ -1143,39 +1197,90 @@ impl ConnectedClient {
     /// Unpair a device - disconnects but keeps trust intact.
     /// The device can reconnect automatically anytime (no re-pairing needed).
     /// This is what the UI "Unpair" action should call.
-    pub fn unpair_device(&self, fingerprint: &str) -> Result<()> {
-        // Get device info for connection invalidation
-        let device_id = self
-            .key_store
-            .read()
-            .get_trusted_peers()
-            .iter()
-            .find(|p| p.fingerprint == fingerprint)
-            .and_then(|p| p.device_id.clone());
+    pub async fn unpair_device(&self, fingerprint: &str) -> Result<()> {
+        let (device_id, device_name, target) = {
+            let ks = self.key_store.read();
+            let info = ks.get_peer_info(fingerprint);
+            if let Some(p) = info {
+                let did = p.device_id.unwrap_or_else(|| "unknown".to_string());
+                let name = p.name.unwrap_or_else(|| "Unknown".to_string());
 
-        // Just invalidate the connection - trust remains intact
-        if let Some(did) = device_id {
-            self.invalidate_connection_by_device_id(&did);
+                // Try to find IP/Port
+                let target = self
+                    .discovery
+                    .get_device_by_id(&did)
+                    .and_then(|d| d.ip_addr().map(|ip| (ip, d.port)));
+
+                (did, name, target)
+            } else {
+                ("unknown".to_string(), "Unknown".to_string(), None)
+            }
+        };
+
+        // Try to send notification
+        if let Some((ip, port)) = target {
+            let _ = self
+                .send_unpair_notification(ip, port, UnpairReason::Unpaired)
+                .await;
         }
 
+        // Just invalidate the connection - trust remains intact
+        self.invalidate_connection_by_device_id(&device_id);
+        self.transport
+            .invalidate_connection_by_fingerprint(fingerprint);
+
         // Emit event so UI updates
-        let _ = self
-            .event_tx
-            .send(ConnectedEvent::PairingModeChanged(self.is_pairing_mode()));
+        let _ = self.event_tx.send(ConnectedEvent::DeviceUnpaired {
+            device_id: device_id.clone(),
+            device_name,
+            reason: UnpairReason::Unpaired,
+        });
 
         info!("Unpaired device - trust preserved, can reconnect anytime");
         Ok(())
     }
 
     /// Unpair a device by its device_id - disconnects but keeps trust intact.
-    pub fn unpair_device_by_id(&self, device_id: &str) -> Result<()> {
+    pub async fn unpair_device_by_id(&self, device_id: &str) -> Result<()> {
+        let (fingerprint, device_name, target) = {
+            let ks = self.key_store.read();
+            let peers = ks.get_all_known_peers();
+            if let Some(p) = peers
+                .into_iter()
+                .find(|p| p.device_id.as_deref() == Some(device_id))
+            {
+                let name = p.name.unwrap_or_else(|| "Unknown".to_string());
+
+                // Try to find IP/Port
+                let target = self
+                    .discovery
+                    .get_device_by_id(device_id)
+                    .and_then(|d| d.ip_addr().map(|ip| (ip, d.port)));
+
+                (Some(p.fingerprint), name, target)
+            } else {
+                (None, "Unknown".to_string(), None)
+            }
+        };
+
+        if let Some((ip, port)) = target {
+            let _ = self
+                .send_unpair_notification(ip, port, UnpairReason::Unpaired)
+                .await;
+        }
+
         // Just invalidate the connection - trust remains intact
         self.invalidate_connection_by_device_id(device_id);
+        if let Some(fp) = fingerprint {
+            self.transport.invalidate_connection_by_fingerprint(&fp);
+        }
 
         // Emit event so UI updates
-        let _ = self
-            .event_tx
-            .send(ConnectedEvent::PairingModeChanged(self.is_pairing_mode()));
+        let _ = self.event_tx.send(ConnectedEvent::DeviceUnpaired {
+            device_id: device_id.to_string(),
+            device_name,
+            reason: UnpairReason::Unpaired,
+        });
 
         info!(
             "Unpaired device {} - trust preserved, can reconnect anytime",
@@ -1188,7 +1293,7 @@ impl ConnectedClient {
         // 0. Periodic connection cache cleanup
         let transport_cleanup = self.transport.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
             loop {
                 interval.tick().await;
                 transport_cleanup.cleanup_stale_connections();

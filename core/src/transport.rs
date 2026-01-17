@@ -423,6 +423,29 @@ impl QuicTransport {
         }
     }
 
+    pub fn invalidate_connection_by_fingerprint(&self, fingerprint: &str) {
+        let mut cache = self.connection_cache.write();
+        let mut to_remove = Vec::new();
+
+        for (addr, cached) in cache.connections.iter() {
+            if let Some(fp) = Self::get_peer_fingerprint(&cached.connection) {
+                if fp == fingerprint {
+                    to_remove.push(*addr);
+                }
+            }
+        }
+
+        for addr in to_remove {
+            if let Some(cached) = cache.connections.remove(&addr) {
+                cached.connection.close(VarInt::from_u32(0), b"unpaired");
+                info!(
+                    "Closed and invalidated connection to {} (fingerprint match)",
+                    addr
+                );
+            }
+        }
+    }
+
     pub fn register_connection_alias(&self, original: SocketAddr, alias: SocketAddr) {
         self.connection_cache
             .write()

@@ -15,7 +15,7 @@ use tracing::{debug, error, info, trace, warn};
 const SERVICE_TYPE: &str = "_connected._udp.local.";
 const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
 const BROWSE_TIMEOUT: Duration = Duration::from_millis(100);
-const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(60);
+const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(2);
 const PROTOCOL_VERSION: u32 = 1;
 const MIN_COMPATIBLE_VERSION: u32 = 1;

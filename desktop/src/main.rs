@@ -165,56 +165,54 @@ fn App() -> Element {
         // Poll for Bluetooth/Wi-Fi state changes
         let action_tx_clone = action_tx.clone();
         spawn(async move {
-            let mut last_bt_state = true; // Assume ON initially
-            let mut last_wifi_state = true;
-
-            loop {
-                // Check Bluetooth
+            // Helper to check states
+            async fn check_adapters() -> (bool, bool) {
                 let bt_status = tokio::process::Command::new("rfkill")
                     .arg("list")
                     .arg("bluetooth")
                     .output()
                     .await;
-
                 let bt_on = if let Ok(output) = bt_status {
                     let out = String::from_utf8_lossy(&output.stdout);
-                    // If "Soft blocked: yes" or "Hard blocked: yes", it's OFF.
                     !out.contains("Soft blocked: yes") && !out.contains("Hard blocked: yes")
                 } else {
-                    true // Default to true if rfkill fails (e.g. non-linux or permission issue)
+                    true
                 };
 
-                // Check Wi-Fi (using nmcli if available, fallback to true)
                 let wifi_status = tokio::process::Command::new("nmcli")
                     .arg("radio")
                     .arg("wifi")
                     .output()
                     .await;
-
                 let wifi_on = if let Ok(output) = wifi_status {
                     let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     out == "enabled"
                 } else {
                     true
                 };
+                (bt_on, wifi_on)
+            }
 
-                let any_turned_off = (last_bt_state && !bt_on) || (last_wifi_state && !wifi_on);
-                let any_turned_on = (!last_bt_state && bt_on) || (!last_wifi_state && wifi_on);
+            // Init state
+            let (mut last_bt_state, mut last_wifi_state) = check_adapters().await;
 
-                if any_turned_off {
-                    debug!("Adapter turned OFF (BT: {}, WiFi: {})", bt_on, wifi_on);
-                    action_tx_clone.send(AppAction::ClearDevices);
-                }
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-                if any_turned_on {
-                    debug!("Adapter turned ON (BT: {}, WiFi: {})", bt_on, wifi_on);
+                let (bt_on, wifi_on) = check_adapters().await;
+
+                let changed = bt_on != last_bt_state || wifi_on != last_wifi_state;
+
+                if changed {
+                    debug!(
+                        "Adapter state changed (BT: {} -> {}, WiFi: {} -> {})",
+                        last_bt_state, bt_on, last_wifi_state, wifi_on
+                    );
                     action_tx_clone.send(AppAction::RefreshDiscovery);
                 }
 
                 last_bt_state = bt_on;
                 last_wifi_state = wifi_on;
-
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         });
     });
@@ -225,7 +223,7 @@ fn App() -> Element {
         let mut tray_initialized = use_signal(|| false);
 
         use_effect(move || {
-            if *tray_initialized.read() {
+            if *tray_initialized.peek() {
                 return;
             }
 

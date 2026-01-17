@@ -9,9 +9,10 @@ use crate::state::{
     get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_call_log,
     get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
     get_remote_files_update, get_saved_devices_setting, get_transfer_status, mark_calls_synced,
-    mark_contacts_synced, mark_messages_synced, remove_file_transfer_request,
-    save_device_to_settings, set_active_call, set_device_name_setting, set_pairing_mode_state,
-    set_phone_call_log, set_phone_contacts, set_phone_conversations, set_phone_messages,
+    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
+    remove_file_transfer_request, save_device_to_settings, set_active_call,
+    set_device_name_setting, set_pairing_mode_state, set_phone_call_log, set_phone_contacts,
+    set_phone_conversations, set_phone_messages,
 };
 use crate::utils::{get_hostname, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -144,7 +145,6 @@ pub enum AppAction {
         port: u16,
         action: CallAction,
     },
-    ClearDevices,
     RefreshDiscovery,
 }
 
@@ -268,16 +268,46 @@ fn spawn_event_loop(
                     fingerprint,
                     device_id,
                 } => {
-                    add_notification(
-                        "Pairing Request",
-                        &format!("{} wants to connect.", device_name),
-                        "🔐",
-                    );
-                    get_pairing_requests().lock().unwrap().push(PairingRequest {
-                        fingerprint,
-                        device_name,
-                        device_id,
-                    });
+                    // Check if already trusted
+                    if c_clone.is_device_trusted(&device_id) {
+                        info!(
+                            "Auto-accepting pairing request from trusted device: {} ({})",
+                            device_name, device_id
+                        );
+                        // Send confirmation directly
+                        let c_trust = c_clone.clone();
+                        let d_id = device_id.clone();
+                        tokio::spawn(async move {
+                            // We need the IP to send confirmation. Since we received a request,
+                            // the device should be in discovered list (connected source).
+                            let devices = c_trust.get_discovered_devices();
+                            if let Some(d) = devices.iter().find(|d| d.id == d_id) {
+                                if let Some(ip) = d.ip_addr() {
+                                    if let Err(e) =
+                                        c_trust.send_trust_confirmation(ip, d.port).await
+                                    {
+                                        warn!("Failed to send trust confirmation: {}", e);
+                                    }
+                                }
+                            }
+                        });
+                        return;
+                    }
+
+                    // Deduplicate requests
+                    let mut requests = get_pairing_requests().lock().unwrap();
+                    if !requests.iter().any(|r| r.fingerprint == fingerprint) {
+                        add_notification(
+                            "Pairing Request",
+                            &format!("{} wants to connect.", device_name),
+                            "🔐",
+                        );
+                        requests.push(PairingRequest {
+                            fingerprint,
+                            device_name,
+                            device_id,
+                        });
+                    }
                 }
                 ConnectedEvent::PairingModeChanged(enabled) => {
                     info!("Pairing mode changed: {}", enabled);
@@ -293,6 +323,20 @@ fn spawn_event_loop(
                         let mut store = get_devices_store().lock().unwrap();
                         if let Some(d) = store.get_mut(&device_id) {
                             d.is_trusted = false;
+                        }
+                    }
+
+                    if matches!(reason, UnpairReason::Forgotten) {
+                        remove_device_from_settings(&device_id);
+
+                        // If device is not discovered (offline), remove it from UI
+                        let is_discovered = c_clone
+                            .get_discovered_devices()
+                            .iter()
+                            .any(|d| d.id == device_id);
+                        if !is_discovered {
+                            let mut store = get_devices_store().lock().unwrap();
+                            store.remove(&device_id);
                         }
                     }
 
@@ -781,6 +825,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
                 let name = get_device_name_setting().unwrap_or_else(get_hostname);
                 client = start_core(name).await;
+                /*
+                // Don't inject saved devices at startup to avoid showing stale devices
+                // Let mDNS/Proximity discovery populate the list with actually active devices
                 if let Some(c) = &client {
                     let saved = get_saved_devices_setting();
                     for (device_id, info) in saved {
@@ -801,6 +848,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         );
                     }
                 }
+                */
             }
             AppAction::RenameDevice { new_name } => {
                 if let Some(c) = client.take() {
@@ -1006,52 +1054,19 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::UnpairDevice { device_id } => {
                 if let Some(c) = &client {
-                    // Unpair = disconnect and remove from UI, but keep backend trust (can auto-reconnect later)
-
-                    // Get device info before unpairing for notification
-                    let device_info = {
-                        let store = get_devices_store().lock().unwrap();
-                        store.get(&device_id).cloned()
-                    };
-
-                    match c.unpair_device_by_id(&device_id) {
-                        Err(e) => {
-                            error!("Failed to unpair: {}", e);
-                            add_notification("Unpair Failed", &e.to_string(), "❌");
-                        }
-                        _ => {
-                            // Remove from UI store so it shows as disconnected
-                            {
-                                let mut store = get_devices_store().lock().unwrap();
-                                if let Some(d) = store.get_mut(&device_id) {
-                                    d.is_trusted = false;
-                                }
+                    let c = c.clone();
+                    let did = device_id.clone();
+                    tokio::spawn(async move {
+                        match c.unpair_device_by_id(&did).await {
+                            Err(e) => {
+                                error!("Failed to unpair: {}", e);
+                                add_notification("Unpair Failed", &e.to_string(), "❌");
                             }
-
-                            // Notify the other device so they also update their UI
-                            // Using UnpairReason::Unpaired which preserves backend trust
-                            if let Some(info) = device_info {
-                                let c_clone = c.clone();
-                                tokio::spawn(async move {
-                                    if let Ok(ip) = info.ip.parse() {
-                                        let _ = c_clone
-                                            .send_unpair_notification(
-                                                ip,
-                                                info.port,
-                                                UnpairReason::Unpaired,
-                                            )
-                                            .await;
-                                    }
-                                });
+                            Ok(_) => {
+                                // Core emits event, event loop handles UI update
                             }
-
-                            add_notification(
-                                "Disconnected",
-                                "Device disconnected - can reconnect anytime",
-                                "💔",
-                            );
                         }
-                    }
+                    });
                 }
             }
             AppAction::SetPairingMode(enabled) => {
@@ -1061,49 +1076,19 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::ForgetDevice { device_id } => {
                 if let Some(c) = &client {
-                    // Get device info before forgetting for notification
-                    let device_info = {
-                        let store = get_devices_store().lock().unwrap();
-                        store.get(&device_id).cloned()
-                    };
-
-                    match c.forget_device_by_id(&device_id) {
-                        Err(e) => {
-                            error!("Failed to forget device: {}", e);
-                            add_notification("Forget Failed", &e.to_string(), "❌");
-                        }
-                        _ => {
-                            // Update local store to reflect change
-                            {
-                                let mut store = get_devices_store().lock().unwrap();
-                                if let Some(d) = store.get_mut(&device_id) {
-                                    d.is_trusted = false;
-                                }
+                    let c = c.clone();
+                    let did = device_id.clone();
+                    tokio::spawn(async move {
+                        match c.forget_device_by_id(&did).await {
+                            Err(e) => {
+                                error!("Failed to forget device: {}", e);
+                                add_notification("Forget Failed", &e.to_string(), "❌");
                             }
-
-                            // Notify the other device that we forgot them
-                            if let Some(info) = device_info {
-                                let c_clone = c.clone();
-                                tokio::spawn(async move {
-                                    if let Ok(ip) = info.ip.parse() {
-                                        let _ = c_clone
-                                            .send_unpair_notification(
-                                                ip,
-                                                info.port,
-                                                UnpairReason::Forgotten,
-                                            )
-                                            .await;
-                                    }
-                                });
+                            Ok(_) => {
+                                // Core emits event, event loop handles UI update
                             }
-
-                            add_notification(
-                                "Device Forgotten",
-                                "Device will require re-pairing approval",
-                                "🔄",
-                            );
                         }
-                    }
+                    });
                 }
             }
             AppAction::AcceptFileTransfer { transfer_id } => {
@@ -1678,33 +1663,33 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     });
                 }
             }
-            AppAction::ClearDevices => {
-                // Clear discovered devices from the store
-                let mut store = get_devices_store().lock().unwrap();
-                store.retain(|_, d| d.is_trusted); // Keep trusted, clear others? Or clear all non-connected?
-                // The prompt says "clear the devives cache from ui".
-                // We'll clear non-trusted ones to be safe, or maybe just mark them as offline?
-                // If the adapter is OFF, they are definitely offline.
-                // Let's clear the whole list to reflect "OFF" state dramatically as requested.
-                // But keeping trusted ones might be useful for "reconnect".
-                // However, "clear the devices cache" implies removing them.
-                store.clear();
-                info!("Cleared device cache due to adapter state change");
-
-                // Also stop proximity if running
-                stop_proximity();
-            }
             AppAction::RefreshDiscovery => {
-                if let Some(c) = &client {
-                    // Restart proximity
+                info!("Refreshed discovery due to adapter state change - Restarting Core");
+                if let Some(c) = client.take() {
                     stop_proximity();
-                    start_proximity(c.clone());
+                    c.shutdown().await;
+                }
 
-                    // Trigger core discovery refresh if needed (core runs MDNS continuously usually)
-                    // But we can force a re-scan if the core supports it, or just rely on new proximity/mdns events.
-                    // Re-injecting local MDNS service might be needed if IP changed.
-                    // For now, restarting proximity is key for BLE/WiFi-Direct.
-                    info!("Refreshed discovery due to adapter state change");
+                let name = get_device_name_setting().unwrap_or_else(get_hostname);
+                client = start_core(name).await;
+
+                if let Some(c) = &client {
+                    let saved = get_saved_devices_setting();
+                    for (device_id, info) in saved {
+                        if info.ip == "0.0.0.0" {
+                            continue;
+                        }
+                        let device_type = connected_core::DeviceType::from_str(&info.device_type);
+                        if let Ok(ip) = info.ip.parse() {
+                            let _ = c.inject_proximity_device(
+                                device_id,
+                                info.name,
+                                device_type,
+                                ip,
+                                info.port,
+                            );
+                        }
+                    }
                 }
             }
         }

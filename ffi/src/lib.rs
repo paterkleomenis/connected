@@ -1290,28 +1290,36 @@ pub fn trust_device(
 pub fn unpair_device(fingerprint: String) -> Result<(), ConnectedFfiError> {
     // Unpair = disconnect but keep trust intact (can reconnect anytime without re-pairing)
     let client = get_client()?;
-    client.unpair_device(&fingerprint).map_err(Into::into)
+    get_runtime()
+        .block_on(async { client.unpair_device(&fingerprint).await })
+        .map_err(Into::into)
 }
 
 #[uniffi::export]
 pub fn unpair_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
     // Unpair = disconnect but keep trust intact (can reconnect anytime without re-pairing)
     let client = get_client()?;
-    client.unpair_device_by_id(&device_id).map_err(Into::into)
+    get_runtime()
+        .block_on(async { client.unpair_device_by_id(&device_id).await })
+        .map_err(Into::into)
 }
 
 #[uniffi::export]
 pub fn forget_device(fingerprint: String) -> Result<(), ConnectedFfiError> {
     // Forget = completely remove trust (must re-pair to connect again)
     let client = get_client()?;
-    client.forget_device(&fingerprint).map_err(Into::into)
+    get_runtime()
+        .block_on(async { client.forget_device(&fingerprint).await })
+        .map_err(Into::into)
 }
 
 #[uniffi::export]
 pub fn forget_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
     // Forget = completely remove trust (must re-pair to connect again)
     let client = get_client()?;
-    client.forget_device_by_id(&device_id).map_err(Into::into)
+    get_runtime()
+        .block_on(async { client.forget_device_by_id(&device_id).await })
+        .map_err(Into::into)
 }
 
 #[uniffi::export]

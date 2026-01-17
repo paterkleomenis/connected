@@ -91,6 +91,12 @@ pub fn save_device_to_settings(device_id: String, info: SavedDeviceInfo) {
     });
 }
 
+pub fn remove_device_from_settings(device_id: &str) {
+    update_setting(|s| {
+        s.saved_devices.remove(device_id);
+    });
+}
+
 // ============================================================================
 // Data Models
 // ============================================================================

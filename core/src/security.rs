@@ -283,6 +283,10 @@ impl KeyStore {
         }
     }
 
+    pub fn get_peer_info(&self, fingerprint: &str) -> Option<PeerInfo> {
+        self.known_peers.peers.get(fingerprint).cloned()
+    }
+
     pub fn get_peer_name(&self, fingerprint: &str) -> Option<String> {
         self.known_peers
             .peers

@@ -119,6 +119,7 @@ class ConnectedApp(private val context: Context) {
     private val PREF_MEDIA_CONTROL = "media_control"
     private val PREF_TELEPHONY_ENABLED = "telephony_enabled"
     private val PREF_DEVICE_NAME = "device_name"
+    private var lastSdkRestart = 0L
 
     private val networkStateReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -163,18 +164,28 @@ class ConnectedApp(private val context: Context) {
                             }
                         }
                         android.net.wifi.WifiManager.WIFI_STATE_ENABLED -> {
-                            Log.d("ConnectedApp", "Wi-Fi turned on - refreshing")
-                            scope.launch(Dispatchers.Main) {
-                                delay(2000)
-                                startProximityManager() // Ensures instance exists
-                                proximityManager?.start() // Triggers startWifiDirect() again
-                                beginDiscovery()
+                            Log.d("ConnectedApp", "Wi-Fi turned on - restarting SDK")
+                            val now = System.currentTimeMillis()
+                            if (now - lastSdkRestart > 10000) {
+                                lastSdkRestart = now
+                                scope.launch(Dispatchers.Main) {
+                                    delay(2000)
+                                    restartSdk()
+                                }
+                            } else {
+                                Log.d("ConnectedApp", "Skipping SDK restart (debounced)")
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    fun restartSdk() {
+        Log.d("ConnectedApp", "Restarting SDK to bind to new network interface...")
+        cleanup()
+        initialize()
     }
 
     fun getDeviceName(): String {
@@ -555,12 +566,14 @@ class ConnectedApp(private val context: Context) {
 
             isMediaControlEnabled.value = prefs.getBoolean(PREF_MEDIA_CONTROL, false)
 
+            lastSdkRestart = System.currentTimeMillis()
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Initialization failed", e)
         }
     }
 
     fun cleanup() {
+        Log.d("ConnectedApp", "Cleaning up resources")
         try { context.unregisterReceiver(networkStateReceiver) } catch (e: Exception) {}
         stopClipboardSync()
         stopProximityManager()
@@ -1321,15 +1334,6 @@ class ConnectedApp(private val context: Context) {
 
     fun unpairDevice(device: DiscoveredDevice) {
         scope.launch(Dispatchers.IO) {
-            // Notify first
-            try {
-                if (!isSyntheticIp(device.ip)) {
-                    uniffi.connected_ffi.sendUnpairNotification(device.ip, device.port, "unpaired")
-                }
-            } catch (e: Exception) {
-                Log.w("ConnectedApp", "Failed to send unpair notification: ${e.message}")
-            }
-
             locallyUnpairedDevices.add(device.id)
             trustedDevices.remove(device.id)
             pendingPairing.remove(device.id)
@@ -1349,14 +1353,6 @@ class ConnectedApp(private val context: Context) {
 
     fun forgetDevice(device: DiscoveredDevice) {
         scope.launch(Dispatchers.IO) {
-            // Try to send the notification first, before we remove trust and close the connection
-            try {
-                uniffi.connected_ffi.sendUnpairNotification(device.ip, device.port, "forgotten")
-            } catch (e: Exception) {
-                Log.w("ConnectedApp", "Failed to send unpair notification: ${e.message}")
-            }
-
-            locallyUnpairedDevices.add(device.id) // Ensure it's marked as locally unpaired
             trustedDevices.remove(device.id)
             pendingPairing.remove(device.id)
             try {
