@@ -28,7 +28,7 @@ dirs = "5"
 sha2 = "0.10.9"
 if-addrs = "0.14.0"
 blake3 = "1.8.2"
-zip = "2.2.0"
+zip = { version = "7.0.0", default-features = false, features = ["deflate", "time"] }
 walkdir = "2.5.0"
 
 [target.'cfg(target_os = "android")'.dependencies]
