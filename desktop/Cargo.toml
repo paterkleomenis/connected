@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-dioxus = { version = "0.6", features = ["desktop"] }
-dioxus-logger = "0.6"
+dioxus = { version = "0.7.3", features = ["desktop"] }
+dioxus-logger = "0.7.3"
+android_logger = "0.15.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
@@ -14,18 +15,24 @@ async-std = "1.12"
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 connected-core = { path = "../core" }
-dirs = "5"
-rfd = "0.15"
+dirs = "6.0.0"
+rfd = "0.17.2"
 arboard = "3.6.1"
 once_cell.workspace = true
 mime_guess.workspace = true
-base64 = "0.21"
+base64 = "0.22.1"
 mpris = "2.0.1"
 dbus = "0.9.10"
-image = "0.24"
+image = "0.25.9"
 btleplug = "0.11.8"
 uuid = { workspace = true }
 notify-rust = "4.10.0"
+crc = "3.4.0"
+rcgen = "0.14.6"
+toml = "0.8.23"
+toml_datetime = "0.6.11"
+toml_edit = "0.20.7"
+uniffi = "0.31.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris-server = "0.9.0"

@@ -1425,6 +1425,14 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun setFullAccess() {
+        if (isFullAccessGranted()) {
+            val root = android.os.Environment.getExternalStorageDirectory()
+            val uri = Uri.fromFile(root)
+            setRootUri(uri)
+            runOnMainThread {
+                android.widget.Toast.makeText(context, "Full Device Access Enabled", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     fun requestFullAccessPermission() {

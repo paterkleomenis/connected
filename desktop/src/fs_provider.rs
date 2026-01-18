@@ -201,7 +201,7 @@ impl FilesystemProvider for DesktopFilesystemProvider {
             let thumb = img.thumbnail(96, 96);
 
             let mut buffer = std::io::Cursor::new(Vec::new());
-            thumb.write_to(&mut buffer, image::ImageOutputFormat::Jpeg(80))?;
+            thumb.write_to(&mut buffer, image::ImageFormat::Jpeg)?;
             Ok(buffer.into_inner())
         };
 

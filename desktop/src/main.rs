@@ -77,8 +77,7 @@ fn main() {
         .with_disable_context_menu(true);
     #[cfg(target_os = "linux")]
     {
-        config =
-            config.with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::LastWindowHides);
+        config = config.with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides);
     }
 
     LaunchBuilder::desktop().with_cfg(config).launch(App);
