@@ -1083,6 +1083,9 @@ impl ConnectedClient {
     /// The device will need to go through full pairing request flow again.
     /// This is what the UI "Forget" action should call.
     pub async fn forget_device(&self, fingerprint: &str) -> Result<()> {
+        // Explicitly disable pairing mode to prevent auto-reconnection loops
+        self.set_pairing_mode(false);
+
         let (device_id, device_name, target) = {
             let ks = self.key_store.read();
             let info = ks.get_peer_info(fingerprint);
@@ -1102,15 +1105,21 @@ impl ConnectedClient {
             }
         };
 
+        // Remove from keystore immediately to prevent auto-trust/reconnect during the notification delay
+        self.key_store.write().remove_peer(fingerprint)?;
+
+        if let Some((ip, _)) = target {
+            self.pending_handshakes.write().remove(&ip);
+        }
+
         // Try to send notification
         if let Some((ip, port)) = target {
             let _ = self
                 .send_unpair_notification(ip, port, UnpairReason::Forgotten)
                 .await;
+            // Give time for the message to be sent before closing connection
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         }
-
-        // Remove from keystore
-        self.key_store.write().remove_peer(fingerprint)?;
 
         // Invalidate cached connection
         self.invalidate_connection_by_device_id(&device_id);
@@ -1130,6 +1139,9 @@ impl ConnectedClient {
 
     /// Forget a device by its device_id - completely removes trust.
     pub async fn forget_device_by_id(&self, device_id: &str) -> Result<()> {
+        // Explicitly disable pairing mode to prevent auto-reconnection loops
+        self.set_pairing_mode(false);
+
         let (fingerprint, device_name, target) = {
             let ks = self.key_store.read();
             let peers = ks.get_all_known_peers();
@@ -1152,14 +1164,20 @@ impl ConnectedClient {
         };
 
         if let Some(fp) = fingerprint {
+            self.key_store.write().remove_peer(&fp)?;
+            if let Some((ip, _)) = target {
+                self.pending_handshakes.write().remove(&ip);
+            }
+
             // Try to send notification
             if let Some((ip, port)) = target {
                 let _ = self
                     .send_unpair_notification(ip, port, UnpairReason::Forgotten)
                     .await;
+                // Give time for the message to be sent before closing connection
+                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
             }
 
-            self.key_store.write().remove_peer(&fp)?;
             self.transport.invalidate_connection_by_fingerprint(&fp);
         } else {
             // Even if not found in keystore, try to invalidate connection
@@ -1198,6 +1216,9 @@ impl ConnectedClient {
     /// The device can reconnect automatically anytime (no re-pairing needed).
     /// This is what the UI "Unpair" action should call.
     pub async fn unpair_device(&self, fingerprint: &str) -> Result<()> {
+        // Explicitly disable pairing mode to prevent auto-reconnection loops
+        self.set_pairing_mode(false);
+
         let (device_id, device_name, target) = {
             let ks = self.key_store.read();
             let info = ks.get_peer_info(fingerprint);
@@ -1217,16 +1238,22 @@ impl ConnectedClient {
             }
         };
 
+        // Mark as unpaired in keystore immediately
+        if let Err(e) = self.key_store.write().unpair_peer(fingerprint.to_string()) {
+            warn!("Failed to mark peer as unpaired in keystore: {}", e);
+        }
+
+        if let Some((ip, _)) = target {
+            self.pending_handshakes.write().remove(&ip);
+        }
+
         // Try to send notification
         if let Some((ip, port)) = target {
             let _ = self
                 .send_unpair_notification(ip, port, UnpairReason::Unpaired)
                 .await;
-        }
-
-        // Mark as unpaired in keystore
-        if let Err(e) = self.key_store.write().unpair_peer(fingerprint.to_string()) {
-            warn!("Failed to mark peer as unpaired in keystore: {}", e);
+            // Give time for the message to be sent before closing connection
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         }
 
         // Just invalidate the connection - trust remains intact
@@ -1247,6 +1274,9 @@ impl ConnectedClient {
 
     /// Unpair a device by its device_id - disconnects but keeps trust intact.
     pub async fn unpair_device_by_id(&self, device_id: &str) -> Result<()> {
+        // Explicitly disable pairing mode to prevent auto-reconnection loops
+        self.set_pairing_mode(false);
+
         let (fingerprint, device_name, target) = {
             let ks = self.key_store.read();
             let peers = ks.get_all_known_peers();
@@ -1268,17 +1298,23 @@ impl ConnectedClient {
             }
         };
 
-        if let Some((ip, port)) = target {
-            let _ = self
-                .send_unpair_notification(ip, port, UnpairReason::Unpaired)
-                .await;
-        }
-
-        // Mark as unpaired in keystore
+        // Mark as unpaired in keystore immediately
         if let Some(fp) = &fingerprint {
             if let Err(e) = self.key_store.write().unpair_peer(fp.clone()) {
                 warn!("Failed to mark peer as unpaired in keystore: {}", e);
             }
+        }
+
+        if let Some((ip, _)) = target {
+            self.pending_handshakes.write().remove(&ip);
+        }
+
+        if let Some((ip, port)) = target {
+            let _ = self
+                .send_unpair_notification(ip, port, UnpairReason::Unpaired)
+                .await;
+            // Give time for the message to be sent before closing connection
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         }
 
         // Just invalidate the connection - trust remains intact
@@ -1701,6 +1737,9 @@ impl ConnectedClient {
                                 }
                             }
                         }
+
+                        // Invalidate connection to ensure clean state on both sides
+                        transport.invalidate_connection(&addr);
 
                         let _ = event_tx.send(ConnectedEvent::DeviceUnpaired {
                             device_id,
