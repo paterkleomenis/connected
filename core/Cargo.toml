@@ -24,11 +24,11 @@ uuid.workspace = true
 once_cell.workspace = true
 parking_lot.workspace = true
 mime_guess.workspace = true
-dirs = "5"
+dirs = "6"
 sha2 = "0.10.9"
 if-addrs = "0.14.0"
 blake3 = "1.8.2"
-zip = { version = "7.0.0", default-features = false, features = ["deflate", "time"] }
+zip = { version = "7.1.0", default-features = false, features = ["deflate", "time"] }
 walkdir = "2.5.0"
 
 [target.'cfg(target_os = "android")'.dependencies]

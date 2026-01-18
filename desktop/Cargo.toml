@@ -26,7 +26,7 @@ dbus = "0.9.10"
 image = "0.25.9"
 btleplug = "0.11.8"
 uuid = { workspace = true }
-notify-rust = "4.10.0"
+notify-rust = "4.11.7"
 crc = "3.4.0"
 rcgen = "0.14.6"
 toml = "0.8.23"

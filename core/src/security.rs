@@ -84,14 +84,14 @@ impl KeyStore {
         }
 
         info!("No identity found, generating new one...");
-        let CertifiedKey { cert, key_pair } = generate_simple_self_signed(vec![
+        let CertifiedKey { cert, signing_key } = generate_simple_self_signed(vec![
             "connected.local".to_string(),
             "localhost".to_string(),
         ])
         .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
 
         let cert_der = cert.der().to_vec();
-        let key_der = key_pair.serialize_der();
+        let key_der = signing_key.serialize_der();
         let device_id = uuid::Uuid::new_v4().to_string();
 
         // Save
