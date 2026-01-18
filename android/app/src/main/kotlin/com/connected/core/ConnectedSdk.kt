@@ -599,6 +599,26 @@ class ConnectedSdk private constructor() {
         }
     }
 
+    fun unpairDeviceById(deviceId: String) {
+        checkInitialized()
+        try {
+            uniffi.connected_ffi.unpairDeviceById(deviceId)
+            Log.d(TAG, "Unpaired device $deviceId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to unpair device: ${e.message}")
+        }
+    }
+
+    fun forgetDeviceById(deviceId: String) {
+        checkInitialized()
+        try {
+            uniffi.connected_ffi.forgetDeviceById(deviceId)
+            Log.d(TAG, "Forgot device $deviceId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to forget device: ${e.message}")
+        }
+    }
+
     private fun acquireMulticastLock() {
         if (multicastLock != null && multicastLock!!.isHeld) {
             Log.d(TAG, "Multicast lock already held")

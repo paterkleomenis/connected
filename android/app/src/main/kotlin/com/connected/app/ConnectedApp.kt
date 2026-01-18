@@ -276,34 +276,23 @@ class ConnectedApp(private val context: Context) {
 
 
 
-                    if (locallyUnpairedDevices.contains(device.id)) {
+                    if (isDeviceTrusted(device)) {
+                        locallyUnpairedDevices.remove(device.id)
+                        if (!trustedDevices.contains(device.id)) {
+                            trustedDevices.add(device.id)
+                        }
 
-                        trustedDevices.remove(device.id)
-
-                    } else if (isDeviceTrusted(device)) {
                         if (pendingPairing.contains(device.id)) {
                             // Core auto-trusted (we initiated). Automatically finalize trusting in UI.
-                            if (!trustedDevices.contains(device.id)) {
-                                trustedDevices.add(device.id)
-                            }
                             pendingPairing.remove(device.id)
                             runOnMainThread {
                                 android.widget.Toast.makeText(context, "Paired with ${device.name}", android.widget.Toast.LENGTH_SHORT).show()
                             }
-                        } else {
-                            if (!trustedDevices.contains(device.id)) {
-                                trustedDevices.add(device.id)
-                            }
                         }
-
                     } else {
-
                         if (trustedDevices.contains(device.id)) {
-
                             trustedDevices.remove(device.id)
-
                         }
-
                     }
 
 
@@ -538,7 +527,12 @@ class ConnectedApp(private val context: Context) {
 
             val storagePath = context.getExternalFilesDir(null)?.absolutePath ?: ""
 
-            uniffi.connected_ffi.initialize(getDeviceName(), "Mobile", 0u.toUShort(), storagePath)
+            try {
+                uniffi.connected_ffi.initialize(getDeviceName(), "Mobile", 0u.toUShort(), storagePath)
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Core might be already initialized: ${e.message}")
+            }
+
             uniffi.connected_ffi.startDiscovery(discoveryCallback)
             uniffi.connected_ffi.registerTransferCallback(transferCallback)
             uniffi.connected_ffi.registerClipboardReceiver(clipboardCallback)

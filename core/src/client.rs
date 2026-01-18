@@ -1224,6 +1224,11 @@ impl ConnectedClient {
                 .await;
         }
 
+        // Mark as unpaired in keystore
+        if let Err(e) = self.key_store.write().unpair_peer(fingerprint.to_string()) {
+            warn!("Failed to mark peer as unpaired in keystore: {}", e);
+        }
+
         // Just invalidate the connection - trust remains intact
         self.invalidate_connection_by_device_id(&device_id);
         self.transport
@@ -1267,6 +1272,13 @@ impl ConnectedClient {
             let _ = self
                 .send_unpair_notification(ip, port, UnpairReason::Unpaired)
                 .await;
+        }
+
+        // Mark as unpaired in keystore
+        if let Some(fp) = &fingerprint {
+            if let Err(e) = self.key_store.write().unpair_peer(fp.clone()) {
+                warn!("Failed to mark peer as unpaired in keystore: {}", e);
+            }
         }
 
         // Just invalidate the connection - trust remains intact
@@ -1400,6 +1412,7 @@ impl ConnectedClient {
 
                         let is_trusted = key_store.read().is_trusted(&fingerprint);
                         let is_forgotten = key_store.read().is_forgotten(&fingerprint);
+                        let is_unpaired = key_store.read().is_unpaired(&fingerprint);
                         let _needs_pairing = key_store.read().needs_pairing_request(&fingerprint);
                         let has_pending = pending_handshakes.read().contains(&addr.ip());
 
@@ -1417,9 +1430,9 @@ impl ConnectedClient {
                             continue;
                         }
 
-                        if !is_trusted && has_pending {
+                        if (!is_trusted && has_pending) || is_unpaired {
                             info!(
-                                "Auto-trusting peer from Handshake (pending outbound pairing): {} - {}",
+                                "Auto-trusting peer from Handshake (pending outbound pairing or unpaired): {} - {}",
                                 device_name, fingerprint
                             );
                             pending_handshakes.write().remove(&addr.ip());
@@ -1678,6 +1691,9 @@ impl ConnectedClient {
                         match reason {
                             UnpairReason::Unpaired => {
                                 info!("Device {} unpaired (trust preserved)", device_id);
+                                if let Err(e) = key_store.write().unpair_peer(fingerprint.clone()) {
+                                    error!("Failed to mark peer as unpaired: {}", e);
+                                }
                             }
                             UnpairReason::Forgotten => {
                                 if let Err(e) = key_store.write().remove_peer(&fingerprint) {
@@ -1692,6 +1708,7 @@ impl ConnectedClient {
                             reason,
                         });
                     }
+
                     _ => {}
                 }
             }

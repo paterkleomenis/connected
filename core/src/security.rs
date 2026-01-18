@@ -10,6 +10,8 @@ use tracing::info;
 pub enum PeerStatus {
     /// Device is trusted and can connect/transfer freely
     Trusted,
+    /// Device is unpaired - keys preserved but disconnected/inactive
+    Unpaired,
     /// Device was forgotten - completely removed, requires full pairing request flow
     Forgotten,
 }
@@ -182,6 +184,21 @@ impl KeyStore {
         self.save_peers()
     }
 
+    /// Unpair a peer - keeps keys but marks as unpaired (inactive)
+    /// Re-connecting acts as a fast-pairing (trust restoration)
+    pub fn unpair_peer(&mut self, fingerprint: String) -> Result<()> {
+        if let Some(peer) = self.known_peers.peers.get_mut(&fingerprint) {
+            peer.status = PeerStatus::Unpaired;
+            peer.last_seen = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            self.save_peers()
+        } else {
+            Ok(())
+        }
+    }
+
     /// Remove peer completely from known peers list
     /// This allows re-pairing without any restrictions
     pub fn remove_peer(&mut self, fingerprint: &str) -> Result<()> {
@@ -263,6 +280,13 @@ impl KeyStore {
     pub fn is_trusted(&self, fingerprint: &str) -> bool {
         if let Some(peer) = self.known_peers.peers.get(fingerprint) {
             return peer.status == PeerStatus::Trusted;
+        }
+        false
+    }
+
+    pub fn is_unpaired(&self, fingerprint: &str) -> bool {
+        if let Some(peer) = self.known_peers.peers.get(fingerprint) {
+            return peer.status == PeerStatus::Unpaired;
         }
         false
     }

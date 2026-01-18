@@ -366,7 +366,32 @@ impl DiscoveryService {
 
         match source {
             DiscoverySource::Connected => tracked.connected = Some(endpoint),
-            DiscoverySource::Discovered => tracked.discovered = Some(endpoint),
+            DiscoverySource::Discovered => {
+                // If we already have a discovered endpoint with a valid IP,
+                // and the new one has an unspecified IP (0.0.0.0),
+                // we should NOT overwrite the valid IP.
+                // This happens when Proximity (BLE) detects a device but hasn't resolved IP yet,
+                // while mDNS has already found the valid IP.
+                let should_update = if let Some(existing) = &tracked.discovered {
+                    let new_is_unspecified = device.ip == "0.0.0.0" || device.ip == "::";
+                    let existing_is_valid =
+                        existing.device.ip != "0.0.0.0" && existing.device.ip != "::";
+
+                    if new_is_unspecified && existing_is_valid {
+                        // Just update last_seen to keep it alive, but don't overwrite device info
+                        tracked.discovered.as_mut().unwrap().last_seen = Instant::now();
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+
+                if should_update {
+                    tracked.discovered = Some(endpoint);
+                }
+            }
         }
 
         let new_source = tracked.active_source();
