@@ -286,10 +286,9 @@ fn spawn_event_loop(
                             let devices = c_trust.get_discovered_devices();
                             if let Some(d) = devices.iter().find(|d| d.id == d_id)
                                 && let Some(ip) = d.ip_addr()
+                                && let Err(e) = c_trust.send_trust_confirmation(ip, d.port).await
                             {
-                                if let Err(e) = c_trust.send_trust_confirmation(ip, d.port).await {
-                                    warn!("Failed to send trust confirmation: {}", e);
-                                }
+                                warn!("Failed to send trust confirmation: {}", e);
                             }
                         });
                         return;
@@ -1028,12 +1027,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 let devices = c_clone.get_discovered_devices();
                                 if let Some(d) = devices.iter().find(|d| d.id == did)
                                     && let Some(ip) = d.ip_addr()
-                                {
-                                    if let Err(e) =
+                                    && let Err(e) =
                                         c_clone.send_trust_confirmation(ip, d.port).await
-                                    {
-                                        warn!("Failed to send trust confirmation: {}", e);
-                                    }
+                                {
+                                    warn!("Failed to send trust confirmation: {}", e);
                                 }
                             });
                         }
@@ -1327,34 +1324,33 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         // We must create a new connection for each player because Player::new takes ownership
                                         if let Ok(p_conn) =
                                             Connection::get_private(BusType::Session)
+                                            && let Ok(player) =
+                                                Player::new(p_conn, name.clone(), 2000)
                                         {
-                                            if let Ok(player) =
-                                                Player::new(p_conn, name.clone().into(), 2000)
-                                            {
-                                                let meta = player.get_metadata().ok();
-                                                let status = player.get_playback_status().ok();
-                                                let playing =
-                                                    matches!(status, Some(PlaybackStatus::Playing));
+                                            let _identity = player.identity().to_string();
+                                            let meta = player.get_metadata().ok();
+                                            let status = player.get_playback_status().ok();
+                                            let playing =
+                                                matches!(status, Some(PlaybackStatus::Playing));
 
-                                                let title = meta
-                                                    .as_ref()
-                                                    .and_then(|m| m.title().map(|s| s.to_string()));
-                                                let artist = meta.as_ref().and_then(|m| {
-                                                    m.artists().map(|a| a.join(", "))
-                                                });
-                                                let album = meta.as_ref().and_then(|m| {
-                                                    m.album_name().map(|s| s.to_string())
-                                                });
+                                            let title = meta
+                                                .as_ref()
+                                                .and_then(|m| m.title().map(|s| s.to_string()));
+                                            let artist = meta
+                                                .as_ref()
+                                                .and_then(|m| m.artists().map(|a| a.join(", ")));
+                                            let album = meta.as_ref().and_then(|m| {
+                                                m.album_name().map(|s| s.to_string())
+                                            });
 
-                                                let candidate = (title, artist, album, playing);
+                                            let candidate = (title, artist, album, playing);
 
-                                                if playing {
-                                                    // Found a playing one, return immediately
-                                                    return Some(candidate);
-                                                } else if best_candidate.is_none() {
-                                                    // Keep as fallback
-                                                    best_candidate = Some(candidate);
-                                                }
+                                            if playing {
+                                                // Found a playing one, return immediately
+                                                return Some(candidate);
+                                            } else if best_candidate.is_none() {
+                                                // Keep as fallback
+                                                best_candidate = Some(candidate);
                                             }
                                         }
                                     }

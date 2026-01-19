@@ -52,10 +52,9 @@ pub fn load_settings() -> AppSettings {
     let path = get_settings_path();
     if path.exists()
         && let Ok(contents) = fs::read_to_string(&path)
+        && let Ok(settings) = serde_json::from_str(&contents)
     {
-        if let Ok(settings) = serde_json::from_str(&contents) {
-            return settings;
-        }
+        return settings;
     }
     AppSettings::default()
 }

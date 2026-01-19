@@ -138,7 +138,6 @@ fn App() -> Element {
         );
     let (mpris_tx, mpris_rx) = std::sync::mpsc::channel();
     if mpris_server::init_mpris(mpris_tx) {
-        let action_tx = action_tx;
         spawn(async move {
             loop {
                 while let Ok(command) = mpris_rx.try_recv() {
@@ -162,7 +161,7 @@ fn App() -> Element {
         }
 
         // Poll for Bluetooth/Wi-Fi state changes
-        let action_tx_clone = action_tx.clone();
+        let action_tx_clone = action_tx;
         spawn(async move {
             // Helper to check states
             async fn check_adapters() -> (bool, bool) {
@@ -1001,13 +1000,13 @@ fn App() -> Element {
                                                     move |_| {
                                                         phone_sub_tab.set("messages".to_string());
                                                         // Only sync if auto-sync enabled AND data is empty
-                                                        if *auto_sync_messages.read() && phone_conversations.read().is_empty() {
-                                                            if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
-                                                                action_tx.send(AppAction::RequestConversationsSync {
-                                                                    ip: fresh_device.ip.clone(),
-                                                                    port: fresh_device.port,
-                                                                });
-                                                            }
+                                                        if *auto_sync_messages.read() && phone_conversations.read().is_empty()
+                                                            && let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned()
+                                                        {
+                                                            action_tx.send(AppAction::RequestConversationsSync {
+                                                                ip: fresh_device.ip.clone(),
+                                                                port: fresh_device.port,
+                                                            });
                                                         }
                                                     }
                                                 },
@@ -1021,14 +1020,14 @@ fn App() -> Element {
                                                     move |_| {
                                                         phone_sub_tab.set("calls".to_string());
                                                         // Only sync if auto-sync enabled AND data is empty
-                                                        if *auto_sync_calls.read() && phone_call_log.read().is_empty() {
-                                                            if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
-                                                                action_tx.send(AppAction::RequestCallLog {
-                                                                    ip: fresh_device.ip.clone(),
-                                                                    port: fresh_device.port,
-                                                                    limit: 200,
-                                                                });
-                                                            }
+                                                        if *auto_sync_calls.read() && phone_call_log.read().is_empty()
+                                                            && let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned()
+                                                        {
+                                                            action_tx.send(AppAction::RequestCallLog {
+                                                                ip: fresh_device.ip.clone(),
+                                                                port: fresh_device.port,
+                                                                limit: 200,
+                                                            });
                                                         }
                                                     }
                                                 },
@@ -1042,13 +1041,13 @@ fn App() -> Element {
                                                     move |_| {
                                                         phone_sub_tab.set("contacts".to_string());
                                                         // Only sync if auto-sync enabled AND data is empty
-                                                        if *auto_sync_contacts.read() && phone_contacts.read().is_empty() {
-                                                            if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
-                                                                action_tx.send(AppAction::RequestContactsSync {
-                                                                    ip: fresh_device.ip.clone(),
-                                                                    port: fresh_device.port,
-                                                                });
-                                                            }
+                                                        if *auto_sync_contacts.read() && phone_contacts.read().is_empty()
+                                                            && let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned()
+                                                        {
+                                                            action_tx.send(AppAction::RequestContactsSync {
+                                                                ip: fresh_device.ip.clone(),
+                                                                port: fresh_device.port,
+                                                            });
                                                         }
                                                     }
                                                 },
@@ -1168,16 +1167,16 @@ fn App() -> Element {
                                                                         let to_address = recipient_address.clone();
                                                                         move |_| {
                                                                             let text = sms_compose_text.read().clone();
-                                                                            if !text.is_empty() && !to_address.is_empty() {
-                                                                                if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
-                                                                                    action_tx.send(AppAction::SendSms {
-                                                                                        ip: fresh_device.ip.clone(),
-                                                                                        port: fresh_device.port,
-                                                                                        to: to_address.clone(),
-                                                                                        body: text,
-                                                                                    });
-                                                                                    sms_compose_text.set(String::new());
-                                                                                }
+                                                                            if !text.is_empty() && !to_address.is_empty()
+                                                                                && let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned()
+                                                                            {
+                                                                                action_tx.send(AppAction::SendSms {
+                                                                                    ip: fresh_device.ip.clone(),
+                                                                                    port: fresh_device.port,
+                                                                                    to: to_address.clone(),
+                                                                                    body: text,
+                                                                                });
+                                                                                sms_compose_text.set(String::new());
                                                                             }
                                                                         }
                                                                     },

@@ -262,6 +262,6 @@ pub fn get_device_icon_type(device_type: &str) -> IconType {
 }
 
 pub fn get_file_icon_type(filename: &str) -> IconType {
-    filename.rsplit('.').next().unwrap_or("").to_lowercase();
+    let _ = filename.rsplit('.').next().unwrap_or("").to_lowercase();
     IconType::File
 }
