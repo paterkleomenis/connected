@@ -90,7 +90,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                         base64::engine::general_purpose::STANDARD.encode(v),
                     );
                 }
-                thumbnails.set(new_thumbs);
+                current_thumbnails.set(new_thumbs);
                 last_thumbnails_update.set(thumbnails_ts);
             }
 
@@ -186,7 +186,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
 
                             // Request thumbnail if needed
                             if is_image && matches!(entry.entry_type, FsEntryType::File) {
-                                let has_thumb = thumbnails.read().contains_key(&entry.path);
+                                let has_thumb = current_thumbnails.read().contains_key(&entry.path);
                                 let already_requested = requested_thumbnails.read().contains(&entry.path);
 
                                 if !has_thumb && !already_requested {
@@ -241,9 +241,9 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     },
                                     span {
                                         class: "icon",
-                                        if is_image && thumbnails.read().contains_key(&entry.path) {
+                                        if is_image && current_thumbnails.read().contains_key(&entry.path) {
                                             img {
-                                                src: "data:image/jpeg;base64,{thumbnails.read().get(&entry.path).unwrap()}",
+                                                src: "data:image/jpeg;base64,{current_thumbnails.read().get(&entry.path).unwrap()}",
                                                 style: "width: 24px; height: 24px; object-fit: cover; border-radius: 4px; display: block;"
                                             }
                                         } else {
