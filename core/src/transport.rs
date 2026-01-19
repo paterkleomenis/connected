@@ -92,7 +92,7 @@ pub struct MediaState {
     pub playing: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum UnpairReason {
     Unpaired,
     Forgotten,
@@ -196,6 +196,7 @@ pub struct QuicTransport {
     client_config_allow_unknown: ClientConfig,
     connection_cache: Arc<RwLock<ConnectionCache>>,
     handlers: Arc<RwLock<Option<TransportHandlers>>>,
+    key_store: Arc<RwLock<KeyStore>>,
 }
 
 impl QuicTransport {
@@ -220,6 +221,7 @@ impl QuicTransport {
             client_config_allow_unknown,
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
             handlers: Arc::new(RwLock::new(None)),
+            key_store: key_store.clone(),
         })
     }
 
@@ -235,6 +237,7 @@ impl QuicTransport {
         };
 
         let local_id = self.local_id.clone();
+        let key_store = self.key_store.clone();
 
         tokio::spawn(async move {
             if let Err(e) = Self::handle_connection(
@@ -244,6 +247,7 @@ impl QuicTransport {
                 handlers.file_stream_tx,
                 handlers.fs_stream_tx,
                 local_id,
+                key_store,
             )
             .await
             {
@@ -410,11 +414,15 @@ impl QuicTransport {
     }
 
     pub fn invalidate_connection(&self, addr: &SocketAddr) {
+        self.invalidate_connection_with_reason(addr, b"unpaired");
+    }
+
+    pub fn invalidate_connection_with_reason(&self, addr: &SocketAddr, reason: &[u8]) {
         let mut cache = self.connection_cache.write();
         match cache.remove(addr) {
             Some(connection) => {
                 // Close the QUIC connection gracefully
-                connection.close(VarInt::from_u32(0), b"unpaired");
+                connection.close(VarInt::from_u32(0), reason);
                 info!("Closed and invalidated connection to {}", addr);
             }
             _ => {
@@ -424,6 +432,14 @@ impl QuicTransport {
     }
 
     pub fn invalidate_connection_by_fingerprint(&self, fingerprint: &str) {
+        self.invalidate_connection_by_fingerprint_with_reason(fingerprint, b"unpaired");
+    }
+
+    pub fn invalidate_connection_by_fingerprint_with_reason(
+        &self,
+        fingerprint: &str,
+        reason: &[u8],
+    ) {
         let mut cache = self.connection_cache.write();
         let mut to_remove = Vec::new();
 
@@ -437,7 +453,7 @@ impl QuicTransport {
 
         for addr in to_remove {
             if let Some(cached) = cache.connections.remove(&addr) {
-                cached.connection.close(VarInt::from_u32(0), b"unpaired");
+                cached.connection.close(VarInt::from_u32(0), reason);
                 info!(
                     "Closed and invalidated connection to {} (fingerprint match)",
                     addr
@@ -603,6 +619,7 @@ impl QuicTransport {
         let endpoint = self.endpoint.clone();
         let local_id = self.local_id.clone();
         let connection_cache = self.connection_cache.clone();
+        let key_store = self.key_store.clone();
 
         tokio::spawn(async move {
             info!("QUIC server started, waiting for connections");
@@ -613,6 +630,7 @@ impl QuicTransport {
                 let fs_tx = fs_stream_tx.clone();
                 let id = local_id.clone();
                 let cache = connection_cache.clone();
+                let ks = key_store.clone();
 
                 tokio::spawn(async move {
                     match incoming.accept() {
@@ -639,6 +657,7 @@ impl QuicTransport {
                                     f_tx,
                                     fs_tx,
                                     id,
+                                    ks,
                                 )
                                 .await
                                 {
@@ -669,6 +688,7 @@ impl QuicTransport {
         file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
         fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
         local_id: String,
+        key_store: Arc<RwLock<KeyStore>>,
     ) -> Result<()> {
         let mut fingerprint =
             Self::get_peer_fingerprint(&connection).unwrap_or_else(|| "unknown".to_string());
@@ -789,6 +809,46 @@ impl QuicTransport {
                         "Connection closed by peer: {} (reason: {:?})",
                         remote_addr, reason
                     );
+
+                    if reason.reason == &b"unpaired"[..] || reason.reason == &b"forgotten"[..] {
+                        let unpair_reason = if reason.reason == &b"forgotten"[..] {
+                            UnpairReason::Forgotten
+                        } else {
+                            UnpairReason::Unpaired
+                        };
+
+                        let reason_str = if unpair_reason == UnpairReason::Forgotten {
+                            "forgotten"
+                        } else {
+                            "unpaired"
+                        };
+
+                        let device_id_opt = {
+                            let ks = key_store.read();
+                            ks.get_peer_info(&fingerprint).and_then(|p| p.device_id)
+                        };
+
+                        if let Some(device_id) = device_id_opt {
+                            info!(
+                                "Peer {} ({}) disconnected with '{}' reason. Triggering unpair/forget.",
+                                device_id, fingerprint, reason_str
+                            );
+                            let _ = message_tx.send((
+                                remote_addr,
+                                fingerprint.clone(),
+                                Message::DeviceUnpaired {
+                                    device_id,
+                                    reason: unpair_reason,
+                                },
+                                None,
+                            ));
+                        } else {
+                            warn!(
+                                "Peer closed with '{}' but device_id not found for fingerprint {}",
+                                reason_str, fingerprint
+                            );
+                        }
+                    }
 
                     break;
                 }

@@ -1042,6 +1042,10 @@ impl ConnectedClient {
 
     /// Invalidate cached connection for a device by looking up its IP from discovered devices
     fn invalidate_connection_by_device_id(&self, device_id: &str) {
+        self.invalidate_connection_by_device_id_with_reason(device_id, b"unpaired");
+    }
+
+    fn invalidate_connection_by_device_id_with_reason(&self, device_id: &str, reason: &[u8]) {
         let discovered = self.discovery.get_discovered_devices();
         info!(
             "Looking for device {} in {} discovered devices",
@@ -1055,7 +1059,8 @@ impl ConnectedClient {
         if let Some(device) = discovered.iter().find(|d| d.id == device_id) {
             if let Some(ip) = device.ip_addr() {
                 let addr = SocketAddr::new(ip, device.port);
-                self.transport.invalidate_connection(&addr);
+                self.transport
+                    .invalidate_connection_with_reason(&addr, reason);
                 info!(
                     "Invalidated connection cache for device {} at {}",
                     device_id, addr
@@ -1117,14 +1122,12 @@ impl ConnectedClient {
             let _ = self
                 .send_unpair_notification(ip, port, UnpairReason::Forgotten)
                 .await;
-            // Give time for the message to be sent before closing connection
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         }
 
         // Invalidate cached connection
-        self.invalidate_connection_by_device_id(&device_id);
+        self.invalidate_connection_by_device_id_with_reason(&device_id, b"forgotten");
         self.transport
-            .invalidate_connection_by_fingerprint(fingerprint);
+            .invalidate_connection_by_fingerprint_with_reason(fingerprint, b"forgotten");
 
         // Emit DeviceUnpaired event
         let _ = self.event_tx.send(ConnectedEvent::DeviceUnpaired {
@@ -1174,17 +1177,16 @@ impl ConnectedClient {
                 let _ = self
                     .send_unpair_notification(ip, port, UnpairReason::Forgotten)
                     .await;
-                // Give time for the message to be sent before closing connection
-                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
             }
 
-            self.transport.invalidate_connection_by_fingerprint(&fp);
+            self.transport
+                .invalidate_connection_by_fingerprint_with_reason(&fp, b"forgotten");
         } else {
             // Even if not found in keystore, try to invalidate connection
         }
 
         // Invalidate any cached connection to this device
-        self.invalidate_connection_by_device_id(device_id);
+        self.invalidate_connection_by_device_id_with_reason(device_id, b"forgotten");
 
         // Emit event so UI updates
         let _ = self.event_tx.send(ConnectedEvent::DeviceUnpaired {
@@ -1252,8 +1254,6 @@ impl ConnectedClient {
             let _ = self
                 .send_unpair_notification(ip, port, UnpairReason::Unpaired)
                 .await;
-            // Give time for the message to be sent before closing connection
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         }
 
         // Just invalidate the connection - trust remains intact
@@ -1313,8 +1313,6 @@ impl ConnectedClient {
             let _ = self
                 .send_unpair_notification(ip, port, UnpairReason::Unpaired)
                 .await;
-            // Give time for the message to be sent before closing connection
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         }
 
         // Just invalidate the connection - trust remains intact
