@@ -2036,43 +2036,44 @@ impl ConnectedClient {
 
         for device in devices {
             if trusted_ids.contains(&device.id)
-                && let Some(ip) = device.ip_addr() {
-                    let port = device.port;
-                    let txt = text.clone();
-                    let t = transport.clone();
+                && let Some(ip) = device.ip_addr()
+            {
+                let port = device.port;
+                let txt = text.clone();
+                let t = transport.clone();
 
-                    tasks.push(tokio::spawn(async move {
-                        let addr = SocketAddr::new(ip, port);
-                        match t
-                            .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
-                            .await
-                        {
-                            Ok((mut send, _recv)) => {
-                                let msg = Message::Clipboard { text: txt };
-                                if let Ok(data) = serde_json::to_vec(&msg) {
-                                    let len_bytes = (data.len() as u32).to_be_bytes();
-                                    // Ignore errors during broadcast to keep going
-                                    let _ = send.write_all(&len_bytes).await;
-                                    let _ = send.write_all(&data).await;
-                                    let _ = send.finish(); // Don't await finish to avoid hanging if peer doesn't ack immediately (though for QUIC stream finish is usually fast)
-                                    return true;
-                                }
-                            }
-                            Err(e) => {
-                                debug!("Failed to send clipboard to {}: {}", addr, e);
+                tasks.push(tokio::spawn(async move {
+                    let addr = SocketAddr::new(ip, port);
+                    match t
+                        .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+                        .await
+                    {
+                        Ok((mut send, _recv)) => {
+                            let msg = Message::Clipboard { text: txt };
+                            if let Ok(data) = serde_json::to_vec(&msg) {
+                                let len_bytes = (data.len() as u32).to_be_bytes();
+                                // Ignore errors during broadcast to keep going
+                                let _ = send.write_all(&len_bytes).await;
+                                let _ = send.write_all(&data).await;
+                                let _ = send.finish(); // Don't await finish to avoid hanging if peer doesn't ack immediately (though for QUIC stream finish is usually fast)
+                                return true;
                             }
                         }
-                        false
-                    }));
-                }
+                        Err(e) => {
+                            debug!("Failed to send clipboard to {}: {}", addr, e);
+                        }
+                    }
+                    false
+                }));
             }
         }
 
         let mut sent_count = 0;
         for task in tasks {
             if let Ok(success) = task.await
-                && success {
-                    sent_count += 1;
+                && success
+            {
+                sent_count += 1;
             }
         }
         Ok(sent_count)
