@@ -447,40 +447,39 @@ fn spawn_event_loop(
                                             && let Ok(player) =
                                                 Player::new(p_conn, name.clone(), 2000)
                                         {
-                                                let identity = player.identity().to_string();
+                                            let identity = player.identity().to_string();
 
-                                                let is_last = last_id.as_ref() == Some(&identity);
+                                            let is_last = last_id.as_ref() == Some(&identity);
 
-                                                match player.get_playback_status() {
-                                                    Ok(status) => match status {
-                                                        PlaybackStatus::Playing => {
-                                                            playing_player = Some(player);
+                                            match player.get_playback_status() {
+                                                Ok(status) => match status {
+                                                    PlaybackStatus::Playing => {
+                                                        playing_player = Some(player);
 
-                                                            break;
+                                                        break;
+                                                    }
+
+                                                    PlaybackStatus::Paused => {
+                                                        if is_last {
+                                                            preferred_player = Some(player);
+                                                        } else if generic_paused.is_none() {
+                                                            generic_paused = Some(player);
                                                         }
+                                                    }
 
-                                                        PlaybackStatus::Paused => {
-                                                            if is_last {
-                                                                preferred_player = Some(player);
-                                                            } else if generic_paused.is_none() {
-                                                                generic_paused = Some(player);
-                                                            }
-                                                        }
-
-                                                        _ => {
-                                                            if is_last {
-                                                                preferred_player = Some(player);
-                                                            } else if generic_any.is_none() {
-                                                                generic_any = Some(player);
-                                                            }
-                                                        }
-                                                    },
                                                     _ => {
                                                         if is_last {
                                                             preferred_player = Some(player);
                                                         } else if generic_any.is_none() {
                                                             generic_any = Some(player);
                                                         }
+                                                    }
+                                                },
+                                                _ => {
+                                                    if is_last {
+                                                        preferred_player = Some(player);
+                                                    } else if generic_any.is_none() {
+                                                        generic_any = Some(player);
                                                     }
                                                 }
                                             }
@@ -706,16 +705,17 @@ fn spawn_event_loop(
                             info!("Notification added successfully");
 
                             if get_auto_sync_messages()
-                                && let Ok(ip_addr) = from_ip.parse() {
-                                    let msg = TelephonyMessage::MessagesRequest {
-                                        thread_id: thread_id.clone(),
-                                        limit: 200,
-                                        before_timestamp: None,
-                                    };
-                                    let c = c_clone.clone();
-                                    tokio::spawn(async move {
-                                        let _ = c.send_telephony(ip_addr, from_port, msg).await;
-                                    });
+                                && let Ok(ip_addr) = from_ip.parse()
+                            {
+                                let msg = TelephonyMessage::MessagesRequest {
+                                    thread_id: thread_id.clone(),
+                                    limit: 200,
+                                    before_timestamp: None,
+                                };
+                                let c = c_clone.clone();
+                                tokio::spawn(async move {
+                                    let _ = c.send_telephony(ip_addr, from_port, msg).await;
+                                });
                             }
                         }
                         TelephonyMessage::CallLogResponse { entries } => {
@@ -1027,12 +1027,13 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             tokio::spawn(async move {
                                 let devices = c_clone.get_discovered_devices();
                                 if let Some(d) = devices.iter().find(|d| d.id == did)
-                                    && let Some(ip) = d.ip_addr() {
-                                        if let Err(e) =
-                                            c_clone.send_trust_confirmation(ip, d.port).await
-                                        {
-                                            warn!("Failed to send trust confirmation: {}", e);
-                                        }
+                                    && let Some(ip) = d.ip_addr()
+                                {
+                                    if let Err(e) =
+                                        c_clone.send_trust_confirmation(ip, d.port).await
+                                    {
+                                        warn!("Failed to send trust confirmation: {}", e);
+                                    }
                                 }
                             });
                         }
@@ -1392,16 +1393,17 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                 let discovered = c.get_discovered_devices();
                                                 if let Some(d) =
                                                     discovered.iter().find(|d| d.id == device_id)
-                                                    && let Some(ip) = d.ip_addr() {
-                                                        let _ = c
-                                                            .send_media_control(
-                                                                ip,
-                                                                d.port,
-                                                                MediaControlMessage::StateUpdate(
-                                                                    state.clone(),
-                                                                ),
-                                                            )
-                                                            .await;
+                                                    && let Some(ip) = d.ip_addr()
+                                                {
+                                                    let _ = c
+                                                        .send_media_control(
+                                                            ip,
+                                                            d.port,
+                                                            MediaControlMessage::StateUpdate(
+                                                                state.clone(),
+                                                            ),
+                                                        )
+                                                        .await;
                                                 }
                                             }
                                         }
@@ -1414,9 +1416,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             add_notification("Media Control", "Media control enabled", "🎵");
                         }
                     }
-                                        } else if notify {
-                                            add_notification("Media Control", "Media control disabled", "🔇");
-                                        }            }
+                } else if notify {
+                    add_notification("Media Control", "Media control disabled", "🔇");
+                }
+            }
             AppAction::SendMediaCommand { ip, port, command } => {
                 if let Some(c) = &client {
                     let c = c.clone();
