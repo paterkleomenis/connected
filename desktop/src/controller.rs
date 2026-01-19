@@ -26,6 +26,7 @@ use futures_util::StreamExt;
 use mpris::PlaybackStatus;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -1679,7 +1680,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         if info.ip == "0.0.0.0" {
                             continue;
                         }
-                        let device_type = connected_core::DeviceType::from_str(&info.device_type);
+                        let device_type = connected_core::DeviceType::from_str(&info.device_type)
+                            .unwrap_or(connected_core::DeviceType::Unknown);
                         if let Ok(ip) = info.ip.parse() {
                             let _ = c.inject_proximity_device(
                                 device_id,

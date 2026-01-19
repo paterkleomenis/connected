@@ -1,8 +1,9 @@
 use connected_core::{ConnectedClient, ConnectedError, ConnectedEvent, Device, DeviceType};
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 use tracing::{error, info};
@@ -721,7 +722,8 @@ pub fn initialize(
     let runtime = get_runtime();
 
     // Parse device type
-    let dtype = DeviceType::from_str(&device_type); // assuming helper exists or we implement logic
+    // Parse device type
+    let dtype = DeviceType::from_str(&device_type).unwrap_or(DeviceType::Unknown); // assuming helper exists or we implement logic
     // Actually DeviceType::from_str is available in core::device
 
     let path = if storage_path.is_empty() {
@@ -766,7 +768,8 @@ pub fn initialize_with_ip(
 
     init_android_logging();
     let runtime = get_runtime();
-    let dtype = DeviceType::from_str(&device_type);
+    // Parse device type
+    let dtype = DeviceType::from_str(&device_type).unwrap_or(DeviceType::Unknown);
     let ip: std::net::IpAddr =
         ip_address
             .parse()
@@ -1070,7 +1073,8 @@ pub fn inject_proximity_device(
     port: u16,
 ) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
-    let dtype = DeviceType::from_str(&device_type);
+    // Parse device type
+    let dtype = DeviceType::from_str(&device_type).unwrap_or(DeviceType::Unknown);
     let ip: IpAddr = ip.parse().map_err(|_| ConnectedFfiError::InvalidArgument {
         msg: "Invalid IP".into(),
     })?;
