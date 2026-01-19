@@ -21,9 +21,9 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let mut preview_content = use_signal(|| Option::<PreviewData>::None);
 
     // Thumbnail state
-    let mut thumbnails = use_signal(|| HashMap::<String, String>::new()); // path -> base64
+    let mut current_thumbnails = use_signal(HashMap::<String, String>::new); // path -> base64
     let mut last_thumbnails_update = use_signal(|| *get_thumbnails_update().lock().unwrap());
-    let mut requested_thumbnails = use_signal(|| HashSet::<String>::new());
+    let mut requested_thumbnails = use_signal(HashSet::<String>::new);
 
     use_effect(use_reactive(&device, move |device| {
         loading.set(true);
@@ -182,7 +182,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                             };
 
                             let is_image = ["jpg", "jpeg", "png", "gif", "webp", "bmp"]
-                                .contains(&entry.name.split('.').last().unwrap_or("").to_lowercase().as_str());
+                                .contains(&entry.name.split('.').next_back().unwrap_or("").to_lowercase().as_str());
 
                             // Request thumbnail if needed
                             if is_image && matches!(entry.entry_type, FsEntryType::File) {

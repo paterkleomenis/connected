@@ -50,11 +50,11 @@ fn get_settings_path() -> PathBuf {
 
 pub fn load_settings() -> AppSettings {
     let path = get_settings_path();
-    if path.exists() {
-        if let Ok(contents) = fs::read_to_string(&path) {
-            if let Ok(settings) = serde_json::from_str(&contents) {
-                return settings;
-            }
+    if path.exists()
+        && let Ok(contents) = fs::read_to_string(&path)
+    {
+        if let Ok(settings) = serde_json::from_str(&contents) {
+            return settings;
         }
     }
     AppSettings::default()
@@ -183,13 +183,16 @@ static MEDIA_ENABLED: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
 static PAIRING_MODE: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
 static CURRENT_MEDIA: OnceLock<Arc<Mutex<Option<RemoteMedia>>>> = OnceLock::new();
 static LAST_REMOTE_MEDIA_DEVICE_ID: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
-static THUMBNAILS: OnceLock<Arc<Mutex<HashMap<String, Vec<u8>>>>> = OnceLock::new();
+static THUMBNAILS: OnceLock<ThumbnailsMap> = OnceLock::new();
 static THUMBNAILS_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
+
+type ThumbnailsMap = Arc<Mutex<HashMap<String, Vec<u8>>>>;
+type MessagesMap = Arc<Mutex<HashMap<String, Vec<SmsMessage>>>>;
 
 // Telephony state
 static PHONE_CONTACTS: OnceLock<Arc<Mutex<Vec<Contact>>>> = OnceLock::new();
 static PHONE_CONVERSATIONS: OnceLock<Arc<Mutex<Vec<Conversation>>>> = OnceLock::new();
-static PHONE_MESSAGES: OnceLock<Arc<Mutex<HashMap<String, Vec<SmsMessage>>>>> = OnceLock::new();
+static PHONE_MESSAGES: OnceLock<MessagesMap> = OnceLock::new();
 static PHONE_CALL_LOG: OnceLock<Arc<Mutex<Vec<CallLogEntry>>>> = OnceLock::new();
 static PHONE_DATA_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 static ACTIVE_CALL: OnceLock<Arc<Mutex<Option<ActiveCall>>>> = OnceLock::new();
@@ -356,7 +359,7 @@ pub fn get_preview_data() -> &'static Arc<Mutex<Option<PreviewData>>> {
     PREVIEW_DATA.get_or_init(|| Arc::new(Mutex::new(None)))
 }
 
-pub fn get_thumbnails() -> &'static Arc<Mutex<HashMap<String, Vec<u8>>>> {
+pub fn get_thumbnails() -> &'static ThumbnailsMap {
     THUMBNAILS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
@@ -373,7 +376,7 @@ pub fn get_phone_conversations() -> &'static Arc<Mutex<Vec<Conversation>>> {
     PHONE_CONVERSATIONS.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
 }
 
-pub fn get_phone_messages() -> &'static Arc<Mutex<HashMap<String, Vec<SmsMessage>>>> {
+pub fn get_phone_messages() -> &'static MessagesMap {
     PHONE_MESSAGES.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 

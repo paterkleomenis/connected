@@ -45,10 +45,10 @@ pub fn set_system_clipboard(text: &str) {
             .spawn()
         {
             Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    if let Err(e) = stdin.write_all(text.as_bytes()) {
-                        warn!("Failed to write to wl-copy stdin: {}", e);
-                    }
+                if let Some(mut stdin) = child.stdin.take()
+                    && let Err(e) = stdin.write_all(text.as_bytes())
+                {
+                    warn!("Failed to write to wl-copy stdin: {}", e);
                 }
                 match child.wait() {
                     Ok(status) => {
@@ -98,10 +98,10 @@ pub fn get_hostname() -> String {
         // Windows
         return name;
     }
-    if let Ok(output) = std::process::Command::new("hostname").output() {
-        if output.status.success() {
-            return String::from_utf8_lossy(&output.stdout).trim().to_string();
-        }
+    if let Ok(output) = std::process::Command::new("hostname").output()
+        && output.status.success()
+    {
+        return String::from_utf8_lossy(&output.stdout).trim().to_string();
     }
     "Desktop".to_string()
 }

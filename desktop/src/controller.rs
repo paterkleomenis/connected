@@ -32,6 +32,8 @@ use std::sync::Mutex;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
+type BestCandidate = Option<(Option<String>, Option<String>, Option<String>, bool)>;
+
 #[derive(Clone, Debug)]
 pub enum AppAction {
     Init,
@@ -282,13 +284,11 @@ fn spawn_event_loop(
                             // We need the IP to send confirmation. Since we received a request,
                             // the device should be in discovered list (connected source).
                             let devices = c_trust.get_discovered_devices();
-                            if let Some(d) = devices.iter().find(|d| d.id == d_id) {
-                                if let Some(ip) = d.ip_addr() {
-                                    if let Err(e) =
-                                        c_trust.send_trust_confirmation(ip, d.port).await
-                                    {
-                                        warn!("Failed to send trust confirmation: {}", e);
-                                    }
+                            if let Some(d) = devices.iter().find(|d| d.id == d_id)
+                                && let Some(ip) = d.ip_addr()
+                            {
+                                if let Err(e) = c_trust.send_trust_confirmation(ip, d.port).await {
+                                    warn!("Failed to send trust confirmation: {}", e);
                                 }
                             }
                         });
@@ -444,10 +444,9 @@ fn spawn_event_loop(
                                     for name in mpris_names {
                                         if let Ok(p_conn) =
                                             Connection::get_private(BusType::Session)
+                                            && let Ok(player) =
+                                                Player::new(p_conn, name.clone(), 2000)
                                         {
-                                            if let Ok(player) =
-                                                Player::new(p_conn, name.clone().into(), 2000)
-                                            {
                                                 let identity = player.identity().to_string();
 
                                                 let is_last = last_id.as_ref() == Some(&identity);
@@ -706,8 +705,8 @@ fn spawn_event_loop(
                             );
                             info!("Notification added successfully");
 
-                            if get_auto_sync_messages() {
-                                if let Ok(ip_addr) = from_ip.parse() {
+                            if get_auto_sync_messages()
+                                && let Ok(ip_addr) = from_ip.parse() {
                                     let msg = TelephonyMessage::MessagesRequest {
                                         thread_id: thread_id.clone(),
                                         limit: 200,
@@ -717,7 +716,6 @@ fn spawn_event_loop(
                                     tokio::spawn(async move {
                                         let _ = c.send_telephony(ip_addr, from_port, msg).await;
                                     });
-                                }
                             }
                         }
                         TelephonyMessage::CallLogResponse { entries } => {
@@ -1028,14 +1026,13 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             let did = device_id.clone();
                             tokio::spawn(async move {
                                 let devices = c_clone.get_discovered_devices();
-                                if let Some(d) = devices.iter().find(|d| d.id == did) {
-                                    if let Some(ip) = d.ip_addr() {
+                                if let Some(d) = devices.iter().find(|d| d.id == did)
+                                    && let Some(ip) = d.ip_addr() {
                                         if let Err(e) =
                                             c_clone.send_trust_confirmation(ip, d.port).await
                                         {
                                             warn!("Failed to send trust confirmation: {}", e);
                                         }
-                                    }
                                 }
                             });
                         }
@@ -1322,12 +1319,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         .collect();
 
                                     // Find first playing, or just first one
-                                    let mut best_candidate: Option<(
-                                        Option<String>,
-                                        Option<String>,
-                                        Option<String>,
-                                        bool,
-                                    )> = None;
+                                    let mut best_candidate: BestCandidate = None;
 
                                     for name in mpris_names {
                                         // Player::new takes (conn, bus_name, timeout_ms)
@@ -1400,8 +1392,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                 let discovered = c.get_discovered_devices();
                                                 if let Some(d) =
                                                     discovered.iter().find(|d| d.id == device_id)
-                                                {
-                                                    if let Some(ip) = d.ip_addr() {
+                                                    && let Some(ip) = d.ip_addr() {
                                                         let _ = c
                                                             .send_media_control(
                                                                 ip,
@@ -1411,7 +1402,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                                 ),
                                                             )
                                                             .await;
-                                                    }
                                                 }
                                             }
                                         }
@@ -1424,12 +1414,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             add_notification("Media Control", "Media control enabled", "🎵");
                         }
                     }
-                } else {
-                    if notify {
-                        add_notification("Media Control", "Media control disabled", "🔇");
-                    }
-                }
-            }
+                                        } else if notify {
+                                            add_notification("Media Control", "Media control disabled", "🔇");
+                                        }            }
             AppAction::SendMediaCommand { ip, port, command } => {
                 if let Some(c) = &client {
                     let c = c.clone();

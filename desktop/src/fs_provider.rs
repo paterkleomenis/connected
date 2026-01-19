@@ -137,6 +137,7 @@ impl FilesystemProvider for DesktopFilesystemProvider {
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .open(full_path)
             .map_err(connected_core::ConnectedError::Io)?;
 

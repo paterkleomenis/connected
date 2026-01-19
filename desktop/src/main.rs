@@ -88,13 +88,13 @@ fn App() -> Element {
     let initialized = use_signal(|| false);
     let mut local_device_name =
         use_signal(|| get_device_name_setting().unwrap_or_else(get_hostname));
-    let local_device_ip = use_signal(|| String::new());
+    let local_device_ip = use_signal(String::new);
     let mut devices_list = use_signal(Vec::<DeviceInfo>::new);
     let mut selected_device = use_signal(|| None::<DeviceInfo>);
     let mut active_tab = use_signal(|| "devices".to_string());
     let mut device_detail_tab = use_signal(|| "clipboard".to_string());
     let mut transfer_status = use_signal(|| TransferStatus::Idle);
-    let mut clipboard_sync_enabled = use_signal(|| get_clipboard_sync_enabled());
+    let mut clipboard_sync_enabled = use_signal(get_clipboard_sync_enabled);
     let mut notifications = use_signal(Vec::<Notification>::new);
     let mut show_send_dialog = use_signal(|| false);
     let mut send_target_device = use_signal(|| None::<DeviceInfo>);
@@ -103,9 +103,9 @@ fn App() -> Element {
     let mut rename_text = use_signal(String::new);
 
     let discovery_active = use_signal(|| false);
-    let mut media_enabled = use_signal(|| get_media_enabled_setting());
+    let mut media_enabled = use_signal(get_media_enabled_setting);
     let mut current_media_title = use_signal(|| "Not Playing".to_string());
-    let mut current_media_artist = use_signal(|| String::new());
+    let mut current_media_artist = use_signal(String::new);
     let mut current_media_playing = use_signal(|| false);
     let mut current_media_source_id = use_signal(|| "local".to_string());
 
@@ -126,10 +126,10 @@ fn App() -> Element {
     let mut active_call = use_signal(|| None::<connected_core::telephony::ActiveCall>);
 
     // Auto-sync settings (loaded from persistent storage)
-    let mut auto_sync_messages = use_signal(|| get_auto_sync_messages());
-    let mut auto_sync_calls = use_signal(|| get_auto_sync_calls());
-    let mut auto_sync_contacts = use_signal(|| get_auto_sync_contacts());
-    let mut notifications_enabled = use_signal(|| get_notifications_enabled_setting());
+    let mut auto_sync_messages = use_signal(get_auto_sync_messages);
+    let mut auto_sync_calls = use_signal(get_auto_sync_calls);
+    let mut auto_sync_contacts = use_signal(get_auto_sync_contacts);
+    let mut notifications_enabled = use_signal(get_notifications_enabled_setting);
 
     // The Controller
     let action_tx =
@@ -138,7 +138,7 @@ fn App() -> Element {
         );
     let (mpris_tx, mpris_rx) = std::sync::mpsc::channel();
     if mpris_server::init_mpris(mpris_tx) {
-        let action_tx = action_tx.clone();
+        let action_tx = action_tx;
         spawn(async move {
             loop {
                 while let Ok(command) = mpris_rx.try_recv() {
@@ -294,13 +294,14 @@ fn App() -> Element {
                 .collect();
 
             // Apply pending state
-            let pending = get_pending_pairings().lock().unwrap();
-            for device in list.iter_mut() {
-                if pending.contains(&device.id) {
-                    device.is_pending = true;
+            {
+                let pending = get_pending_pairings().lock().unwrap();
+                for device in list.iter_mut() {
+                    if pending.contains(&device.id) {
+                        device.is_pending = true;
+                    }
                 }
             }
-            drop(pending);
 
             devices_list.set(list);
             // Update transfer status
@@ -335,25 +336,25 @@ fn App() -> Element {
             phone_call_log.set(get_phone_call_log().lock().unwrap().clone());
             active_call.set(get_active_call().lock().unwrap().clone());
             // Update messages for selected conversation
-            if let Some(thread_id) = selected_conversation.read().clone() {
-                if let Some(msgs) = get_phone_messages().lock().unwrap().get(&thread_id) {
-                    let new_count = msgs.len();
-                    let old_count = *last_message_count.read();
-                    phone_messages.set(msgs.clone());
-                    // Auto-scroll when messages first load or when new messages arrive
-                    if new_count > 0 && new_count != old_count {
-                        spawn(async move {
-                            // Delay to let DOM update
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                            let js = r#"
+            if let Some(thread_id) = selected_conversation.read().clone()
+                && let Some(msgs) = get_phone_messages().lock().unwrap().get(&thread_id)
+            {
+                let new_count = msgs.len();
+                let old_count = *last_message_count.read();
+                phone_messages.set(msgs.clone());
+                // Auto-scroll when messages first load or when new messages arrive
+                if new_count > 0 && new_count != old_count {
+                    spawn(async move {
+                        // Delay to let DOM update
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        let js = r#"
                                 let el = document.getElementById('messages-container');
                                 if (el) { el.scrollTop = el.scrollHeight; }
                             "#;
-                            let _ = document::eval(js);
-                        });
-                    }
-                    last_message_count.set(new_count);
+                        let _ = document::eval(js);
+                    });
                 }
+                last_message_count.set(new_count);
             }
 
             // Update Media State

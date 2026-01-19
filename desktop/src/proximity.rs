@@ -29,7 +29,7 @@ impl ProximityHandle {
 pub fn start(client: Arc<ConnectedClient>) -> Option<ProximityHandle> {
     #[cfg(all(target_os = "linux", feature = "proximity-ble"))]
     {
-        return start_linux(client);
+        start_linux(client)
     }
     #[cfg(not(all(target_os = "linux", feature = "proximity-ble")))]
     {
