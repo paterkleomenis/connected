@@ -44,7 +44,7 @@ Currently available for **Linux** and **Android**.
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/yourusername/connected.git
+    git clone https://github.com/paterkleomenis/connected.git
     cd connected
     ```
 2.  Run the desktop application:
