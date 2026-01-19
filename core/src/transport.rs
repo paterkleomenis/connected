@@ -444,10 +444,10 @@ impl QuicTransport {
         let mut to_remove = Vec::new();
 
         for (addr, cached) in cache.connections.iter() {
-            if let Some(fp) = Self::get_peer_fingerprint(&cached.connection) {
-                if fp == fingerprint {
-                    to_remove.push(*addr);
-                }
+            if let Some(fp) = Self::get_peer_fingerprint(&cached.connection)
+                && fp == fingerprint
+            {
+                to_remove.push(*addr);
             }
         }
 
@@ -704,10 +704,10 @@ impl QuicTransport {
                         continue;
                     }
 
-                    if fingerprint == "unknown" {
-                        if let Some(fp) = Self::get_peer_fingerprint(&connection) {
-                            fingerprint = fp;
-                        }
+                    if fingerprint == "unknown"
+                        && let Some(fp) = Self::get_peer_fingerprint(&connection)
+                    {
+                        fingerprint = fp;
                     }
 
                     match type_buf[0] {
@@ -810,8 +810,10 @@ impl QuicTransport {
                         remote_addr, reason
                     );
 
-                    if reason.reason == &b"unpaired"[..] || reason.reason == &b"forgotten"[..] {
-                        let unpair_reason = if reason.reason == &b"forgotten"[..] {
+                    if reason.reason == b"unpaired".as_slice()
+                        || reason.reason == b"forgotten".as_slice()
+                    {
+                        let unpair_reason = if reason.reason == b"forgotten".as_slice() {
                             UnpairReason::Forgotten
                         } else {
                             UnpairReason::Unpaired

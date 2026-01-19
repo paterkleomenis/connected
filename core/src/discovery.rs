@@ -336,9 +336,11 @@ impl DiscoveryService {
             (None, Some(device)) => Some(DiscoveryEvent::DeviceFound(device)),
             (Some(_), None) => Some(DiscoveryEvent::DeviceLost(device_id.to_string())),
             (Some(prev), Some(curr)) => {
-                if prev_source != new_source {
-                    Some(DiscoveryEvent::DeviceFound(curr))
-                } else if new_source == Some(DiscoverySource::Discovered) && prev != curr {
+                let source_changed = prev_source != new_source;
+                let discovered_changed =
+                    new_source == Some(DiscoverySource::Discovered) && prev != curr;
+
+                if source_changed || discovered_changed {
                     Some(DiscoveryEvent::DeviceFound(curr))
                 } else {
                     None
@@ -405,9 +407,7 @@ impl DiscoveryService {
         device_id: &str,
         source: DiscoverySource,
     ) -> Option<DiscoveryEvent> {
-        let Some(tracked) = devices.get_mut(device_id) else {
-            return None;
-        };
+        let tracked = devices.get_mut(device_id)?;
 
         let prev_source = tracked.active_source();
         let prev_device = tracked.active_device();
@@ -608,7 +608,7 @@ impl DiscoveryService {
         let device_type = info
             .txt_properties
             .get("type")
-            .map(|v| DeviceType::from_str(v.val_str()))
+            .map(|v| v.val_str().parse().unwrap_or(DeviceType::Unknown))
             .unwrap_or(DeviceType::Unknown);
 
         // Get best IP address (prefer IPv4 for compatibility)

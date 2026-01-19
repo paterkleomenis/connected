@@ -707,11 +707,11 @@ impl ConnectedClient {
             Ok(Err(e)) => Err(ConnectedError::PairingFailed(e.to_string())),
             Err(_) => {
                 // Final check - maybe trust was established just before timeout
-                if let Some(fp) = self.transport.get_connection_fingerprint(addr).await {
-                    if self.key_store.read().is_trusted(&fp) {
-                        info!("Pairing completed (trust established at timeout boundary)");
-                        return Ok(());
-                    }
+                if let Some(fp) = self.transport.get_connection_fingerprint(addr).await
+                    && self.key_store.read().is_trusted(&fp)
+                {
+                    info!("Pairing completed (trust established at timeout boundary)");
+                    return Ok(());
                 }
                 Err(ConnectedError::Timeout("Handshake timeout".to_string()))
             }

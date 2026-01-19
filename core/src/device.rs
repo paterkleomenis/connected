@@ -11,16 +11,6 @@ pub enum DeviceType {
 }
 
 impl DeviceType {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "android" => DeviceType::Android,
-            "linux" => DeviceType::Linux,
-            "windows" => DeviceType::Windows,
-            "macos" => DeviceType::MacOS,
-            _ => DeviceType::Unknown,
-        }
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             DeviceType::Android => "android",
@@ -28,6 +18,20 @@ impl DeviceType {
             DeviceType::Windows => "windows",
             DeviceType::MacOS => "macos",
             DeviceType::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::str::FromStr for DeviceType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "android" => Ok(DeviceType::Android),
+            "linux" => Ok(DeviceType::Linux),
+            "windows" => Ok(DeviceType::Windows),
+            "macos" => Ok(DeviceType::MacOS),
+            _ => Ok(DeviceType::Unknown),
         }
     }
 }

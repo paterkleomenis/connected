@@ -54,7 +54,7 @@ impl KeyStore {
         };
 
         if !storage_dir.exists() {
-            std::fs::create_dir_all(&storage_dir).map_err(|e| ConnectedError::Io(e))?;
+            std::fs::create_dir_all(&storage_dir).map_err(ConnectedError::Io)?;
         }
 
         let (cert, key, device_id) = Self::load_or_create_identity(&storage_dir)?;
@@ -112,7 +112,7 @@ impl KeyStore {
     }
 
     fn load_identity_der(
-        path: &PathBuf,
+        path: &std::path::Path,
     ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>, String)> {
         let data = std::fs::read(path).map_err(ConnectedError::Io)?;
         let persisted: PersistedIdentityDer = serde_json::from_slice(&data).map_err(|e| {
@@ -142,7 +142,7 @@ impl KeyStore {
         ))
     }
 
-    fn load_known_peers(storage_dir: &PathBuf) -> Result<KnownPeers> {
+    fn load_known_peers(storage_dir: &std::path::Path) -> Result<KnownPeers> {
         let new_path = storage_dir.join("known_peers.json");
 
         if new_path.exists() {

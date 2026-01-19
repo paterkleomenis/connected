@@ -115,34 +115,30 @@ impl FileTransfer {
                     let it = walk_dir.into_iter();
 
                     for entry in it {
-                        let entry =
-                            entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                        let entry = entry.map_err(|e| std::io::Error::other(e))?;
                         let path = entry.path();
                         let name = path
                             .strip_prefix(&dir_path.parent().unwrap_or(&dir_path))
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+                            .map_err(|e| std::io::Error::other(e))?
                             .to_string_lossy()
                             .into_owned();
 
                         if path.is_file() {
                             zip.start_file(name, options)
-                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                                .map_err(|e| std::io::Error::other(e))?;
                             let mut f = std::fs::File::open(path)?;
                             std::io::copy(&mut f, &mut zip)?;
                         } else if !name.is_empty() {
                             zip.add_directory(name, options)
-                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                                .map_err(|e| std::io::Error::other(e))?;
                         }
                     }
-                    zip.finish()
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                    zip.finish().map_err(|e| std::io::Error::other(e))?;
 
                     Ok(archive_path)
                 })
                 .await
-                .map_err(|e| {
-                    ConnectedError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
-                })??;
+                .map_err(|e| ConnectedError::Io(std::io::Error::other(e)))??;
 
             path = temp_archive_path;
             is_temp_file = true;
@@ -408,14 +404,12 @@ impl FileTransfer {
         );
 
         // If we need user approval, emit Pending first
-        if !auto_accept {
-            if let Some(ref tx) = progress_tx {
-                let _ = tx.send(TransferProgress::Pending {
-                    filename: filename.clone(),
-                    total_size: file_size,
-                    mime_type: _mime_type.clone(),
-                });
-            }
+        if !auto_accept && let Some(ref tx) = progress_tx {
+            let _ = tx.send(TransferProgress::Pending {
+                filename: filename.clone(),
+                total_size: file_size,
+                mime_type: _mime_type.clone(),
+            });
         }
 
         // Accept or reject based on auto_accept or user decision
