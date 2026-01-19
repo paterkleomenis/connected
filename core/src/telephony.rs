@@ -163,17 +163,31 @@ pub enum TelephonyMessage {
     /// Response with conversations list
     ConversationsSyncResponse { conversations: Vec<Conversation> },
     /// Request messages for a specific thread
-    MessagesRequest { thread_id: String, limit: u32, before_timestamp: Option<u64> },
+    MessagesRequest {
+        thread_id: String,
+        limit: u32,
+        before_timestamp: Option<u64>,
+    },
     /// Response with messages
-    MessagesResponse { thread_id: String, messages: Vec<SmsMessage> },
+    MessagesResponse {
+        thread_id: String,
+        messages: Vec<SmsMessage>,
+    },
     /// Send a new SMS
     SendSms { to: String, body: String },
     /// SMS send result
-    SmsSendResult { success: bool, message_id: Option<String>, error: Option<String> },
+    SmsSendResult {
+        success: bool,
+        message_id: Option<String>,
+        error: Option<String>,
+    },
     /// New incoming SMS notification
     NewSmsNotification { message: SmsMessage },
     /// Request call log
-    CallLogRequest { limit: u32, before_timestamp: Option<u64> },
+    CallLogRequest {
+        limit: u32,
+        before_timestamp: Option<u64>,
+    },
     /// Response with call log
     CallLogResponse { entries: Vec<CallLogEntry> },
     /// Initiate a phone call
@@ -183,7 +197,10 @@ pub enum TelephonyMessage {
     /// Active call state update
     ActiveCallUpdate { call: Option<ActiveCall> },
     /// Mark messages as read
-    MarkMessagesRead { thread_id: String, message_ids: Vec<String> },
+    MarkMessagesRead {
+        thread_id: String,
+        message_ids: Vec<String>,
+    },
     /// Delete messages
     DeleteMessages { message_ids: Vec<String> },
     /// Delete conversation

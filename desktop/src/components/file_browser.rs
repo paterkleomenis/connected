@@ -1,8 +1,8 @@
-use crate::components::icon::{get_file_icon_type, Icon, IconType};
+use crate::components::icon::{Icon, IconType, get_file_icon_type};
 use crate::controller::AppAction;
 use crate::state::{
-    get_current_remote_files, get_current_remote_path, get_preview_data, get_remote_files_update,
-    get_thumbnails, get_thumbnails_update, DeviceInfo, PreviewData,
+    DeviceInfo, PreviewData, get_current_remote_files, get_current_remote_path, get_preview_data,
+    get_remote_files_update, get_thumbnails, get_thumbnails_update,
 };
 use crate::utils::format_file_size;
 use base64::Engine as _;
