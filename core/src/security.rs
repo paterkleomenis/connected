@@ -75,7 +75,7 @@ impl KeyStore {
     }
 
     fn load_or_create_identity(
-        storage_dir: &PathBuf,
+        storage_dir: &std::path::Path,
     ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>, String)> {
         let identity_path = storage_dir.join("identity.json");
 

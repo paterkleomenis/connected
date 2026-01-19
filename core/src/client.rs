@@ -1299,10 +1299,10 @@ impl ConnectedClient {
         };
 
         // Mark as unpaired in keystore immediately
-        if let Some(fp) = &fingerprint {
-            if let Err(e) = self.key_store.write().unpair_peer(fp.clone()) {
-                warn!("Failed to mark peer as unpaired in keystore: {}", e);
-            }
+        if let Some(fp) = &fingerprint
+            && let Err(e) = self.key_store.write().unpair_peer(fp.clone())
+        {
+            warn!("Failed to mark peer as unpaired in keystore: {}", e);
         }
 
         if let Some((ip, _)) = target {
@@ -2035,8 +2035,8 @@ impl ConnectedClient {
         let transport = self.transport.clone();
 
         for device in devices {
-            if trusted_ids.contains(&device.id) {
-                if let Some(ip) = device.ip_addr() {
+            if trusted_ids.contains(&device.id)
+                && let Some(ip) = device.ip_addr() {
                     let port = device.port;
                     let txt = text.clone();
                     let t = transport.clone();
@@ -2070,10 +2070,9 @@ impl ConnectedClient {
 
         let mut sent_count = 0;
         for task in tasks {
-            if let Ok(success) = task.await {
-                if success {
+            if let Ok(success) = task.await
+                && success {
                     sent_count += 1;
-                }
             }
         }
         Ok(sent_count)

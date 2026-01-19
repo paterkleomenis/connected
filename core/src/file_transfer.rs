@@ -115,25 +115,25 @@ impl FileTransfer {
                     let it = walk_dir.into_iter();
 
                     for entry in it {
-                        let entry = entry.map_err(|e| std::io::Error::other(e))?;
+                        let entry = entry.map_err(std::io::Error::other)?;
                         let path = entry.path();
                         let name = path
-                            .strip_prefix(&dir_path.parent().unwrap_or(&dir_path))
-                            .map_err(|e| std::io::Error::other(e))?
+                            .strip_prefix(dir_path.parent().unwrap_or(&dir_path))
+                            .map_err(std::io::Error::other)?
                             .to_string_lossy()
                             .into_owned();
 
                         if path.is_file() {
                             zip.start_file(name, options)
-                                .map_err(|e| std::io::Error::other(e))?;
+                                .map_err(std::io::Error::other)?;
                             let mut f = std::fs::File::open(path)?;
                             std::io::copy(&mut f, &mut zip)?;
                         } else if !name.is_empty() {
                             zip.add_directory(name, options)
-                                .map_err(|e| std::io::Error::other(e))?;
+                                .map_err(std::io::Error::other)?;
                         }
                     }
-                    zip.finish().map_err(|e| std::io::Error::other(e))?;
+                    zip.finish().map_err(std::io::Error::other)?;
 
                     Ok(archive_path)
                 })
