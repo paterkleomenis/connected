@@ -2027,14 +2027,14 @@ fn App() -> Element {
                             }
                         }
 
-                        if let Some(ref device) = *send_target_device.read() {
-                            if success {
-                                action_tx.send(AppAction::SendFile {
-                                    ip: device.ip.clone(),
-                                    port: device.port,
-                                    path: final_path
-                                });
-                            }
+                        if let Some(ref device) = *send_target_device.read()
+                            && success
+                        {
+                            action_tx.send(AppAction::SendFile {
+                                ip: device.ip.clone(),
+                                port: device.port,
+                                path: final_path
+                            });
                         }
                         show_send_dialog.set(false);
                         send_target_device.set(None);

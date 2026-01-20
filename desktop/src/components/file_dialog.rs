@@ -17,10 +17,8 @@ pub fn FileDialog(
             if let Some(path) = rfd::FileDialog::new().pick_folder() {
                 file_path.set(path.display().to_string());
             }
-        } else {
-            if let Some(path) = rfd::FileDialog::new().pick_file() {
-                file_path.set(path.display().to_string());
-            }
+        } else if let Some(path) = rfd::FileDialog::new().pick_file() {
+            file_path.set(path.display().to_string());
         }
     };
 
