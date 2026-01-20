@@ -14,6 +14,7 @@ kotlin {
 android {
     namespace = "com.connected.app"
     compileSdk = 36
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.connected.app"
@@ -108,7 +109,9 @@ dependencies {
 
 // Task to build Rust library for Android
 tasks.register<Exec>("buildRustDebug") {
+    val androidExtension = project.extensions.getByType(com.android.build.gradle.BaseExtension::class.java)
     workingDir = file("${project.rootDir}/../ffi")
+    environment("ANDROID_NDK_HOME", androidExtension.ndkDirectory.absolutePath)
     commandLine("cargo", "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
@@ -120,7 +123,9 @@ tasks.register<Exec>("buildRustDebug") {
 }
 
 tasks.register<Exec>("buildRustRelease") {
+    val androidExtension = project.extensions.getByType(com.android.build.gradle.BaseExtension::class.java)
     workingDir = file("${project.rootDir}/../ffi")
+    environment("ANDROID_NDK_HOME", androidExtension.ndkDirectory.absolutePath)
     commandLine("cargo", "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
