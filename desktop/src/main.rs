@@ -28,8 +28,8 @@ use dioxus::prelude::*;
 use state::*;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::debug;
-use utils::{get_hostname, get_system_clipboard};
+use tracing::{debug, error};
+use utils::{get_hostname, get_system_clipboard, zip_folder};
 
 fn format_timestamp(ts: u64) -> String {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -97,6 +97,7 @@ fn App() -> Element {
     let mut clipboard_sync_enabled = use_signal(get_clipboard_sync_enabled);
     let mut notifications = use_signal(Vec::<Notification>::new);
     let mut show_send_dialog = use_signal(|| false);
+    let mut send_dialog_is_folder = use_signal(|| false);
     let mut send_target_device = use_signal(|| None::<DeviceInfo>);
     let mut clipboard_text = use_signal(String::new);
     let mut show_rename_dialog = use_signal(|| false);
@@ -830,18 +831,35 @@ fn App() -> Element {
 
                                         div {
                                             class: "send-file-section",
-                                            h3 { "Send a File to {device.name}" }
-                                            button {
-                                                class: "primary-button",
-                                                onclick: {
-                                                    let device = device.clone();
-                                                    move |_| {
-                                                        send_target_device.set(Some(device.clone()));
-                                                        show_send_dialog.set(true);
-                                                    }
-                                                },
-                                                Icon { icon: IconType::Upload, size: 14, color: "currentColor".to_string() }
-                                                span { " Choose File" }
+                                            h3 { "Send a File or Folder to {device.name}" }
+                                            div {
+                                                style: "display: flex; gap: 10px;",
+                                                button {
+                                                    class: "primary-button",
+                                                    onclick: {
+                                                        let device = device.clone();
+                                                        move |_| {
+                                                            send_target_device.set(Some(device.clone()));
+                                                            send_dialog_is_folder.set(false);
+                                                            show_send_dialog.set(true);
+                                                        }
+                                                    },
+                                                    Icon { icon: IconType::Upload, size: 14, color: "currentColor".to_string() }
+                                                    span { " Choose File" }
+                                                }
+                                                button {
+                                                    class: "primary-button",
+                                                    onclick: {
+                                                        let device = device.clone();
+                                                        move |_| {
+                                                            send_target_device.set(Some(device.clone()));
+                                                            send_dialog_is_folder.set(true);
+                                                            show_send_dialog.set(true);
+                                                        }
+                                                    },
+                                                    Icon { icon: IconType::Folder, size: 14, color: "currentColor".to_string() }
+                                                    span { " Choose Folder" }
+                                                }
                                             }
                                         }
 
@@ -1988,17 +2006,35 @@ fn App() -> Element {
             if *show_send_dialog.read() {
                 FileDialog {
                     device: send_target_device.read().clone(),
+                    is_folder: *send_dialog_is_folder.read(),
                     on_close: move |_| {
                         show_send_dialog.set(false);
                         send_target_device.set(None);
                     },
                     on_send: move |path: String| {
+                        let is_folder = *send_dialog_is_folder.read();
+                        let mut final_path = path.clone();
+                        let mut success = true;
+
+                        if is_folder {
+                            match zip_folder(std::path::Path::new(&path)) {
+                                Ok(p) => final_path = p.to_string_lossy().to_string(),
+                                Err(e) => {
+                                    error!("Failed to zip folder: {}", e);
+                                    add_notification("Error", "Failed to zip folder", "error");
+                                    success = false;
+                                }
+                            }
+                        }
+
                         if let Some(ref device) = *send_target_device.read() {
-                            action_tx.send(AppAction::SendFile {
-                                ip: device.ip.clone(),
-                                port: device.port,
-                                path
-                            });
+                            if success {
+                                action_tx.send(AppAction::SendFile {
+                                    ip: device.ip.clone(),
+                                    port: device.port,
+                                    path: final_path
+                                });
+                            }
                         }
                         show_send_dialog.set(false);
                         send_target_device.set(None);

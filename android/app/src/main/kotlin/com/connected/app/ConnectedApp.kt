@@ -9,6 +9,9 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import uniffi.connected_ffi.*
 import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
@@ -136,6 +139,7 @@ class ConnectedApp(private val context: Context) {
                                 trustedDevices.clear()
                             }
                         }
+
                         android.bluetooth.BluetoothAdapter.STATE_ON -> {
                             Log.d("ConnectedApp", "Bluetooth turned on - refreshing")
                             scope.launch(Dispatchers.Main) {
@@ -147,6 +151,7 @@ class ConnectedApp(private val context: Context) {
                         }
                     }
                 }
+
                 android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION -> {
                     val state = intent.getIntExtra(
                         android.net.wifi.WifiManager.EXTRA_WIFI_STATE,
@@ -161,6 +166,7 @@ class ConnectedApp(private val context: Context) {
                                 trustedDevices.clear()
                             }
                         }
+
                         android.net.wifi.WifiManager.WIFI_STATE_ENABLED -> {
                             Log.d("ConnectedApp", "Wi-Fi turned on - restarting SDK")
                             val now = System.currentTimeMillis()
@@ -228,7 +234,11 @@ class ConnectedApp(private val context: Context) {
                     }
                     pendingPairingAwaitingIp.add(deviceId)
                     runOnMainThread {
-                        android.widget.Toast.makeText(context, "Connecting to device...", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(
+                            context,
+                            "Connecting to device...",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
                     }
                 }
             }
@@ -250,116 +260,118 @@ class ConnectedApp(private val context: Context) {
 
     // ... (rest of the class) ...
 
-        private val discoveryCallback = object : DiscoveryCallback {
+    private val discoveryCallback = object : DiscoveryCallback {
 
-            override fun onDeviceFound(device: DiscoveredDevice) {
+        override fun onDeviceFound(device: DiscoveredDevice) {
 
-                runOnMainThread {
+            runOnMainThread {
 
-                    val existingIndex = devices.indexOfFirst { it.id == device.id }
+                val existingIndex = devices.indexOfFirst { it.id == device.id }
 
-                    if (existingIndex >= 0) {
+                if (existingIndex >= 0) {
 
-                        devices[existingIndex] = device
+                    devices[existingIndex] = device
 
-                    } else {
+                } else {
 
-                        val staleIndex = devices.indexOfFirst { it.ip == device.ip && it.port == device.port }
+                    val staleIndex = devices.indexOfFirst { it.ip == device.ip && it.port == device.port }
 
-                        if (staleIndex >= 0) devices.removeAt(staleIndex)
+                    if (staleIndex >= 0) devices.removeAt(staleIndex)
 
-                        devices.add(device)
+                    devices.add(device)
 
+                }
+
+
+
+                if (isDeviceTrusted(device)) {
+                    locallyUnpairedDevices.remove(device.id)
+                    if (!trustedDevices.contains(device.id)) {
+                        trustedDevices.add(device.id)
                     }
 
-
-
-                    if (isDeviceTrusted(device)) {
-                        locallyUnpairedDevices.remove(device.id)
-                        if (!trustedDevices.contains(device.id)) {
-                            trustedDevices.add(device.id)
-                        }
-
-                        if (pendingPairing.contains(device.id)) {
-                            // Core auto-trusted (we initiated). Automatically finalize trusting in UI.
-                            pendingPairing.remove(device.id)
-                            runOnMainThread {
-                                android.widget.Toast.makeText(context, "Paired with ${device.name}", android.widget.Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    } else {
-                        if (trustedDevices.contains(device.id)) {
-                            trustedDevices.remove(device.id)
+                    if (pendingPairing.contains(device.id)) {
+                        // Core auto-trusted (we initiated). Automatically finalize trusting in UI.
+                        pendingPairing.remove(device.id)
+                        runOnMainThread {
+                            android.widget.Toast.makeText(
+                                context,
+                                "Paired with ${device.name}",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
                         }
                     }
-
-
-
-                    if (!isSyntheticIp(device.ip) && pendingPairingAwaitingIp.remove(device.id)) {
-
-                        sendPairRequest(device)
-
+                } else {
+                    if (trustedDevices.contains(device.id)) {
+                        trustedDevices.remove(device.id)
                     }
+                }
 
 
 
-                    if (!isSyntheticIp(device.ip)) {
+                if (!isSyntheticIp(device.ip) && pendingPairingAwaitingIp.remove(device.id)) {
 
-                        pendingFileTransfersAwaitingIp.remove(device.id)?.let { queue ->
+                    sendPairRequest(device)
 
-                            var nextPath = queue.poll()
+                }
 
-                            while (nextPath != null) {
 
-                                sendFileToDevice(device, "file://$nextPath") // Dummy URI reconstruction
 
-                                nextPath = queue.poll()
+                if (!isSyntheticIp(device.ip)) {
 
-                            }
+                    pendingFileTransfersAwaitingIp.remove(device.id)?.let { queue ->
+
+                        var nextPath = queue.poll()
+
+                        while (nextPath != null) {
+
+                            sendFileToDevice(device, "file://$nextPath") // Dummy URI reconstruction
+
+                            nextPath = queue.poll()
 
                         }
-
-                    }
-
-
-
-                    if (isDeviceTrusted(device)) {
-
-                        sendLastMediaStateIfAvailable(device)
 
                     }
 
                 }
 
-            }
 
 
+                if (isDeviceTrusted(device)) {
 
-            override fun onDeviceLost(deviceId: String) {
-
-                runOnMainThread {
-
-                    devices.removeAll { it.id == deviceId }
-
-                    trustedDevices.remove(deviceId)
-
-                    pendingPairingAwaitingIp.remove(deviceId)
-
-                    pendingFileTransfersAwaitingIp.remove(deviceId)
+                    sendLastMediaStateIfAvailable(device)
 
                 }
-
-            }
-
-
-
-            override fun onError(errorMsg: String) {
-
-                Log.e("ConnectedApp", "Discovery error: $errorMsg")
 
             }
 
         }
+
+
+        override fun onDeviceLost(deviceId: String) {
+
+            runOnMainThread {
+
+                devices.removeAll { it.id == deviceId }
+
+                trustedDevices.remove(deviceId)
+
+                pendingPairingAwaitingIp.remove(deviceId)
+
+                pendingFileTransfersAwaitingIp.remove(deviceId)
+
+            }
+
+        }
+
+
+        override fun onError(errorMsg: String) {
+
+            Log.e("ConnectedApp", "Discovery error: $errorMsg")
+
+        }
+
+    }
 
     private val transferCallback = object : FileTransferCallback {
         override fun onTransferRequest(transferId: String, filename: String, fileSize: ULong, fromDevice: String) {
@@ -398,7 +410,8 @@ class ConnectedApp(private val context: Context) {
 
         override fun onTransferCancelled() {
             transferStatus.value = "Cancelled"
-            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            val notificationManager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
             notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
         }
     }
@@ -409,14 +422,31 @@ class ConnectedApp(private val context: Context) {
             clipboardContent.value = text
             copyToClipboard(text)
             runOnMainThread {
-                android.widget.Toast.makeText(context, "Clipboard received from $fromDevice", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(
+                    context,
+                    "Clipboard received from $fromDevice",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
             }
         }
+
         override fun onClipboardSent(success: Boolean, errorMsg: String?) {
             if (!success) {
-                runOnMainThread { android.widget.Toast.makeText(context, "Send failed: $errorMsg", android.widget.Toast.LENGTH_LONG).show() }
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Send failed: $errorMsg",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
             } else {
-                runOnMainThread { android.widget.Toast.makeText(context, "Clipboard sent successfully", android.widget.Toast.LENGTH_SHORT).show() }
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Clipboard sent successfully",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
     }
@@ -427,7 +457,8 @@ class ConnectedApp(private val context: Context) {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 val clip = android.content.ClipData.newPlainText("Connected", text)
                 clipboard.setPrimaryClip(clip)
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+            }
         }
     }
 
@@ -445,11 +476,18 @@ class ConnectedApp(private val context: Context) {
                     MediaCommand.PREVIOUS -> android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS
                     MediaCommand.STOP -> android.view.KeyEvent.KEYCODE_MEDIA_STOP
                     MediaCommand.VOLUME_UP -> {
-                        audioManager.adjustVolume(android.media.AudioManager.ADJUST_RAISE, android.media.AudioManager.FLAG_SHOW_UI)
+                        audioManager.adjustVolume(
+                            android.media.AudioManager.ADJUST_RAISE,
+                            android.media.AudioManager.FLAG_SHOW_UI
+                        )
                         null
                     }
+
                     MediaCommand.VOLUME_DOWN -> {
-                        audioManager.adjustVolume(android.media.AudioManager.ADJUST_LOWER, android.media.AudioManager.FLAG_SHOW_UI)
+                        audioManager.adjustVolume(
+                            android.media.AudioManager.ADJUST_LOWER,
+                            android.media.AudioManager.FLAG_SHOW_UI
+                        )
                         null
                     }
                 }
@@ -462,6 +500,7 @@ class ConnectedApp(private val context: Context) {
                 if (wasActive) mediaSession?.isActive = true
             }
         }
+
         override fun onMediaStateUpdate(fromDevice: String, state: MediaState) {
             lastMediaSourceDevice = fromDevice
             currentMediaTitle.value = state.title ?: "Unknown Title"
@@ -485,7 +524,11 @@ class ConnectedApp(private val context: Context) {
                     if (!trustedDevices.contains(deviceId)) {
                         trustedDevices.add(deviceId)
                     }
-                    android.widget.Toast.makeText(context, "Reconnected with $deviceName", android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(
+                        context,
+                        "Reconnected with $deviceName",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
                 }
                 return
             }
@@ -515,7 +558,8 @@ class ConnectedApp(private val context: Context) {
 
     fun initialize() {
         try {
-            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            val wifiManager =
+                context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
             multicastLock = wifiManager.createMulticastLock("ConnectedMulticastLock")
             multicastLock?.setReferenceCounted(true)
             multicastLock?.acquire()
@@ -566,11 +610,17 @@ class ConnectedApp(private val context: Context) {
 
     fun cleanup() {
         Log.d("ConnectedApp", "Cleaning up resources")
-        try { context.unregisterReceiver(networkStateReceiver) } catch (e: Exception) {}
+        try {
+            context.unregisterReceiver(networkStateReceiver)
+        } catch (e: Exception) {
+        }
         stopClipboardSync()
         stopProximityManager()
         shutdown()
-        try { multicastLock?.release() } catch (e: Exception) {}
+        try {
+            multicastLock?.release()
+        } catch (e: Exception) {
+        }
     }
 
     fun runOnMainThread(action: () -> Unit) {
@@ -578,22 +628,37 @@ class ConnectedApp(private val context: Context) {
     }
 
     private fun showTransferNotification(request: TransferRequest) {
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val notificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         val channelId = "connected_transfer_channel"
-        val channel = android.app.NotificationChannel(channelId, "File Transfers", android.app.NotificationManager.IMPORTANCE_HIGH)
+        val channel = android.app.NotificationChannel(
+            channelId,
+            "File Transfers",
+            android.app.NotificationManager.IMPORTANCE_HIGH
+        )
         notificationManager.createNotificationChannel(channel)
 
         val acceptIntent = Intent(context, TransferActionReceiver::class.java).apply {
             action = "com.connected.app.ACTION_ACCEPT_TRANSFER"
             putExtra("transferId", request.id)
         }
-        val acceptPendingIntent = android.app.PendingIntent.getBroadcast(context, request.id.hashCode(), acceptIntent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+        val acceptPendingIntent = android.app.PendingIntent.getBroadcast(
+            context,
+            request.id.hashCode(),
+            acceptIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
 
         val rejectIntent = Intent(context, TransferActionReceiver::class.java).apply {
             action = "com.connected.app.ACTION_REJECT_TRANSFER"
             putExtra("transferId", request.id)
         }
-        val rejectPendingIntent = android.app.PendingIntent.getBroadcast(context, request.id.hashCode() + 1, rejectIntent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+        val rejectPendingIntent = android.app.PendingIntent.getBroadcast(
+            context,
+            request.id.hashCode() + 1,
+            rejectIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
 
         val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setContentTitle("Incoming File")
@@ -609,7 +674,8 @@ class ConnectedApp(private val context: Context) {
     }
 
     private fun showProgressNotification(title: String, current: Long, total: Long) {
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val notificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         val channelId = "connected_transfer_channel"
         val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setContentTitle(title)
@@ -629,7 +695,8 @@ class ConnectedApp(private val context: Context) {
     }
 
     private fun showCompletionNotification(filename: String) {
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val notificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
         val channelId = "connected_transfer_channel"
         val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
@@ -643,7 +710,8 @@ class ConnectedApp(private val context: Context) {
     }
 
     private fun showErrorNotification(error: String) {
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val notificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
         val channelId = "connected_transfer_channel"
         val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
@@ -664,7 +732,10 @@ class ConnectedApp(private val context: Context) {
                 put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
                 put(android.provider.MediaStore.MediaColumns.MIME_TYPE, getMimeType(filename))
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                    put(
+                        android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                        android.os.Environment.DIRECTORY_DOWNLOADS
+                    )
                     put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
                 }
             }
@@ -684,16 +755,25 @@ class ConnectedApp(private val context: Context) {
                     contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
                     resolver.update(itemUri, contentValues, null, null)
                 }
-                runOnMainThread { android.widget.Toast.makeText(context, "Saved to Downloads: $filename", android.widget.Toast.LENGTH_LONG).show() }
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Saved to Downloads: $filename",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
                 return itemUri
             }
-        } catch (e: Exception) { Log.e("ConnectedApp", "Failed to save to Downloads", e) }
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to save to Downloads", e)
+        }
         return null
     }
 
     private fun getMimeType(url: String): String {
         val ext = android.webkit.MimeTypeMap.getFileExtensionFromUrl(url)
-        return if (ext != null) android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*" else "*/*"
+        return if (ext != null) android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+            ?: "*/*" else "*/*"
     }
 
     private fun getPersistedRootUri(): Uri? {
@@ -707,15 +787,23 @@ class ConnectedApp(private val context: Context) {
             val provider = AndroidFilesystemProvider(context, uri)
             registerFilesystemProvider(provider)
             isFsProviderRegistered.value = true
-            sharedFolderName.value = if (uri.scheme == "file") "Full Device Access" else androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)?.name ?: uri.path
-        } catch (e: Exception) {}
+            sharedFolderName.value =
+                if (uri.scheme == "file") "Full Device Access" else androidx.documentfile.provider.DocumentFile.fromTreeUri(
+                    context,
+                    uri
+                )?.name ?: uri.path
+        } catch (e: Exception) {
+        }
     }
 
     fun isSyntheticIp(ip: String) = ip == "0.0.0.0" || ip.startsWith("198.18.")
 
     // Wrapper for DiscoveredDevice
     fun sendTrustConfirmationWrapper(device: DiscoveredDevice) {
-        try { sendTrustConfirmation(device.ip, device.port) } catch (e: Exception) {}
+        try {
+            sendTrustConfirmation(device.ip, device.port)
+        } catch (e: Exception) {
+        }
     }
 
     // Corrected signatures and helpers
@@ -727,7 +815,8 @@ class ConnectedApp(private val context: Context) {
             devices.addAll(list)
             trustedDevices.clear()
             list.forEach { if (isDeviceTrusted(it)) trustedDevices.add(it.id) }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+        }
     }
 
     fun getRealPathFromUri(contentUri: String): String? {
@@ -738,18 +827,23 @@ class ConnectedApp(private val context: Context) {
             }
             context.contentResolver.query(uri, null, null, null, null)?.use {
                 val nameIndex = it.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DATA)
-                if (nameIndex >= 0) { it.moveToFirst(); return it.getString(nameIndex) }
+                if (nameIndex >= 0) {
+                    it.moveToFirst(); return it.getString(nameIndex)
+                }
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+        }
         try {
             val uri = contentUri.toUri()
             context.contentResolver.openInputStream(uri)?.use { input ->
-                val fileName = androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)?.name ?: "temp_file"
+                val fileName =
+                    androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)?.name ?: "temp_file"
                 val tempFile = File(context.cacheDir, fileName)
                 tempFile.outputStream().use { output -> input.copyTo(output) }
                 return tempFile.absolutePath
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+        }
         return null
     }
 
@@ -767,7 +861,9 @@ class ConnectedApp(private val context: Context) {
                     dest.outputStream().use { output -> input.copyTo(output) }
                 }
                 true
-            } catch (e: Exception) { false }
+            } catch (e: Exception) {
+                false
+            }
         }
     }
 
@@ -775,11 +871,16 @@ class ConnectedApp(private val context: Context) {
     fun requestContactsSync(ip: String, port: UShort) = uniffi.connected_ffi.requestContactsSync(ip, port)
     fun requestConversationsSync(ip: String, port: UShort) = uniffi.connected_ffi.requestConversationsSync(ip, port)
     fun requestCallLog(ip: String, port: UShort, limit: UInt) = uniffi.connected_ffi.requestCallLog(ip, port, limit)
-    fun requestMessages(ip: String, port: UShort, threadId: String, limit: UInt) = uniffi.connected_ffi.requestMessages(ip, port, threadId, limit)
+    fun requestMessages(ip: String, port: UShort, threadId: String, limit: UInt) =
+        uniffi.connected_ffi.requestMessages(ip, port, threadId, limit)
+
     fun initiateCall(ip: String, port: UShort, number: String) = uniffi.connected_ffi.initiateCall(ip, port, number)
     fun sendSms(ip: String, port: UShort, to: String, body: String) = uniffi.connected_ffi.sendSms(ip, port, to, body)
-    fun sendCallAction(ip: String, port: UShort, action: CallAction) = uniffi.connected_ffi.sendCallAction(ip, port, action)
-    fun sendActiveCallUpdate(ip: String, port: UShort, call: FfiActiveCall?) = uniffi.connected_ffi.sendActiveCallUpdate(ip, port, call)
+    fun sendCallAction(ip: String, port: UShort, action: CallAction) =
+        uniffi.connected_ffi.sendCallAction(ip, port, action)
+
+    fun sendActiveCallUpdate(ip: String, port: UShort, call: FfiActiveCall?) =
+        uniffi.connected_ffi.sendActiveCallUpdate(ip, port, call)
 
     // Original methods that use DiscoveredDevice now delegate to these or extract props
 
@@ -827,7 +928,9 @@ class ConnectedApp(private val context: Context) {
     fun isDeviceTrusted(device: DiscoveredDevice): Boolean {
         return try {
             isDeviceTrusted(device.id)
-        } catch (e: Exception) { false }
+        } catch (e: Exception) {
+            false
+        }
     }
 
     // Missing method: sendFileToDevice
@@ -844,7 +947,11 @@ class ConnectedApp(private val context: Context) {
                     proximityManager?.requestConnect(device.id)
                     runOnMainThread {
                         android.widget.Toast
-                            .makeText(context, "Waiting for Wi-Fi Direct connection...", android.widget.Toast.LENGTH_SHORT)
+                            .makeText(
+                                context,
+                                "Waiting for Wi-Fi Direct connection...",
+                                android.widget.Toast.LENGTH_SHORT
+                            )
                             .show()
                     }
                     return
@@ -855,7 +962,11 @@ class ConnectedApp(private val context: Context) {
                     } catch (e: Exception) {
                         Log.e("ConnectedApp", "Send file failed", e)
                         runOnMainThread {
-                            android.widget.Toast.makeText(context, "Failed to send file", android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(
+                                context,
+                                "Failed to send file",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
                         }
                     }
                 }
@@ -868,11 +979,25 @@ class ConnectedApp(private val context: Context) {
         if (mediaSession == null) {
             mediaSession = MediaSessionCompat(context, "ConnectedMediaSession").apply {
                 setCallback(object : MediaSessionCompat.Callback() {
-                    override fun onPlay() { sendMediaCommand(MediaCommand.PLAY) }
-                    override fun onPause() { sendMediaCommand(MediaCommand.PAUSE) }
-                    override fun onSkipToNext() { sendMediaCommand(MediaCommand.NEXT) }
-                    override fun onSkipToPrevious() { sendMediaCommand(MediaCommand.PREVIOUS) }
-                    override fun onStop() { sendMediaCommand(MediaCommand.STOP) }
+                    override fun onPlay() {
+                        sendMediaCommand(MediaCommand.PLAY)
+                    }
+
+                    override fun onPause() {
+                        sendMediaCommand(MediaCommand.PAUSE)
+                    }
+
+                    override fun onSkipToNext() {
+                        sendMediaCommand(MediaCommand.NEXT)
+                    }
+
+                    override fun onSkipToPrevious() {
+                        sendMediaCommand(MediaCommand.PREVIOUS)
+                    }
+
+                    override fun onStop() {
+                        sendMediaCommand(MediaCommand.STOP)
+                    }
                 })
                 isActive = true
             }
@@ -903,7 +1028,9 @@ class ConnectedApp(private val context: Context) {
             if (device != null) {
                 try {
                     sendMediaCommand(device.ip, device.port, command)
-                } catch (e: Exception) { Log.e("ConnectedApp", "Media command failed", e) }
+                } catch (e: Exception) {
+                    Log.e("ConnectedApp", "Media command failed", e)
+                }
             }
         }
     }
@@ -913,22 +1040,25 @@ class ConnectedApp(private val context: Context) {
         override fun onCallStateChanged(call: FfiActiveCall?) {
             activeCall.value = call
             // Broadcast update to connected devices if trusted
-             devices.forEach { device ->
+            devices.forEach { device ->
                 if (isDeviceTrusted(device)) {
                     try {
-                         uniffi.connected_ffi.sendActiveCallUpdate(device.ip, device.port, call)
-                    } catch (e: Exception) {}
+                        uniffi.connected_ffi.sendActiveCallUpdate(device.ip, device.port, call)
+                    } catch (e: Exception) {
+                    }
                 }
             }
         }
+
         override fun onNewSmsReceived(message: FfiSmsMessage) {
             currentMessages.add(message)
-             // Broadcast to connected devices if trusted
-             devices.forEach { device ->
+            // Broadcast to connected devices if trusted
+            devices.forEach { device ->
                 if (isDeviceTrusted(device)) {
                     try {
-                         notifyNewSms(device.ip, device.port, message)
-                    } catch (e: Exception) {}
+                        notifyNewSms(device.ip, device.port, message)
+                    } catch (e: Exception) {
+                    }
                 }
             }
         }
@@ -957,17 +1087,21 @@ class ConnectedApp(private val context: Context) {
             if (isDeviceTrusted(device)) {
                 try {
                     notifyNewSms(device.ip, device.port, msg)
-                } catch (e: Exception) {}
+                } catch (e: Exception) {
+                }
             }
         }
     }
 
     private val telephonyCallback = object : TelephonyCallback {
         override fun onContactsSyncRequest(fromDevice: String, fromIp: String, fromPort: UShort) {
-             scope.launch {
-                 val contacts = telephonyProvider.getContacts()
-                 try { sendContacts(fromIp, fromPort, contacts) } catch (e: Exception) {}
-             }
+            scope.launch {
+                val contacts = telephonyProvider.getContacts()
+                try {
+                    sendContacts(fromIp, fromPort, contacts)
+                } catch (e: Exception) {
+                }
+            }
         }
 
         override fun onContactsReceived(fromDevice: String, contacts: List<FfiContact>) {
@@ -978,10 +1112,13 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onConversationsSyncRequest(fromDevice: String, fromIp: String, fromPort: UShort) {
-             scope.launch {
-                 val convos = telephonyProvider.getConversations()
-                 try { sendConversations(fromIp, fromPort, convos) } catch (e: Exception) {}
-             }
+            scope.launch {
+                val convos = telephonyProvider.getConversations()
+                try {
+                    sendConversations(fromIp, fromPort, convos)
+                } catch (e: Exception) {
+                }
+            }
         }
 
         override fun onConversationsReceived(fromDevice: String, conversations: List<FfiConversation>) {
@@ -991,15 +1128,24 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        override fun onMessagesRequest(fromDevice: String, fromIp: String, fromPort: UShort, threadId: String, limit: UInt) {
-             scope.launch {
-                 val msgs = telephonyProvider.getMessages(threadId, limit.toInt())
-                 try { sendMessages(fromIp, fromPort, threadId, msgs) } catch (e: Exception) {}
-             }
+        override fun onMessagesRequest(
+            fromDevice: String,
+            fromIp: String,
+            fromPort: UShort,
+            threadId: String,
+            limit: UInt
+        ) {
+            scope.launch {
+                val msgs = telephonyProvider.getMessages(threadId, limit.toInt())
+                try {
+                    sendMessages(fromIp, fromPort, threadId, msgs)
+                } catch (e: Exception) {
+                }
+            }
         }
 
         override fun onMessagesReceived(fromDevice: String, threadId: String, messages: List<FfiSmsMessage>) {
-             runOnMainThread {
+            runOnMainThread {
                 currentMessages.clear()
                 currentMessages.addAll(messages)
             }
@@ -1009,14 +1155,19 @@ class ConnectedApp(private val context: Context) {
             val result = telephonyProvider.sendSms(to, body)
             val success = result.isSuccess
             val error = result.exceptionOrNull()?.message
-            try { sendSmsSendResult(fromIp, fromPort, success, null, error) } catch (e: Exception) {}
+            try {
+                sendSmsSendResult(fromIp, fromPort, success, null, error)
+            } catch (e: Exception) {
+            }
         }
 
         override fun onSmsSendResult(success: Boolean, messageId: String?, error: String?) {
-             runOnMainThread {
-                 if (success) android.widget.Toast.makeText(context, "SMS Sent", android.widget.Toast.LENGTH_SHORT).show()
-                 else android.widget.Toast.makeText(context, "SMS Failed: $error", android.widget.Toast.LENGTH_LONG).show()
-             }
+            runOnMainThread {
+                if (success) android.widget.Toast.makeText(context, "SMS Sent", android.widget.Toast.LENGTH_SHORT)
+                    .show()
+                else android.widget.Toast.makeText(context, "SMS Failed: $error", android.widget.Toast.LENGTH_LONG)
+                    .show()
+            }
         }
 
         override fun onNewSms(fromDevice: String, message: FfiSmsMessage) {
@@ -1026,14 +1177,17 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onCallLogRequest(fromDevice: String, fromIp: String, fromPort: UShort, limit: UInt) {
-             scope.launch {
-                 val log = telephonyProvider.getCallLog(limit.toInt())
-                 try { sendCallLog(fromIp, fromPort, log) } catch (e: Exception) {}
-             }
+            scope.launch {
+                val log = telephonyProvider.getCallLog(limit.toInt())
+                try {
+                    sendCallLog(fromIp, fromPort, log)
+                } catch (e: Exception) {
+                }
+            }
         }
 
         override fun onCallLogReceived(fromDevice: String, entries: List<FfiCallLogEntry>) {
-             runOnMainThread {
+            runOnMainThread {
                 callLog.clear()
                 callLog.addAll(entries)
             }
@@ -1052,7 +1206,7 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onActiveCallUpdate(fromDevice: String, call: FfiActiveCall?) {
-             runOnMainThread { activeCall.value = call }
+            runOnMainThread { activeCall.value = call }
         }
     }
 
@@ -1072,9 +1226,10 @@ class ConnectedApp(private val context: Context) {
                     // Broadcast to trusted devices
                     devices.forEach { device ->
                         if (isDeviceTrusted(device)) {
-                             try {
+                            try {
                                 sendClipboard(device.ip, device.port, currentClip, clipboardCallback)
-                             } catch (e: Exception) {}
+                            } catch (e: Exception) {
+                            }
                         }
                     }
                 }
@@ -1099,10 +1254,14 @@ class ConnectedApp(private val context: Context) {
                 if (clipboard.hasPrimaryClip()) {
                     text = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
                 }
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+            }
             latch.countDown()
         }
-        try { latch.await(1, java.util.concurrent.TimeUnit.SECONDS) } catch (e: Exception) {}
+        try {
+            latch.await(1, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (e: Exception) {
+        }
         return text
     }
 
@@ -1119,8 +1278,12 @@ class ConnectedApp(private val context: Context) {
 
         // Persist permission
         try {
-            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        } catch (e: Exception) {}
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+        }
 
         registerFsProvider(uri)
     }
@@ -1169,9 +1332,10 @@ class ConnectedApp(private val context: Context) {
 
         devices.forEach { device ->
             if (isDeviceTrusted(device)) {
-                 try {
+                try {
                     sendMediaState(device.ip, device.port, state)
-                 } catch (e: Exception) {}
+                } catch (e: Exception) {
+                }
             }
         }
     }
@@ -1181,7 +1345,9 @@ class ConnectedApp(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 sendMediaCommand(device.ip, device.port, command)
-            } catch (e: Exception) { Log.e("ConnectedApp", "Media command failed", e) }
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Media command failed", e)
+            }
         }
     }
 
@@ -1200,24 +1366,30 @@ class ConnectedApp(private val context: Context) {
     // Send Clipboard Manually
     fun sendClipboard(device: DiscoveredDevice) {
         scope.launch {
-             if (!isAppInForeground.get()) {
-                 runOnMainThread {
-                     android.widget.Toast.makeText(
-                         context,
-                         "Open the app to access clipboard on Android 15",
-                         android.widget.Toast.LENGTH_SHORT
-                     ).show()
-                 }
-                 return@launch
-             }
-             val clip = getClipboardText()
-             if (clip.isNotEmpty()) {
-                 try {
-                     sendClipboard(device.ip, device.port, clip, clipboardCallback)
-                 } catch (e: Exception) {
-                     runOnMainThread { android.widget.Toast.makeText(context, "Failed to send clipboard", android.widget.Toast.LENGTH_SHORT).show() }
-                 }
-             }
+            if (!isAppInForeground.get()) {
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Open the app to access clipboard on Android 15",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+                return@launch
+            }
+            val clip = getClipboardText()
+            if (clip.isNotEmpty()) {
+                try {
+                    sendClipboard(device.ip, device.port, clip, clipboardCallback)
+                } catch (e: Exception) {
+                    runOnMainThread {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Failed to send clipboard",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
         }
     }
 
@@ -1237,7 +1409,11 @@ class ConnectedApp(private val context: Context) {
                 }
             } catch (e: Exception) {
                 runOnMainThread {
-                    android.widget.Toast.makeText(context, "Failed to browse: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(
+                        context,
+                        "Failed to browse: ${e.message}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
         }
@@ -1255,13 +1431,18 @@ class ConnectedApp(private val context: Context) {
                 val fileName = File(remotePath).name
                 val destFile = File(downloadDir, fileName)
                 requestDownloadFile(device.ip, device.port, remotePath, destFile.absolutePath)
-                 runOnMainThread {
-                     moveToDownloads(fileName)
-                     android.widget.Toast.makeText(context, "Downloaded $fileName", android.widget.Toast.LENGTH_SHORT).show()
-                 }
+                runOnMainThread {
+                    moveToDownloads(fileName)
+                    android.widget.Toast.makeText(context, "Downloaded $fileName", android.widget.Toast.LENGTH_SHORT)
+                        .show()
+                }
             } catch (e: Exception) {
-                 runOnMainThread {
-                    android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Download failed: ${e.message}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
         }
@@ -1272,58 +1453,144 @@ class ConnectedApp(private val context: Context) {
         val device = browsingDevice ?: return
         requestedThumbnails.add(path)
         scope.launch(Dispatchers.IO) {
-             try {
-                 val bytes = requestGetThumbnail(device.ip, device.port, path)
-                 if (bytes.isNotEmpty()) {
-                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                     if (bitmap != null) {
-                         runOnMainThread { thumbnails[path] = bitmap }
-                     }
-                 }
-             } catch (e: Exception) {}
-        }
-    }
-
-    // Folder Transfer (Recursive)
-    fun sendFolderToDevice(device: DiscoveredDevice, folderUri: Uri) {
-        scope.launch(Dispatchers.IO) {
-            val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, folderUri)
-            if (docFile != null && docFile.isDirectory) {
-                walkAndSend(device, docFile)
-            }
-        }
-    }
-
-    private fun walkAndSend(device: DiscoveredDevice, root: androidx.documentfile.provider.DocumentFile) {
-        root.listFiles().forEach { file ->
-            if (file.isDirectory) {
-                walkAndSend(device, file)
-            } else {
-                try {
-                    val tempFile = File(context.cacheDir, file.name ?: "temp")
-                    if (copyDocumentFileToLocal(file, tempFile)) {
-                        if (isSyntheticIp(device.ip)) {
-                            val queue = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
-                                ConcurrentLinkedQueue()
-                            }
-                            queue.add(tempFile.absolutePath)
-                            proximityManager?.requestConnect(device.id)
-                            runOnMainThread {
-                                android.widget.Toast
-                                    .makeText(
-                                        context,
-                                        "Waiting for Wi-Fi Direct connection...",
-                                        android.widget.Toast.LENGTH_SHORT
-                                    )
-                                    .show()
-                            }
-                        } else {
-                            sendFile(device.ip, device.port, tempFile.absolutePath)
-                        }
+            try {
+                val bytes = requestGetThumbnail(device.ip, device.port, path)
+                if (bytes.isNotEmpty()) {
+                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    if (bitmap != null) {
+                        runOnMainThread { thumbnails[path] = bitmap }
                     }
-                } catch (e: Exception) {}
+                }
+            } catch (e: Exception) {
             }
         }
+    }
+
+    // Folder Transfer (Zipped)
+
+    fun sendFolderToDevice(device: DiscoveredDevice, folderUri: Uri) {
+
+        scope.launch(Dispatchers.IO) {
+
+            val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, folderUri)
+
+            if (docFile != null && docFile.isDirectory) {
+
+                val folderName = docFile.name ?: "folder"
+
+                val zipFile = File(context.cacheDir, "$folderName.zip")
+
+
+
+                try {
+
+                    ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+
+                        zipRecursive(docFile, folderName, zos)
+
+                    }
+
+
+
+                    if (isSyntheticIp(device.ip)) {
+
+                        val queue = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
+
+                            ConcurrentLinkedQueue()
+
+                        }
+
+                        queue.add(zipFile.absolutePath)
+
+                        proximityManager?.requestConnect(device.id)
+
+                        runOnMainThread {
+
+                            android.widget.Toast
+
+                                .makeText(
+
+                                    context,
+
+                                    "Waiting for Wi-Fi Direct connection...",
+
+                                    android.widget.Toast.LENGTH_SHORT
+
+                                )
+
+                                .show()
+
+                        }
+
+                    } else {
+
+                        sendFile(device.ip, device.port, zipFile.absolutePath)
+
+                    }
+
+                } catch (e: Exception) {
+
+                    Log.e("ConnectedApp", "Failed to zip folder", e)
+
+                    runOnMainThread {
+
+                        android.widget.Toast.makeText(
+                            context,
+                            "Failed to zip folder: ${e.message}",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+
+                    }
+
+                }
+
+            }
+
+        }
+
+    }
+
+
+    private fun zipRecursive(
+        root: androidx.documentfile.provider.DocumentFile,
+        parentPath: String,
+        zos: ZipOutputStream
+    ) {
+
+        root.listFiles().forEach { file ->
+
+            val entryPath = if (parentPath.isEmpty()) file.name ?: "" else "$parentPath/${file.name}"
+
+            if (file.isDirectory) {
+
+                zipRecursive(file, entryPath, zos)
+
+            } else {
+
+                try {
+
+                    val entry = ZipEntry(entryPath)
+
+                    zos.putNextEntry(entry)
+
+                    context.contentResolver.openInputStream(file.uri)?.use { input ->
+
+                        input.copyTo(zos)
+
+                    }
+
+                    zos.closeEntry()
+
+                } catch (e: Exception) {
+
+                    Log.e("ConnectedApp", "Failed to zip file: ${file.name}", e)
+
+                }
+
+            }
+
+        }
+
     }
 
     // Device Management Wrappers
@@ -1345,7 +1612,11 @@ class ConnectedApp(private val context: Context) {
             } catch (e: Exception) {
                 Log.e("ConnectedApp", "Unpair failed", e)
                 runOnMainThread {
-                    android.widget.Toast.makeText(context, "Unpair failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                    android.widget.Toast.makeText(
+                        context,
+                        "Unpair failed: ${e.message}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
@@ -1364,7 +1635,11 @@ class ConnectedApp(private val context: Context) {
             } catch (e: Exception) {
                 Log.e("ConnectedApp", "Forget failed", e)
                 runOnMainThread {
-                    android.widget.Toast.makeText(context, "Forget failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                    android.widget.Toast.makeText(
+                        context,
+                        "Forget failed: ${e.message}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
@@ -1386,41 +1661,53 @@ class ConnectedApp(private val context: Context) {
                 }
                 pairingRequest.value = null
                 runOnMainThread {
-                     locallyUnpairedDevices.remove(request.deviceId)
-                     pendingPairing.remove(request.deviceId)
-                     if (!trustedDevices.contains(request.deviceId)) {
-                         trustedDevices.add(request.deviceId)
-                     }
-                     android.widget.Toast.makeText(context, "Device trusted", android.widget.Toast.LENGTH_SHORT).show()
+                    locallyUnpairedDevices.remove(request.deviceId)
+                    pendingPairing.remove(request.deviceId)
+                    if (!trustedDevices.contains(request.deviceId)) {
+                        trustedDevices.add(request.deviceId)
+                    }
+                    android.widget.Toast.makeText(context, "Device trusted", android.widget.Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
-                 runOnMainThread {
-                     android.widget.Toast.makeText(context, "Failed to trust: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
-                 }
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Failed to trust: ${e.message}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
     }
 
-        fun acceptTransfer(request: TransferRequest) {
-             scope.launch(Dispatchers.IO) {
-                 try { acceptFileTransfer(request.id) } catch (e: Exception) {}
-                 transferRequest.value = null
-                 dismissTransferNotification()
-             }
+    fun acceptTransfer(request: TransferRequest) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                acceptFileTransfer(request.id)
+            } catch (e: Exception) {
+            }
+            transferRequest.value = null
+            dismissTransferNotification()
         }
+    }
 
-        fun rejectTransfer(request: TransferRequest) {
-             scope.launch(Dispatchers.IO) {
-                 try { rejectFileTransfer(request.id) } catch (e: Exception) {}
-                 transferRequest.value = null
-                 dismissTransferNotification()
-             }
+    fun rejectTransfer(request: TransferRequest) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                rejectFileTransfer(request.id)
+            } catch (e: Exception) {
+            }
+            transferRequest.value = null
+            dismissTransferNotification()
         }
+    }
 
-        fun dismissTransferNotification() {
-            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-            notificationManager.cancel(NOTIFICATION_ID_REQUEST)
-        }
+    fun dismissTransferNotification() {
+        val notificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        notificationManager.cancel(NOTIFICATION_ID_REQUEST)
+    }
+
     // Permission Helpers
     fun isFullAccessGranted(): Boolean {
         return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
@@ -1436,7 +1723,8 @@ class ConnectedApp(private val context: Context) {
             val uri = Uri.fromFile(root)
             setRootUri(uri)
             runOnMainThread {
-                android.widget.Toast.makeText(context, "Full Device Access Enabled", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, "Full Device Access Enabled", android.widget.Toast.LENGTH_SHORT)
+                    .show()
             }
         }
     }

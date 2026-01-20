@@ -105,3 +105,38 @@ pub fn get_hostname() -> String {
     }
     "Desktop".to_string()
 }
+
+pub fn zip_folder(folder_path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let folder_name = folder_path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid folder path")
+    })?;
+
+    let zip_filename = format!("{}.zip", folder_name.to_string_lossy());
+    let mut temp_path = std::env::temp_dir();
+    temp_path.push(zip_filename);
+
+    let file = std::fs::File::create(&temp_path)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+    let walker = walkdir::WalkDir::new(folder_path);
+    let it = walker.into_iter();
+
+    for entry in it.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = path.strip_prefix(folder_path.parent().unwrap()).unwrap();
+        let path_as_string = name.to_string_lossy();
+
+        if path.is_file() {
+            zip.start_file(path_as_string, options)?;
+            let mut f = std::fs::File::open(path)?;
+            std::io::copy(&mut f, &mut zip)?;
+        } else if !name.as_os_str().is_empty() {
+            zip.add_directory(path_as_string, options)?;
+        }
+    }
+
+    zip.finish()?;
+    Ok(temp_path)
+}

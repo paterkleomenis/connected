@@ -5,6 +5,7 @@ use dioxus::prelude::*;
 #[component]
 pub fn FileDialog(
     device: Option<DeviceInfo>,
+    is_folder: bool,
     on_close: EventHandler<()>,
     on_send: EventHandler<String>,
 ) -> Element {
@@ -12,8 +13,14 @@ pub fn FileDialog(
     let mut drag_over = use_signal(|| false);
 
     let browse_file = move |_| {
-        if let Some(path) = rfd::FileDialog::new().pick_file() {
-            file_path.set(path.display().to_string());
+        if is_folder {
+            if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                file_path.set(path.display().to_string());
+            }
+        } else {
+            if let Some(path) = rfd::FileDialog::new().pick_file() {
+                file_path.set(path.display().to_string());
+            }
         }
     };
 
@@ -23,6 +30,32 @@ pub fn FileDialog(
         .unwrap_or_else(|| "Unknown Device".to_string());
 
     let has_file = !file_path.read().is_empty();
+
+    let title_text = if is_folder {
+        " Send Folder"
+    } else {
+        " Send File"
+    };
+    let drop_text = if is_folder {
+        "Click to browse a folder"
+    } else {
+        "Click to browse or drag a file here"
+    };
+    let support_text = if is_folder {
+        "Folder will be sent as a zip archive"
+    } else {
+        "Supports all file types"
+    };
+    let button_text = if is_folder {
+        " Send Folder"
+    } else {
+        " Send File"
+    };
+    let select_text = if is_folder {
+        "Select a Folder"
+    } else {
+        "Select a File"
+    };
 
     rsx! {
         div {
@@ -37,7 +70,7 @@ pub fn FileDialog(
                     class: "dialog-header",
                     h2 {
                         Icon { icon: IconType::Send, size: 18, color: "var(--accent)".to_string() }
-                        span { " Send File" }
+                        span { "{title_text}" }
                     }
                     button {
                         class: "dialog-close",
@@ -71,8 +104,8 @@ pub fn FileDialog(
                                 class: "drop-icon",
                                 Icon { icon: IconType::Upload, size: 48, color: "var(--text-tertiary)".to_string() }
                             }
-                            p { "Click to browse or drag a file here" }
-                            p { class: "muted", style: "font-size: 12px; margin-top: 8px;", "Supports all file types" }
+                            p { "{drop_text}" }
+                            p { class: "muted", style: "font-size: 12px; margin-top: 8px;", "{support_text}" }
                         } else {
                             div {
                                 class: "drop-icon",
@@ -111,9 +144,9 @@ pub fn FileDialog(
                             },
                             if has_file {
                                 Icon { icon: IconType::Send, size: 14, color: "currentColor".to_string() }
-                                span { " Send File" }
+                                span { "{button_text}" }
                             } else {
-                                span { "Select a File" }
+                                span { "{select_text}" }
                             }
                         }
                     }
