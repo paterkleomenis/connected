@@ -27,13 +27,11 @@ image = "0.25.9"
 btleplug = "0.11.8"
 uuid = { workspace = true }
 notify-rust = "4.11.7"
-crc = "3.4.0"
 rcgen = "0.14.6"
-zip = "0.6"
 walkdir = "2"
-toml = "0.8.23"
-toml_datetime = "0.6.11"
-toml_edit = "0.20.7"
+toml = "0.9"
+toml_datetime = "0.7"
+toml_edit = "0.24"
 uniffi = "0.31.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]

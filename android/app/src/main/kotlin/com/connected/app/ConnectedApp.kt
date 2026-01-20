@@ -1216,10 +1216,6 @@ class ConnectedApp(private val context: Context) {
         isClipboardSyncEnabled.value = true
         clipboardSyncJob = scope.launch {
             while (isActive) {
-                if (!isAppInForeground.get()) {
-                    delay(1000)
-                    continue
-                }
                 val currentClip = getClipboardText()
                 if (currentClip.isNotEmpty() && currentClip != lastLocalClipboard && currentClip != lastRemoteClipboard) {
                     lastLocalClipboard = currentClip

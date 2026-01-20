@@ -645,6 +645,7 @@ class ConnectedSdk private constructor() {
             Log.e(TAG, "Failed to acquire multicast lock: ${e.message}")
         }
     }
+
     private fun releaseMulticastLock() {
         try {
             multicastLock?.let { lock ->

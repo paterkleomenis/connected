@@ -219,6 +219,7 @@ class MainActivity : ComponentActivity() {
                     connectedApp.setPendingShare(listOf(uri))
                 }
             }
+
             Intent.ACTION_SEND_MULTIPLE -> {
                 val uris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
                     ?: intent.clipData?.let { clip ->
@@ -512,8 +513,16 @@ fun NotificationWarningCard(packageName: String) {
             )
             Spacer(modifier = Modifier.width(16.dp))
             Column {
-                Text("Notifications Disabled", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer)
-                Text("Enable notifications to receive files.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                Text(
+                    "Notifications Disabled",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+                Text(
+                    "Enable notifications to receive files.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
             }
         }
     }
@@ -533,7 +542,8 @@ fun HomeScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                val notificationManager =
+                    context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
                 areNotificationsEnabled = notificationManager.areNotificationsEnabled()
             }
         }

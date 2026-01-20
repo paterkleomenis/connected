@@ -28,8 +28,8 @@ use dioxus::prelude::*;
 use state::*;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::{debug, error};
-use utils::{get_hostname, get_system_clipboard, zip_folder};
+use tracing::debug;
+use utils::{get_hostname, get_system_clipboard};
 
 fn format_timestamp(ts: u64) -> String {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -2012,20 +2012,8 @@ fn App() -> Element {
                         send_target_device.set(None);
                     },
                     on_send: move |path: String| {
-                        let is_folder = *send_dialog_is_folder.read();
-                        let mut final_path = path.clone();
-                        let mut success = true;
-
-                        if is_folder {
-                            match zip_folder(std::path::Path::new(&path)) {
-                                Ok(p) => final_path = p.to_string_lossy().to_string(),
-                                Err(e) => {
-                                    error!("Failed to zip folder: {}", e);
-                                    add_notification("Error", "Failed to zip folder", "error");
-                                    success = false;
-                                }
-                            }
-                        }
+                        let final_path = path.clone();
+                        let success = true;
 
                         if let Some(ref device) = *send_target_device.read()
                             && success

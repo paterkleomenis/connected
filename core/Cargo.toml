@@ -28,10 +28,10 @@ dirs = "6"
 sha2 = "0.10.9"
 if-addrs = "0.14.0"
 blake3 = "1.8.2"
-zip = { version = "7.1.0", default-features = false, features = ["deflate", "time"] }
+zip = { version = "7.2.0", default-features = false, features = ["deflate", "time"] }
 walkdir = "2.5.0"
 
 [target.'cfg(target_os = "android")'.dependencies]
-android_logger = "0.14"
+android_logger = "0.15"
 log = "0.4"
 tracing-log = "0.2"
