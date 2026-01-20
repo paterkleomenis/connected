@@ -1,5 +1,6 @@
 import com.android.build.api.dsl.ApplicationExtension
 import org.gradle.api.JavaVersion
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -111,9 +112,16 @@ dependencies {
 
 // Task to build Rust library for Android
 tasks.register<Exec>("buildRustDebug") {
-    val androidExtension = project.extensions.getByType(com.android.build.gradle.BaseExtension::class.java)
+    val properties = Properties()
+    val localProperties = project.rootProject.file("local.properties")
+    if (localProperties.exists()) {
+        localProperties.inputStream().use { stream -> properties.load(stream) }
+    }
+    val sdkDir = properties.getProperty("sdk.dir") ?: System.getenv("ANDROID_HOME")
+    val ndkDir = File(sdkDir, "ndk/27.0.12077973")
+
     workingDir = file("${project.rootDir}/../ffi")
-    environment("ANDROID_NDK_HOME", androidExtension.ndkDirectory.absolutePath)
+    environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
     commandLine("cargo", "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
@@ -125,9 +133,16 @@ tasks.register<Exec>("buildRustDebug") {
 }
 
 tasks.register<Exec>("buildRustRelease") {
-    val androidExtension = project.extensions.getByType(com.android.build.gradle.BaseExtension::class.java)
+    val properties = Properties()
+    val localProperties = project.rootProject.file("local.properties")
+    if (localProperties.exists()) {
+        localProperties.inputStream().use { stream -> properties.load(stream) }
+    }
+    val sdkDir = properties.getProperty("sdk.dir") ?: System.getenv("ANDROID_HOME")
+    val ndkDir = File(sdkDir, "ndk/27.0.12077973")
+
     workingDir = file("${project.rootDir}/../ffi")
-    environment("ANDROID_NDK_HOME", androidExtension.ndkDirectory.absolutePath)
+    environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
     commandLine("cargo", "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
