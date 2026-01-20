@@ -5,16 +5,12 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.util.Log
 import android.net.Uri
-import android.database.Cursor
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import uniffi.connected_ffi.*
 import java.io.File
-import java.io.InputStream
-import java.io.OutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import java.util.concurrent.ConcurrentHashMap
@@ -25,6 +21,8 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.graphics.BitmapFactory
+import androidx.core.content.edit
+import androidx.core.net.toUri
 
 class ConnectedApp(private val context: Context) {
 
@@ -93,7 +91,7 @@ class ConnectedApp(private val context: Context) {
 
     private val isAppInForeground = AtomicBoolean(false)
     private val scope =
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
 
     val unpairNotification = mutableStateOf<String?>(null)
 
@@ -203,7 +201,7 @@ class ConnectedApp(private val context: Context) {
 
     fun renameDevice(newName: String) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(PREF_DEVICE_NAME, newName).apply()
+        prefs.edit { putString(PREF_DEVICE_NAME, newName) }
         cleanup()
         initialize()
         android.widget.Toast.makeText(context, "Device renamed to $newName", android.widget.Toast.LENGTH_SHORT).show()
@@ -212,7 +210,7 @@ class ConnectedApp(private val context: Context) {
     // Renamed wrappers to avoid conflict with imported FFI functions
     fun beginDiscovery() {
         try {
-            uniffi.connected_ffi.startDiscovery(discoveryCallback)
+            startDiscovery(discoveryCallback)
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Start discovery failed", e)
         }
@@ -224,7 +222,7 @@ class ConnectedApp(private val context: Context) {
             manager.onPairingIntent = { deviceId ->
                 if (!pendingPairing.contains(deviceId)) {
                     try {
-                        uniffi.connected_ffi.setPairingMode(true)
+                        setPairingMode(true)
                     } catch (e: Exception) {
                         Log.w("ConnectedApp", "Failed to enable pairing mode", e)
                     }
@@ -528,24 +526,24 @@ class ConnectedApp(private val context: Context) {
             val storagePath = context.getExternalFilesDir(null)?.absolutePath ?: ""
 
             try {
-                uniffi.connected_ffi.initialize(getDeviceName(), "Mobile", 0u.toUShort(), storagePath)
+                initialize(getDeviceName(), "Mobile", 0u.toUShort(), storagePath)
             } catch (e: Exception) {
                 Log.w("ConnectedApp", "Core might be already initialized: ${e.message}")
             }
 
-            uniffi.connected_ffi.startDiscovery(discoveryCallback)
-            uniffi.connected_ffi.registerTransferCallback(transferCallback)
-            uniffi.connected_ffi.registerClipboardReceiver(clipboardCallback)
-            uniffi.connected_ffi.registerPairingCallback(pairingCallback)
-            uniffi.connected_ffi.registerUnpairCallback(unpairCallback)
-            uniffi.connected_ffi.registerMediaControlCallback(mediaCallback)
+            startDiscovery(discoveryCallback)
+            registerTransferCallback(transferCallback)
+            registerClipboardReceiver(clipboardCallback)
+            registerPairingCallback(pairingCallback)
+            registerUnpairCallback(unpairCallback)
+            registerMediaControlCallback(mediaCallback)
 
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             if (prefs.getBoolean(PREF_TELEPHONY_ENABLED, false)) {
                 isTelephonyEnabled.value = true
                 telephonyProvider.setListener(telephonyListener)
                 telephonyProvider.registerReceivers()
-                uniffi.connected_ffi.registerTelephonyCallback(telephonyCallback)
+                registerTelephonyCallback(telephonyCallback)
             }
 
             startProximityManager()
@@ -571,7 +569,7 @@ class ConnectedApp(private val context: Context) {
         try { context.unregisterReceiver(networkStateReceiver) } catch (e: Exception) {}
         stopClipboardSync()
         stopProximityManager()
-        uniffi.connected_ffi.shutdown()
+        shutdown()
         try { multicastLock?.release() } catch (e: Exception) {}
     }
 
@@ -582,10 +580,8 @@ class ConnectedApp(private val context: Context) {
     private fun showTransferNotification(request: TransferRequest) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         val channelId = "connected_transfer_channel"
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            val channel = android.app.NotificationChannel(channelId, "File Transfers", android.app.NotificationManager.IMPORTANCE_HIGH)
-            notificationManager.createNotificationChannel(channel)
-        }
+        val channel = android.app.NotificationChannel(channelId, "File Transfers", android.app.NotificationManager.IMPORTANCE_HIGH)
+        notificationManager.createNotificationChannel(channel)
 
         val acceptIntent = Intent(context, TransferActionReceiver::class.java).apply {
             action = "com.connected.app.ACTION_ACCEPT_TRANSFER"
@@ -703,13 +699,13 @@ class ConnectedApp(private val context: Context) {
     private fun getPersistedRootUri(): Uri? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val uriString = prefs.getString(PREF_ROOT_URI, null) ?: return null
-        return Uri.parse(uriString)
+        return uriString.toUri()
     }
 
     fun registerFsProvider(uri: Uri) {
         try {
             val provider = AndroidFilesystemProvider(context, uri)
-            uniffi.connected_ffi.registerFilesystemProvider(provider)
+            registerFilesystemProvider(provider)
             isFsProviderRegistered.value = true
             sharedFolderName.value = if (uri.scheme == "file") "Full Device Access" else androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)?.name ?: uri.path
         } catch (e: Exception) {}
@@ -719,14 +715,14 @@ class ConnectedApp(private val context: Context) {
 
     // Wrapper for DiscoveredDevice
     fun sendTrustConfirmationWrapper(device: DiscoveredDevice) {
-        try { uniffi.connected_ffi.sendTrustConfirmation(device.ip, device.port) } catch (e: Exception) {}
+        try { sendTrustConfirmation(device.ip, device.port) } catch (e: Exception) {}
     }
 
     // Corrected signatures and helpers
     private fun sendTrustConfirmation(device: DiscoveredDevice) = sendTrustConfirmationWrapper(device)
     fun getDevices() {
         try {
-            val list = uniffi.connected_ffi.getDiscoveredDevices()
+            val list = getDiscoveredDevices()
             devices.clear()
             devices.addAll(list)
             trustedDevices.clear()
@@ -736,7 +732,7 @@ class ConnectedApp(private val context: Context) {
 
     fun getRealPathFromUri(contentUri: String): String? {
         try {
-            val uri = Uri.parse(contentUri)
+            val uri = contentUri.toUri()
             if (uri.scheme == "file") {
                 return uri.path
             }
@@ -746,7 +742,7 @@ class ConnectedApp(private val context: Context) {
             }
         } catch (e: Exception) {}
         try {
-            val uri = Uri.parse(contentUri)
+            val uri = contentUri.toUri()
             context.contentResolver.openInputStream(uri)?.use { input ->
                 val fileName = androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)?.name ?: "temp_file"
                 val tempFile = File(context.cacheDir, fileName)
@@ -790,7 +786,7 @@ class ConnectedApp(private val context: Context) {
     fun sendPairRequest(device: DiscoveredDevice) {
         if (isSyntheticIp(device.ip)) {
             try {
-                uniffi.connected_ffi.setPairingMode(true)
+                setPairingMode(true)
             } catch (e: Exception) {
                 Log.w("ConnectedApp", "Failed to enable pairing mode", e)
             }
@@ -804,7 +800,7 @@ class ConnectedApp(private val context: Context) {
             }
             return
         }
-        uniffi.connected_ffi.pairDevice(device.ip, device.port)
+        pairDevice(device.ip, device.port)
         android.widget.Toast.makeText(context, "Pairing request sent", android.widget.Toast.LENGTH_SHORT).show()
         if (!pendingPairing.contains(device.id)) pendingPairing.add(device.id)
     }
@@ -830,7 +826,7 @@ class ConnectedApp(private val context: Context) {
     // Missing method: isDeviceTrusted
     fun isDeviceTrusted(device: DiscoveredDevice): Boolean {
         return try {
-            uniffi.connected_ffi.isDeviceTrusted(device.id)
+            isDeviceTrusted(device.id)
         } catch (e: Exception) { false }
     }
 
@@ -855,7 +851,7 @@ class ConnectedApp(private val context: Context) {
                 }
                 scope.launch(Dispatchers.IO) {
                     try {
-                        uniffi.connected_ffi.sendFile(device.ip, device.port, file.absolutePath)
+                        sendFile(device.ip, device.port, file.absolutePath)
                     } catch (e: Exception) {
                         Log.e("ConnectedApp", "Send file failed", e)
                         runOnMainThread {
@@ -906,7 +902,7 @@ class ConnectedApp(private val context: Context) {
             val device = devices.find { it.id == deviceId }
             if (device != null) {
                 try {
-                    uniffi.connected_ffi.sendMediaCommand(device.ip, device.port, command)
+                    sendMediaCommand(device.ip, device.port, command)
                 } catch (e: Exception) { Log.e("ConnectedApp", "Media command failed", e) }
             }
         }
@@ -931,7 +927,7 @@ class ConnectedApp(private val context: Context) {
              devices.forEach { device ->
                 if (isDeviceTrusted(device)) {
                     try {
-                         uniffi.connected_ffi.notifyNewSms(device.ip, device.port, message)
+                         notifyNewSms(device.ip, device.port, message)
                     } catch (e: Exception) {}
                 }
             }
@@ -960,7 +956,7 @@ class ConnectedApp(private val context: Context) {
         devices.forEach { device ->
             if (isDeviceTrusted(device)) {
                 try {
-                    uniffi.connected_ffi.notifyNewSms(device.ip, device.port, msg)
+                    notifyNewSms(device.ip, device.port, msg)
                 } catch (e: Exception) {}
             }
         }
@@ -970,42 +966,42 @@ class ConnectedApp(private val context: Context) {
         override fun onContactsSyncRequest(fromDevice: String, fromIp: String, fromPort: UShort) {
              scope.launch {
                  val contacts = telephonyProvider.getContacts()
-                 try { uniffi.connected_ffi.sendContacts(fromIp, fromPort, contacts) } catch (e: Exception) {}
+                 try { sendContacts(fromIp, fromPort, contacts) } catch (e: Exception) {}
              }
         }
 
-        override fun onContactsReceived(fromDevice: String, contactsList: List<FfiContact>) {
+        override fun onContactsReceived(fromDevice: String, contacts: List<FfiContact>) {
             runOnMainThread {
-                contacts.clear()
-                contacts.addAll(contactsList)
+                this@ConnectedApp.contacts.clear()
+                this@ConnectedApp.contacts.addAll(contacts)
             }
         }
 
         override fun onConversationsSyncRequest(fromDevice: String, fromIp: String, fromPort: UShort) {
              scope.launch {
                  val convos = telephonyProvider.getConversations()
-                 try { uniffi.connected_ffi.sendConversations(fromIp, fromPort, convos) } catch (e: Exception) {}
+                 try { sendConversations(fromIp, fromPort, convos) } catch (e: Exception) {}
              }
         }
 
-        override fun onConversationsReceived(fromDevice: String, conversationsList: List<FfiConversation>) {
+        override fun onConversationsReceived(fromDevice: String, conversations: List<FfiConversation>) {
             runOnMainThread {
-                conversations.clear()
-                conversations.addAll(conversationsList)
+                this@ConnectedApp.conversations.clear()
+                this@ConnectedApp.conversations.addAll(conversations)
             }
         }
 
         override fun onMessagesRequest(fromDevice: String, fromIp: String, fromPort: UShort, threadId: String, limit: UInt) {
              scope.launch {
                  val msgs = telephonyProvider.getMessages(threadId, limit.toInt())
-                 try { uniffi.connected_ffi.sendMessages(fromIp, fromPort, threadId, msgs) } catch (e: Exception) {}
+                 try { sendMessages(fromIp, fromPort, threadId, msgs) } catch (e: Exception) {}
              }
         }
 
-        override fun onMessagesReceived(fromDevice: String, threadId: String, messagesList: List<FfiSmsMessage>) {
+        override fun onMessagesReceived(fromDevice: String, threadId: String, messages: List<FfiSmsMessage>) {
              runOnMainThread {
                 currentMessages.clear()
-                currentMessages.addAll(messagesList)
+                currentMessages.addAll(messages)
             }
         }
 
@@ -1013,7 +1009,7 @@ class ConnectedApp(private val context: Context) {
             val result = telephonyProvider.sendSms(to, body)
             val success = result.isSuccess
             val error = result.exceptionOrNull()?.message
-            try { uniffi.connected_ffi.sendSmsSendResult(fromIp, fromPort, success, null, error) } catch (e: Exception) {}
+            try { sendSmsSendResult(fromIp, fromPort, success, null, error) } catch (e: Exception) {}
         }
 
         override fun onSmsSendResult(success: Boolean, messageId: String?, error: String?) {
@@ -1032,7 +1028,7 @@ class ConnectedApp(private val context: Context) {
         override fun onCallLogRequest(fromDevice: String, fromIp: String, fromPort: UShort, limit: UInt) {
              scope.launch {
                  val log = telephonyProvider.getCallLog(limit.toInt())
-                 try { uniffi.connected_ffi.sendCallLog(fromIp, fromPort, log) } catch (e: Exception) {}
+                 try { sendCallLog(fromIp, fromPort, log) } catch (e: Exception) {}
              }
         }
 
@@ -1077,7 +1073,7 @@ class ConnectedApp(private val context: Context) {
                     devices.forEach { device ->
                         if (isDeviceTrusted(device)) {
                              try {
-                                uniffi.connected_ffi.sendClipboard(device.ip, device.port, currentClip, clipboardCallback)
+                                sendClipboard(device.ip, device.port, currentClip, clipboardCallback)
                              } catch (e: Exception) {}
                         }
                     }
@@ -1119,7 +1115,7 @@ class ConnectedApp(private val context: Context) {
     // Settings / Preferences
     fun setRootUri(uri: Uri) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(PREF_ROOT_URI, uri.toString()).apply()
+        prefs.edit { putString(PREF_ROOT_URI, uri.toString()) }
 
         // Persist permission
         try {
@@ -1132,11 +1128,16 @@ class ConnectedApp(private val context: Context) {
     fun toggleTelephony() {
         val newState = !isTelephonyEnabled.value
         isTelephonyEnabled.value = newState
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putBoolean(PREF_TELEPHONY_ENABLED, newState).apply()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
+            putBoolean(
+                PREF_TELEPHONY_ENABLED,
+                newState
+            )
+        }
         if (newState) {
             telephonyProvider.setListener(telephonyListener)
             telephonyProvider.registerReceivers()
-            uniffi.connected_ffi.registerTelephonyCallback(telephonyCallback)
+            registerTelephonyCallback(telephonyCallback)
         } else {
             telephonyProvider.setListener(null)
             telephonyProvider.unregisterReceivers()
@@ -1146,7 +1147,12 @@ class ConnectedApp(private val context: Context) {
     fun toggleMediaControl() {
         val newState = !isMediaControlEnabled.value
         isMediaControlEnabled.value = newState
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putBoolean(PREF_MEDIA_CONTROL, newState).apply()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
+            putBoolean(
+                PREF_MEDIA_CONTROL,
+                newState
+            )
+        }
     }
 
     fun setAppInForeground(isForeground: Boolean) {
@@ -1164,7 +1170,7 @@ class ConnectedApp(private val context: Context) {
         devices.forEach { device ->
             if (isDeviceTrusted(device)) {
                  try {
-                    uniffi.connected_ffi.sendMediaState(device.ip, device.port, state)
+                    sendMediaState(device.ip, device.port, state)
                  } catch (e: Exception) {}
             }
         }
@@ -1174,7 +1180,7 @@ class ConnectedApp(private val context: Context) {
     fun sendMediaCommand(device: DiscoveredDevice, command: MediaCommand) {
         scope.launch(Dispatchers.IO) {
             try {
-                uniffi.connected_ffi.sendMediaCommand(device.ip, device.port, command)
+                sendMediaCommand(device.ip, device.port, command)
             } catch (e: Exception) { Log.e("ConnectedApp", "Media command failed", e) }
         }
     }
@@ -1184,7 +1190,7 @@ class ConnectedApp(private val context: Context) {
         if (!isMediaControlEnabled.value || isSyntheticIp(device.ip)) return
         scope.launch(Dispatchers.IO) {
             try {
-                uniffi.connected_ffi.sendMediaState(device.ip, device.port, lastState)
+                sendMediaState(device.ip, device.port, lastState)
             } catch (e: Exception) {
                 Log.e("ConnectedApp", "Failed to send media state", e)
             }
@@ -1207,7 +1213,7 @@ class ConnectedApp(private val context: Context) {
              val clip = getClipboardText()
              if (clip.isNotEmpty()) {
                  try {
-                     uniffi.connected_ffi.sendClipboard(device.ip, device.port, clip, clipboardCallback)
+                     sendClipboard(device.ip, device.port, clip, clipboardCallback)
                  } catch (e: Exception) {
                      runOnMainThread { android.widget.Toast.makeText(context, "Failed to send clipboard", android.widget.Toast.LENGTH_SHORT).show() }
                  }
@@ -1224,7 +1230,7 @@ class ConnectedApp(private val context: Context) {
         isBrowsingRemote.value = true
         scope.launch(Dispatchers.IO) {
             try {
-                val list = uniffi.connected_ffi.requestListDir(device.ip, device.port, path)
+                val list = requestListDir(device.ip, device.port, path)
                 runOnMainThread {
                     remoteFiles.clear()
                     remoteFiles.addAll(list)
@@ -1248,7 +1254,7 @@ class ConnectedApp(private val context: Context) {
             try {
                 val fileName = File(remotePath).name
                 val destFile = File(downloadDir, fileName)
-                uniffi.connected_ffi.requestDownloadFile(device.ip, device.port, remotePath, destFile.absolutePath)
+                requestDownloadFile(device.ip, device.port, remotePath, destFile.absolutePath)
                  runOnMainThread {
                      moveToDownloads(fileName)
                      android.widget.Toast.makeText(context, "Downloaded $fileName", android.widget.Toast.LENGTH_SHORT).show()
@@ -1267,7 +1273,7 @@ class ConnectedApp(private val context: Context) {
         requestedThumbnails.add(path)
         scope.launch(Dispatchers.IO) {
              try {
-                 val bytes = uniffi.connected_ffi.requestGetThumbnail(device.ip, device.port, path)
+                 val bytes = requestGetThumbnail(device.ip, device.port, path)
                  if (bytes.isNotEmpty()) {
                      val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                      if (bitmap != null) {
@@ -1288,7 +1294,7 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    private suspend fun walkAndSend(device: DiscoveredDevice, root: androidx.documentfile.provider.DocumentFile) {
+    private fun walkAndSend(device: DiscoveredDevice, root: androidx.documentfile.provider.DocumentFile) {
         root.listFiles().forEach { file ->
             if (file.isDirectory) {
                 walkAndSend(device, file)
@@ -1312,7 +1318,7 @@ class ConnectedApp(private val context: Context) {
                                     .show()
                             }
                         } else {
-                            uniffi.connected_ffi.sendFile(device.ip, device.port, tempFile.absolutePath)
+                            sendFile(device.ip, device.port, tempFile.absolutePath)
                         }
                     }
                 } catch (e: Exception) {}
@@ -1332,7 +1338,7 @@ class ConnectedApp(private val context: Context) {
             trustedDevices.remove(device.id)
             pendingPairing.remove(device.id)
             try {
-                uniffi.connected_ffi.unpairDeviceById(device.id)
+                unpairDeviceById(device.id)
                 runOnMainThread {
                     android.widget.Toast.makeText(context, "Device unpaired", android.widget.Toast.LENGTH_SHORT).show()
                 }
@@ -1350,7 +1356,7 @@ class ConnectedApp(private val context: Context) {
             trustedDevices.remove(device.id)
             pendingPairing.remove(device.id)
             try {
-                uniffi.connected_ffi.forgetDeviceById(device.id)
+                forgetDeviceById(device.id)
                 runOnMainThread {
                     // Do not remove from devices list; just update trusted state
                     android.widget.Toast.makeText(context, "Device forgotten", android.widget.Toast.LENGTH_SHORT).show()
@@ -1372,11 +1378,11 @@ class ConnectedApp(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 if (request.fingerprint != "Verified (You initiated)") {
-                    uniffi.connected_ffi.trustDevice(request.fingerprint, request.deviceId, request.deviceName)
+                    trustDevice(request.fingerprint, request.deviceId, request.deviceName)
                 }
                 val device = devices.find { it.id == request.deviceId }
                 if (device != null && !isSyntheticIp(device.ip)) {
-                    uniffi.connected_ffi.sendTrustConfirmation(device.ip, device.port)
+                    sendTrustConfirmation(device.ip, device.port)
                 }
                 pairingRequest.value = null
                 runOnMainThread {
@@ -1397,7 +1403,7 @@ class ConnectedApp(private val context: Context) {
 
         fun acceptTransfer(request: TransferRequest) {
              scope.launch(Dispatchers.IO) {
-                 try { uniffi.connected_ffi.acceptFileTransfer(request.id) } catch (e: Exception) {}
+                 try { acceptFileTransfer(request.id) } catch (e: Exception) {}
                  transferRequest.value = null
                  dismissTransferNotification()
              }
@@ -1405,7 +1411,7 @@ class ConnectedApp(private val context: Context) {
 
         fun rejectTransfer(request: TransferRequest) {
              scope.launch(Dispatchers.IO) {
-                 try { uniffi.connected_ffi.rejectFileTransfer(request.id) } catch (e: Exception) {}
+                 try { rejectFileTransfer(request.id) } catch (e: Exception) {}
                  transferRequest.value = null
                  dismissTransferNotification()
              }
@@ -1440,7 +1446,7 @@ class ConnectedApp(private val context: Context) {
             try {
                 val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
                 intent.addCategory("android.intent.category.DEFAULT")
-                intent.data = Uri.parse("package:${context.packageName}")
+                intent.data = "package:${context.packageName}".toUri()
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(intent)
             } catch (e: Exception) {

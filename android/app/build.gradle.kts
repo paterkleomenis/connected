@@ -1,6 +1,8 @@
+import com.android.build.api.dsl.ApplicationExtension
+import org.gradle.api.JavaVersion
+
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
@@ -8,10 +10,10 @@ kotlin {
     compilerOptions {
         freeCompilerArgs.add("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
     }
-    jvmToolchain(org.gradle.api.JavaVersion.current().majorVersion.toInt())
+    jvmToolchain(JavaVersion.current().majorVersion.toInt())
 }
 
-android {
+configure<ApplicationExtension> {
     namespace = "com.connected.app"
     compileSdk = 36
     ndkVersion = "27.0.12077973"
@@ -19,7 +21,7 @@ android {
     defaultConfig {
         applicationId = "com.connected.app"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
 
@@ -66,7 +68,7 @@ android {
     // Configure where to find the native libraries (.so files)
     sourceSets {
         getByName("main") {
-            jniLibs.srcDirs("src/main/jniLibs")
+            jniLibs.directories.add("src/main/jniLibs")
         }
     }
 }
@@ -80,7 +82,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("androidx.activity:activity-compose:1.12.2")
     implementation("androidx.media:media:1.7.1")
-    implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("androidx.documentfile:documentfile:1.1.0")
 
     // Compose
     implementation(platform("androidx.compose:compose-bom:2026.01.00"))
