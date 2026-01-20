@@ -7,6 +7,26 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Helper to find SDK and NDK
+val sdkDir = project.rootProject.file("local.properties").let { localProps ->
+    if (localProps.exists()) {
+        val p = Properties()
+        localProps.inputStream().use { p.load(it) }
+        p.getProperty("sdk.dir")?.let { File(it) }
+    } else {
+        null
+    }
+} ?: System.getenv("ANDROID_HOME")?.let { File(it) }
+  ?: throw GradleException("Android SDK not found. Please set local.properties or ANDROID_HOME environment variable.")
+
+val ndkDir = File(sdkDir, "ndk").listFiles()
+    ?.filter { it.isDirectory }
+    ?.sortedByDescending { it.name }
+    ?.firstOrNull()
+    ?: throw GradleException("NDK not found in ${File(sdkDir, "ndk")}")
+
+val latestNdkVersion = ndkDir.name
+
 kotlin {
     compilerOptions {
         freeCompilerArgs.add("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
@@ -17,7 +37,7 @@ kotlin {
 configure<ApplicationExtension> {
     namespace = "com.connected.app"
     compileSdk = 36
-    ndkVersion = "27.0.12077973"
+    ndkVersion = latestNdkVersion
 
     defaultConfig {
         applicationId = "com.connected.app"
@@ -112,14 +132,6 @@ dependencies {
 
 // Task to build Rust library for Android
 tasks.register<Exec>("buildRustDebug") {
-    val properties = Properties()
-    val localProperties = project.rootProject.file("local.properties")
-    if (localProperties.exists()) {
-        localProperties.inputStream().use { stream -> properties.load(stream) }
-    }
-    val sdkDir = properties.getProperty("sdk.dir") ?: System.getenv("ANDROID_HOME")
-    val ndkDir = File(sdkDir, "ndk/27.0.12077973")
-
     workingDir = file("${project.rootDir}/../ffi")
     environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
     commandLine("cargo", "ndk",
@@ -133,14 +145,6 @@ tasks.register<Exec>("buildRustDebug") {
 }
 
 tasks.register<Exec>("buildRustRelease") {
-    val properties = Properties()
-    val localProperties = project.rootProject.file("local.properties")
-    if (localProperties.exists()) {
-        localProperties.inputStream().use { stream -> properties.load(stream) }
-    }
-    val sdkDir = properties.getProperty("sdk.dir") ?: System.getenv("ANDROID_HOME")
-    val ndkDir = File(sdkDir, "ndk/27.0.12077973")
-
     workingDir = file("${project.rootDir}/../ffi")
     environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
     commandLine("cargo", "ndk",
