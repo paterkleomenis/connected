@@ -135,6 +135,9 @@
                 <action
                     android:name="com.connected.app.ACTION_REJECT_TRANSFER"
                 />
+                <action
+                    android:name="com.connected.app.ACTION_SHARE_CLIPBOARD"
+                />
             </intent-filter>
         </receiver>
 
@@ -158,6 +161,15 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".ClipboardHelperActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            android:exported="false"
+        />
 
     </application>
 

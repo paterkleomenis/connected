@@ -1362,6 +1362,71 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    fun broadcastClipboard(text: String) {
+        scope.launch {
+            devices.forEach { device ->
+                if (isDeviceTrusted(device)) {
+                    try {
+                        sendClipboard(device.ip, device.port, text, clipboardCallback)
+                    } catch (e: Exception) {
+                        Log.e("ConnectedApp", "Failed to send clipboard to ${device.name}", e)
+                    }
+                }
+            }
+            runOnMainThread {
+                android.widget.Toast.makeText(
+                    context,
+                    "Clipboard shared with trusted devices",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    // Send Clipboard to all trusted devices
+    fun sendClipboardToAllTrusted() {
+        scope.launch {
+            if (!isAppInForeground.get() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                // Background clipboard access restriction
+                 runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Bring app to foreground to share clipboard",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+                return@launch
+            }
+            val clip = getClipboardText()
+            if (clip.isNotEmpty()) {
+                devices.forEach { device ->
+                    if (isDeviceTrusted(device)) {
+                        try {
+                            sendClipboard(device.ip, device.port, clip, clipboardCallback)
+                        } catch (e: Exception) {
+                            Log.e("ConnectedApp", "Failed to send clipboard to ${device.name}", e)
+                        }
+                    }
+                }
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Clipboard shared with trusted devices",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } else {
+                 runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Clipboard is empty",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
     // Remote File Browsing
     fun getBrowsingDevice(): DiscoveredDevice? = browsingDevice
 

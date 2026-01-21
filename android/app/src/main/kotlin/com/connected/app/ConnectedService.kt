@@ -56,18 +56,43 @@ class ConnectedService : Service() {
             val channel = NotificationChannel(
                 channelId,
                 channelName,
-                NotificationManager.IMPORTANCE_LOW
-            )
+                NotificationManager.IMPORTANCE_MAX
+            ).apply {
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setShowBadge(false)
+            }
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
 
-        val notification: Notification = androidx.core.app.NotificationCompat.Builder(this, channelId)
+        val shareIntent = Intent(this, ClipboardHelperActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val sharePendingIntent = android.app.PendingIntent.getActivity(
+            this,
+            0,
+            shareIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = androidx.core.app.NotificationCompat.Builder(this, channelId)
             .setContentTitle("Connected")
-            .setContentText("Keeping connection alive...")
+            .setContentText("Click to share clipboard")
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
-            .build()
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_MAX)
+            .setCategory(androidx.core.app.NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)
+            .setShowWhen(false)
+            .setContentIntent(sharePendingIntent)
+            .setColorized(true)
+            .setColor(0xFF6200EE.toInt()) // purple_500
+            .setOngoing(true)
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        }
+
+        val notification = builder.build()
 
         // ID must be non-zero
         startForeground(1, notification)

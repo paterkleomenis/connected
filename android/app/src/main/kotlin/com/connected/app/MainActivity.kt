@@ -811,7 +811,7 @@ fun SettingsScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Run in Background", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "Keep app running to receive files anytime",
+                                "Keep app running to receive files and share clipboard anytime",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1205,7 +1205,7 @@ fun DeviceItem(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Send Clipboard") },
+                                text = { Text("Share Clipboard") },
                                 leadingIcon = {
                                     Icon(
                                         painterResource(R.drawable.ic_nav_clipboard),
