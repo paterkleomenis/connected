@@ -1,6 +1,7 @@
 package com.connected.app
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -31,8 +32,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,14 +40,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.core.content.ContextCompat
+import androidx.core.os.BundleCompat
 import kotlinx.coroutines.launch
 import uniffi.connected_ffi.DiscoveredDevice
+import androidx.core.net.toUri
 
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
@@ -79,7 +79,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun isServiceRunning(serviceClass: Class<*>): Boolean {
-        val manager = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
         for (service in manager.getRunningServices(Int.MAX_VALUE)) {
             if (serviceClass.name == service.service.className) {
                 return true
@@ -213,7 +213,7 @@ class MainActivity : ComponentActivity() {
         if (intent == null) return
         when (intent.action) {
             Intent.ACTION_SEND -> {
-                val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                val uri = intent.extras?.let { BundleCompat.getParcelable(it, Intent.EXTRA_STREAM, Uri::class.java) }
                     ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
                 if (uri != null) {
                     connectedApp.setPendingShare(listOf(uri))
@@ -221,7 +221,7 @@ class MainActivity : ComponentActivity() {
             }
 
             Intent.ACTION_SEND_MULTIPLE -> {
-                val uris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                val uris = intent.extras?.let { BundleCompat.getParcelableArrayList(it, Intent.EXTRA_STREAM, Uri::class.java) }
                     ?: intent.clipData?.let { clip ->
                         ArrayList<Uri>(clip.itemCount).apply {
                             for (i in 0 until clip.itemCount) {
@@ -388,7 +388,7 @@ fun MainAppNavigation(
                     icon = { Icon(painterResource(R.drawable.ic_nav_settings), contentDescription = "Settings") },
                     label = { Text("Settings") },
                     selected = currentScreen == Screen.Settings,
-                    onClick = { currentScreen = Screen.Settings }
+                    onClick = { Screen.Settings }
                 )
             }
         }
@@ -491,7 +491,7 @@ fun MainAppNavigation(
 @Composable
 fun NotificationWarningCard(packageName: String) {
     val context = LocalContext.current
-    androidx.compose.foundation.layout.Box(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = 16.dp)
@@ -538,7 +538,7 @@ fun HomeScreen(
     val context = LocalContext.current
     var areNotificationsEnabled by remember { mutableStateOf(true) }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -610,6 +610,7 @@ fun HomeScreen(
     }
 }
 
+@SuppressLint("BatteryLife")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -618,7 +619,7 @@ fun SettingsScreen(
     isServiceRunning: ((Class<*>) -> Boolean)? = null
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var isNotificationAccessGranted by remember { mutableStateOf(false) }
     var isBackgroundServiceRunning by remember {
         mutableStateOf(
@@ -630,11 +631,7 @@ fun SettingsScreen(
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
     var isIgnoringBatteryOptimizations by remember {
         mutableStateOf(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                powerManager.isIgnoringBatteryOptimizations(context.packageName)
-            } else {
-                true
-            }
+            powerManager.isIgnoringBatteryOptimizations(context.packageName)
         )
     }
 
@@ -649,13 +646,11 @@ fun SettingsScreen(
                 isBackgroundServiceRunning = isServiceRunning?.invoke(ConnectedService::class.java) ?: false
 
                 // Check battery optimizations
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    isIgnoringBatteryOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
-                }
+                isIgnoringBatteryOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
 
                 // Check notification access
                 val componentName = android.content.ComponentName(context, MediaObserverService::class.java)
-                val enabledListeners = android.provider.Settings.Secure.getString(
+                val enabledListeners = Settings.Secure.getString(
                     context.contentResolver,
                     "enabled_notification_listeners"
                 )
@@ -679,8 +674,8 @@ fun SettingsScreen(
 
     fun getMissingPermissions(): Array<String> {
         return connectedApp.telephonyProvider.getRequiredPermissions().filter { permission ->
-            androidx.core.content.ContextCompat.checkSelfPermission(context, permission) !=
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(context, permission) !=
+                    PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
     }
 
@@ -821,11 +816,7 @@ fun SettingsScreen(
                             onCheckedChange = { enabled ->
                                 val intent = Intent(context, ConnectedService::class.java)
                                 if (enabled) {
-                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                        context.startForegroundService(intent)
-                                    } else {
-                                        context.startService(intent)
-                                    }
+                                    context.startForegroundService(intent)
                                 } else {
                                     context.stopService(intent)
                                 }
@@ -834,12 +825,12 @@ fun SettingsScreen(
                         )
                     }
 
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !isIgnoringBatteryOptimizations) {
+                    if (!isIgnoringBatteryOptimizations) {
                         Spacer(modifier = Modifier.height(12.dp))
                         Button(
                             onClick = {
                                 val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                    data = Uri.parse("package:${context.packageName}")
+                                    data = "package:${context.packageName}".toUri()
                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }
                                 context.startActivity(intent)
@@ -895,7 +886,7 @@ fun SettingsScreen(
                         Button(
                             onClick = {
                                 val intent =
-                                    android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                                    Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
                                 context.startActivity(intent)
                             },
                             colors = ButtonDefaults.buttonColors(
@@ -1010,7 +1001,7 @@ fun SettingsScreen(
                         Button(
                             onClick = {
                                 val intent =
-                                    android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                                    Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
                                 context.startActivity(intent)
                             },
                             colors = ButtonDefaults.buttonColors(
@@ -1061,7 +1052,7 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         Button(
                             onClick = {
                                 if (connectedApp.isFullAccessGranted()) {
