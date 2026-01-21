@@ -798,16 +798,6 @@ class ConnectedApp(private val context: Context) {
 
     fun isSyntheticIp(ip: String) = ip == "0.0.0.0" || ip.startsWith("198.18.")
 
-    // Wrapper for DiscoveredDevice
-    fun sendTrustConfirmationWrapper(device: DiscoveredDevice) {
-        try {
-            sendTrustConfirmation(device.ip, device.port)
-        } catch (e: Exception) {
-        }
-    }
-
-    // Corrected signatures and helpers
-    private fun sendTrustConfirmation(device: DiscoveredDevice) = sendTrustConfirmationWrapper(device)
     fun getDevices() {
         try {
             val list = getDiscoveredDevices()
@@ -866,23 +856,6 @@ class ConnectedApp(private val context: Context) {
             }
         }
     }
-
-    // Wrappers for simple FFI calls to avoid 'DiscoveredDevice' vs 'String' mismatch in calls
-    fun requestContactsSync(ip: String, port: UShort) = uniffi.connected_ffi.requestContactsSync(ip, port)
-    fun requestConversationsSync(ip: String, port: UShort) = uniffi.connected_ffi.requestConversationsSync(ip, port)
-    fun requestCallLog(ip: String, port: UShort, limit: UInt) = uniffi.connected_ffi.requestCallLog(ip, port, limit)
-    fun requestMessages(ip: String, port: UShort, threadId: String, limit: UInt) =
-        uniffi.connected_ffi.requestMessages(ip, port, threadId, limit)
-
-    fun initiateCall(ip: String, port: UShort, number: String) = uniffi.connected_ffi.initiateCall(ip, port, number)
-    fun sendSms(ip: String, port: UShort, to: String, body: String) = uniffi.connected_ffi.sendSms(ip, port, to, body)
-    fun sendCallAction(ip: String, port: UShort, action: CallAction) =
-        uniffi.connected_ffi.sendCallAction(ip, port, action)
-
-    fun sendActiveCallUpdate(ip: String, port: UShort, call: FfiActiveCall?) =
-        uniffi.connected_ffi.sendActiveCallUpdate(ip, port, call)
-
-    // Original methods that use DiscoveredDevice now delegate to these or extract props
 
     fun sendPairRequest(device: DiscoveredDevice) {
         if (isSyntheticIp(device.ip)) {
@@ -1043,7 +1016,7 @@ class ConnectedApp(private val context: Context) {
             devices.forEach { device ->
                 if (isDeviceTrusted(device)) {
                     try {
-                        uniffi.connected_ffi.sendActiveCallUpdate(device.ip, device.port, call)
+                        sendActiveCallUpdate(device.ip, device.port, call)
                     } catch (e: Exception) {
                     }
                 }
