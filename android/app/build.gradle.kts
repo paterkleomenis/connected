@@ -20,12 +20,10 @@ val sdkDir = project.rootProject.file("local.properties").let { localProps ->
   ?: throw GradleException("Android SDK not found. Please set local.properties or ANDROID_HOME environment variable.")
 
 val ndkDir = File(sdkDir, "ndk").listFiles()
-    ?.filter { it.isDirectory }
-    ?.sortedByDescending { it.name }
-    ?.firstOrNull()
+    ?.filter { it.isDirectory }?.maxByOrNull { it.name }
     ?: throw GradleException("NDK not found in ${File(sdkDir, "ndk")}")
 
-val latestNdkVersion = ndkDir.name
+val latestNdkVersion: String = ndkDir.name
 
 kotlin {
     compilerOptions {

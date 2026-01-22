@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.provider.CallLog
@@ -21,6 +20,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.connected_ffi.*
+import androidx.core.net.toUri
 
 class TelephonyProvider(private val context: Context) {
 
@@ -549,12 +549,12 @@ class TelephonyProvider(private val context: Context) {
             }
 
             val intent = Intent(Intent.ACTION_CALL).apply {
-                data = Uri.parse("tel:$number")
+                data = "tel:$number".toUri()
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             context.startActivity(intent)
             true
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -763,7 +763,7 @@ class TelephonyProvider(private val context: Context) {
         smsReceiver?.let {
             try {
                 context.unregisterReceiver(it)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Ignore if not registered
             }
             smsReceiver = null
@@ -772,7 +772,7 @@ class TelephonyProvider(private val context: Context) {
         callStateReceiver?.let {
             try {
                 context.unregisterReceiver(it)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Ignore if not registered
             }
             callStateReceiver = null

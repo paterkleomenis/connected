@@ -1,5 +1,7 @@
 package com.connected.app
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.AdvertiseCallback
@@ -28,6 +30,8 @@ import android.os.ParcelUuid
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import androidx.annotation.RequiresPermission
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import uniffi.connected_ffi.DiscoveredDevice
@@ -52,7 +56,6 @@ class ProximityManager(private val context: Context) {
         private const val DISCOVERY_COOLDOWN_MS = 15_000L
         private const val RETRY_DELAY_MS = 5_000L
         private const val CONNECT_RETRY_DELAY_MS = 2_000L
-        private const val GROUP_REFRESH_DELAY_MS = 2_000L
         private const val GROUP_CREATE_COOLDOWN_MS = 15_000L
         private const val GROUP_RECOVERY_DELAY_MS = 2_000L
         private const val PAIR_INTENT_TTL_MS = 30_000L
@@ -75,8 +78,12 @@ class ProximityManager(private val context: Context) {
     private var p2pChannel: WifiP2pManager.Channel? = null
     private var p2pReceiver: BroadcastReceiver? = null
     private val handler = Handler(Looper.getMainLooper())
+
+    @SuppressLint("MissingPermission")
     private val retryDiscoveryRunnable = Runnable { discoverPeers(force = true) }
+    @SuppressLint("MissingPermission")
     private val retryConnectRunnable = Runnable { discoverPeers(force = true) }
+    @SuppressLint("MissingPermission")
     private val retryGroupCreateRunnable = Runnable { createGroupIfNeeded(force = true) }
 
     private val peersById = ConcurrentHashMap<String, ProximityPeer>()
@@ -131,16 +138,34 @@ class ProximityManager(private val context: Context) {
         val pairingIntent: Boolean = false,
     )
 
+    @RequiresPermission(anyOf = [
+        // BLE
+        Manifest.permission.BLUETOOTH,
+        Manifest.permission.BLUETOOTH_ADVERTISE,
+        // WiFi Direct
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    ])
     fun start() {
         startBle()
         startWifiDirect()
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.BLUETOOTH,
+        Manifest.permission.BLUETOOTH_ADVERTISE
+    ])
     fun stop() {
         stopWifiDirect()
         stopBle()
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.BLUETOOTH,
+        Manifest.permission.BLUETOOTH_ADVERTISE,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    ])
     fun requestConnect(deviceId: String) {
         val peer = peersById[deviceId]
         if (peer == null) {
@@ -158,6 +183,11 @@ class ProximityManager(private val context: Context) {
         maybeConnectWifiDirect(peer, force = true)
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.BLUETOOTH,
+        Manifest.permission.BLUETOOTH_ADVERTISE,
+        Manifest.permission.BLUETOOTH_SCAN
+    ])
     private fun startBle() {
         stopBle()
         val adapter = bluetoothAdapter
@@ -184,11 +214,21 @@ class ProximityManager(private val context: Context) {
         startScanning()
     }
 
+
+    @RequiresPermission(anyOf = [
+        Manifest.permission.BLUETOOTH,
+        Manifest.permission.BLUETOOTH_ADVERTISE,
+        Manifest.permission.BLUETOOTH_SCAN
+    ])
     private fun stopBle() {
         stopAdvertising()
         stopScanning()
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.BLUETOOTH,
+        Manifest.permission.BLUETOOTH_ADVERTISE
+    ])
     private fun refreshAdvertising(force: Boolean = false) {
         if (!hasBleAdvertisePermission()) {
             Log.w(TAG, "Missing BLE advertise permission")
@@ -236,6 +276,10 @@ class ProximityManager(private val context: Context) {
         lastAdvertisedSignature = signature
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.BLUETOOTH,
+        Manifest.permission.BLUETOOTH_ADVERTISE
+    ])
     private fun stopAdvertising() {
         val callback = advertiseCallback
         if (callback != null) {
@@ -249,6 +293,10 @@ class ProximityManager(private val context: Context) {
         lastAdvertisedSignature = null
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.BLUETOOTH,
+        Manifest.permission.BLUETOOTH_SCAN
+    ])
     private fun startScanning() {
         if (!hasBleScanPermission()) {
             Log.w(TAG, "Missing BLE scan permission")
@@ -265,10 +313,17 @@ class ProximityManager(private val context: Context) {
             .build()
 
         scanCallback = object : ScanCallback() {
+            @RequiresPermission(anyOf = [
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.NEARBY_WIFI_DEVICES,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH
+            ])
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 handleScanResult(result)
             }
 
+            @SuppressLint("MissingPermission") // if it works, it works
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
                 results.forEach { handleScanResult(it) }
             }
@@ -281,6 +336,10 @@ class ProximityManager(private val context: Context) {
         scanner?.startScan(filters, settings, scanCallback)
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.BLUETOOTH,
+        Manifest.permission.BLUETOOTH_SCAN
+    ])
     private fun stopScanning() {
         val callback = scanCallback
         if (callback != null) {
@@ -293,6 +352,13 @@ class ProximityManager(private val context: Context) {
         scanCallback = null
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.NEARBY_WIFI_DEVICES,
+        // Get name
+        Manifest.permission.BLUETOOTH_CONNECT,
+        Manifest.permission.BLUETOOTH
+    ])
     private fun handleScanResult(result: ScanResult) {
         val record = result.scanRecord ?: return
         val payload = record.getManufacturerSpecificData(MANUFACTURER_ID) ?: return
@@ -363,6 +429,10 @@ class ProximityManager(private val context: Context) {
         }
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    ])
     private fun startWifiDirect() {
         stopWifiDirect()
         if (wifiP2pManager == null) {
@@ -388,6 +458,10 @@ class ProximityManager(private val context: Context) {
         }
 
         p2pReceiver = object : BroadcastReceiver() {
+            @RequiresPermission(anyOf = [
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.NEARBY_WIFI_DEVICES
+            ])
             override fun onReceive(context: Context?, intent: Intent?) {
                 val action = intent?.action ?: return
                 when (action) {
@@ -429,6 +503,10 @@ class ProximityManager(private val context: Context) {
         }
     }
 
+    @RequiresPermission(allOf = [
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    ])
     private fun requestLocalDeviceInfo() {
         val manager = wifiP2pManager ?: return
         val channel = p2pChannel ?: return
@@ -461,6 +539,10 @@ class ProximityManager(private val context: Context) {
         handler.removeCallbacks(retryGroupCreateRunnable)
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    ])
     private fun discoverPeers(force: Boolean = false) {
         val manager = wifiP2pManager ?: return
         val channel = p2pChannel ?: return
@@ -481,6 +563,8 @@ class ProximityManager(private val context: Context) {
 
         try {
             manager.discoverPeers(channel, object : WifiP2pManager.ActionListener {
+                @SuppressLint("MissingPermission")
+                // permission already required above
                 override fun onSuccess() {
                     Log.d(TAG, "Wi-Fi Direct peer discovery started")
                     handler.postDelayed({ requestPeers() }, 1000L)
@@ -495,6 +579,10 @@ class ProximityManager(private val context: Context) {
         }
     }
 
+    @RequiresPermission(allOf = [
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    ])
     private fun requestPeers() {
         val manager = wifiP2pManager ?: return
         val channel = p2pChannel ?: return
@@ -534,7 +622,6 @@ class ProximityManager(private val context: Context) {
         val candidate = when {
             match != null -> match
             candidates.size == 1 -> candidates.first()
-            !hasPendingTarget -> candidates.firstOrNull()
             else -> null
         }
 
@@ -553,12 +640,10 @@ class ProximityManager(private val context: Context) {
                 TAG,
                 "No Wi-Fi Direct peer matched '$targetName' (candidates=${candidates.size})"
             )
-            if (hasPendingTarget) {
-                scheduleDiscoveryRetry()
-            }
+            scheduleDiscoveryRetry()
             return
         }
-        if (match == null && hasPendingTarget && candidates.size == 1) {
+        if (match == null && candidates.size == 1) {
             Log.d(
                 TAG,
                 "No name match for '$targetName'; using sole Wi-Fi Direct peer ${candidate.deviceName}"
@@ -590,21 +675,30 @@ class ProximityManager(private val context: Context) {
         Log.d(TAG, "Wi-Fi Direct connect to ${device.deviceName} (${device.deviceAddress})")
 
         val doConnect = {
-            try {
-                manager.connect(channel, config, object : WifiP2pManager.ActionListener {
-                    override fun onSuccess() {
-                        Log.d(TAG, "Wi-Fi Direct connect requested")
-                        p2pActionInFlight = false
-                    }
+            if (ActivityCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.NEARBY_WIFI_DEVICES
+                ) == PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+            ) {
+                try {
+                    manager.connect(channel, config, object : WifiP2pManager.ActionListener {
+                        override fun onSuccess() {
+                            Log.d(TAG, "Wi-Fi Direct connect requested")
+                            p2pActionInFlight = false
+                        }
 
-                    override fun onFailure(reason: Int) {
-                        p2pActionInFlight = false
-                        handleP2pFailure("connect", reason)
-                    }
-                })
-            } catch (e: Exception) {
-                Log.w(TAG, "connect failed: ${e.message}")
-                p2pActionInFlight = false
+                        override fun onFailure(reason: Int) {
+                            p2pActionInFlight = false
+                            handleP2pFailure("connect", reason)
+                        }
+                    })
+                } catch (e: Exception) {
+                    Log.w(TAG, "connect failed: ${e.message}")
+                    p2pActionInFlight = false
+                }
             }
         }
 
@@ -620,7 +714,16 @@ class ProximityManager(private val context: Context) {
             p2pConnected = info.groupFormed
             isGroupOwner = info.isGroupOwner
             if (info.groupFormed) {
-                refreshAdvertising()
+                if (ActivityCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.BLUETOOTH_ADVERTISE
+                    ) == PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.BLUETOOTH
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    refreshAdvertising()
+                }
                 if (!info.isGroupOwner) {
                     val peerId = pendingPeerId
                     val peer = peerId?.let { peersById[it] }
@@ -647,6 +750,11 @@ class ProximityManager(private val context: Context) {
         }
     }
 
+    @Suppress("SameParameterValue")
+    @RequiresPermission(anyOf = [
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    ])
     private fun maybeConnectWifiDirect(peer: ProximityPeer, force: Boolean) {
         if (wifiP2pManager == null || !hasP2pPermission() || !p2pEnabled) {
             Log.d(
@@ -768,6 +876,10 @@ class ProximityManager(private val context: Context) {
         handler.postDelayed(retryGroupCreateRunnable, delay)
     }
 
+    @RequiresPermission(anyOf = [
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    ])
     private fun createGroupIfNeeded(force: Boolean) {
         val manager = wifiP2pManager ?: return
         val channel = p2pChannel ?: return
@@ -798,6 +910,10 @@ class ProximityManager(private val context: Context) {
                 val doCreate = {
                     try {
                         manager.createGroup(channel, object : WifiP2pManager.ActionListener {
+                            @RequiresPermission(anyOf = [
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.NEARBY_WIFI_DEVICES
+                            ])
                             override fun onSuccess() {
                                 Log.d(TAG, "Wi-Fi Direct group creation requested")
                                 p2pActionInFlight = false
@@ -868,7 +984,7 @@ class ProximityManager(private val context: Context) {
         val ipBytes = if (p2pIp != null) {
             try {
                 InetAddress.getByName(p2pIp).address
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 ByteArray(0)
             }
         } else {
@@ -965,6 +1081,7 @@ class ProximityManager(private val context: Context) {
         val ipBytes = data.copyOfRange(nameEnd, nameEnd + 4)
         val legacyIp = InetAddress.getByAddress(ipBytes).hostAddress
 
+        @Suppress("KotlinConstantConditions")
         return ProximityPeer(
             deviceId = uuid,
             name = legacyName.ifBlank { matchName },
@@ -1049,6 +1166,9 @@ class ProximityManager(private val context: Context) {
         return target == peerId
     }
 
+    @SuppressLint("MissingPermission")
+    // getOrNull is called on bluetoothAdapter, so we can reason null
+    // will be returned if the permission is not granted
     private fun getMatchName(local: DiscoveredDevice): String {
         val p2pName = localP2pDeviceName
         if (!p2pName.isNullOrBlank()) {
@@ -1067,6 +1187,7 @@ class ProximityManager(private val context: Context) {
         return local.name
     }
 
+    @Suppress("SameParameterValue")
     private fun trimUtf8Bytes(input: String, maxBytes: Int): ByteArray {
         if (maxBytes <= 0) {
             return ByteArray(0)
@@ -1123,12 +1244,12 @@ class ProximityManager(private val context: Context) {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
                 context,
-                android.Manifest.permission.BLUETOOTH_SCAN
+                Manifest.permission.BLUETOOTH_SCAN
             ) == PackageManager.PERMISSION_GRANTED
         } else {
             ContextCompat.checkSelfPermission(
                 context,
-                android.Manifest.permission.ACCESS_FINE_LOCATION
+                Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
         }
     }
@@ -1137,7 +1258,7 @@ class ProximityManager(private val context: Context) {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
                 context,
-                android.Manifest.permission.BLUETOOTH_ADVERTISE
+                Manifest.permission.BLUETOOTH_ADVERTISE
             ) == PackageManager.PERMISSION_GRANTED
         } else {
             true
@@ -1148,12 +1269,12 @@ class ProximityManager(private val context: Context) {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(
                 context,
-                android.Manifest.permission.NEARBY_WIFI_DEVICES
+                Manifest.permission.NEARBY_WIFI_DEVICES
             ) == PackageManager.PERMISSION_GRANTED
         } else {
             ContextCompat.checkSelfPermission(
                 context,
-                android.Manifest.permission.ACCESS_FINE_LOCATION
+                Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
         }
     }

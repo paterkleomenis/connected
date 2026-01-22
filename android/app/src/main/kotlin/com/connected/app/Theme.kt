@@ -1,7 +1,6 @@
 package com.connected.app
 
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -9,8 +8,6 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
@@ -19,13 +16,10 @@ val ColorBgPrimary = Color(0xFF000000)
 val ColorBgSecondary = Color(0xFF1c1c1e)
 val ColorBgTertiary = Color(0xFF2c2c2e)
 val ColorAccent = Color(0xFF0a84ff)
-val ColorAccentHover = Color(0xFF409cff)
 val ColorTextPrimary = Color(0xFFf5f5f7)
 val ColorTextSecondary = Color(0xFFa1a1a6)
-val ColorTextTertiary = Color(0xFF6e6e73)
 val ColorSuccess = Color(0xFF30d158)
 val ColorError = Color(0xFFff453a)
-val ColorWarning = Color(0xFFff9f0a)
 
 private val ConnectedDarkColorScheme = darkColorScheme(
     primary = ColorAccent,
@@ -67,16 +61,9 @@ private val ConnectedLightColorScheme = lightColorScheme(
 @Composable
 fun ConnectedTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // We default to false for dynamic color to enforce our brand look
-    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
-        // dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-        //    val context = LocalContext.current
-        //    if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        // }
-
         // Force Dark Theme preference if user is in dark mode or if we want to enforce it
         // The desktop app defaults to dark, so we prioritize it.
         darkTheme -> ConnectedDarkColorScheme
@@ -87,8 +74,6 @@ fun ConnectedTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.background.toArgb()
-            window.navigationBarColor = colorScheme.background.toArgb()
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
             WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !darkTheme
         }
