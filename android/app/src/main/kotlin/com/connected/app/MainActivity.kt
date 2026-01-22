@@ -78,34 +78,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun isServiceRunning(serviceClass: Class<*>): Boolean {
-        val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
-        for (service in manager.getRunningServices(Int.MAX_VALUE)) {
-            if (serviceClass.name == service.service.className) {
-                return true
-            }
-        }
-        return false
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // Initialize singleton with Application Context
         connectedApp = ConnectedApp.getInstance(applicationContext)
 
-        // If service is running, we assume it has already initialized the app logic.
-        // If not, and run in background is off, we ensure initialization here.
-        // Since getInstance() guarantees initialization, we just need to ensure startProximity/initialize
-        // is called if it hasn't been.
-        // A simple check: if we are not running as a service, we initialize manually.
-        // However, ConnectedApp.initialize() is safe to call multiple times (it might re-register callbacks).
-        // Let's assume initialize() handles idempotency or we just call it.
-        // Better: Check if the service is running. If so, bind to it?
-        // Actually, with the Singleton pattern, we share the state in memory.
-        // As long as the process is alive, we share the ConnectedApp instance.
-
-        if (!isServiceRunning(ConnectedService::class.java)) {
+        // If service is running, it has already initialized the app logic.
+        if (!ConnectedService.isRunning) {
             connectedApp.initialize()
         }
 
@@ -129,8 +109,7 @@ class MainActivity : ComponentActivity() {
                             connectedApp,
                             filePickerLauncher,
                             folderPickerLauncher,
-                            sendFolderLauncher,
-                            ::isServiceRunning
+                            sendFolderLauncher
                         )
                     }
                 }
@@ -146,7 +125,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         // Only cleanup if we are NOT running as a service
-        if (!isServiceRunning(ConnectedService::class.java)) {
+        if (!ConnectedService.isRunning) {
             connectedApp.cleanup()
         }
         super.onDestroy()
@@ -355,8 +334,7 @@ fun MainAppNavigation(
     connectedApp: ConnectedApp,
     filePickerLauncher: ActivityResultLauncher<String>? = null,
     folderPickerLauncher: ActivityResultLauncher<Uri?>? = null,
-    sendFolderLauncher: ActivityResultLauncher<Uri?>? = null,
-    isServiceRunning: ((Class<*>) -> Boolean)? = null
+    sendFolderLauncher: ActivityResultLauncher<Uri?>? = null
 ) {
     var currentScreen by remember { mutableStateOf(Screen.Home) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -388,7 +366,10 @@ fun MainAppNavigation(
                     icon = { Icon(painterResource(R.drawable.ic_nav_settings), contentDescription = "Settings") },
                     label = { Text("Settings") },
                     selected = currentScreen == Screen.Settings,
-                    onClick = { Screen.Settings }
+                    onClick = {
+                        @Suppress("AssignedValueIsNeverRead")
+                        currentScreen = Screen.Settings
+                    }
                 )
             }
         }
@@ -396,7 +377,7 @@ fun MainAppNavigation(
         Box(modifier = Modifier.padding(paddingValues)) {
             when (currentScreen) {
                 Screen.Home -> HomeScreen(connectedApp, filePickerLauncher, sendFolderLauncher)
-                Screen.Settings -> SettingsScreen(connectedApp, folderPickerLauncher, isServiceRunning)
+                Screen.Settings -> SettingsScreen(connectedApp, folderPickerLauncher)
             }
         }
 
@@ -615,16 +596,13 @@ fun HomeScreen(
 @Composable
 fun SettingsScreen(
     connectedApp: ConnectedApp,
-    folderPickerLauncher: ActivityResultLauncher<Uri?>? = null,
-    isServiceRunning: ((Class<*>) -> Boolean)? = null
+    folderPickerLauncher: ActivityResultLauncher<Uri?>? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var isNotificationAccessGranted by remember { mutableStateOf(false) }
     var isBackgroundServiceRunning by remember {
-        mutableStateOf(
-            isServiceRunning?.invoke(ConnectedService::class.java) ?: false
-        )
+        mutableStateOf(ConnectedService.isRunning)
     }
 
     // Battery Optimization
@@ -643,7 +621,7 @@ fun SettingsScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 // Check background service
-                isBackgroundServiceRunning = isServiceRunning?.invoke(ConnectedService::class.java) ?: false
+                isBackgroundServiceRunning = ConnectedService.isRunning
 
                 // Check battery optimizations
                 isIgnoringBatteryOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
@@ -713,12 +691,18 @@ fun SettingsScreen(
     if (showRenameDialog) {
         var newName by remember { mutableStateOf(connectedApp.getDeviceName()) }
         AlertDialog(
-            onDismissRequest = { showRenameDialog = false },
+            onDismissRequest = {
+                @Suppress("AssignedValueIsNeverRead")
+                showRenameDialog = false
+            },
             title = { Text("Rename Device") },
             text = {
                 OutlinedTextField(
                     value = newName,
-                    onValueChange = { newName = it },
+                    onValueChange = {
+                        @Suppress("AssignedValueIsNeverRead")
+                        newName = it
+                    },
                     label = { Text("Device Name") },
                     singleLine = true
                 )
@@ -727,6 +711,7 @@ fun SettingsScreen(
                 Button(onClick = {
                     if (newName.isNotBlank()) {
                         connectedApp.renameDevice(newName)
+                        @Suppress("AssignedValueIsNeverRead")
                         showRenameDialog = false
                     }
                 }) {
@@ -734,7 +719,10 @@ fun SettingsScreen(
                 }
             },
             dismissButton = {
-                Button(onClick = { showRenameDialog = false }) {
+                Button(onClick = {
+                    @Suppress("AssignedValueIsNeverRead")
+                    showRenameDialog = false
+                }) {
                     Text("Cancel")
                 }
             }
@@ -777,7 +765,10 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.padding(start = 4.dp)
                         )
-                        Button(onClick = { showRenameDialog = true }) {
+                        Button(onClick = {
+                            @Suppress("AssignedValueIsNeverRead")
+                            showRenameDialog = true
+                        }) {
                             Text("Rename")
                         }
                     }

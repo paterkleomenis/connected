@@ -2,23 +2,20 @@ package com.connected.app
 
 import android.app.Notification
 import android.content.ComponentName
-import android.content.Context
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import androidx.core.os.BundleCompat
 import uniffi.connected_ffi.MediaState
 
 class MediaObserverService : NotificationListenerService() {
 
     private var sessionManager: MediaSessionManager? = null
-    private val sessionsChangedListener = object : MediaSessionManager.OnActiveSessionsChangedListener {
-        override fun onActiveSessionsChanged(controllers: List<MediaController>?) {
-            processControllers(controllers)
-        }
-    }
+    private val sessionsChangedListener =
+        MediaSessionManager.OnActiveSessionsChangedListener { controllers -> processControllers(controllers) }
 
     private fun processControllers(controllers: List<MediaController>?) {
         if (controllers.isNullOrEmpty()) return
@@ -60,7 +57,7 @@ class MediaObserverService : NotificationListenerService() {
     override fun onCreate() {
         super.onCreate()
         Log.d("MediaObserver", "MediaObserverService Created")
-        sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+        sessionManager = getSystemService(MEDIA_SESSION_SERVICE) as MediaSessionManager
         try {
             val componentName = ComponentName(this, MediaObserverService::class.java)
             sessionManager?.addOnActiveSessionsChangedListener(sessionsChangedListener, componentName)
@@ -131,7 +128,11 @@ class MediaObserverService : NotificationListenerService() {
         }
 
         private fun extractMessagingStyleBody(extras: android.os.Bundle): Pair<CharSequence, CharSequence?>? {
-            val messages = extras.getParcelableArray(Notification.EXTRA_MESSAGES) ?: return null
+            val messages = BundleCompat.getParcelableArray(
+                extras,
+                Notification.EXTRA_MESSAGES,
+                android.os.Parcelable::class.java
+            ) ?: return null
             if (messages.isEmpty()) return null
             val last = messages.lastOrNull() as? android.os.Bundle ?: return null
             val text = (last.getCharSequence("text") ?: last.getCharSequence("android.text")) ?: return null

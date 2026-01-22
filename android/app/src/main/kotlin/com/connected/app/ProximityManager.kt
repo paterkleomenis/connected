@@ -29,6 +29,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import uniffi.connected_ffi.DiscoveredDevice
 import uniffi.connected_ffi.getLocalDevice
 import uniffi.connected_ffi.injectProximityDevice
@@ -848,19 +849,7 @@ class ProximityManager(private val context: Context) {
 
     private fun isLocationEnabled(): Boolean {
         val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            manager.isLocationEnabled
-        } else {
-            val mode = try {
-                Settings.Secure.getInt(
-                    context.contentResolver,
-                    Settings.Secure.LOCATION_MODE
-                )
-            } catch (_: Exception) {
-                Settings.Secure.LOCATION_MODE_OFF
-            }
-            mode != Settings.Secure.LOCATION_MODE_OFF
-        }
+        return LocationManagerCompat.isLocationEnabled(manager)
     }
 
     private fun buildPayload(local: DiscoveredDevice): ByteArray {

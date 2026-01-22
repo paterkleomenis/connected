@@ -2,7 +2,7 @@ package com.connected.app
 
 import android.app.Activity
 import android.content.ClipboardManager
-import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import android.os.Handler
@@ -27,7 +27,7 @@ class ClipboardHelperActivity : Activity() {
 
     private fun shareClipboard() {
         try {
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
 
             // Check if clipboard has data
             if (!clipboard.hasPrimaryClip()) {
@@ -56,7 +56,12 @@ class ClipboardHelperActivity : Activity() {
             e.printStackTrace()
         } finally {
             finish()
-            overridePendingTransition(0, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, 0)
+            } else {
+                @Suppress("DEPRECATION")
+                overridePendingTransition(0, 0)
+            }
         }
     }
 }
