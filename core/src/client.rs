@@ -416,6 +416,28 @@ impl ConnectedClient {
         }
     }
 
+    pub async fn reject_pairing(&self, device_id: &str) -> Result<()> {
+        let target = self
+            .discovery
+            .get_device_by_id(device_id)
+            .and_then(|d| d.ip_addr().map(|ip| (ip, d.port)));
+
+        if let Some((ip, port)) = target {
+            let _ = self
+                .send_unpair_notification(ip, port, UnpairReason::Unpaired)
+                .await;
+
+            let addr = SocketAddr::new(ip, port);
+            self.transport
+                .invalidate_connection_with_reason(&addr, b"unpaired");
+        }
+
+        self.invalidate_connection_by_device_id_with_reason(device_id, b"unpaired");
+
+        info!("Rejected pairing request from {}", device_id);
+        Ok(())
+    }
+
     pub fn trust_device(
         &self,
         fingerprint: String,

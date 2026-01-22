@@ -15,7 +15,6 @@ import java.util.zip.ZipOutputStream
 import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -89,9 +88,6 @@ class ConnectedApp(private val context: Context) {
     private var clipboardSyncJob: kotlinx.coroutines.Job? = null
 
     @Volatile
-    private var lastLocalClipboard: String = ""
-
-    @Volatile
     private var lastRemoteClipboard: String = ""
 
     private val isAppInForeground = AtomicBoolean(false)
@@ -117,11 +113,11 @@ class ConnectedApp(private val context: Context) {
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
     private var proximityManager: ProximityManager? = null
 
-    private val PREFS_NAME = "ConnectedPrefs"
-    private val PREF_ROOT_URI = "root_uri"
-    private val PREF_MEDIA_CONTROL = "media_control"
-    private val PREF_TELEPHONY_ENABLED = "telephony_enabled"
-    private val PREF_DEVICE_NAME = "device_name"
+    private val _prefsName = "ConnectedPrefs"
+    private val _prefRootUri = "root_uri"
+    private val _prefMediaControl = "media_control"
+    private val _prefTelephonyEnabled = "telephony_enabled"
+    private val _prefDeviceName = "device_name"
     private var lastSdkRestart = 0L
 
     private val networkStateReceiver = object : android.content.BroadcastReceiver() {
@@ -195,8 +191,8 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun getDeviceName(): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val customName = prefs.getString(PREF_DEVICE_NAME, null)
+        val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
+        val customName = prefs.getString(_prefDeviceName, null)
         if (customName != null) return customName
 
         val manufacturer = android.os.Build.MANUFACTURER
@@ -208,8 +204,8 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun renameDevice(newName: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit { putString(PREF_DEVICE_NAME, newName) }
+        val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
+        prefs.edit { putString(_prefDeviceName, newName) }
         cleanup()
         initialize()
         android.widget.Toast.makeText(context, "Device renamed to $newName", android.widget.Toast.LENGTH_SHORT).show()
@@ -583,8 +579,8 @@ class ConnectedApp(private val context: Context) {
             registerUnpairCallback(unpairCallback)
             registerMediaControlCallback(mediaCallback)
 
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            if (prefs.getBoolean(PREF_TELEPHONY_ENABLED, false)) {
+            val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
+            if (prefs.getBoolean(_prefTelephonyEnabled, false)) {
                 isTelephonyEnabled.value = true
                 telephonyProvider.setListener(telephonyListener)
                 telephonyProvider.registerReceivers()
@@ -601,7 +597,7 @@ class ConnectedApp(private val context: Context) {
 
             getPersistedRootUri()?.let { registerFsProvider(it) }
 
-            isMediaControlEnabled.value = prefs.getBoolean(PREF_MEDIA_CONTROL, false)
+            isMediaControlEnabled.value = prefs.getBoolean(_prefMediaControl, false)
 
             lastSdkRestart = System.currentTimeMillis()
         } catch (e: Exception) {
@@ -778,8 +774,8 @@ class ConnectedApp(private val context: Context) {
     }
 
     private fun getPersistedRootUri(): Uri? {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val uriString = prefs.getString(PREF_ROOT_URI, null) ?: return null
+        val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
+        val uriString = prefs.getString(_prefRootUri, null) ?: return null
         return uriString.toUri()
     }
 
@@ -1184,30 +1180,6 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    // Missing Clipboard Sync methods
-    fun startClipboardSync() {
-        if (clipboardSyncJob?.isActive == true) return
-        isClipboardSyncEnabled.value = true
-        clipboardSyncJob = scope.launch {
-            while (isActive) {
-                val currentClip = getClipboardText()
-                if (currentClip.isNotEmpty() && currentClip != lastLocalClipboard && currentClip != lastRemoteClipboard) {
-                    lastLocalClipboard = currentClip
-                    // Broadcast to trusted devices
-                    devices.forEach { device ->
-                        if (isDeviceTrusted(device)) {
-                            try {
-                                sendClipboard(device.ip, device.port, currentClip, clipboardCallback)
-                            } catch (_: Exception) {
-                            }
-                        }
-                    }
-                }
-                delay(1000)
-            }
-        }
-    }
-
     fun stopClipboardSync() {
         isClipboardSyncEnabled.value = false
         clipboardSyncJob?.cancel()
@@ -1243,8 +1215,8 @@ class ConnectedApp(private val context: Context) {
 
     // Settings / Preferences
     fun setRootUri(uri: Uri) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit { putString(PREF_ROOT_URI, uri.toString()) }
+        val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
+        prefs.edit { putString(_prefRootUri, uri.toString()) }
 
         // Persist permission
         try {
@@ -1261,9 +1233,9 @@ class ConnectedApp(private val context: Context) {
     fun toggleTelephony() {
         val newState = !isTelephonyEnabled.value
         isTelephonyEnabled.value = newState
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
+        context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE).edit {
             putBoolean(
-                PREF_TELEPHONY_ENABLED,
+                _prefTelephonyEnabled,
                 newState
             )
         }
@@ -1280,9 +1252,9 @@ class ConnectedApp(private val context: Context) {
     fun toggleMediaControl() {
         val newState = !isMediaControlEnabled.value
         isMediaControlEnabled.value = newState
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
+        context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE).edit {
             putBoolean(
-                PREF_MEDIA_CONTROL,
+                _prefMediaControl,
                 newState
             )
         }
@@ -1681,7 +1653,14 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun rejectDevice(request: PairingRequest) {
-        pairingRequest.value = null
+        scope.launch(Dispatchers.IO) {
+            try {
+                rejectPairing(request.deviceId)
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Reject pairing failed", e)
+            }
+            pairingRequest.value = null
+        }
     }
 
     fun trustDevice(request: PairingRequest) {

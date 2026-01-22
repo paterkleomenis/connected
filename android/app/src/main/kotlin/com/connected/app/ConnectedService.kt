@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
+import com.connected.app.R
 
 class ConnectedService : Service() {
     companion object {
@@ -77,7 +78,7 @@ class ConnectedService : Service() {
         val builder = androidx.core.app.NotificationCompat.Builder(this, channelId)
             .setContentTitle("Connected")
             .setContentText("Click to share clipboard")
-            .setSmallIcon(com.connected.app.R.drawable.ic_notification_logo)
+            .setSmallIcon(R.drawable.ic_notification_logo)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_MAX)
             .setCategory(androidx.core.app.NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)

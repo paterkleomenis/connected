@@ -1293,6 +1293,14 @@ pub fn trust_device(
 }
 
 #[uniffi::export]
+pub fn reject_pairing(device_id: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    get_runtime()
+        .block_on(async { client.reject_pairing(&device_id).await })
+        .map_err(Into::into)
+}
+
+#[uniffi::export]
 pub fn unpair_device(fingerprint: String) -> Result<(), ConnectedFfiError> {
     // Unpair = disconnect but keep trust intact (can reconnect anytime without re-pairing)
     let client = get_client()?;
