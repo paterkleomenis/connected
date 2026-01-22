@@ -1,5 +1,6 @@
 package com.connected.app
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -24,6 +25,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.graphics.BitmapFactory
+import androidx.annotation.RequiresPermission
 import androidx.core.content.edit
 import androidx.core.net.toUri
 
@@ -249,6 +251,7 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     fun stopProximityManager() {
         proximityManager?.stop()
         proximityManager = null
@@ -256,9 +259,7 @@ class ConnectedApp(private val context: Context) {
 
     // Alias for old calls
     fun startProximity() = startProximityManager()
-    fun stopProximity() = stopProximityManager()
 
-    // ... (rest of the class) ...
 
     private val discoveryCallback = object : DiscoveryCallback {
 
@@ -457,7 +458,7 @@ class ConnectedApp(private val context: Context) {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 val clip = android.content.ClipData.newPlainText("Connected", text)
                 clipboard.setPrimaryClip(clip)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
             }
         }
     }
@@ -612,14 +613,14 @@ class ConnectedApp(private val context: Context) {
         Log.d("ConnectedApp", "Cleaning up resources")
         try {
             context.unregisterReceiver(networkStateReceiver)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
         stopClipboardSync()
         stopProximityManager()
         shutdown()
         try {
             multicastLock?.release()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
     }
 
@@ -792,7 +793,7 @@ class ConnectedApp(private val context: Context) {
                     context,
                     uri
                 )?.name ?: uri.path
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
     }
 
@@ -805,7 +806,7 @@ class ConnectedApp(private val context: Context) {
             devices.addAll(list)
             trustedDevices.clear()
             list.forEach { if (isDeviceTrusted(it)) trustedDevices.add(it.id) }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
     }
 
@@ -821,7 +822,7 @@ class ConnectedApp(private val context: Context) {
                     it.moveToFirst(); return it.getString(nameIndex)
                 }
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
         try {
             val uri = contentUri.toUri()
@@ -832,7 +833,7 @@ class ConnectedApp(private val context: Context) {
                 tempFile.outputStream().use { output -> input.copyTo(output) }
                 return tempFile.absolutePath
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
         return null
     }
@@ -851,7 +852,7 @@ class ConnectedApp(private val context: Context) {
                     dest.outputStream().use { output -> input.copyTo(output) }
                 }
                 true
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 false
             }
         }
@@ -901,7 +902,7 @@ class ConnectedApp(private val context: Context) {
     fun isDeviceTrusted(device: DiscoveredDevice): Boolean {
         return try {
             isDeviceTrusted(device.id)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -1017,7 +1018,7 @@ class ConnectedApp(private val context: Context) {
                 if (isDeviceTrusted(device)) {
                     try {
                         sendActiveCallUpdate(device.ip, device.port, call)
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                     }
                 }
             }
@@ -1030,7 +1031,7 @@ class ConnectedApp(private val context: Context) {
                 if (isDeviceTrusted(device)) {
                     try {
                         notifyNewSms(device.ip, device.port, message)
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                     }
                 }
             }
@@ -1060,7 +1061,7 @@ class ConnectedApp(private val context: Context) {
             if (isDeviceTrusted(device)) {
                 try {
                     notifyNewSms(device.ip, device.port, msg)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                 }
             }
         }
@@ -1072,7 +1073,7 @@ class ConnectedApp(private val context: Context) {
                 val contacts = telephonyProvider.getContacts()
                 try {
                     sendContacts(fromIp, fromPort, contacts)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                 }
             }
         }
@@ -1089,7 +1090,7 @@ class ConnectedApp(private val context: Context) {
                 val convos = telephonyProvider.getConversations()
                 try {
                     sendConversations(fromIp, fromPort, convos)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                 }
             }
         }
@@ -1112,7 +1113,7 @@ class ConnectedApp(private val context: Context) {
                 val msgs = telephonyProvider.getMessages(threadId, limit.toInt())
                 try {
                     sendMessages(fromIp, fromPort, threadId, msgs)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                 }
             }
         }
@@ -1130,7 +1131,7 @@ class ConnectedApp(private val context: Context) {
             val error = result.exceptionOrNull()?.message
             try {
                 sendSmsSendResult(fromIp, fromPort, success, null, error)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
             }
         }
 
@@ -1154,7 +1155,7 @@ class ConnectedApp(private val context: Context) {
                 val log = telephonyProvider.getCallLog(limit.toInt())
                 try {
                     sendCallLog(fromIp, fromPort, log)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                 }
             }
         }
@@ -1197,7 +1198,7 @@ class ConnectedApp(private val context: Context) {
                         if (isDeviceTrusted(device)) {
                             try {
                                 sendClipboard(device.ip, device.port, currentClip, clipboardCallback)
-                            } catch (e: Exception) {
+                            } catch (_: Exception) {
                             }
                         }
                     }
@@ -1223,13 +1224,13 @@ class ConnectedApp(private val context: Context) {
                 if (clipboard.hasPrimaryClip()) {
                     text = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
             }
             latch.countDown()
         }
         try {
             latch.await(1, java.util.concurrent.TimeUnit.SECONDS)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
         return text
     }
@@ -1251,7 +1252,7 @@ class ConnectedApp(private val context: Context) {
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
-        } catch (e: Exception) {
+        } catch (_: Exception) {
         }
 
         registerFsProvider(uri)
@@ -1303,7 +1304,7 @@ class ConnectedApp(private val context: Context) {
             if (isDeviceTrusted(device)) {
                 try {
                     sendMediaState(device.ip, device.port, state)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                 }
             }
         }
@@ -1349,7 +1350,7 @@ class ConnectedApp(private val context: Context) {
             if (clip.isNotEmpty()) {
                 try {
                     sendClipboard(device.ip, device.port, clip, clipboardCallback)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     runOnMainThread {
                         android.widget.Toast.makeText(
                             context,
@@ -1388,7 +1389,7 @@ class ConnectedApp(private val context: Context) {
         scope.launch {
             if (!isAppInForeground.get() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 // Background clipboard access restriction
-                 runOnMainThread {
+                runOnMainThread {
                     android.widget.Toast.makeText(
                         context,
                         "Bring app to foreground to share clipboard",
@@ -1416,7 +1417,7 @@ class ConnectedApp(private val context: Context) {
                     ).show()
                 }
             } else {
-                 runOnMainThread {
+                runOnMainThread {
                     android.widget.Toast.makeText(
                         context,
                         "Clipboard is empty",
@@ -1495,7 +1496,7 @@ class ConnectedApp(private val context: Context) {
                         runOnMainThread { thumbnails[path] = bitmap }
                     }
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
             }
         }
     }
@@ -1718,7 +1719,7 @@ class ConnectedApp(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 acceptFileTransfer(request.id)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
             }
             transferRequest.value = null
             dismissTransferNotification()
@@ -1729,7 +1730,7 @@ class ConnectedApp(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 rejectFileTransfer(request.id)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
             }
             transferRequest.value = null
             dismissTransferNotification()
@@ -1771,7 +1772,7 @@ class ConnectedApp(private val context: Context) {
                 intent.data = "package:${context.packageName}".toUri()
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(intent)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 val intent = Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(intent)

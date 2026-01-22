@@ -11,20 +11,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-// Colors from desktop styles.css
+// Colors from desktop styles.css - Updated for High Contrast B&W
 val ColorBgPrimary = Color(0xFF000000)
-val ColorBgSecondary = Color(0xFF1c1c1e)
-val ColorBgTertiary = Color(0xFF2c2c2e)
-val ColorAccent = Color(0xFF0a84ff)
-val ColorTextPrimary = Color(0xFFf5f5f7)
-val ColorTextSecondary = Color(0xFFa1a1a6)
+val ColorBgSecondary = Color(0xFF000000) // Secondary is now Black
+val ColorBgTertiary = Color(0xFF1c1c1e) // Slightly lighter for variants if needed
+val ColorAccent = Color(0xFFFFFFFF) // Primary is now White
+val ColorTextPrimary = Color(0xFFFFFFFF)
+val ColorTextSecondary = Color(0xFFFFFFFF) // Icons/Secondary text also White
 val ColorSuccess = Color(0xFF30d158)
 val ColorError = Color(0xFFff453a)
 
 private val ConnectedDarkColorScheme = darkColorScheme(
     primary = ColorAccent,
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFF003D7A), // Darker shade of accent
+    onPrimary = Color.Black, // Black text on White Primary
+    primaryContainer = Color(0xFF333333),
     onPrimaryContainer = ColorTextPrimary,
 
     secondary = ColorBgSecondary,
@@ -49,7 +49,7 @@ private val ConnectedDarkColorScheme = darkColorScheme(
 // For now, mapping light theme to be similar or just standard light
 private val ConnectedLightColorScheme = lightColorScheme(
     primary = ColorAccent,
-    onPrimary = Color.White,
+    onPrimary = Color.Black,
     background = Color(0xFFf5f5f7),
     onBackground = Color(0xFF1d1d1f),
     surface = Color(0xFFffffff),

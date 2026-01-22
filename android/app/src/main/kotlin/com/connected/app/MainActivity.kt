@@ -209,14 +209,15 @@ class MainActivity : ComponentActivity() {
             }
 
             Intent.ACTION_SEND_MULTIPLE -> {
-                val uris = intent.extras?.let { BundleCompat.getParcelableArrayList(it, Intent.EXTRA_STREAM, Uri::class.java) }
-                    ?: intent.clipData?.let { clip ->
-                        ArrayList<Uri>(clip.itemCount).apply {
-                            for (i in 0 until clip.itemCount) {
-                                clip.getItemAt(i)?.uri?.let { add(it) }
+                val uris =
+                    intent.extras?.let { BundleCompat.getParcelableArrayList(it, Intent.EXTRA_STREAM, Uri::class.java) }
+                        ?: intent.clipData?.let { clip ->
+                            ArrayList<Uri>(clip.itemCount).apply {
+                                for (i in 0 until clip.itemCount) {
+                                    clip.getItemAt(i)?.uri?.let { add(it) }
+                                }
                             }
                         }
-                    }
                 if (!uris.isNullOrEmpty()) {
                     connectedApp.setPendingShare(uris)
                 }

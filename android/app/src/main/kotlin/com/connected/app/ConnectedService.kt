@@ -77,14 +77,14 @@ class ConnectedService : Service() {
         val builder = androidx.core.app.NotificationCompat.Builder(this, channelId)
             .setContentTitle("Connected")
             .setContentText("Click to share clipboard")
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(com.connected.app.R.drawable.ic_notification_logo)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_MAX)
             .setCategory(androidx.core.app.NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)
             .setShowWhen(false)
             .setContentIntent(sharePendingIntent)
             .setColorized(true)
-            .setColor(0xFF6200EE.toInt()) // purple_500
+            .setColor(0xFFFFFFFF.toInt()) // white
             .setOngoing(true)
 
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {

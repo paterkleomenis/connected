@@ -93,6 +93,7 @@ configure<ApplicationExtension> {
 }
 
 dependencies {
+    implementation("androidx.exifinterface:exifinterface:1.3.6")
     // Core library desugaring for Java 21 APIs on older Android
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 

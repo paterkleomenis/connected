@@ -5,13 +5,11 @@ import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.media.ExifInterface
+import androidx.exifinterface.media.ExifInterface
 import androidx.documentfile.provider.DocumentFile
 import uniffi.connected_ffi.*
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileNotFoundException
-import java.io.InputStream
 
 class AndroidFilesystemProvider(private val context: Context, private val rootUri: Uri) : FilesystemProviderCallback {
 
@@ -253,7 +251,7 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
                 bitmap.recycle()
                 return stream.toByteArray()
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             // Ignore errors
         }
         return ByteArray(0)
