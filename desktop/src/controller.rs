@@ -204,7 +204,7 @@ fn spawn_event_loop(
                 ConnectedEvent::DeviceLost(id) => {
                     let mut store = get_devices_store().lock().unwrap();
                     if let Some(d) = store.remove(&id) {
-                        add_notification("Device Lost", &format!("{} disconnected", d.name), "📴");
+                        add_notification("Device Lost", &format!("{} disconnected", d.name), "");
                     }
                 }
                 ConnectedEvent::TransferStarting {
@@ -219,7 +219,7 @@ fn spawn_event_loop(
                         add_notification(
                             "Transfer Starting",
                             &format!("Receiving {}", filename),
-                            "📥",
+                            "",
                         );
                     } else {
                         *get_transfer_status().lock().unwrap() =
@@ -249,11 +249,11 @@ fn spawn_event_loop(
                 ConnectedEvent::TransferCompleted { filename, .. } => {
                     *get_transfer_status().lock().unwrap() =
                         TransferStatus::Completed(filename.clone());
-                    add_notification("Transfer Complete", &format!("{} finished", filename), "✅");
+                    add_notification("Transfer Complete", &format!("{} finished", filename), "");
                 }
                 ConnectedEvent::TransferFailed { error, .. } => {
                     *get_transfer_status().lock().unwrap() = TransferStatus::Failed(error.clone());
-                    add_notification("Transfer Failed", &error, "❌");
+                    add_notification("Transfer Failed", &error, "");
                 }
                 ConnectedEvent::ClipboardReceived {
                     content,
@@ -262,7 +262,7 @@ fn spawn_event_loop(
                     set_system_clipboard(&content);
                     *get_last_clipboard().lock().unwrap() = content.clone();
                     *get_last_remote_update().lock().unwrap() = Instant::now();
-                    add_notification("Clipboard", &format!("Received from {}", from_device), "📋");
+                    add_notification("Clipboard", &format!("Received from {}", from_device), "");
                 }
                 ConnectedEvent::Error(msg) => {
                     error!("System error: {}", msg);
@@ -301,7 +301,7 @@ fn spawn_event_loop(
                         add_notification(
                             "Pairing Request",
                             &format!("{} wants to connect.", device_name),
-                            "🔐",
+                            "",
                         );
                         requests.push(PairingRequest {
                             fingerprint,
@@ -317,7 +317,7 @@ fn spawn_event_loop(
                     add_notification(
                         "Pairing Rejected",
                         &format!("{} rejected your request.", device_name),
-                        "🚫",
+                        "",
                     );
                     get_pending_pairings().lock().unwrap().remove(&device_id);
                 }
@@ -359,7 +359,7 @@ fn spawn_event_loop(
                     add_notification(
                         "Device Disconnected",
                         &format!("You were {} {}", reason_str, device_name),
-                        "💔",
+                        "",
                     );
                 }
                 ConnectedEvent::TransferRequest {
@@ -375,7 +375,7 @@ fn spawn_event_loop(
                             "{} wants to send {} ({} bytes)",
                             from_device, filename, size
                         ),
-                        "📁",
+                        "",
                     );
                     // Store the request for UI to display
                     add_file_transfer_request(FileTransferRequest {
@@ -711,7 +711,7 @@ fn spawn_event_loop(
                             add_notification(
                                 "New SMS",
                                 &format!("From {}: {}", sender, preview),
-                                "💬",
+                                "",
                             );
                             info!("Notification added successfully");
 
@@ -772,7 +772,7 @@ fn spawn_event_loop(
                                     add_notification(
                                         "Phone Call",
                                         &format!("{:?} call from {}", c.state, caller),
-                                        "📞",
+                                        "",
                                     );
                                 }
                             }
@@ -818,7 +818,7 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
         }
         Err(e) => {
             error!("Failed to init: {}", e);
-            add_notification("Init Failed", &e.to_string(), "❌");
+            add_notification("Init Failed", &e.to_string(), "");
             None
         }
     }
@@ -874,7 +874,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         add_notification(
                             "Offline Mode",
                             "Offline transfer not supported. Connect to same network.",
-                            "⚠️",
+                            "",
                         );
                         return;
                     }
@@ -892,7 +892,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         add_notification(
                             "Offline Mode",
                             "Offline transfer not supported. Connect to same network.",
-                            "⚠️",
+                            "",
                         );
                         return;
                     }
@@ -952,7 +952,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         add_notification(
                             "Offline Mode",
                             "Offline pairing not yet supported on Linux. Please connect devices to the same network or use Hotspot.",
-                            "⚠️",
+                            "",
                         );
                         warn!("Offline pairing requested but not implemented for Linux");
                         return;
@@ -982,7 +982,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     add_notification(
                                         "Paired",
                                         "Successfully paired with device",
-                                        "✅",
+                                        "",
                                     );
                                     // Remove from pending on success
                                     if let Some(did) = device_id_for_cleanup {
@@ -993,7 +993,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     error!("Failed to send handshake: {}", e);
                                     // Suppress notification if rejected, as ConnectedEvent::PairingRejected handles it
                                     if !e.to_string().to_lowercase().contains("rejected") {
-                                        add_notification("Pairing Failed", &e.to_string(), "❌");
+                                        add_notification("Pairing Failed", &e.to_string(), "");
                                     }
                                     // Remove from pending on failure
                                     if let Some(did) = device_id_for_cleanup {
@@ -1015,7 +1015,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     {
                         Err(e) => {
                             error!("Failed to trust: {}", e);
-                            add_notification("Trust Failed", &e.to_string(), "❌");
+                            add_notification("Trust Failed", &e.to_string(), "");
                         }
                         _ => {
                             // Remove from pairing requests
@@ -1032,7 +1032,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 }
                             }
 
-                            add_notification("Paired", "Device trusted successfully", "✅");
+                            add_notification("Paired", "Device trusted successfully", "");
 
                             // Send trust confirmation (HandshakeAck) to the other device
                             // This is NOT a new handshake - it confirms we accepted their pairing request
@@ -1081,7 +1081,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         match c.unpair_device_by_id(&did).await {
                             Err(e) => {
                                 error!("Failed to unpair: {}", e);
-                                add_notification("Unpair Failed", &e.to_string(), "❌");
+                                add_notification("Unpair Failed", &e.to_string(), "");
                             }
                             Ok(_) => {
                                 // Core emits event, event loop handles UI update
@@ -1103,7 +1103,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         match c.forget_device_by_id(&did).await {
                             Err(e) => {
                                 error!("Failed to forget device: {}", e);
-                                add_notification("Forget Failed", &e.to_string(), "❌");
+                                add_notification("Forget Failed", &e.to_string(), "");
                             }
                             Ok(_) => {
                                 // Core emits event, event loop handles UI update
@@ -1118,7 +1118,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     remove_file_transfer_request(&transfer_id);
                     if let Err(e) = c.accept_file_transfer(&transfer_id) {
                         error!("Failed to accept file transfer: {}", e);
-                        add_notification("Transfer Error", &e.to_string(), "❌");
+                        add_notification("Transfer Error", &e.to_string(), "");
                     }
                 }
             }
@@ -1131,7 +1131,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             error!("Failed to reject file transfer: {}", e);
                         }
                         _ => {
-                            add_notification("Transfer Rejected", "File transfer declined", "🚫");
+                            add_notification("Transfer Rejected", "File transfer declined", "");
                         }
                     }
                 }
@@ -1153,7 +1153,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     add_notification(
                                         "File Browser",
                                         &format!("Failed to list: {}", e),
-                                        "❌",
+                                        "",
                                     );
                                 }
                             }
@@ -1179,7 +1179,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             add_notification(
                                 "Download",
                                 &format!("Downloading {}...", filename),
-                                "📥",
+                                "",
                             );
 
                             match c
@@ -1190,12 +1190,12 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     add_notification(
                                         "Download",
                                         &format!("Downloaded {}", filename),
-                                        "✅",
+                                        "",
                                     );
                                 }
                                 Err(e) => {
                                     error!("Failed to download file: {}", e);
-                                    add_notification("Download Failed", &e.to_string(), "❌");
+                                    add_notification("Download Failed", &e.to_string(), "");
                                 }
                             }
                         }
@@ -1216,7 +1216,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             let temp_dir = std::env::temp_dir();
                             let local_path = temp_dir.join(format!("preview_{}", filename));
 
-                            add_notification("Preview", &format!("Loading {}...", filename), "👁️");
+                            add_notification("Preview", &format!("Loading {}...", filename), "");
 
                             match c
                                 .fs_download_file(ip_addr, port, remote_path, local_path.clone())
@@ -1237,12 +1237,12 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         // Clean up temp file
                                         let _ = tokio::fs::remove_file(local_path).await;
                                     } else {
-                                        add_notification("Preview", "Failed to read file", "❌");
+                                        add_notification("Preview", "Failed to read file", "");
                                     }
                                 }
                                 Err(e) => {
                                     error!("Failed to preview file: {}", e);
-                                    add_notification("Preview Failed", &e.to_string(), "❌");
+                                    add_notification("Preview Failed", &e.to_string(), "");
                                 }
                             }
                         }
@@ -1434,11 +1434,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             info!("Media poller stopped");
                         });
                         if notify {
-                            add_notification("Media Control", "Media control enabled", "🎵");
+                            add_notification("Media Control", "Media control enabled", "");
                         }
                     }
                 } else if notify {
-                    add_notification("Media Control", "Media control disabled", "🔇");
+                    add_notification("Media Control", "Media control disabled", "");
                 }
             }
             AppAction::SendMediaCommand { ip, port, command } => {
@@ -1513,7 +1513,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     } else {
                                         format!("Sync failed: {}", e)
                                     };
-                                    add_notification("Phone", &user_msg, "❌");
+                                    add_notification("Phone", &user_msg, "");
                                 }
                             }
                         }
@@ -1540,7 +1540,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     } else {
                                         format!("Sync failed: {}", e)
                                     };
-                                    add_notification("Phone", &user_msg, "❌");
+                                    add_notification("Phone", &user_msg, "");
                                 }
                             }
                         }
@@ -1567,7 +1567,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     } else {
                                         format!("Sync failed: {}", e)
                                     };
-                                    add_notification("Phone", &user_msg, "❌");
+                                    add_notification("Phone", &user_msg, "");
                                 }
                             }
                         }
@@ -1595,7 +1595,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 }
                                 Err(e) => {
                                     error!("Failed to request messages: {}", e);
-                                    add_notification("Phone", &format!("Failed: {}", e), "❌");
+                                    add_notification("Phone", &format!("Failed: {}", e), "");
                                 }
                             }
                         }
@@ -1617,12 +1617,12 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     add_notification(
                                         "Phone",
                                         &format!("Sending SMS to {}...", to),
-                                        "📤",
+                                        "",
                                     );
                                 }
                                 Err(e) => {
                                     error!("Failed to send SMS: {}", e);
-                                    add_notification("Phone", &format!("Failed: {}", e), "❌");
+                                    add_notification("Phone", &format!("Failed: {}", e), "");
                                 }
                             }
                         }
@@ -1643,12 +1643,12 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     add_notification(
                                         "Phone",
                                         &format!("Calling {}...", number),
-                                        "📞",
+                                        "",
                                     );
                                 }
                                 Err(e) => {
                                     error!("Failed to initiate call: {}", e);
-                                    add_notification("Phone", &format!("Failed: {}", e), "❌");
+                                    add_notification("Phone", &format!("Failed: {}", e), "");
                                 }
                             }
                         }
@@ -1668,7 +1668,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 }
                                 Err(e) => {
                                     error!("Failed to send call action: {}", e);
-                                    add_notification("Phone", &format!("Failed: {}", e), "❌");
+                                    add_notification("Phone", &format!("Failed: {}", e), "");
                                 }
                             }
                         }

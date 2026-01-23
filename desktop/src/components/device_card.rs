@@ -54,7 +54,9 @@ pub fn DeviceCard(
                         "{device.ip}:{device.port}"
                     }
                 }
-                p { class: "device-type", "{device.device_type}" }
+                if device.device_type.to_lowercase() != "unknown" {
+                    p { class: "device-type", "{device.device_type}" }
+                }
                 if device.is_trusted {
                     p {
                         class: "device-status trusted",

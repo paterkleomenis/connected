@@ -413,9 +413,9 @@ fn App() -> Element {
         action_tx.send(AppAction::SetClipboardSync(new_state));
         if new_state {
             *get_last_clipboard().lock().unwrap() = get_system_clipboard();
-            add_notification("Clipboard Sync", "Sync Started (Trusted Devices)", "📋");
+            add_notification("Clipboard Sync", "Sync Started (Trusted Devices)", "");
         } else {
-            add_notification("Clipboard Sync", "Sync Stopped", "📋");
+            add_notification("Clipboard Sync", "Sync Stopped", "");
         }
     };
 
@@ -447,6 +447,7 @@ fn App() -> Element {
                 // Logo/Header
                 div {
                     class: "sidebar-header",
+                    Icon { icon: IconType::Logo, size: 36, color: "white".to_string() }
                     h1 { "Connected" }
                 }
 
@@ -989,7 +990,7 @@ fn App() -> Element {
                                         // Note about media control
                                         div {
                                             class: "phone-note",
-                                            span { class: "note-icon", "ℹ️" }
+                                            span { class: "note-icon", Icon { icon: IconType::Warning, size: 16, color: "var(--text-tertiary)".to_string() } }
                                             span { "Control media playback on your Android device. Make sure a media app is playing on the device." }
                                         }
                                     }
@@ -1141,12 +1142,12 @@ fn App() -> Element {
                                                                                 let is_outgoing = msg.is_outgoing;
                                                                                 let body = msg.body.clone();
                                                                                 let time_str = format_timestamp(msg.timestamp);
-                                                                                let status = match msg.status {
-                                                                                    connected_core::telephony::SmsStatus::Pending => "⏳",
-                                                                                    connected_core::telephony::SmsStatus::Sent => "✓",
-                                                                                    connected_core::telephony::SmsStatus::Delivered => "✓✓",
-                                                                                    connected_core::telephony::SmsStatus::Failed => "❌",
-                                                                                    connected_core::telephony::SmsStatus::Received => "",
+                                                                                let status_icon = match msg.status {
+                                                                                    connected_core::telephony::SmsStatus::Pending => Some(IconType::Searching),
+                                                                                    connected_core::telephony::SmsStatus::Sent => Some(IconType::Check),
+                                                                                    connected_core::telephony::SmsStatus::Delivered => Some(IconType::Check),
+                                                                                    connected_core::telephony::SmsStatus::Failed => Some(IconType::Error),
+                                                                                    connected_core::telephony::SmsStatus::Received => None,
                                                                                 };
                                                                                 rsx! {
                                                                                     div {
@@ -1155,8 +1156,10 @@ fn App() -> Element {
                                                                                         div {
                                                                                             class: "message-meta",
                                                                                             span { class: "message-time", "{time_str}" }
-                                                                                            if is_outgoing && !status.is_empty() {
-                                                                                                span { class: "message-status", "{status}" }
+                                                                                            if is_outgoing {
+                                                                                                if let Some(icon) = status_icon {
+                                                                                                    span { class: "message-status", Icon { icon: icon, size: 12, color: "currentColor".to_string() } }
+                                                                                                }
                                                                                             }
                                                                                         }
                                                                                     }
@@ -1223,7 +1226,7 @@ fn App() -> Element {
                                                                                 port: fresh_device.port,
                                                                             });
                                                                         } else {
-                                                                            add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                                            add_notification("Phone", "Device not found. Try refreshing.", "");
                                                                         }
                                                                     }
                                                                 },
@@ -1326,7 +1329,7 @@ fn App() -> Element {
                                                                             limit: 200,
                                                                         });
                                                                     } else {
-                                                                        add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                                        add_notification("Phone", "Device not found. Try refreshing.", "");
                                                                     }
                                                                 }
                                                             },
@@ -1357,12 +1360,12 @@ fn App() -> Element {
                                                                 let duration = call.duration;
                                                                 let timestamp = call.timestamp;
                                                                 let time_str = format_timestamp(timestamp);
-                                                                let (icon, type_class) = match call_type {
-                                                                    connected_core::telephony::CallType::Incoming => ("📥", "incoming"),
-                                                                    connected_core::telephony::CallType::Outgoing => ("📤", "outgoing"),
-                                                                    connected_core::telephony::CallType::Missed => ("📵", "missed"),
-                                                                    connected_core::telephony::CallType::Rejected => ("🚫", "rejected"),
-                                                                    _ => ("📞", "other"),
+                                                                let (icon_type, type_class) = match call_type {
+                                                                    connected_core::telephony::CallType::Incoming => (IconType::Download, "incoming"),
+                                                                    connected_core::telephony::CallType::Outgoing => (IconType::Upload, "outgoing"),
+                                                                    connected_core::telephony::CallType::Missed => (IconType::Error, "missed"),
+                                                                    connected_core::telephony::CallType::Rejected => (IconType::Warning, "rejected"),
+                                                                    _ => (IconType::Call, "other"),
                                                                 };
                                                                 let duration_str = if duration > 0 {
                                                                     format!("{}:{:02}", duration / 60, duration % 60)
@@ -1373,7 +1376,7 @@ fn App() -> Element {
                                                                 rsx! {
                                                                     div {
                                                                         class: "call-item {type_class}",
-                                                                        span { class: "call-icon", "{icon}" }
+                                                                        div { class: "call-icon", Icon { icon: icon_type, size: 16, color: "currentColor".to_string() } }
                                                                         div {
                                                                             class: "call-info",
                                                                             div {
@@ -1401,7 +1404,7 @@ fn App() -> Element {
                                                                                     }
                                                                                 }
                                                                             },
-                                                                            "📞"
+                                                                            Icon { icon: IconType::Call, size: 16, color: "currentColor".to_string() }
                                                                         }
                                                                     }
                                                                 }
@@ -1431,7 +1434,7 @@ fn App() -> Element {
                                                                             port: fresh_device.port,
                                                                         });
                                                                     } else {
-                                                                        add_notification("Phone", "Device not found. Try refreshing.", "❌");
+                                                                        add_notification("Phone", "Device not found. Try refreshing.", "");
                                                                     }
                                                                 }
                                                             },
@@ -1474,7 +1477,9 @@ fn App() -> Element {
                                                                             class: "contact-info",
                                                                             div {
                                                                                 class: "contact-name",
-                                                                                if starred { "⭐ " } else { "" }
+                                                                                if starred {
+                                                                                     Icon { icon: IconType::Star, size: 12, color: "var(--accent)".to_string() }
+                                                                                }
                                                                                 "{name}"
                                                                             }
                                                                             if !phone.is_empty() {
@@ -1503,12 +1508,12 @@ fn App() -> Element {
                                                                                             }
                                                                                         }
                                                                                     },
-                                                                                    "📞"
+                                                                                    Icon { icon: IconType::Call, size: 16, color: "currentColor".to_string() }
                                                                                 }
                                                                                 button {
                                                                                     class: "contact-action",
                                                                                     title: "Message",
-                                                                                    "💬"
+                                                                                    Icon { icon: IconType::Message, size: 16, color: "currentColor".to_string() }
                                                                                 }
                                                                             }
                                                                         }
@@ -1533,7 +1538,10 @@ fn App() -> Element {
                         class: "settings-section",
                         div {
                             class: "info-card",
-                            h3 { "📱 This Device" }
+                            h3 {
+                                Icon { icon: IconType::Desktop, size: 20, color: "currentColor".to_string() }
+                                " This Device"
+                            }
                             div {
                                 class: "info-grid",
                                 div { class: "info-label", "Name" }
@@ -1558,7 +1566,10 @@ fn App() -> Element {
 
                         div {
                             class: "info-card",
-                            h3 { "🔐 Security" }
+                            h3 {
+                                Icon { icon: IconType::Pair, size: 20, color: "currentColor".to_string() }
+                                " Security"
+                            }
                             div {
                                 class: "info-grid",
                                 div { class: "info-label", "Pairing Mode" }
@@ -1576,7 +1587,10 @@ fn App() -> Element {
 
                         div {
                             class: "info-card",
-                            h3 { "📋 Clipboard Sync" }
+                            h3 {
+                                Icon { icon: IconType::NavClipboard, size: 20, color: "currentColor".to_string() }
+                                " Clipboard Sync"
+                            }
                             div {
                                 class: "info-grid",
                                 div { class: "info-label", "Auto-sync" }
@@ -1598,7 +1612,10 @@ fn App() -> Element {
 
                         div {
                             class: "info-card",
-                            h3 { "🎵 Media Sharing" }
+                            h3 {
+                                Icon { icon: IconType::Music, size: 20, color: "currentColor".to_string() }
+                                " Media Sharing"
+                            }
                             div {
                                 class: "info-grid",
                                 div { class: "info-label", "Share Status" }
@@ -1621,7 +1638,10 @@ fn App() -> Element {
                         if cfg!(target_os = "linux") {
                             div {
                                 class: "info-card",
-                                h3 { "🔔 Notifications" }
+                                h3 {
+                                    Icon { icon: IconType::Bell, size: 20, color: "currentColor".to_string() }
+                                    " Notifications"
+                                }
                                 div {
                                     class: "info-grid",
                                     div { class: "info-label", "Enable" }
@@ -1648,7 +1668,10 @@ fn App() -> Element {
 
                         div {
                             class: "info-card",
-                            h3 { "📱 Phone Auto-Sync" }
+                            h3 {
+                                Icon { icon: IconType::NavPhone, size: 20, color: "currentColor".to_string() }
+                                " Phone Auto-Sync"
+                            }
                             div {
                                 class: "info-grid",
                                 div { class: "info-label", "Messages" }
@@ -1833,23 +1856,23 @@ fn App() -> Element {
                             class: "call-modal-header",
                             match call.state {
                                 ActiveCallState::Ringing => rsx! {
-                                    span { class: "call-state-icon ringing", "📞" }
+                                    div { class: "call-state-icon ringing", Icon { icon: IconType::Call, size: 48, color: "currentColor".to_string() } }
                                     h3 { "Incoming Call" }
                                 },
                                 ActiveCallState::Dialing => rsx! {
-                                    span { class: "call-state-icon dialing", "📱" }
+                                    div { class: "call-state-icon dialing", Icon { icon: IconType::NavPhone, size: 48, color: "currentColor".to_string() } }
                                     h3 { "Dialing..." }
                                 },
                                 ActiveCallState::Connected => rsx! {
-                                    span { class: "call-state-icon connected", "🔊" }
+                                    div { class: "call-state-icon connected", Icon { icon: IconType::VolumeUp, size: 48, color: "currentColor".to_string() } }
                                     h3 { "Call in Progress" }
                                 },
                                 ActiveCallState::OnHold => rsx! {
-                                    span { class: "call-state-icon on-hold", "⏸️" }
+                                    div { class: "call-state-icon on-hold", Icon { icon: IconType::Pause, size: 48, color: "currentColor".to_string() } }
                                     h3 { "On Hold" }
                                 },
                                 ActiveCallState::Ended => rsx! {
-                                    span { class: "call-state-icon ended", "📵" }
+                                    div { class: "call-state-icon ended", Icon { icon: IconType::Unpair, size: 48, color: "currentColor".to_string() } }
                                     h3 { "Call Ended" }
                                 },
                             }
@@ -1904,7 +1927,7 @@ fn App() -> Element {
                                                     }
                                                 }
                                             },
-                                            span { class: "call-btn-icon", "📵" }
+                                            span { class: "call-btn-icon", Icon { icon: IconType::Unpair, size: 20, color: "currentColor".to_string() } }
                                             span { "Reject" }
                                         }
                                         button {
@@ -1921,7 +1944,7 @@ fn App() -> Element {
                                                     }
                                                 }
                                             },
-                                            span { class: "call-btn-icon", "📞" }
+                                            span { class: "call-btn-icon", Icon { icon: IconType::Call, size: 20, color: "currentColor".to_string() } }
                                             span { "Answer" }
                                         }
                                     }
@@ -1943,7 +1966,7 @@ fn App() -> Element {
                                                     }
                                                 }
                                             },
-                                            span { class: "call-btn-icon", "📵" }
+                                            span { class: "call-btn-icon", Icon { icon: IconType::Unpair, size: 20, color: "currentColor".to_string() } }
                                             span { "End Call" }
                                         }
                                     }

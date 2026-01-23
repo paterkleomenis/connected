@@ -1114,6 +1114,7 @@ fun DeviceItem(
     val isTrusted = app.trustedDevices.contains(device.id)
     val isPending = app.pendingPairing.contains(device.id)
     var showMenu by remember { mutableStateOf(false) }
+    var showDetails by remember { mutableStateOf(false) }
 
     Card(modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth()) {
         Row(
@@ -1122,24 +1123,11 @@ fun DeviceItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                // Device Type Icon
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .padding(end = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        painterResource(getDeviceIcon(device.deviceType)),
-                        contentDescription = device.deviceType,
-                        modifier = Modifier.size(24.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                Column {
+                Column(modifier = Modifier.clickable { showDetails = !showDetails }) {
                     Text(text = device.name, style = MaterialTheme.typography.bodyLarge)
-                    Text(text = "${device.ip}:${device.port}", style = MaterialTheme.typography.bodySmall)
+                    if (showDetails) {
+                        Text(text = "${device.ip}:${device.port}", style = MaterialTheme.typography.bodySmall)
+                    }
                     if (isTrusted) {
                         Text(
                             text = "✓ Trusted",
