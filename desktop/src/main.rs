@@ -136,8 +136,11 @@ fn main() {
         .with_window(
             dioxus::desktop::WindowBuilder::new()
                 .with_title("Connected")
-                .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0)),
+                .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
+                .with_decorations(false)
+                .with_transparent(true),
         )
+        .with_menu(None)
         .with_disable_context_menu(true);
     #[cfg(target_os = "linux")]
     {
@@ -300,18 +303,22 @@ fn App() -> Element {
             tray_initialized.set(true);
         });
 
-        use_tray_menu_event_handler(move |event| match event.id().as_ref() {
-            "tray_show" => {
-                window.set_visible(true);
-                window.set_focus();
+        use_tray_menu_event_handler(move |event| {
+            debug!("Tray event received: {:?}", event);
+            match event.id().as_ref() {
+                "tray_show" => {
+                    window.set_visible(true);
+                    window.set_minimized(false);
+                    window.set_focus();
+                }
+                "tray_hide" => {
+                    window.set_visible(false);
+                }
+                "tray_quit" => {
+                    std::process::exit(0);
+                }
+                _ => {}
             }
-            "tray_hide" => {
-                window.set_visible(false);
-            }
-            "tray_quit" => {
-                std::process::exit(0);
-            }
-            _ => {}
         });
     }
 

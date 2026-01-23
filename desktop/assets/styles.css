@@ -28,7 +28,7 @@
     --accent-light: rgba(255, 255, 255, 0.15);
     --accent-gradient: linear-gradient(135deg, #ffffff 0%, #9e9ea3 100%);
 
-    --toggle-color: #ffffff;
+    --toggle-color: var(--success);
     --success: #30d158;
     --success-light: rgba(48, 209, 88, 0.2);
     --warning: #ff9f0a;
@@ -184,6 +184,7 @@ body {
     border-right: 1px solid var(--border-light);
     position: relative;
     z-index: 10;
+    -webkit-app-region: drag;
 }
 
 .sidebar-header {
@@ -232,6 +233,7 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.08);
     transition: var(--transition-normal);
     margin-bottom: var(--space-2);
+    -webkit-app-region: no-drag;
 }
 
 .local-device:hover {
@@ -319,6 +321,7 @@ body {
     text-align: left;
     position: relative;
     overflow: hidden;
+    -webkit-app-region: no-drag;
 }
 
 .nav-item::before {
@@ -401,6 +404,7 @@ body {
     padding-top: var(--space-4);
     border-top: 1px solid var(--border-light);
     margin-top: auto;
+    -webkit-app-region: no-drag;
 }
 
 .discovery-status {
@@ -816,7 +820,7 @@ body {
 
 .action-button:hover:not(:disabled) {
     background: var(--accent);
-    color: var(--text-inverse);
+    color: var(--bg-primary) !important;
     transform: scale(1.02);
 }
 
@@ -2098,7 +2102,7 @@ input:focus + .slider {
     padding: var(--space-2) var(--space-4);
     border: none;
     background: var(--accent);
-    color: var(--text-inverse);
+    color: var(--bg-primary);
     font-size: var(--text-sm);
     font-weight: 500;
     border-radius: var(--radius-md);
@@ -2344,7 +2348,7 @@ input:focus + .slider {
 .message-bubble.outgoing {
     align-self: flex-end;
     background: var(--accent);
-    color: var(--text-inverse);
+    color: var(--bg-primary);
     border-bottom-right-radius: var(--radius-xs);
 }
 
