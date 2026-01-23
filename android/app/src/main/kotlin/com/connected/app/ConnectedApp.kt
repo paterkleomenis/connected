@@ -537,6 +537,18 @@ class ConnectedApp(private val context: Context) {
                 pairingRequest.value = PairingRequest(deviceName, fingerprint, deviceId)
             }
         }
+
+        override fun onPairingRejected(deviceName: String, deviceId: String) {
+            runOnMainThread {
+                pendingPairing.remove(deviceId)
+                pendingPairingAwaitingIp.remove(deviceId)
+                android.widget.Toast.makeText(
+                    context,
+                    "Pairing rejected by $deviceName",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     private val unpairCallback = object : UnpairCallback {

@@ -625,6 +625,7 @@ pub trait ClipboardCallback: Send + Sync {
 #[uniffi::export(callback_interface)]
 pub trait PairingCallback: Send + Sync {
     fn on_pairing_request(&self, device_name: String, fingerprint: String, device_id: String);
+    fn on_pairing_rejected(&self, device_name: String, device_id: String);
 }
 
 #[uniffi::export(callback_interface)]
@@ -894,6 +895,14 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                     } => {
                         if let Some(cb) = PAIRING_CALLBACK.read().as_ref() {
                             cb.on_pairing_request(device_name, fingerprint, device_id);
+                        }
+                    }
+                    ConnectedEvent::PairingRejected {
+                        device_name,
+                        device_id,
+                    } => {
+                        if let Some(cb) = PAIRING_CALLBACK.read().as_ref() {
+                            cb.on_pairing_rejected(device_name, device_id);
                         }
                     }
                     ConnectedEvent::DeviceUnpaired {

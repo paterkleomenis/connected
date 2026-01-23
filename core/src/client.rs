@@ -423,18 +423,53 @@ impl ConnectedClient {
             .and_then(|d| d.ip_addr().map(|ip| (ip, d.port)));
 
         if let Some((ip, port)) = target {
-            let _ = self
-                .send_unpair_notification(ip, port, UnpairReason::Unpaired)
-                .await;
+            // Send explicit rejection message
+            let _ = self.send_handshake_reject(ip, port).await;
 
+            // Wait briefly to ensure the rejection message is transmitted before closing
+            tokio::time::sleep(Duration::from_millis(300)).await;
+
+            // Then invalidate connection
             let addr = SocketAddr::new(ip, port);
             self.transport
-                .invalidate_connection_with_reason(&addr, b"unpaired");
+                .invalidate_connection_with_reason(&addr, b"rejected");
         }
 
-        self.invalidate_connection_by_device_id_with_reason(device_id, b"unpaired");
+        self.invalidate_connection_by_device_id_with_reason(device_id, b"rejected");
 
         info!("Rejected pairing request from {}", device_id);
+        Ok(())
+    }
+
+    pub async fn send_handshake_reject(&self, target_ip: IpAddr, target_port: u16) -> Result<()> {
+        let addr = SocketAddr::new(target_ip, target_port);
+
+        let (mut send, _recv) = match self
+            .transport
+            .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Could not send handshake reject: {}", e);
+                return Ok(());
+            }
+        };
+
+        let msg = Message::HandshakeReject {
+            device_id: self.local_device.id.clone(),
+            reason: None,
+        };
+
+        let data = serde_json::to_vec(&msg)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let len_bytes = (data.len() as u32).to_be_bytes();
+
+        let _ = send.write_all(&len_bytes).await;
+        let _ = send.write_all(&data).await;
+        let _ = send.finish();
+        
+        info!("Sent handshake reject to {}:{}", target_ip, target_port);
         Ok(())
     }
 
@@ -473,79 +508,58 @@ impl ConnectedClient {
         let addr = SocketAddr::new(target_ip, target_port);
 
         // Ensure pairing mode is enabled for outgoing handshakes
-
         if !self.is_pairing_mode() {
             self.set_pairing_mode(true);
         }
 
         // Track this as a pending handshake so we can auto-trust acks even if pairing mode times out
-
         self.pending_handshakes.write().insert(target_ip);
 
-        // 1. Fast Attempt: Try with a short timeout.
+        // Try to send the handshake.
+        // If the connection is stale, send_handshake_internal (specifically open_stream) will likely fail.
+        // We catch that failure and retry once with a fresh connection.
+        // We DO NOT wrap the entire call in a timeout because waiting for user approval takes time.
 
-        // If we have a valid cached connection (e.g., incoming from PC), this will succeed instantly.
+        let result = self.send_handshake_internal(addr).await;
 
-        // If we have a stale connection, this will hang/fail, and we'll invalidate it.
-
-        let fast_result =
-            tokio::time::timeout(Duration::from_secs(2), self.send_handshake_internal(addr)).await;
-
-        let result = match fast_result {
-            Ok(Ok(())) => Ok(()), // Success using existing (possibly incoming) connection!
-
-            Ok(Err(e)) => {
-                info!(
-                    "Handshake fast-attempt failed to {}: {}, invalidating and retrying...",
-                    addr, e
+        let result = match result {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Check if this is a connection/IO error that warrants a retry with a fresh connection
+                let should_retry = matches!(
+                    e,
+                    ConnectedError::Connection(_) | ConnectedError::Io(_)
                 );
 
-                self.transport.invalidate_connection(&addr);
+                if should_retry {
+                    info!(
+                        "Handshake failed to {}: {}, invalidating and retrying...",
+                        addr, e
+                    );
 
-                tokio::time::sleep(Duration::from_millis(1500)).await;
-
-                self.send_handshake_internal(addr).await
-            }
-
-            Err(_) => {
-                info!(
-                    "Handshake fast-attempt timed out to {}, invalidating and retrying...",
-                    addr
-                );
-
-                self.transport.invalidate_connection(&addr);
-
-                tokio::time::sleep(Duration::from_millis(1500)).await;
-
-                self.send_handshake_internal(addr).await
+                    self.transport.invalidate_connection(&addr);
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    self.send_handshake_internal(addr).await
+                } else {
+                    Err(e)
+                }
             }
         };
 
-        // On success or permanent failure, remove from pending
-
-        // Keep it on timeout so background handler can still process late acks
-
+        // Cleanup pending state
         match &result {
             Ok(()) | Err(ConnectedError::PairingFailed(_)) => {
                 self.pending_handshakes.write().remove(&target_ip);
             }
-
             Err(ConnectedError::Timeout(_)) => {
                 // Keep in pending_handshakes - background handler may receive ack later
-
-                // Schedule cleanup after extended timeout
-
                 let pending = self.pending_handshakes.clone();
-
                 let ip = target_ip;
-
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(300)).await; // 5 min cleanup
-
                     pending.write().remove(&ip);
                 });
             }
-
             _ => {
                 self.pending_handshakes.write().remove(&target_ip);
             }
@@ -624,13 +638,24 @@ impl ConnectedClient {
             // Stream closed - now poll periodically to check if trusted via background handler
             let check_interval = Duration::from_millis(500);
             let start = std::time::Instant::now();
+            let pending_handshakes = self.pending_handshakes.clone();
 
             loop {
                 // Wait before checking
                 tokio::time::sleep(check_interval).await;
 
+                // Check if we are still pending
+                // If we are NOT pending, it means the background handler processed an Ack or Reject
+                let is_pending = pending_handshakes.read().contains(&target_addr.ip());
+
                 // Check if we've been trusted via background handler
-                if let Some(fp) = transport.get_connection_fingerprint(target_addr).await {
+                // We check trust first to handle the Ack case
+                let current_fingerprint = transport.get_connection_fingerprint(target_addr).await;
+                
+                // Use captured fingerprint or current one
+                let fp_to_check = current_fingerprint.or(peer_fingerprint.clone());
+
+                if let Some(fp) = fp_to_check {
                     let ks = key_store.read();
                     if ks.is_trusted(&fp) {
                         // Get actual device info from trusted peers
@@ -655,6 +680,12 @@ impl ConnectedClient {
                             device_name: dev_name,
                         });
                     }
+                }
+
+                if !is_pending {
+                    // Not pending and not trusted -> Rejected
+                    info!("Pending handshake cleared but not trusted - assuming Rejected");
+                    return Err(ConnectedError::PairingFailed("Pairing rejected".to_string()));
                 }
 
                 // Check if overall timeout exceeded
@@ -1691,6 +1722,24 @@ impl ConnectedClient {
                                 .upsert_device_endpoint(d.clone(), DiscoverySource::Connected);
                             let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
                         }
+                    }
+                    Message::HandshakeReject { device_id, reason } => {
+                        let device_name = key_store
+                            .read()
+                            .get_peer_name(&fingerprint)
+                            .unwrap_or_else(|| device_id.clone());
+                        
+                        info!("Received HandshakeReject from {} ({}): {:?}", device_name, device_id, reason);
+                        
+                        pending_handshakes.write().remove(&addr.ip());
+                        
+                        // Invalidate connection to ensure clean state
+                        transport.invalidate_connection(&addr);
+
+                        let _ = event_tx.send(ConnectedEvent::PairingRejected {
+                            device_name,
+                            device_id,
+                        });
                     }
                     Message::Clipboard { text } => {
                         let is_trusted = key_store.read().is_trusted(&fingerprint);

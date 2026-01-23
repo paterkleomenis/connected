@@ -52,6 +52,10 @@ pub enum Message {
         device_id: String,
         device_name: String,
     },
+    HandshakeReject {
+        device_id: String,
+        reason: Option<String>,
+    },
     Clipboard {
         text: String,
     },

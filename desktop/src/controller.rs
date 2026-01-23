@@ -65,6 +65,7 @@ pub enum AppAction {
     },
     RejectDevice {
         fingerprint: String,
+        device_id: String,
     },
     UnpairDevice {
         device_id: String,
@@ -308,6 +309,17 @@ fn spawn_event_loop(
                             device_id,
                         });
                     }
+                }
+                ConnectedEvent::PairingRejected {
+                    device_name,
+                    device_id,
+                } => {
+                    add_notification(
+                        "Pairing Rejected",
+                        &format!("{} rejected your request.", device_name),
+                        "🚫",
+                    );
+                    get_pending_pairings().lock().unwrap().remove(&device_id);
                 }
                 ConnectedEvent::PairingModeChanged(enabled) => {
                     info!("Pairing mode changed: {}", enabled);
@@ -979,7 +991,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 }
                                 Err(e) => {
                                     error!("Failed to send handshake: {}", e);
-                                    add_notification("Pairing Failed", &e.to_string(), "❌");
+                                    // Suppress notification if rejected, as ConnectedEvent::PairingRejected handles it
+                                    if !e.to_string().to_lowercase().contains("rejected") {
+                                        add_notification("Pairing Failed", &e.to_string(), "❌");
+                                    }
                                     // Remove from pending on failure
                                     if let Some(did) = device_id_for_cleanup {
                                         get_pending_pairings().lock().unwrap().remove(&did);
@@ -1037,15 +1052,25 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     }
                 }
             }
-            AppAction::RejectDevice { fingerprint } => {
-                if client.is_some() {
+            AppAction::RejectDevice {
+                fingerprint,
+                device_id,
+            } => {
+                if let Some(c) = &client {
                     // Remove from pairing requests
                     {
                         let mut requests = get_pairing_requests().lock().unwrap();
                         requests.retain(|r| r.fingerprint != fingerprint);
                     }
-                    // Just dismiss the request, don't block
-                    info!("Rejected device pairing request: {}", fingerprint);
+
+                    info!("Rejecting device pairing request: {}", fingerprint);
+                    let c = c.clone();
+                    let did = device_id.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = c.reject_pairing(&did).await {
+                            warn!("Failed to send rejection to {}: {}", did, e);
+                        }
+                    });
                 }
             }
             AppAction::UnpairDevice { device_id } => {

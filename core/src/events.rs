@@ -46,6 +46,11 @@ pub enum ConnectedEvent {
         device_name: String,
         device_id: String,
     },
+    /// Outgoing pairing request was rejected by the peer
+    PairingRejected {
+        device_name: String,
+        device_id: String,
+    },
     /// Pairing mode enabled/disabled
     PairingModeChanged(bool),
     /// A paired device has unpaired/forgotten/blocked us

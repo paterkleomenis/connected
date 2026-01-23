@@ -1748,7 +1748,10 @@ fn App() -> Element {
                                         onclick: {
                                             let req = req.clone();
                                             move |_| {
-                                                action_tx.send(AppAction::RejectDevice { fingerprint: req.fingerprint.clone() });
+                                                action_tx.send(AppAction::RejectDevice {
+                                                    fingerprint: req.fingerprint.clone(),
+                                                    device_id: req.device_id.clone(),
+                                                });
                                                 get_pairing_requests().lock().unwrap().retain(|r| r.fingerprint != req.fingerprint);
                                             }
                                         },
