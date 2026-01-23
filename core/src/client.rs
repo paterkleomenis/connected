@@ -468,7 +468,7 @@ impl ConnectedClient {
         let _ = send.write_all(&len_bytes).await;
         let _ = send.write_all(&data).await;
         let _ = send.finish();
-        
+
         info!("Sent handshake reject to {}:{}", target_ip, target_port);
         Ok(())
     }
@@ -526,10 +526,8 @@ impl ConnectedClient {
             Ok(()) => Ok(()),
             Err(e) => {
                 // Check if this is a connection/IO error that warrants a retry with a fresh connection
-                let should_retry = matches!(
-                    e,
-                    ConnectedError::Connection(_) | ConnectedError::Io(_)
-                );
+                let should_retry =
+                    matches!(e, ConnectedError::Connection(_) | ConnectedError::Io(_));
 
                 if should_retry {
                     info!(
@@ -651,7 +649,7 @@ impl ConnectedClient {
                 // Check if we've been trusted via background handler
                 // We check trust first to handle the Ack case
                 let current_fingerprint = transport.get_connection_fingerprint(target_addr).await;
-                
+
                 // Use captured fingerprint or current one
                 let fp_to_check = current_fingerprint.or(peer_fingerprint.clone());
 
@@ -1728,11 +1726,14 @@ impl ConnectedClient {
                             .read()
                             .get_peer_name(&fingerprint)
                             .unwrap_or_else(|| device_id.clone());
-                        
-                        info!("Received HandshakeReject from {} ({}): {:?}", device_name, device_id, reason);
-                        
+
+                        info!(
+                            "Received HandshakeReject from {} ({}): {:?}",
+                            device_name, device_id, reason
+                        );
+
                         pending_handshakes.write().remove(&addr.ip());
-                        
+
                         // Invalidate connection to ensure clean state
                         transport.invalidate_connection(&addr);
 
