@@ -47,6 +47,7 @@ sealed class ClipboardEvent {
 
 sealed class PairingEvent {
     data class Request(val deviceName: String, val fingerprint: String, val deviceId: String) : PairingEvent()
+    data class Rejected(val deviceName: String, val deviceId: String) : PairingEvent()
 }
 
 class ConnectedSdk private constructor() {
@@ -119,11 +120,11 @@ class ConnectedSdk private constructor() {
             Log.d(TAG, "Device lost: $deviceId")
         }
 
-        override fun onError(message: String) {
+        override fun onError(errorMsg: String) {
             scope.launch {
-                _discoveryEvents.emit(DiscoveryEvent.Error(message))
+                _discoveryEvents.emit(DiscoveryEvent.Error(errorMsg))
             }
-            Log.e(TAG, "Discovery error: $message")
+            Log.e(TAG, "Discovery error: $errorMsg")
         }
     }
 
@@ -208,6 +209,13 @@ class ConnectedSdk private constructor() {
                 _pairingEvents.emit(PairingEvent.Request(deviceName, fingerprint, deviceId))
             }
             Log.d(TAG, "Pairing request from $deviceName ($fingerprint)")
+        }
+
+        override fun onPairingRejected(deviceName: String, deviceId: String) {
+            scope.launch {
+                _pairingEvents.emit(PairingEvent.Rejected(deviceName, deviceId))
+            }
+            Log.d(TAG, "Pairing rejected by $deviceName ($deviceId)")
         }
     }
 
