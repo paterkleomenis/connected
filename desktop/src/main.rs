@@ -63,6 +63,70 @@ fn format_timestamp(ts: u64) -> String {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn generate_tray_icon() -> dioxus::desktop::trayicon::Icon {
+    let width = 64u32;
+    let height = 64u32;
+    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+
+    for y in 0..height {
+        for x in 0..width {
+            let scale = 64.0 / 116.0;
+            let cx = 58.0 * scale;
+            let cy = 58.0 * scale;
+            let dot_radius = 9.0 * scale;
+            let arc_radius = 38.0 * scale;
+            let stroke_width = 16.0 * scale;
+            let half_stroke = stroke_width / 2.0;
+
+            let px = x as f32;
+            let py = y as f32;
+
+            let dist = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+
+            let mut alpha: u8 = 0;
+
+            // Dot
+            if dist <= dot_radius {
+                alpha = 255;
+            } else if dist <= dot_radius + 1.0 {
+                alpha = (255.0 * (1.0 - (dist - dot_radius))) as u8;
+            }
+
+            // Arc
+            // Path: M27,79.6 A38,38 0 1 1 89,79.6
+            // Center 58,58. Start 27,79.6. End 89,79.6.
+            // Gap is at the bottom.
+            if alpha == 0 {
+                let dist_from_arc = (dist - arc_radius).abs();
+
+                if dist_from_arc <= half_stroke + 1.0 {
+                    let angle = (py - cy).atan2(px - cx);
+                    // Gap angles from XML coords: ~0.608 to ~2.533 radians
+                    let gap_start = 0.608;
+                    let gap_end = 2.533;
+
+                    if !(angle > gap_start && angle < gap_end) {
+                        if dist_from_arc <= half_stroke {
+                            alpha = 255;
+                        } else {
+                            alpha = (255.0 * (1.0 - (dist_from_arc - half_stroke))) as u8;
+                        }
+                    }
+                }
+            }
+
+            // White color
+            rgba.push(255);
+            rgba.push(255);
+            rgba.push(255);
+            rgba.push(alpha);
+        }
+    }
+
+    dioxus::desktop::trayicon::Icon::from_rgba(rgba, width, height).unwrap()
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
@@ -232,7 +296,7 @@ fn App() -> Element {
             let quit_item = MenuItem::with_id("tray_quit", "Quit", true, None);
             let _ = menu.append_items(&[&show_item, &hide_item, &quit_item]);
 
-            trayicon::init_tray_icon(menu, None);
+            trayicon::init_tray_icon(menu, Some(generate_tray_icon()));
             tray_initialized.set(true);
         });
 

@@ -163,7 +163,7 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
     }
 
     override fun getThumbnail(path: String): ByteArray {
-        val THUMB_SIZE = 96 // Target size 96x96
+        val thumbSize = 96 // Target size 96x96
 
         val ext = path.substringAfterLast('.', "").lowercase()
         if (ext !in listOf("jpg", "jpeg", "png", "gif", "webp", "bmp")) {
@@ -182,11 +182,9 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
                 val file = resolveDocumentFile(path) ?: return ByteArray(0)
                 // ExifInterface requires InputStream or FileDescriptor
                 // API 24+ supports InputStream
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                    context.contentResolver.openInputStream(file.uri)?.use {
-                        val exif = ExifInterface(it)
-                        rotation = getRotationFromExif(exif)
-                    }
+                context.contentResolver.openInputStream(file.uri)?.use {
+                    val exif = ExifInterface(it)
+                    rotation = getRotationFromExif(exif)
                 }
             }
 
@@ -209,10 +207,10 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
 
             // 3. Calculate sample size
             var inSampleSize = 1
-            if (options.outHeight > THUMB_SIZE || options.outWidth > THUMB_SIZE) {
+            if (options.outHeight > thumbSize || options.outWidth > thumbSize) {
                 val halfHeight = options.outHeight / 2
                 val halfWidth = options.outWidth / 2
-                while (halfHeight / inSampleSize >= THUMB_SIZE && halfWidth / inSampleSize >= THUMB_SIZE) {
+                while (halfHeight / inSampleSize >= thumbSize && halfWidth / inSampleSize >= thumbSize) {
                     inSampleSize *= 2
                 }
             }

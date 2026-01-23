@@ -4,31 +4,97 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.util.Log
+import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
+import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import uniffi.connected_ffi.*
-import java.io.File
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
-import java.io.FileOutputStream
+import androidx.core.content.ContextCompat
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import uniffi.connected_ffi.CallAction
+import uniffi.connected_ffi.ClipboardCallback
+import uniffi.connected_ffi.DiscoveredDevice
+import uniffi.connected_ffi.DiscoveryCallback
+import uniffi.connected_ffi.FfiActiveCall
+import uniffi.connected_ffi.FfiCallLogEntry
+import uniffi.connected_ffi.FfiContact
+import uniffi.connected_ffi.FfiConversation
+import uniffi.connected_ffi.FfiFsEntry
+import uniffi.connected_ffi.FfiSmsMessage
+import uniffi.connected_ffi.FileTransferCallback
+import uniffi.connected_ffi.MediaCommand
+import uniffi.connected_ffi.MediaControlCallback
+import uniffi.connected_ffi.MediaState
+import uniffi.connected_ffi.PairingCallback
+import uniffi.connected_ffi.SmsStatus
+import uniffi.connected_ffi.TelephonyCallback
+import uniffi.connected_ffi.UnpairCallback
+import uniffi.connected_ffi.acceptFileTransfer
+import uniffi.connected_ffi.forgetDeviceById
+import uniffi.connected_ffi.getDiscoveredDevices
+import uniffi.connected_ffi.initialize
+import uniffi.connected_ffi.isDeviceTrusted
+import uniffi.connected_ffi.notifyNewSms
+import uniffi.connected_ffi.pairDevice
+import uniffi.connected_ffi.registerClipboardReceiver
+import uniffi.connected_ffi.registerFilesystemProvider
+import uniffi.connected_ffi.registerMediaControlCallback
+import uniffi.connected_ffi.registerPairingCallback
+import uniffi.connected_ffi.registerTelephonyCallback
+import uniffi.connected_ffi.registerTransferCallback
+import uniffi.connected_ffi.registerUnpairCallback
+import uniffi.connected_ffi.rejectFileTransfer
+import uniffi.connected_ffi.rejectPairing
+import uniffi.connected_ffi.requestDownloadFile
+import uniffi.connected_ffi.requestGetThumbnail
+import uniffi.connected_ffi.requestListDir
+import uniffi.connected_ffi.sendActiveCallUpdate
+import uniffi.connected_ffi.sendCallLog
+import uniffi.connected_ffi.sendClipboard
+import uniffi.connected_ffi.sendContacts
+import uniffi.connected_ffi.sendConversations
+import uniffi.connected_ffi.sendFile
+import uniffi.connected_ffi.sendMediaCommand
+import uniffi.connected_ffi.sendMediaState
+import uniffi.connected_ffi.sendMessages
+import uniffi.connected_ffi.sendSmsSendResult
+import uniffi.connected_ffi.sendTrustConfirmation
+import uniffi.connected_ffi.setPairingMode
+import uniffi.connected_ffi.shutdown
+import uniffi.connected_ffi.startDiscovery
+import uniffi.connected_ffi.trustDevice
+import uniffi.connected_ffi.unpairDeviceById
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
-
-import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.graphics.BitmapFactory
-import androidx.annotation.RequiresPermission
-import androidx.core.content.edit
-import androidx.core.net.toUri
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class ConnectedApp(private val context: Context) {
+
+    private fun hasProximityPermissions(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) return false
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) return false
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) return false
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return false
+        } else {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return false
+        }
+        return true
+    }
 
     companion object {
         private const val NOTIFICATION_ID_REQUEST = 1001
@@ -36,6 +102,7 @@ class ConnectedApp(private val context: Context) {
         private const val NOTIFICATION_ID_COMPLETE = 1003
 
         @Volatile
+        @android.annotation.SuppressLint("StaticFieldLeak")
         private var instance: ConnectedApp? = null
 
         fun getInstance(context: Context): ConnectedApp {
@@ -143,7 +210,13 @@ class ConnectedApp(private val context: Context) {
                             scope.launch(Dispatchers.Main) {
                                 delay(1000)
                                 startProximityManager() // Ensures instance exists
-                                proximityManager?.start() // Triggers startBle() again
+                                if (hasProximityPermissions()) {
+                                    try {
+                                        proximityManager?.start() // Triggers startBle() again
+                                    } catch (e: SecurityException) {
+                                        Log.w("ConnectedApp", "Failed to start proximity manager: permission denied", e)
+                                    }
+                                }
                                 beginDiscovery()
                             }
                         }
@@ -243,13 +316,24 @@ class ConnectedApp(private val context: Context) {
             manager.hasIdeallyDiscoveredDevice = { deviceId ->
                 devices.any { it.id == deviceId && !isSyntheticIp(it.ip) }
             }
-            manager.start()
+            if (hasProximityPermissions()) {
+                try {
+                    manager.start()
+                } catch (e: SecurityException) {
+                    Log.w("ConnectedApp", "Failed to start proximity manager: permission denied", e)
+                }
+            }
         }
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     fun stopProximityManager() {
-        proximityManager?.stop()
+        if (hasProximityPermissions()) {
+            try {
+                proximityManager?.stop()
+            } catch (e: SecurityException) {
+                Log.w("ConnectedApp", "Failed to stop proximity manager: permission denied", e)
+            }
+        }
         proximityManager = null
     }
 
@@ -875,7 +959,13 @@ class ConnectedApp(private val context: Context) {
             }
             pendingPairingAwaitingIp.add(device.id)
             if (!pendingPairing.contains(device.id)) pendingPairing.add(device.id)
-            proximityManager?.requestConnect(device.id)
+            if (hasProximityPermissions()) {
+                try {
+                    proximityManager?.requestConnect(device.id)
+                } catch (e: SecurityException) {
+                    Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
+                }
+            }
             runOnMainThread {
                 android.widget.Toast
                     .makeText(context, "Waiting for Wi-Fi Direct connection...", android.widget.Toast.LENGTH_SHORT)
@@ -926,7 +1016,13 @@ class ConnectedApp(private val context: Context) {
                         ConcurrentLinkedQueue()
                     }
                     queue.add(file.absolutePath)
-                    proximityManager?.requestConnect(device.id)
+                    if (hasProximityPermissions()) {
+                        try {
+                            proximityManager?.requestConnect(device.id)
+                        } catch (e: SecurityException) {
+                            Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
+                        }
+                    }
                     runOnMainThread {
                         android.widget.Toast
                             .makeText(
@@ -1521,7 +1617,13 @@ class ConnectedApp(private val context: Context) {
 
                         queue.add(zipFile.absolutePath)
 
-                        proximityManager?.requestConnect(device.id)
+                        if (hasProximityPermissions()) {
+                            try {
+                                proximityManager?.requestConnect(device.id)
+                            } catch (e: SecurityException) {
+                                Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
+                            }
+                        }
 
                         runOnMainThread {
 
