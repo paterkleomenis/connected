@@ -32,7 +32,12 @@ pub fn init_mpris(command_tx: std::sync::mpsc::Sender<MediaCommand>) -> bool {
     }
 
     std::thread::spawn(move || {
-        async_std::task::block_on(async move {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create Tokio runtime for MPRIS");
+
+        rt.block_on(async move {
             if let Err(e) = run_mpris_server(rx, command_tx).await {
                 warn!("MPRIS server failed: {}", e);
             }
