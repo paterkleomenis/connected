@@ -78,13 +78,13 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
             val file = resolveRawFile(path) ?: throw FilesystemException.Generic("File not found: $path")
             if (!file.exists() || !file.isFile) throw FilesystemException.Generic("Not a file: $path")
 
-            try {
+            return try {
                 file.inputStream().use { input ->
                     input.skip(offset.toLong())
                     val buffer = ByteArray(size.toInt())
                     val read = input.read(buffer)
-                    if (read == -1) return ByteArray(0)
-                    return if (read < size.toInt()) buffer.copyOf(read) else buffer
+                    if (read == -1) ByteArray(0)
+                    else if (read < size.toInt()) buffer.copyOf(read) else buffer
                 }
             } catch (e: Exception) {
                 throw FilesystemException.Generic("Read failed: ${e.message}")
@@ -93,13 +93,16 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
             val file = resolveDocumentFile(path) ?: throw FilesystemException.Generic("File not found: $path")
             if (!file.isFile) throw FilesystemException.Generic("Not a file: $path")
 
-            context.contentResolver.openInputStream(file.uri)?.use { input ->
+            val inputStream = context.contentResolver.openInputStream(file.uri)
+                ?: throw FilesystemException.Generic("Could not open file: $path")
+            
+            return inputStream.use { input ->
                 input.skip(offset.toLong())
                 val buffer = ByteArray(size.toInt())
                 val read = input.read(buffer)
-                if (read == -1) return ByteArray(0)
-                return if (read < size.toInt()) buffer.copyOf(read) else buffer
-            } ?: throw FilesystemException.Generic("Could not open file: $path")
+                if (read == -1) ByteArray(0)
+                else if (read < size.toInt()) buffer.copyOf(read) else buffer
+            }
         }
     }
 
@@ -131,9 +134,12 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
             val newFile = parentDir.createFile("*/*", filename)
                 ?: throw FilesystemException.Generic("Could not create file: $filename")
 
-            context.contentResolver.openOutputStream(newFile.uri)?.use { output ->
+            val outputStream = context.contentResolver.openOutputStream(newFile.uri)
+                ?: throw FilesystemException.Generic("Could not open output stream")
+
+            outputStream.use { output ->
                 output.write(data)
-            } ?: throw FilesystemException.Generic("Could not open output stream")
+            }
 
             return data.size.toULong()
         }
@@ -220,10 +226,10 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
             options.inSampleSize = inSampleSize
 
             var bitmap = if (isRawFile) {
-                val file = resolveRawFile(path)!!
+                val file = resolveRawFile(path) ?: return ByteArray(0)
                 BitmapFactory.decodeFile(file.absolutePath, options)
             } else {
-                val file = resolveDocumentFile(path)!!
+                val file = resolveDocumentFile(path) ?: return ByteArray(0)
                 context.contentResolver.openInputStream(file.uri)?.use {
                     BitmapFactory.decodeStream(it, null, options)
                 }
