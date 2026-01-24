@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
+import androidx.core.app.NotificationCompat
 
 class ConnectedService : Service() {
     companion object {
@@ -74,13 +75,13 @@ class ConnectedService : Service() {
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
         )
 
-        val builder = androidx.core.app.NotificationCompat.Builder(this, channelId)
+        val builder = NotificationCompat.Builder(this, channelId)
             .setContentTitle("Connected")
             .setContentText("Click to share clipboard")
             .setSmallIcon(R.drawable.ic_notification_logo)
-            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_MAX)
-            .setCategory(androidx.core.app.NotificationCompat.CATEGORY_SERVICE)
-            .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setShowWhen(false)
             .setContentIntent(sharePendingIntent)
             .setColorized(true)

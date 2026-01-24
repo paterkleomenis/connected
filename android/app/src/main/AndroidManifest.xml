@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:tools="http://schemas.android.com/tools"
+    xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Network permissions required for mDNS discovery and QUIC transport -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -22,9 +23,10 @@
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation"
-    />
+        tools:targetApi="31" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!-- Declare telephony as optional for tablets/ChromeOS -->
@@ -37,7 +39,7 @@
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
-    />
+        tools:targetApi="31" />
 
     <!-- For reading/writing files (pre-Android 13) -->
     <uses-permission
@@ -50,24 +52,30 @@
     />
 
     <!-- For reading media files (Android 13+) -->
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"
+        tools:ignore="PhotoAndVideoPolicy,SelectedPhotoAccess" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"
+        tools:ignore="PhotoAndVideoPolicy,SelectedPhotoAccess" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
     <!-- For full file access (Android 11+) -->
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-    />
+        tools:ignore="AllFilesAccessPolicy,ScopedStorage" />
 
     <!-- For posting notifications (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Telephony permissions for Phone Link feature -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
-    <uses-permission android:name="android.permission.READ_SMS" />
-    <uses-permission android:name="android.permission.SEND_SMS" />
-    <uses-permission android:name="android.permission.RECEIVE_SMS" />
-    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.READ_SMS"
+        tools:ignore="SmsAndCallLogPolicy" />
+    <uses-permission android:name="android.permission.SEND_SMS"
+        tools:ignore="SmsAndCallLogPolicy" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS"
+        tools:ignore="SmsAndCallLogPolicy" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG"
+        tools:ignore="SmsAndCallLogPolicy" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
@@ -76,11 +84,11 @@
     <uses-permission
         android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
         tools:ignore="ProtectedPermissions"
-        xmlns:tools="http://schemas.android.com/tools"
     />
 
     <!-- For foreground services (Android 9+) -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"
+        tools:ignore="ForegroundServicesPolicy" />
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
     />
@@ -137,6 +145,23 @@
                 />
                 <action
                     android:name="com.connected.app.ACTION_SHARE_CLIPBOARD"
+                />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".MediaControlReceiver"
+            android:exported="false"
+        >
+            <intent-filter>
+                <action
+                    android:name="com.connected.app.ACTION_MEDIA_PLAY_PAUSE"
+                />
+                <action
+                    android:name="com.connected.app.ACTION_MEDIA_NEXT"
+                />
+                <action
+                    android:name="com.connected.app.ACTION_MEDIA_PREVIOUS"
                 />
             </intent-filter>
         </receiver>

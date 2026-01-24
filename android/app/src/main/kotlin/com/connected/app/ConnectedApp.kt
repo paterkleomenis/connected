@@ -120,6 +120,7 @@ class ConnectedApp(private val context: Context) {
         private const val NOTIFICATION_ID_REQUEST = 1001
         private const val NOTIFICATION_ID_PROGRESS = 1002
         private const val NOTIFICATION_ID_COMPLETE = 1003
+        private const val MEDIA_NOTIFICATION_ID = 1004
 
         @Volatile
         @android.annotation.SuppressLint("StaticFieldLeak")
@@ -611,6 +612,7 @@ class ConnectedApp(private val context: Context) {
                 runOnMainThread {
                     initMediaSession()
                     updateMediaSession(state)
+                    updateMediaNotification(state)
                 }
             }
         }
@@ -1120,16 +1122,100 @@ class ConnectedApp(private val context: Context) {
         )
     }
 
+    private fun updateMediaNotification(state: MediaState) {
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val channelId = "connected_media_channel"
+
+        // Create channel if it doesn't exist
+        val channel = android.app.NotificationChannel(
+            channelId,
+            "Media Controls",
+            android.app.NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Control media playback on connected devices"
+            setShowBadge(false)
+        }
+        notificationManager.createNotificationChannel(channel)
+
+        // Create media control pending intents
+        val previousIntent = Intent(MediaControlReceiver.ACTION_PREVIOUS).apply {
+            setPackage(context.packageName)
+        }
+        val previousPendingIntent = android.app.PendingIntent.getBroadcast(
+            context,
+            1,
+            previousIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val playPauseIntent = Intent(MediaControlReceiver.ACTION_PLAY_PAUSE).apply {
+            setPackage(context.packageName)
+        }
+        val playPausePendingIntent = android.app.PendingIntent.getBroadcast(
+            context,
+            2,
+            playPauseIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val nextIntent = Intent(MediaControlReceiver.ACTION_NEXT).apply {
+            setPackage(context.packageName)
+        }
+        val nextPendingIntent = android.app.PendingIntent.getBroadcast(
+            context,
+            3,
+            nextIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val title = state.title ?: "Unknown Title"
+        val artist = state.artist ?: "Unknown Artist"
+        val playPauseIcon = if (state.playing) R.drawable.ic_pause else R.drawable.ic_play
+
+        val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
+            .setContentTitle(title)
+            .setContentText(artist)
+            .setSmallIcon(R.drawable.ic_music)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
+            .setCategory(androidx.core.app.NotificationCompat.CATEGORY_TRANSPORT)
+            .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)
+            .setShowWhen(false)
+            .setOngoing(state.playing)
+            .addAction(R.drawable.ic_previous, "Previous", previousPendingIntent)
+            .addAction(playPauseIcon, "Play/Pause", playPausePendingIntent)
+            .addAction(R.drawable.ic_next, "Next", nextPendingIntent)
+            .setStyle(androidx.media.app.NotificationCompat.MediaStyle()
+                .setShowActionsInCompactView(0, 1, 2)
+                .setMediaSession(mediaSession?.sessionToken))
+            .build()
+
+        notificationManager.notify(MEDIA_NOTIFICATION_ID, notification)
+    }
+
     private fun sendMediaCommand(command: MediaCommand) {
-        lastMediaSourceDevice?.let { deviceId ->
-            val device = devices.find { it.id == deviceId }
+        lastMediaSourceDevice?.let { deviceName ->
+            Log.d("ConnectedApp", "Sending media command $command to device $deviceName")
+            val device = devices.find { it.name == deviceName }
             if (device != null) {
                 try {
+                    Log.d("ConnectedApp", "Found device: ${device.name} at ${device.ip}:${device.port}")
                     sendMediaCommand(device.ip, device.port, command)
                 } catch (e: Exception) {
                     Log.e("ConnectedApp", "Media command failed", e)
                 }
+            } else {
+                Log.w("ConnectedApp", "Device $deviceName not found in devices list (size=${devices.size})")
             }
+        } ?: Log.w("ConnectedApp", "No lastMediaSourceDevice set")
+    }
+
+    /**
+     * Public method to send media commands to the last device that sent media state.
+     * Used by MediaControlReceiver to handle notification button presses.
+     */
+    fun sendMediaCommandToLastDevice(command: MediaCommand) {
+        scope.launch(Dispatchers.IO) {
+            sendMediaCommand(command)
         }
     }
 
