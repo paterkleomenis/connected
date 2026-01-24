@@ -19,12 +19,9 @@ use connected_core::MediaCommand;
 use connected_core::telephony::{ActiveCallState, CallAction};
 use controller::{AppAction, app_controller};
 #[cfg(target_os = "linux")]
-use dioxus::desktop::trayicon;
-#[cfg(target_os = "linux")]
-use dioxus::desktop::trayicon::menu::{Menu, MenuItem};
-#[cfg(target_os = "linux")]
-use dioxus::desktop::{use_tray_menu_event_handler, use_window};
+use dioxus::desktop::use_window;
 use dioxus::prelude::*;
+
 use state::*;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -64,67 +61,128 @@ fn format_timestamp(ts: u64) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn generate_tray_icon() -> dioxus::desktop::trayicon::Icon {
-    let width = 64u32;
-    let height = 64u32;
-    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+mod tray {
+    use std::sync::atomic::{AtomicU8, Ordering};
 
-    for y in 0..height {
-        for x in 0..width {
-            let scale = 64.0 / 116.0;
-            let cx = 58.0 * scale;
-            let cy = 58.0 * scale;
-            let dot_radius = 9.0 * scale;
-            let arc_radius = 38.0 * scale;
-            let stroke_width = 16.0 * scale;
-            let half_stroke = stroke_width / 2.0;
+    // Global atomic for tray actions
+    // 0 = none, 1 = show, 2 = hide, 3 = quit
+    pub static TRAY_ACTION: AtomicU8 = AtomicU8::new(0);
 
-            let px = x as f32;
-            let py = y as f32;
+    fn send_action(action: u8) {
+        TRAY_ACTION.store(action, Ordering::SeqCst);
+    }
 
-            let dist = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+    #[derive(Debug)]
+    pub struct ConnectedTray;
 
-            let mut alpha: u8 = 0;
+    impl ksni::Tray for ConnectedTray {
+        fn id(&self) -> String {
+            "connected-desktop".to_string()
+        }
 
-            // Dot
-            if dist <= dot_radius {
-                alpha = 255;
-            } else if dist <= dot_radius + 1.0 {
-                alpha = (255.0 * (1.0 - (dist - dot_radius))) as u8;
-            }
+        fn title(&self) -> String {
+            "Connected".to_string()
+        }
 
-            // Arc
-            // Path: M27,79.6 A38,38 0 1 1 89,79.6
-            // Center 58,58. Start 27,79.6. End 89,79.6.
-            // Gap is at the bottom.
-            if alpha == 0 {
-                let dist_from_arc = (dist - arc_radius).abs();
+        fn icon_name(&self) -> String {
+            "connected".to_string()
+        }
 
-                if dist_from_arc <= half_stroke + 1.0 {
-                    let angle = (py - cy).atan2(px - cx);
-                    // Gap angles from XML coords: ~0.608 to ~2.533 radians
-                    let gap_start = 0.608;
-                    let gap_end = 2.533;
+        fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+            // Generate the Connected logo icon
+            let width = 64i32;
+            let height = 64i32;
+            let mut argb = Vec::with_capacity((width * height * 4) as usize);
 
-                    if !(angle > gap_start && angle < gap_end) {
-                        if dist_from_arc <= half_stroke {
-                            alpha = 255;
-                        } else {
-                            alpha = (255.0 * (1.0 - (dist_from_arc - half_stroke))) as u8;
+            for y in 0..height {
+                for x in 0..width {
+                    let scale = 64.0 / 116.0;
+                    let cx = 58.0 * scale;
+                    let cy = 58.0 * scale;
+                    let dot_radius = 9.0 * scale;
+                    let arc_radius = 38.0 * scale;
+                    let stroke_width = 16.0 * scale;
+                    let half_stroke = stroke_width / 2.0;
+
+                    let px = x as f32;
+                    let py = y as f32;
+
+                    let dist = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+
+                    let mut alpha: u8 = 0;
+
+                    // Dot
+                    if dist <= dot_radius {
+                        alpha = 255;
+                    } else if dist <= dot_radius + 1.0 {
+                        alpha = (255.0 * (1.0 - (dist - dot_radius))) as u8;
+                    }
+
+                    // Arc
+                    if alpha == 0 {
+                        let dist_from_arc = (dist - arc_radius).abs();
+
+                        if dist_from_arc <= half_stroke + 1.0 {
+                            let angle = (py - cy).atan2(px - cx);
+                            let gap_start = 0.608;
+                            let gap_end = 2.533;
+
+                            if !(angle > gap_start && angle < gap_end) {
+                                if dist_from_arc <= half_stroke {
+                                    alpha = 255;
+                                } else {
+                                    alpha = (255.0 * (1.0 - (dist_from_arc - half_stroke))) as u8;
+                                }
+                            }
                         }
                     }
+
+                    // ARGB format (big-endian: A, R, G, B)
+                    argb.push(alpha);
+                    argb.push(255); // R (white)
+                    argb.push(255); // G (white)
+                    argb.push(255); // B (white)
                 }
             }
 
-            // White color
-            rgba.push(255);
-            rgba.push(255);
-            rgba.push(255);
-            rgba.push(alpha);
+            vec![ksni::Icon {
+                width,
+                height,
+                data: argb,
+            }]
+        }
+
+        fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+            use ksni::menu::*;
+            vec![
+                StandardItem {
+                    label: "Show Connected".to_string(),
+                    activate: Box::new(|_: &mut Self| {
+                        send_action(1); // Show
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+                StandardItem {
+                    label: "Hide Connected".to_string(),
+                    activate: Box::new(|_: &mut Self| {
+                        send_action(2); // Hide
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+                MenuItem::Separator,
+                StandardItem {
+                    label: "Quit".to_string(),
+                    activate: Box::new(|_: &mut Self| {
+                        send_action(3); // Quit
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            ]
         }
     }
-
-    dioxus::desktop::trayicon::Icon::from_rgba(rgba, width, height).unwrap()
 }
 
 fn main() {
@@ -285,39 +343,44 @@ fn App() -> Element {
 
     #[cfg(target_os = "linux")]
     {
+        use ksni::TrayMethods;
+        use std::sync::atomic::Ordering;
+
         let window = use_window();
-        let mut tray_initialized = use_signal(|| false);
 
-        use_effect(move || {
-            if *tray_initialized.peek() {
-                return;
-            }
+        // Initialize tray icon and start background polling thread
+        use_future(move || {
+            let window_arc = window.window.clone();
+            async move {
+                let handle = tray::ConnectedTray.spawn().await.unwrap();
+                debug!("System tray initialized");
 
-            let menu = Menu::new();
-            let show_item = MenuItem::with_id("tray_show", "Show Connected", true, None);
-            let hide_item = MenuItem::with_id("tray_hide", "Hide Connected", true, None);
-            let quit_item = MenuItem::with_id("tray_quit", "Quit", true, None);
-            let _ = menu.append_items(&[&show_item, &hide_item, &quit_item]);
+                // Background thread that handles all tray actions directly
+                std::thread::spawn(move || {
+                    loop {
+                        let action = tray::TRAY_ACTION.swap(0, Ordering::SeqCst);
+                        match action {
+                            1 => {
+                                // Show window
+                                window_arc.set_visible(true);
+                                window_arc.set_minimized(false);
+                                window_arc.set_focus();
+                            }
+                            2 => {
+                                // Hide window
+                                window_arc.set_visible(false);
+                            }
+                            3 => {
+                                // Quit
+                                std::process::exit(0);
+                            }
+                            _ => {}
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                });
 
-            trayicon::init_tray_icon(menu, Some(generate_tray_icon()));
-            tray_initialized.set(true);
-        });
-
-        use_tray_menu_event_handler(move |event| {
-            debug!("Tray event received: {:?}", event);
-            match event.id().as_ref() {
-                "tray_show" => {
-                    window.set_visible(true);
-                    window.set_minimized(false);
-                    window.set_focus();
-                }
-                "tray_hide" => {
-                    window.set_visible(false);
-                }
-                "tray_quit" => {
-                    std::process::exit(0);
-                }
-                _ => {}
+                handle
             }
         });
     }
