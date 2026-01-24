@@ -62,18 +62,12 @@ fn format_timestamp(ts: u64) -> String {
 
 #[cfg(target_os = "linux")]
 mod tray {
-    use std::sync::atomic::{AtomicU8, Ordering};
+    use dioxus::desktop::tao::window::Window;
+    use std::sync::Arc;
 
-    // Global atomic for tray actions
-    // 0 = none, 1 = show, 2 = hide, 3 = quit
-    pub static TRAY_ACTION: AtomicU8 = AtomicU8::new(0);
-
-    fn send_action(action: u8) {
-        TRAY_ACTION.store(action, Ordering::SeqCst);
+    pub struct ConnectedTray {
+        pub window: Arc<Window>,
     }
-
-    #[derive(Debug)]
-    pub struct ConnectedTray;
 
     impl ksni::Tray for ConnectedTray {
         fn id(&self) -> String {
@@ -157,16 +151,18 @@ mod tray {
             vec![
                 StandardItem {
                     label: "Show Connected".to_string(),
-                    activate: Box::new(|_: &mut Self| {
-                        send_action(1); // Show
+                    activate: Box::new(|tray: &mut Self| {
+                        tray.window.set_visible(true);
+                        tray.window.set_minimized(false);
+                        tray.window.set_focus();
                     }),
                     ..Default::default()
                 }
                 .into(),
                 StandardItem {
                     label: "Hide Connected".to_string(),
-                    activate: Box::new(|_: &mut Self| {
-                        send_action(2); // Hide
+                    activate: Box::new(|tray: &mut Self| {
+                        tray.window.set_visible(false);
                     }),
                     ..Default::default()
                 }
@@ -175,7 +171,7 @@ mod tray {
                 StandardItem {
                     label: "Quit".to_string(),
                     activate: Box::new(|_: &mut Self| {
-                        send_action(3); // Quit
+                        std::process::exit(0);
                     }),
                     ..Default::default()
                 }
@@ -344,44 +340,25 @@ fn App() -> Element {
     #[cfg(target_os = "linux")]
     {
         use ksni::TrayMethods;
-        use std::sync::atomic::Ordering;
 
         let window = use_window();
 
-        // Initialize tray icon and start background polling thread
-        use_future(move || {
-            let window_arc = window.window.clone();
-            async move {
-                let handle = tray::ConnectedTray.spawn().await.unwrap();
-                debug!("System tray initialized");
-
-                // Background thread that handles all tray actions directly
-                std::thread::spawn(move || {
-                    loop {
-                        let action = tray::TRAY_ACTION.swap(0, Ordering::SeqCst);
-                        match action {
-                            1 => {
-                                // Show window
-                                window_arc.set_visible(true);
-                                window_arc.set_minimized(false);
-                                window_arc.set_focus();
-                            }
-                            2 => {
-                                // Hide window
-                                window_arc.set_visible(false);
-                            }
-                            3 => {
-                                // Quit
-                                std::process::exit(0);
-                            }
-                            _ => {}
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Initialize tray icon
+        use_hook(|| {
+            let tray = tray::ConnectedTray {
+                window: window.window.clone(),
+            };
+            // Spawn the tray service using the ksni async API
+            tokio::spawn(async move {
+                match tray.spawn().await {
+                    Ok(_handle) => {
+                        debug!("System tray initialized");
                     }
-                });
-
-                handle
-            }
+                    Err(e) => {
+                        tracing::error!("Failed to initialize system tray: {:?}", e);
+                    }
+                }
+            });
         });
     }
 
