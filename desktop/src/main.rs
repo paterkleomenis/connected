@@ -79,7 +79,7 @@ mod tray {
         }
 
         fn icon_name(&self) -> String {
-            "connected".to_string()
+            "connected-app-logo".to_string()
         }
 
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
