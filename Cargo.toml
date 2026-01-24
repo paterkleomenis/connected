@@ -15,6 +15,13 @@ incremental = true
 opt-level = 3
 debug = false
 
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
 [workspace.package]
 version = "1.0.0"
 edition = "2024"
