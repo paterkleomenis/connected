@@ -1122,7 +1122,8 @@ class ConnectedApp(private val context: Context) {
     }
 
     private fun updateMediaNotification(state: MediaState) {
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val notificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         val channelId = "connected_media_channel"
 
         // Create channel if it doesn't exist
@@ -1183,9 +1184,11 @@ class ConnectedApp(private val context: Context) {
             .addAction(R.drawable.ic_previous, "Previous", previousPendingIntent)
             .addAction(playPauseIcon, "Play/Pause", playPausePendingIntent)
             .addAction(R.drawable.ic_next, "Next", nextPendingIntent)
-            .setStyle(androidx.media.app.NotificationCompat.MediaStyle()
-                .setShowActionsInCompactView(0, 1, 2)
-                .setMediaSession(mediaSession?.sessionToken))
+            .setStyle(
+                androidx.media.app.NotificationCompat.MediaStyle()
+                    .setShowActionsInCompactView(0, 1, 2)
+                    .setMediaSession(mediaSession?.sessionToken)
+            )
             .build()
 
         notificationManager.notify(MEDIA_NOTIFICATION_ID, notification)
