@@ -40,20 +40,20 @@ In a world of walled gardens, moving a file from your phone to your computer sho
 ### Desktop
 | Home | File Transfer | Browse Files |
 |:---:|:---:|:---:|
-| <img src="screenshots/desktop-home.png" width="300"> | <img src="screenshots/desktop-transfer.png" width="300"> | <img src="screenshots/desktop-browse.png" width="300"> |
+| ![Home](screenshots/desktop-home.png) | ![Transfer](screenshots/desktop-transfer.png) | ![Browse](screenshots/desktop-browse.png) |
 
 | SMS | Inside SMS | Contacts |
 |:---:|:---:|:---:|
-| <img src="screenshots/desktop-sms.png" width="300"> | <img src="screenshots/desktop-inside-sms.png" width="300"> | <img src="screenshots/desktop-contacts.png" width="300"> |
+| ![SMS](screenshots/desktop-sms.png) | ![Inside SMS](screenshots/desktop-inside-sms.png) | ![Contacts](screenshots/desktop-contacts.png) |
 
 | Call Logs | Media Control | Settings |
 |:---:|:---:|:---:|
-| <img src="screenshots/desktop-call-logs.png" width="300"> | <img src="screenshots/desktop-media-control.png" width="300"> | <img src="screenshots/desktop-settings.png" width="300"> |
+| ![Call Logs](screenshots/desktop-call-logs.png) | ![Media Control](screenshots/desktop-media-control.png) | ![Settings](screenshots/desktop-settings.png) |
 
 ### Mobile
 | Home | Settings |
 |:---:|:---:|
-| <img src="screenshots/phone-home.png" width="300"> | <img src="screenshots/phone-settings.png" width="300"> |
+| ![Phone Home](screenshots/phone-home.png) | ![Phone Settings](screenshots/phone-settings.png) |
 
 ## Installation
 
