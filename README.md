@@ -38,17 +38,21 @@ In a world of walled gardens, moving a file from your phone to your computer sho
 ## Screenshots
 
 ### Desktop
-| Home | File Transfer | Browse Files |
-|:---:|:---:|:---:|
-| ![Home](screenshots/desktop-home.png) | ![Transfer](screenshots/desktop-transfer.png) | ![Browse](screenshots/desktop-browse.png) |
 
-| SMS | Inside SMS | Contacts |
-|:---:|:---:|:---:|
-| ![SMS](screenshots/desktop-sms.png) | ![Inside SMS](screenshots/desktop-inside-sms.png) | ![Contacts](screenshots/desktop-contacts.png) |
+#### Dashboard & Files
+![Home](screenshots/desktop-home.png)
+![Transfer](screenshots/desktop-transfer.png)
+![Browse](screenshots/desktop-browse.png)
 
-| Call Logs | Media Control | Settings |
-|:---:|:---:|:---:|
-| ![Call Logs](screenshots/desktop-call-logs.png) | ![Media Control](screenshots/desktop-media-control.png) | ![Settings](screenshots/desktop-settings.png) |
+#### Communication
+![SMS](screenshots/desktop-sms.png)
+![Inside SMS](screenshots/desktop-inside-sms.png)
+![Contacts](screenshots/desktop-contacts.png)
+
+#### Management
+![Call Logs](screenshots/desktop-call-logs.png)
+![Media Control](screenshots/desktop-media-control.png)
+![Settings](screenshots/desktop-settings.png)
 
 ### Mobile
 | Home | Settings |
