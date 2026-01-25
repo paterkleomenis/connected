@@ -622,17 +622,16 @@ class ConnectedApp(private val context: Context) {
         override fun onPairingRequest(deviceName: String, fingerprint: String, deviceId: String) {
             // Check if Core already trusts this device (e.g. re-connection after local unpair)
             if (isDeviceTrusted(DiscoveredDevice(deviceId, deviceName, "0.0.0.0", 0u, "Unknown"))) {
+                Log.d("ConnectedApp", "Already trusted device re-connecting: $deviceName")
                 runOnMainThread {
-                    locallyUnpairedDevices.remove(deviceId)
-                    if (!trustedDevices.contains(deviceId)) {
-                        trustedDevices.add(deviceId)
-                    }
                     android.widget.Toast.makeText(
                         context,
                         "Reconnected with $deviceName",
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                 }
+                // Ensure we send trust confirmation so the other side finishes pairing
+                trustDevice(PairingRequest(deviceName, fingerprint, deviceId))
                 return
             }
 
