@@ -1,6 +1,6 @@
 # Connected
 
-**Connected** is a high-speed, offline, cross-platform file transfer application built with **Rust** and **Jetpack Compose**. It aims to outperform proprietary ecosystems like AirDrop by utilizing cutting-edge technologies like BLE (Bluetooth Low Energy) for discovery and QUIC/Wi-Fi Direct for high-bandwidth data transfer.
+**Connected** is a high-speed, offline, cross-platform ecosystem that bridges the gap between your devices. Built with **Rust** and **Jetpack Compose**, it aims to outperform proprietary solutions like AirDrop by utilizing cutting-edge technologies like BLE (Bluetooth Low Energy) for instant discovery and QUIC/Wi-Fi Direct for saturating data transfer speeds.
 
 Currently available for **Linux** and **Android**.
 
@@ -10,16 +10,50 @@ Currently available for **Linux** and **Android**.
 
 ## Features
 
--   **Cross-Platform**: Seamlessly transfer files between Android and Linux devices.
+-   **Cross-Platform**: Seamlessly transfer files, sync clipboards, and control media between Android and Linux devices.
 -   **Offline First**: No internet required. Uses Wi-Fi Direct and Local Network.
 -   **High Speed**: Powered by the QUIC protocol over Wi-Fi 5/6.
 -   **Zero Config**: Auto-discovery via mDNS and BLE.
 -   **Secure**: End-to-end encryption for all transfers.
 -   **Modern UI**: Beautiful, responsive interfaces using Jetpack Compose (Android) and Tailwind CSS (Linux Desktop).
 
+## Why Connected?
+
+In a world of walled gardens, moving a file from your phone to your computer shouldn't be a hassle.
+
+*   **Apple AirDrop**: Works like magic, but only if you stay strictly within the Evil Apple ecosystem.
+*   **KDE Connect**: It's the only alternative that doesn't work without a shared Wi-Fi network and also is really buggy.
+*   **Bluetooth**: Universal but painfully slow for anything larger than a photo.
+*   **Cloud Services**: Require an active internet connection, consume data plans, and involve uploading just to download again.
+
+**Connected** cuts through the fragmentation. It brings the "it just works" magical experience to the open ecosystem.
+
+### The Connected Advantage
+
+1.  **Protocol Superiority**: We use **QUIC** (via `quinn`), the same protocol powering HTTP/3. This ensures lower latency, better congestion control, and faster connection setup compared to the TCP connections used by legacy transfer tools.
+2.  **True Offline Freedom**: While many apps require a shared Router/Access Point, **Connected** is designed to leverage **Wi-Fi Direct**. This allows devices to negotiate their own high-speed link anywhere—on a train, in a park, or in an air-gapped office.
+3.  **Rust-Powered Reliability**: The core logic is written in Rust, guaranteeing memory safety, high performance, and a minimal resource footprint. The desktop client is native and blazingly fast, avoiding the bloat of Electron.
+4.  **Privacy by Design**: Your data never leaves your local link. End-to-end encryption is mandatory, ensuring your personal files remain personal.
+
 ## Screenshots
 
-*(Placeholder for Screenshots - Add images of the Android and Linux UI here)*
+### Desktop
+| Home | File Transfer | Browse Files |
+|:---:|:---:|:---:|
+| <img src="screenshots/desktop-home.png" width="300"> | <img src="screenshots/desktop-transfer.png" width="300"> | <img src="screenshots/desktop-browse.png" width="300"> |
+
+| SMS | Inside SMS | Contacts |
+|:---:|:---:|:---:|
+| <img src="screenshots/desktop-sms.png" width="300"> | <img src="screenshots/desktop-inside-sms.png" width="300"> | <img src="screenshots/desktop-contacts.png" width="300"> |
+
+| Call Logs | Media Control | Settings |
+|:---:|:---:|:---:|
+| <img src="screenshots/desktop-call-logs.png" width="300"> | <img src="screenshots/desktop-media-control.png" width="300"> | <img src="screenshots/desktop-settings.png" width="300"> |
+
+### Mobile
+| Home | Settings |
+|:---:|:---:|
+| <img src="screenshots/phone-home.png" width="300"> | <img src="screenshots/phone-settings.png" width="300"> |
 
 ## Installation
 
