@@ -27,19 +27,19 @@ impl ProximityHandle {
 }
 
 pub fn start(client: Arc<ConnectedClient>) -> Option<ProximityHandle> {
-    #[cfg(all(target_os = "linux", feature = "proximity-ble"))]
+    #[cfg(feature = "proximity-ble")]
     {
-        start_linux(client)
+        start_ble(client)
     }
-    #[cfg(not(all(target_os = "linux", feature = "proximity-ble")))]
+    #[cfg(not(feature = "proximity-ble"))]
     {
         let _ = client;
         None
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "proximity-ble"))]
-fn start_linux(client: Arc<ConnectedClient>) -> Option<ProximityHandle> {
+#[cfg(feature = "proximity-ble")]
+fn start_ble(client: Arc<ConnectedClient>) -> Option<ProximityHandle> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let task = tokio::spawn(async move {
         run_ble_scan(client, shutdown_rx).await;
@@ -47,7 +47,7 @@ fn start_linux(client: Arc<ConnectedClient>) -> Option<ProximityHandle> {
     Some(ProximityHandle { shutdown_tx, task })
 }
 
-#[cfg(all(target_os = "linux", feature = "proximity-ble"))]
+#[cfg(feature = "proximity-ble")]
 async fn run_ble_scan(client: Arc<ConnectedClient>, mut shutdown_rx: watch::Receiver<bool>) {
     let manager = match Manager::new().await {
         Ok(manager) => manager,
@@ -106,7 +106,7 @@ async fn run_ble_scan(client: Arc<ConnectedClient>, mut shutdown_rx: watch::Rece
     info!("BLE proximity scan stopped");
 }
 
-#[cfg(all(target_os = "linux", feature = "proximity-ble"))]
+#[cfg(feature = "proximity-ble")]
 fn handle_event(client: &Arc<ConnectedClient>, event: CentralEvent) {
     let CentralEvent::ManufacturerDataAdvertisement {
         manufacturer_data, ..
@@ -153,7 +153,7 @@ fn handle_event(client: &Arc<ConnectedClient>, event: CentralEvent) {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "proximity-ble"))]
+#[cfg(feature = "proximity-ble")]
 struct ProximityPayload {
     device_id: String,
     name: String,
@@ -162,7 +162,7 @@ struct ProximityPayload {
     port: u16,
 }
 
-#[cfg(all(target_os = "linux", feature = "proximity-ble"))]
+#[cfg(feature = "proximity-ble")]
 fn parse_payload(data: &[u8]) -> Option<ProximityPayload> {
     if data.len() < PAYLOAD_MIN_LEN_V2 {
         return None;

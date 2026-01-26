@@ -300,11 +300,13 @@ pub fn remove_file_transfer_request(id: &str) -> Option<FileTransferRequest> {
 }
 
 pub fn add_notification(title: &str, message: &str, icon: &'static str) {
-    if cfg!(target_os = "linux") && !get_notifications_enabled_setting() {
+    if (cfg!(target_os = "linux") || cfg!(target_os = "windows"))
+        && !get_notifications_enabled_setting()
+    {
         return;
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         if get_notifications_enabled_setting() {
             let summary = title.to_string();

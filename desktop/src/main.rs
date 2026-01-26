@@ -181,18 +181,38 @@ mod tray {
     }
 }
 
+use image::ImageReader;
+use std::io::Cursor;
+
+fn load_icon() -> dioxus::desktop::tao::window::Icon {
+    let icon_bytes = include_bytes!("../assets/logo.png");
+    let reader = ImageReader::new(Cursor::new(icon_bytes))
+        .with_guessed_format()
+        .expect("Failed to detect icon format");
+    let image = reader.decode().expect("Failed to decode icon");
+    let rgba = image.into_rgba8();
+    let (width, height) = rgba.dimensions();
+    dioxus::desktop::tao::window::Icon::from_rgba(rgba.into_raw(), width, height)
+        .expect("Failed to create icon")
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
+
+    // Platform-specific window settings
+    let decorations = cfg!(target_os = "windows");
+    let transparent = !cfg!(target_os = "windows");
 
     let mut config = dioxus::desktop::Config::new()
         .with_window(
             dioxus::desktop::WindowBuilder::new()
                 .with_title("Connected")
                 .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
-                .with_decorations(false)
-                .with_transparent(true),
+                .with_decorations(decorations)
+                .with_transparent(transparent)
+                .with_window_icon(Some(load_icon())),
         )
         .with_menu(None)
         .with_disable_context_menu(true);
@@ -287,30 +307,37 @@ fn App() -> Element {
         spawn(async move {
             // Helper to check states
             async fn check_adapters() -> (bool, bool) {
-                let bt_status = tokio::process::Command::new("rfkill")
-                    .arg("list")
-                    .arg("bluetooth")
-                    .output()
-                    .await;
-                let bt_on = if let Ok(output) = bt_status {
-                    let out = String::from_utf8_lossy(&output.stdout);
-                    !out.contains("Soft blocked: yes") && !out.contains("Hard blocked: yes")
-                } else {
-                    true
-                };
+                #[cfg(target_os = "linux")]
+                {
+                    let bt_status = tokio::process::Command::new("rfkill")
+                        .arg("list")
+                        .arg("bluetooth")
+                        .output()
+                        .await;
+                    let bt_on = if let Ok(output) = bt_status {
+                        let out = String::from_utf8_lossy(&output.stdout);
+                        !out.contains("Soft blocked: yes") && !out.contains("Hard blocked: yes")
+                    } else {
+                        true
+                    };
 
-                let wifi_status = tokio::process::Command::new("nmcli")
-                    .arg("radio")
-                    .arg("wifi")
-                    .output()
-                    .await;
-                let wifi_on = if let Ok(output) = wifi_status {
-                    let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    out == "enabled"
-                } else {
-                    true
-                };
-                (bt_on, wifi_on)
+                    let wifi_status = tokio::process::Command::new("nmcli")
+                        .arg("radio")
+                        .arg("wifi")
+                        .output()
+                        .await;
+                    let wifi_on = if let Ok(output) = wifi_status {
+                        let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        out == "enabled"
+                    } else {
+                        true
+                    };
+                    (bt_on, wifi_on)
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    (true, true)
+                }
             }
 
             // Init state
@@ -1746,7 +1773,7 @@ fn App() -> Element {
                             p { class: "settings-hint", "Allow other devices to see and control your media." }
                         }
 
-                        if cfg!(target_os = "linux") {
+                        if cfg!(target_os = "linux") || cfg!(target_os = "windows") {
                             div {
                                 class: "info-card",
                                 h3 {
@@ -1844,7 +1871,7 @@ fn App() -> Element {
             }
 
             // Notifications (in-app)
-            if !cfg!(target_os = "linux") {
+            if !cfg!(target_os = "linux") && !cfg!(target_os = "windows") {
                 div {
                     class: "notifications-panel",
                     for notification in notifications.read().iter().rev().take(3) {

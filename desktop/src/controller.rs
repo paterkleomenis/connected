@@ -399,85 +399,95 @@ fn spawn_event_loop(
 
                                 // Execute command via MPRIS with manual scan
                                 tokio::task::spawn_blocking(move || {
-                                    use dbus::ffidisp::{BusType, Connection};
-                                    use mpris::Player;
-                                    use std::rc::Rc;
+                                    #[cfg(target_os = "linux")]
+                                    {
+                                        use dbus::ffidisp::{BusType, Connection};
+                                        use mpris::Player;
+                                        use std::rc::Rc;
 
-                                    let conn = match Connection::get_private(BusType::Session) {
-                                        Ok(c) => Rc::new(c),
-                                        Err(e) => {
-                                            warn!("DBus Connection Error: {}", e);
-                                            return;
-                                        }
-                                    };
-
-                                    // ListNames
-                                    use dbus::Message;
-                                    let msg = Message::new_method_call(
-                                        "org.freedesktop.DBus",
-                                        "/org/freedesktop/DBus",
-                                        "org.freedesktop.DBus",
-                                        "ListNames",
-                                    )
-                                    .unwrap();
-                                    let names: Vec<String> =
-                                        match conn.send_with_reply_and_block(msg, 5000) {
-                                            Ok(reply) => match reply.get1() {
-                                                Some(n) => n,
-                                                None => return,
-                                            },
+                                        let conn = match Connection::get_private(BusType::Session) {
+                                            Ok(c) => Rc::new(c),
                                             Err(e) => {
-                                                warn!("DBus ListNames Error: {}", e);
+                                                warn!("DBus Connection Error: {}", e);
                                                 return;
                                             }
                                         };
 
-                                    let mpris_names: Vec<&String> = names
-                                        .iter()
-                                        .filter(|n| {
-                                            n.starts_with("org.mpris.MediaPlayer2.")
-                                                && !n.contains("playerctld")
-                                                && !n.contains("kdeconnect")
-                                                && *n != "org.mpris.MediaPlayer2.connected"
-                                        })
-                                        .collect();
+                                        // ListNames
+                                        use dbus::Message;
+                                        let msg = Message::new_method_call(
+                                            "org.freedesktop.DBus",
+                                            "/org/freedesktop/DBus",
+                                            "org.freedesktop.DBus",
+                                            "ListNames",
+                                        )
+                                        .unwrap();
+                                        let names: Vec<String> =
+                                            match conn.send_with_reply_and_block(msg, 5000) {
+                                                Ok(reply) => match reply.get1() {
+                                                    Some(n) => n,
+                                                    None => return,
+                                                },
+                                                Err(e) => {
+                                                    warn!("DBus ListNames Error: {}", e);
+                                                    return;
+                                                }
+                                            };
 
-                                    let last_id = last_identity.lock().unwrap().clone();
+                                        let mpris_names: Vec<&String> = names
+                                            .iter()
+                                            .filter(|n| {
+                                                n.starts_with("org.mpris.MediaPlayer2.")
+                                                    && !n.contains("playerctld")
+                                                    && !n.contains("kdeconnect")
+                                                    && *n != "org.mpris.MediaPlayer2.connected"
+                                            })
+                                            .collect();
 
-                                    let mut playing_player: Option<Player> = None;
+                                        let last_id = last_identity.lock().unwrap().clone();
 
-                                    let mut preferred_player: Option<Player> = None;
+                                        let mut playing_player: Option<Player> = None;
 
-                                    let mut generic_paused: Option<Player> = None;
+                                        let mut preferred_player: Option<Player> = None;
 
-                                    let mut generic_any: Option<Player> = None;
+                                        let mut generic_paused: Option<Player> = None;
 
-                                    for name in mpris_names {
-                                        if let Ok(p_conn) =
-                                            Connection::get_private(BusType::Session)
-                                            && let Ok(player) =
-                                                Player::new(p_conn, name.clone(), 2000)
-                                        {
-                                            let identity = player.identity().to_string();
+                                        let mut generic_any: Option<Player> = None;
 
-                                            let is_last = last_id.as_ref() == Some(&identity);
+                                        for name in mpris_names {
+                                            if let Ok(p_conn) =
+                                                Connection::get_private(BusType::Session)
+                                                && let Ok(player) =
+                                                    Player::new(p_conn, name.clone(), 2000)
+                                            {
+                                                let identity = player.identity().to_string();
 
-                                            match player.get_playback_status() {
-                                                Ok(status) => match status {
-                                                    PlaybackStatus::Playing => {
-                                                        playing_player = Some(player);
+                                                let is_last = last_id.as_ref() == Some(&identity);
 
-                                                        break;
-                                                    }
+                                                match player.get_playback_status() {
+                                                    Ok(status) => match status {
+                                                        PlaybackStatus::Playing => {
+                                                            playing_player = Some(player);
 
-                                                    PlaybackStatus::Paused => {
-                                                        if is_last {
-                                                            preferred_player = Some(player);
-                                                        } else if generic_paused.is_none() {
-                                                            generic_paused = Some(player);
+                                                            break;
                                                         }
-                                                    }
 
+                                                        PlaybackStatus::Paused => {
+                                                            if is_last {
+                                                                preferred_player = Some(player);
+                                                            } else if generic_paused.is_none() {
+                                                                generic_paused = Some(player);
+                                                            }
+                                                        }
+
+                                                        _ => {
+                                                            if is_last {
+                                                                preferred_player = Some(player);
+                                                            } else if generic_any.is_none() {
+                                                                generic_any = Some(player);
+                                                            }
+                                                        }
+                                                    },
                                                     _ => {
                                                         if is_last {
                                                             preferred_player = Some(player);
@@ -485,56 +495,99 @@ fn spawn_event_loop(
                                                             generic_any = Some(player);
                                                         }
                                                     }
-                                                },
-                                                _ => {
-                                                    if is_last {
-                                                        preferred_player = Some(player);
-                                                    } else if generic_any.is_none() {
-                                                        generic_any = Some(player);
-                                                    }
                                                 }
                                             }
                                         }
-                                    }
 
-                                    let target_player = playing_player
-                                        .or(preferred_player)
-                                        .or(generic_paused)
-                                        .or(generic_any);
+                                        let target_player = playing_player
+                                            .or(preferred_player)
+                                            .or(generic_paused)
+                                            .or(generic_any);
 
-                                    if let Some(player) = target_player {
-                                        // Update last identity
+                                        if let Some(player) = target_player {
+                                            // Update last identity
 
-                                        *last_identity.lock().unwrap() =
-                                            Some(player.identity().to_string());
+                                            *last_identity.lock().unwrap() =
+                                                Some(player.identity().to_string());
 
-                                        info!("MPRIS: Controlling player: {}", player.identity());
+                                            info!(
+                                                "MPRIS: Controlling player: {}",
+                                                player.identity()
+                                            );
 
-                                        let res = match cmd {
-                                            MediaCommand::Play => player.play(),
-                                            MediaCommand::Pause => player.pause(),
-                                            MediaCommand::PlayPause => player.play_pause(),
-                                            MediaCommand::Next => player.next(),
-                                            MediaCommand::Previous => player.previous(),
-                                            MediaCommand::Stop => player.stop(),
-                                            MediaCommand::VolumeUp => {
-                                                let _ = player.set_volume(
-                                                    player.get_volume().unwrap_or(0.0) + 0.05,
-                                                );
-                                                Ok(())
+                                            let res = match cmd {
+                                                MediaCommand::Play => player.play(),
+                                                MediaCommand::Pause => player.pause(),
+                                                MediaCommand::PlayPause => player.play_pause(),
+                                                MediaCommand::Next => player.next(),
+                                                MediaCommand::Previous => player.previous(),
+                                                MediaCommand::Stop => player.stop(),
+                                                MediaCommand::VolumeUp => {
+                                                    let _ = player.set_volume(
+                                                        player.get_volume().unwrap_or(0.0) + 0.05,
+                                                    );
+                                                    Ok(())
+                                                }
+                                                MediaCommand::VolumeDown => {
+                                                    let _ = player.set_volume(
+                                                        player.get_volume().unwrap_or(0.0) - 0.05,
+                                                    );
+                                                    Ok(())
+                                                }
+                                            };
+
+                                            if let Err(e) = res {
+                                                warn!("MPRIS Command Error: {}", e);
                                             }
-                                            MediaCommand::VolumeDown => {
-                                                let _ = player.set_volume(
-                                                    player.get_volume().unwrap_or(0.0) - 0.05,
-                                                );
-                                                Ok(())
-                                            }
-                                        };
-                                        if let Err(e) = res {
-                                            warn!("MPRIS Command Failed: {}", e);
+                                        } else {
+                                            warn!("No controllable media player found");
                                         }
-                                    } else {
-                                        warn!("MPRIS: No controllable player found");
+                                    }
+                                    #[cfg(target_os = "windows")]
+                                    {
+                                        use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
+
+                                        async fn control_media_windows(
+                                            cmd: MediaCommand,
+                                        ) -> windows::core::Result<()>
+                                        {
+                                            let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
+                                            let session = manager.GetCurrentSession()?;
+
+                                            match cmd {
+                                                MediaCommand::Play => {
+                                                    session.TryPlayAsync()?.await?;
+                                                }
+                                                MediaCommand::Pause => {
+                                                    session.TryPauseAsync()?.await?;
+                                                }
+                                                MediaCommand::PlayPause => {
+                                                    session.TryTogglePlayPauseAsync()?.await?;
+                                                }
+                                                MediaCommand::Next => {
+                                                    session.TrySkipNextAsync()?.await?;
+                                                }
+                                                MediaCommand::Previous => {
+                                                    session.TrySkipPreviousAsync()?.await?;
+                                                }
+                                                MediaCommand::Stop => {
+                                                    session.TryStopAsync()?.await?;
+                                                }
+                                                // Volume control is not directly available via SMTC session
+                                                _ => {}
+                                            }
+                                            Ok(())
+                                        }
+
+                                        if let Err(e) = tokio::runtime::Handle::current()
+                                            .block_on(control_media_windows(cmd))
+                                        {
+                                            warn!("Windows Media Control Error: {}", e);
+                                        }
+                                    }
+                                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+                                    {
+                                        warn!("Media control not implemented for this OS");
                                     }
                                 });
                             }
@@ -1296,91 +1349,134 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 interval.tick().await;
 
                                 let state_update = tokio::task::spawn_blocking(move || {
-                                    // Manual D-Bus scan to bypass broken playerctld
-                                    use dbus::ffidisp::{BusType, Connection};
-                                    use mpris::Player;
-                                    use std::rc::Rc;
+                                    #[cfg(target_os = "linux")]
+                                    {
+                                        // Manual D-Bus scan to bypass broken playerctld
+                                        use dbus::ffidisp::{BusType, Connection};
+                                        use mpris::Player;
+                                        use std::rc::Rc;
 
-                                    // Create a new connection for this iteration
-                                    let conn = match Connection::get_private(BusType::Session) {
-                                        Ok(c) => Rc::new(c),
-                                        Err(e) => {
-                                            warn!("DBus Connection Error: {}", e);
-                                            return None;
-                                        }
-                                    };
-
-                                    // Use the connection to list names
-                                    use dbus::Message;
-                                    let msg = Message::new_method_call(
-                                        "org.freedesktop.DBus",
-                                        "/org/freedesktop/DBus",
-                                        "org.freedesktop.DBus",
-                                        "ListNames",
-                                    )
-                                    .unwrap();
-
-                                    let names: Vec<String> =
-                                        match conn.send_with_reply_and_block(msg, 5000) {
-                                            Ok(reply) => match reply.get1() {
-                                                Some(n) => n,
-                                                None => return None,
-                                            },
+                                        // Create a new connection for this iteration
+                                        let conn = match Connection::get_private(BusType::Session) {
+                                            Ok(c) => Rc::new(c),
                                             Err(e) => {
-                                                warn!("DBus ListNames Error: {}", e);
+                                                warn!("DBus Connection Error: {}", e);
                                                 return None;
                                             }
                                         };
 
-                                    let mpris_names: Vec<&String> = names
-                                        .iter()
-                                        .filter(|n| {
-                                            n.starts_with("org.mpris.MediaPlayer2.")
-                                                && !n.contains("playerctld")
-                                                && *n != "org.mpris.MediaPlayer2.connected"
-                                        })
-                                        .collect();
+                                        // Use the connection to list names
+                                        use dbus::Message;
+                                        let msg = Message::new_method_call(
+                                            "org.freedesktop.DBus",
+                                            "/org/freedesktop/DBus",
+                                            "org.freedesktop.DBus",
+                                            "ListNames",
+                                        )
+                                        .unwrap();
 
-                                    // Find first playing, or just first one
-                                    let mut best_candidate: BestCandidate = None;
+                                        let names: Vec<String> =
+                                            match conn.send_with_reply_and_block(msg, 5000) {
+                                                Ok(reply) => match reply.get1() {
+                                                    Some(n) => n,
+                                                    None => return None,
+                                                },
+                                                Err(e) => {
+                                                    warn!("DBus ListNames Error: {}", e);
+                                                    return None;
+                                                }
+                                            };
 
-                                    for name in mpris_names {
-                                        // Player::new takes (conn, bus_name, timeout_ms)
-                                        // We must create a new connection for each player because Player::new takes ownership
-                                        if let Ok(p_conn) =
-                                            Connection::get_private(BusType::Session)
-                                            && let Ok(player) =
-                                                Player::new(p_conn, name.clone(), 2000)
-                                        {
-                                            let _identity = player.identity().to_string();
-                                            let meta = player.get_metadata().ok();
-                                            let status = player.get_playback_status().ok();
-                                            let playing =
-                                                matches!(status, Some(PlaybackStatus::Playing));
+                                        let mpris_names: Vec<&String> = names
+                                            .iter()
+                                            .filter(|n| {
+                                                n.starts_with("org.mpris.MediaPlayer2.")
+                                                    && !n.contains("playerctld")
+                                                    && *n != "org.mpris.MediaPlayer2.connected"
+                                            })
+                                            .collect();
 
-                                            let title = meta
-                                                .as_ref()
-                                                .and_then(|m| m.title().map(|s| s.to_string()));
-                                            let artist = meta
-                                                .as_ref()
-                                                .and_then(|m| m.artists().map(|a| a.join(", ")));
-                                            let album = meta.as_ref().and_then(|m| {
-                                                m.album_name().map(|s| s.to_string())
-                                            });
+                                        // Find first playing, or just first one
+                                        let mut best_candidate: BestCandidate = None;
 
-                                            let candidate = (title, artist, album, playing);
+                                        for name in mpris_names {
+                                            // Player::new takes (conn, bus_name, timeout_ms)
+                                            // We must create a new connection for each player because Player::new takes ownership
+                                            if let Ok(p_conn) =
+                                                Connection::get_private(BusType::Session)
+                                                && let Ok(player) =
+                                                    Player::new(p_conn, name.clone(), 2000)
+                                            {
+                                                let _identity = player.identity().to_string();
+                                                let meta = player.get_metadata().ok();
+                                                let status = player.get_playback_status().ok();
+                                                let playing =
+                                                    matches!(status, Some(PlaybackStatus::Playing));
 
-                                            if playing {
-                                                // Found a playing one, return immediately
-                                                return Some(candidate);
-                                            } else if best_candidate.is_none() {
-                                                // Keep as fallback
-                                                best_candidate = Some(candidate);
+                                                let title = meta
+                                                    .as_ref()
+                                                    .and_then(|m| m.title().map(|s| s.to_string()));
+                                                let artist = meta.as_ref().and_then(|m| {
+                                                    m.artists().map(|a| a.join(", "))
+                                                });
+                                                let album = meta.as_ref().and_then(|m| {
+                                                    m.album_name().map(|s| s.to_string())
+                                                });
+
+                                                let candidate = (title, artist, album, playing);
+
+                                                if playing {
+                                                    // Found a playing one, return immediately
+                                                    return Some(candidate);
+                                                } else if best_candidate.is_none() {
+                                                    // Keep as fallback
+                                                    best_candidate = Some(candidate);
+                                                }
                                             }
                                         }
-                                    }
 
-                                    best_candidate
+                                        best_candidate
+                                    }
+                                    #[cfg(target_os = "windows")]
+                                    {
+                                        use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager, GlobalSystemMediaTransportControlsSessionPlaybackStatus};
+
+                                        async fn get_media_state_windows() -> windows::core::Result<Option<(Option<String>, Option<String>, Option<String>, bool)>> {
+                                            let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
+                                            let session = manager.GetCurrentSession()?;
+
+                                            let properties = session.TryGetMediaPropertiesAsync()?.await?;
+                                            let title = properties.Title()?;
+                                            let artist = properties.Artist()?;
+                                            let album = properties.AlbumTitle()?;
+
+                                            let timeline = session.GetTimelineProperties()?;
+                                            let status = session.GetPlaybackInfo()?.PlaybackStatus()?;
+
+                                            let playing = status == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
+
+                                            let title_str = if !title.is_empty() { Some(title.to_string()) } else { None };
+                                            let artist_str = if !artist.is_empty() { Some(artist.to_string()) } else { None };
+                                            let album_str = if !album.is_empty() { Some(album.to_string()) } else { None };
+
+                                            Ok(Some((title_str, artist_str, album_str, playing)))
+                                        }
+
+                                        tokio::runtime::Handle::current().block_on(async {
+                                            match get_media_state_windows().await {
+                                                Ok(res) => res,
+                                                Err(e) => {
+                                                    // Warn only on specific errors to avoid spamming logs if no session is active
+                                                    // warn!("Windows Media Poll Error: {}", e);
+                                                    None
+                                                }
+                                            }
+                                        })
+                                    }
+                                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+                                    {
+                                        None
+                                    }
                                 })
                                 .await
                                 .unwrap_or(None);

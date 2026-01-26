@@ -21,8 +21,6 @@ arboard = "3.6.1"
 once_cell.workspace = true
 mime_guess.workspace = true
 base64 = "0.22.1"
-mpris = "2.0.1"
-dbus = "0.9.10"
 image = "0.25.9"
 btleplug = "0.11.8"
 uuid = { workspace = true }
@@ -37,6 +35,12 @@ uniffi = "0.31.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris-server = "0.9.0"
 ksni = "0.3"
+dbus = "0.9.10"
+mpris = "2.0.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Foundation", "Media_Control"] }
+
 
 [features]
 default = ["proximity-ble"]
