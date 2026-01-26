@@ -33,8 +33,6 @@ use std::sync::Mutex;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
-
-
 #[derive(Clone, Debug)]
 pub enum AppAction {
     Init,
@@ -586,8 +584,7 @@ fn spawn_event_loop(
                                             Ok(())
                                         }
 
-                                        if let Err(e) = control_media_windows(cmd)
-                                        {
+                                        if let Err(e) = control_media_windows(cmd) {
                                             warn!("Windows Media Control Error: {}", e);
                                         }
                                     }

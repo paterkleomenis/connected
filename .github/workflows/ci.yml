@@ -66,10 +66,6 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
-      - name: Install dependencies
-        run: |
-          choco install gtk3 webkit2gtk
-
       - name: Build
         run: cargo build --release --verbose
 
