@@ -172,7 +172,7 @@ fn spawn_event_loop(
 ) {
     let c_clone = c.clone();
     tokio::spawn(async move {
-        let _last_player_identity = Arc::new(std::sync::Mutex::new(None::<String>));
+        let last_player_identity = Arc::new(std::sync::Mutex::new(None::<String>));
 
         while let Ok(event) = events.recv().await {
             match event {
@@ -395,6 +395,7 @@ fn spawn_event_loop(
                                 info!("COMMAND: Executing {:?} from {}", cmd, from_device);
 
                                 // Execute command via MPRIS with manual scan
+                                let last_player_identity = last_player_identity.clone();
                                 tokio::task::spawn_blocking(move || {
                                     #[cfg(target_os = "linux")]
                                     {
@@ -1400,7 +1401,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             .collect();
 
                                         // Find first playing, or just first one
-                                        let mut best_candidate: BestCandidate = None;
+                                        let mut best_candidate: Option<(Option<String>, Option<String>, Option<String>, bool)> = None;
 
                                         for name in mpris_names {
                                             // Player::new takes (conn, bus_name, timeout_ms)
