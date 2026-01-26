@@ -208,19 +208,36 @@ fn ensure_firewall_rule() {
     let exe_path = env::current_exe().unwrap();
     let exe_path_str = exe_path.to_str().unwrap();
 
-    let rule = WindowsFirewallRule::builder()
-        .name("Connected Desktop (mDNS)")
+    let inbound_rule = WindowsFirewallRule::builder()
+        .name("Connected Desktop (mDNS) - Inbound")
         .action(ActionFirewallWindows::Allow)
         .direction(DirectionFirewallWindows::In)
         .enabled(true)
-        .description("Allow Connected Desktop to discover and be discovered by other devices on the local network.")
+        .description(
+            "Allow Connected Desktop to be discovered by other devices on the local network.",
+        )
         .protocol(ProtocolFirewallWindows::Udp)
         .local_ports([5353])
         .application_name(exe_path_str)
         .build();
 
-    if let Err(e) = add_rule(&rule) {
-        warn!("Failed to add firewall rule: {}", e);
+    if let Err(e) = add_rule(&inbound_rule) {
+        warn!("Failed to add inbound firewall rule: {}", e);
+    }
+
+    let outbound_rule = WindowsFirewallRule::builder()
+        .name("Connected Desktop (mDNS) - Outbound")
+        .action(ActionFirewallWindows::Allow)
+        .direction(DirectionFirewallWindows::Out)
+        .enabled(true)
+        .description("Allow Connected Desktop to discover other devices on the local network.")
+        .protocol(ProtocolFirewallWindows::Udp)
+        .local_ports([5353])
+        .application_name(exe_path_str)
+        .build();
+
+    if let Err(e) = add_rule(&outbound_rule) {
+        warn!("Failed to add outbound firewall rule: {}", e);
     }
 }
 
