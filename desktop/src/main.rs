@@ -205,6 +205,7 @@ fn main() {
     let decorations = cfg!(target_os = "windows");
     let transparent = !cfg!(target_os = "windows");
 
+    #[allow(unused_mut)]
     let mut config = dioxus::desktop::Config::new()
         .with_window(
             dioxus::desktop::WindowBuilder::new()

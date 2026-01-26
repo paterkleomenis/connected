@@ -23,6 +23,7 @@ use connected_core::{
 };
 use dioxus::prelude::*;
 use futures_util::StreamExt;
+#[cfg(target_os = "linux")]
 use mpris::PlaybackStatus;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
@@ -545,33 +546,41 @@ fn spawn_event_loop(
                                     }
                                     #[cfg(target_os = "windows")]
                                     {
+                                        use windows::Foundation::IAsyncOperation;
                                         use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 
                                         async fn control_media_windows(
                                             cmd: MediaCommand,
                                         ) -> windows::core::Result<()>
                                         {
-                                            let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
+                                            let op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?;
+                                            let manager: GlobalSystemMediaTransportControlsSessionManager = op.await?;
                                             let session = manager.GetCurrentSession()?;
 
                                             match cmd {
                                                 MediaCommand::Play => {
-                                                    session.TryPlayAsync()?.await?;
+                                                    let op = session.TryPlayAsync()?;
+                                                    op.await?;
                                                 }
                                                 MediaCommand::Pause => {
-                                                    session.TryPauseAsync()?.await?;
+                                                    let op = session.TryPauseAsync()?;
+                                                    op.await?;
                                                 }
                                                 MediaCommand::PlayPause => {
-                                                    session.TryTogglePlayPauseAsync()?.await?;
+                                                    let op = session.TryTogglePlayPauseAsync()?;
+                                                    op.await?;
                                                 }
                                                 MediaCommand::Next => {
-                                                    session.TrySkipNextAsync()?.await?;
+                                                    let op = session.TrySkipNextAsync()?;
+                                                    op.await?;
                                                 }
                                                 MediaCommand::Previous => {
-                                                    session.TrySkipPreviousAsync()?.await?;
+                                                    let op = session.TrySkipPreviousAsync()?;
+                                                    op.await?;
                                                 }
                                                 MediaCommand::Stop => {
-                                                    session.TryStopAsync()?.await?;
+                                                    let op = session.TryStopAsync()?;
+                                                    op.await?;
                                                 }
                                                 // Volume control is not directly available via SMTC session
                                                 _ => {}
@@ -1440,17 +1449,22 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     #[cfg(target_os = "windows")]
                                     {
                                         use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager, GlobalSystemMediaTransportControlsSessionPlaybackStatus};
+                                        use windows::Foundation::IAsyncOperation;
 
                                         async fn get_media_state_windows() -> windows::core::Result<Option<(Option<String>, Option<String>, Option<String>, bool)>> {
-                                            let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
+                                            let op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?;
+                                            let manager: GlobalSystemMediaTransportControlsSessionManager = op.await?;
                                             let session = manager.GetCurrentSession()?;
 
-                                            let properties = session.TryGetMediaPropertiesAsync()?.await?;
+                                            let op_props = session.TryGetMediaPropertiesAsync()?;
+                                            let properties: windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties = op_props.await?;
+
                                             let title = properties.Title()?;
                                             let artist = properties.Artist()?;
                                             let album = properties.AlbumTitle()?;
 
-                                            let timeline = session.GetTimelineProperties()?;
+                                            // Timeline is not strictly needed for basic title/artist
+                                            // let timeline = session.GetTimelineProperties()?;
                                             let status = session.GetPlaybackInfo()?.PlaybackStatus()?;
 
                                             let playing = status == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
