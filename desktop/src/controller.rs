@@ -33,7 +33,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
-type BestCandidate = Option<(Option<String>, Option<String>, Option<String>, bool)>;
+
 
 #[derive(Clone, Debug)]
 pub enum AppAction {
@@ -174,7 +174,7 @@ fn spawn_event_loop(
 ) {
     let c_clone = c.clone();
     tokio::spawn(async move {
-        let last_player_identity = Arc::new(std::sync::Mutex::new(None::<String>));
+        let _last_player_identity = Arc::new(std::sync::Mutex::new(None::<String>));
 
         while let Ok(event) = events.recv().await {
             match event {
@@ -396,12 +396,11 @@ fn spawn_event_loop(
                             MediaControlMessage::Command(cmd) => {
                                 info!("COMMAND: Executing {:?} from {}", cmd, from_device);
 
-                                let last_identity = last_player_identity.clone();
-
                                 // Execute command via MPRIS with manual scan
                                 tokio::task::spawn_blocking(move || {
                                     #[cfg(target_os = "linux")]
                                     {
+                                        let last_identity = last_player_identity.clone();
                                         use dbus::ffidisp::{BusType, Connection};
                                         use mpris::Player;
                                         use std::rc::Rc;
@@ -546,41 +545,40 @@ fn spawn_event_loop(
                                     }
                                     #[cfg(target_os = "windows")]
                                     {
-                                        use windows::Foundation::IAsyncOperation;
                                         use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 
-                                        async fn control_media_windows(
+                                        fn control_media_windows(
                                             cmd: MediaCommand,
                                         ) -> windows::core::Result<()>
                                         {
                                             let op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?;
-                                            let manager: GlobalSystemMediaTransportControlsSessionManager = op.await?;
+                                            let manager: GlobalSystemMediaTransportControlsSessionManager = op.get()?;
                                             let session = manager.GetCurrentSession()?;
 
                                             match cmd {
                                                 MediaCommand::Play => {
                                                     let op = session.TryPlayAsync()?;
-                                                    op.await?;
+                                                    op.get()?;
                                                 }
                                                 MediaCommand::Pause => {
                                                     let op = session.TryPauseAsync()?;
-                                                    op.await?;
+                                                    op.get()?;
                                                 }
                                                 MediaCommand::PlayPause => {
                                                     let op = session.TryTogglePlayPauseAsync()?;
-                                                    op.await?;
+                                                    op.get()?;
                                                 }
                                                 MediaCommand::Next => {
                                                     let op = session.TrySkipNextAsync()?;
-                                                    op.await?;
+                                                    op.get()?;
                                                 }
                                                 MediaCommand::Previous => {
                                                     let op = session.TrySkipPreviousAsync()?;
-                                                    op.await?;
+                                                    op.get()?;
                                                 }
                                                 MediaCommand::Stop => {
                                                     let op = session.TryStopAsync()?;
-                                                    op.await?;
+                                                    op.get()?;
                                                 }
                                                 // Volume control is not directly available via SMTC session
                                                 _ => {}
@@ -588,8 +586,7 @@ fn spawn_event_loop(
                                             Ok(())
                                         }
 
-                                        if let Err(e) = tokio::runtime::Handle::current()
-                                            .block_on(control_media_windows(cmd))
+                                        if let Err(e) = control_media_windows(cmd)
                                         {
                                             warn!("Windows Media Control Error: {}", e);
                                         }
@@ -1449,15 +1446,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     #[cfg(target_os = "windows")]
                                     {
                                         use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager, GlobalSystemMediaTransportControlsSessionPlaybackStatus};
-                                        use windows::Foundation::IAsyncOperation;
 
-                                        async fn get_media_state_windows() -> windows::core::Result<Option<(Option<String>, Option<String>, Option<String>, bool)>> {
+                                        fn get_media_state_windows() -> windows::core::Result<Option<(Option<String>, Option<String>, Option<String>, bool)>> {
                                             let op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?;
-                                            let manager: GlobalSystemMediaTransportControlsSessionManager = op.await?;
+                                            let manager: GlobalSystemMediaTransportControlsSessionManager = op.get()?;
                                             let session = manager.GetCurrentSession()?;
 
                                             let op_props = session.TryGetMediaPropertiesAsync()?;
-                                            let properties: windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties = op_props.await?;
+                                            let properties: windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties = op_props.get()?;
 
                                             let title = properties.Title()?;
                                             let artist = properties.Artist()?;
@@ -1476,16 +1472,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             Ok(Some((title_str, artist_str, album_str, playing)))
                                         }
 
-                                        tokio::runtime::Handle::current().block_on(async {
-                                            match get_media_state_windows().await {
-                                                Ok(res) => res,
-                                                Err(e) => {
-                                                    // Warn only on specific errors to avoid spamming logs if no session is active
-                                                    // warn!("Windows Media Poll Error: {}", e);
-                                                    None
-                                                }
+                                        match get_media_state_windows() {
+                                            Ok(res) => res,
+                                            Err(_) => {
+                                                // Warn only on specific errors to avoid spamming logs if no session is active
+                                                // warn!("Windows Media Poll Error: {}", e);
+                                                None
                                             }
-                                        })
+                                        }
                                     }
                                     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
                                     {

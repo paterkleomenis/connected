@@ -42,8 +42,45 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+      - name: Build Release
+        run: cargo build --release --verbose
+
+      - name: Upload Linux Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: connected-desktop-linux
+          path: target/release/connected-desktop
+
   # -------------------------------------------------------------------------
-  # Job 2: Build Android App
+  # Job 2: Build Rust Code (Windows Desktop)
+  # -------------------------------------------------------------------------
+  build-windows:
+    name: Rust (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install dependencies
+        run: |
+          choco install gtk3 webkit2gtk
+
+      - name: Build
+        run: cargo build --release --verbose
+
+      - name: Upload Windows Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: connected-desktop-windows
+          path: target/release/connected-desktop.exe
+
+  # -------------------------------------------------------------------------
+  # Job 3: Build Android App
   # -------------------------------------------------------------------------
   build-android:
     name: Android Build
