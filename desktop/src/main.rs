@@ -196,7 +196,38 @@ fn load_icon() -> dioxus::desktop::tao::window::Icon {
         .expect("Failed to create icon")
 }
 
+#[cfg(target_os = "windows")]
+fn ensure_firewall_rule() {
+    use std::env;
+    use tracing::warn;
+    use windows_firewall::{
+        ActionFirewallWindows, DirectionFirewallWindows, ProtocolFirewallWindows,
+        WindowsFirewallRule, add_rule,
+    };
+
+    let exe_path = env::current_exe().unwrap();
+    let exe_path_str = exe_path.to_str().unwrap();
+
+    let rule = WindowsFirewallRule::builder()
+        .name("Connected Desktop (mDNS)")
+        .action(ActionFirewallWindows::Allow)
+        .direction(DirectionFirewallWindows::In)
+        .enabled(true)
+        .description("Allow Connected Desktop to discover and be discovered by other devices on the local network.")
+        .protocol(ProtocolFirewallWindows::Udp)
+        .local_ports([5353])
+        .application_name(exe_path_str)
+        .build();
+
+    if let Err(e) = add_rule(&rule) {
+        warn!("Failed to add firewall rule: {}", e);
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "windows")]
+    ensure_firewall_rule();
+
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
