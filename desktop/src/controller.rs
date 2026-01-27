@@ -395,11 +395,11 @@ fn spawn_event_loop(
                                 info!("COMMAND: Executing {:?} from {}", cmd, from_device);
 
                                 // Execute command via MPRIS with manual scan
-                                let last_player_identity = last_player_identity.clone();
+                                let _last_player_identity = last_player_identity.clone();
                                 tokio::task::spawn_blocking(move || {
                                     #[cfg(target_os = "linux")]
                                     {
-                                        let last_identity = last_player_identity.clone();
+                                        let last_identity = _last_player_identity.clone();
                                         use dbus::ffidisp::{BusType, Connection};
                                         use mpris::Player;
                                         use std::rc::Rc;
