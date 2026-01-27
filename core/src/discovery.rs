@@ -1,6 +1,6 @@
 use crate::device::{Device, DeviceType};
 use crate::error::{ConnectedError, Result};
-use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{IfKind, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -79,6 +79,11 @@ impl DiscoveryService {
     pub fn new(local_device: Device) -> Result<Self> {
         let daemon = ServiceDaemon::new()?;
 
+        // Disable virtual network interfaces that can interfere with mDNS multicast
+        // This is especially important on Windows where VMware, VirtualBox, Hyper-V,
+        // WSL, and Docker create virtual adapters that can capture/misdirect multicast traffic
+        Self::disable_virtual_interfaces(&daemon);
+
         // Create a consistent instance name that we can use for unregistration
         let instance_name = Self::create_instance_name(&local_device);
         let service_fullname = format!("{}.{}", instance_name, SERVICE_TYPE);
@@ -92,6 +97,62 @@ impl DiscoveryService {
             service_fullname,
             thread_handles: RwLock::new(Vec::new()),
         })
+    }
+
+    /// Disable virtual network interfaces that commonly interfere with mDNS discovery.
+    /// These include VMware, VirtualBox, Hyper-V, WSL, Docker, and other virtualization adapters.
+    fn disable_virtual_interfaces(daemon: &ServiceDaemon) {
+        // Common virtual interface name patterns to exclude
+        let virtual_interface_patterns = [
+            // VMware
+            "vmnet",
+            "vmware",
+            // VirtualBox
+            "virtualbox",
+            "vboxnet",
+            // Hyper-V
+            "vethernet",
+            "hyper-v",
+            // WSL
+            "wsl",
+            // Docker
+            "docker",
+            "br-",
+            "veth",
+            // Other common virtual adapters
+            "virbr",
+            "lxcbr",
+            "lxdbr",
+            "podman",
+            "cni",
+            "flannel",
+            "calico",
+            "weave",
+            // Loopback (already excluded by mdns-sd, but be explicit)
+            "loopback",
+            // Bluetooth PAN
+            "bluetooth",
+            // VPN adapters
+            "tap-",
+            "tun",
+            "utun",
+            "pptp",
+            "ipsec",
+            "wireguard",
+            "wg",
+            "nordlynx",
+            "proton",
+            "mullvad",
+        ];
+
+        for pattern in virtual_interface_patterns {
+            if let Err(e) = daemon.disable_interface(IfKind::Name(pattern.to_string())) {
+                // Log at trace level since many of these interfaces won't exist on most systems
+                trace!("Could not disable interface pattern '{}': {}", pattern, e);
+            }
+        }
+
+        debug!("Disabled virtual network interfaces for mDNS daemon");
     }
 
     fn create_instance_name(device: &Device) -> String {
@@ -151,7 +212,8 @@ impl DiscoveryService {
             ip,
             self.local_device.port,
             properties.clone(),
-        )?;
+        )?
+        .enable_addr_auto();
 
         debug!("Service properties: {:?}", properties);
 
@@ -310,7 +372,8 @@ impl DiscoveryService {
             ip,
             device.port,
             properties,
-        )?;
+        )?
+        .enable_addr_auto();
 
         daemon.register(service_info)?;
         Ok(())

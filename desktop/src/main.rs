@@ -197,53 +197,95 @@ fn load_icon() -> dioxus::desktop::tao::window::Icon {
 }
 
 #[cfg(target_os = "windows")]
-fn ensure_firewall_rule() {
+fn ensure_firewall_rules() {
     use std::env;
-    use tracing::warn;
     use windows_firewall::{
         ActionFirewallWindows, DirectionFirewallWindows, ProtocolFirewallWindows,
-        WindowsFirewallRule, add_rule,
+        WindowsFirewallRule,
     };
 
-    let exe_path = env::current_exe().unwrap();
-    let exe_path_str = exe_path.to_str().unwrap();
+    let exe_path = match env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Failed to get current exe path for firewall rules: {}", e);
+            return;
+        }
+    };
+    let exe_path_str = match exe_path.to_str() {
+        Some(s) => s,
+        None => {
+            eprintln!("Exe path contains invalid UTF-8");
+            return;
+        }
+    };
 
-    let inbound_rule = WindowsFirewallRule::builder()
+    // mDNS Inbound: allow receiving mDNS responses and queries on port 5353
+    let mdns_inbound = WindowsFirewallRule::builder()
         .name("Connected Desktop (mDNS) - Inbound")
         .action(ActionFirewallWindows::Allow)
         .direction(DirectionFirewallWindows::In)
         .enabled(true)
-        .description(
-            "Allow Connected Desktop to be discovered by other devices on the local network.",
-        )
+        .description("Allow Connected Desktop to receive mDNS traffic for local network discovery.")
         .protocol(ProtocolFirewallWindows::Udp)
         .local_ports([5353])
         .application_name(exe_path_str)
         .build();
 
-    if let Err(e) = add_rule(&inbound_rule) {
-        warn!("Failed to add inbound firewall rule: {}", e);
+    if let Err(e) = mdns_inbound.add_or_update() {
+        eprintln!("Failed to add/update mDNS inbound firewall rule: {}", e);
     }
 
-    let outbound_rule = WindowsFirewallRule::builder()
+    // mDNS Outbound: allow sending mDNS queries to port 5353
+    let mdns_outbound = WindowsFirewallRule::builder()
         .name("Connected Desktop (mDNS) - Outbound")
         .action(ActionFirewallWindows::Allow)
         .direction(DirectionFirewallWindows::Out)
         .enabled(true)
-        .description("Allow Connected Desktop to discover other devices on the local network.")
+        .description("Allow Connected Desktop to send mDNS queries for local network discovery.")
         .protocol(ProtocolFirewallWindows::Udp)
-        .local_ports([5353])
+        .remote_ports([5353])
         .application_name(exe_path_str)
         .build();
 
-    if let Err(e) = add_rule(&outbound_rule) {
-        warn!("Failed to add outbound firewall rule: {}", e);
+    if let Err(e) = mdns_outbound.add_or_update() {
+        eprintln!("Failed to add/update mDNS outbound firewall rule: {}", e);
+    }
+
+    // QUIC/UDP Inbound: allow incoming connections on any port for this application
+    // This is needed so other devices can connect to our dynamically-assigned QUIC port
+    let quic_inbound = WindowsFirewallRule::builder()
+        .name("Connected Desktop (QUIC) - Inbound")
+        .action(ActionFirewallWindows::Allow)
+        .direction(DirectionFirewallWindows::In)
+        .enabled(true)
+        .description("Allow Connected Desktop to receive incoming connections from paired devices.")
+        .protocol(ProtocolFirewallWindows::Udp)
+        .application_name(exe_path_str)
+        .build();
+
+    if let Err(e) = quic_inbound.add_or_update() {
+        eprintln!("Failed to add/update QUIC inbound firewall rule: {}", e);
+    }
+
+    // QUIC/UDP Outbound: allow outgoing connections on any port for this application
+    let quic_outbound = WindowsFirewallRule::builder()
+        .name("Connected Desktop (QUIC) - Outbound")
+        .action(ActionFirewallWindows::Allow)
+        .direction(DirectionFirewallWindows::Out)
+        .enabled(true)
+        .description("Allow Connected Desktop to connect to paired devices.")
+        .protocol(ProtocolFirewallWindows::Udp)
+        .application_name(exe_path_str)
+        .build();
+
+    if let Err(e) = quic_outbound.add_or_update() {
+        eprintln!("Failed to add/update QUIC outbound firewall rule: {}", e);
     }
 }
 
 fn main() {
     #[cfg(target_os = "windows")]
-    ensure_firewall_rule();
+    ensure_firewall_rules();
 
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
