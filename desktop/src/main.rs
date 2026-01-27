@@ -296,10 +296,8 @@ fn main() {
     let transparent = !cfg!(target_os = "windows");
 
     let data_dir = dirs::data_local_dir().map(|d| d.join("connected"));
-    if let Some(d) = &data_dir {
-        if !d.exists() {
-            let _ = std::fs::create_dir_all(d);
-        }
+    if let Some(d) = data_dir.as_ref().filter(|d| !d.exists()) {
+        let _ = std::fs::create_dir_all(d);
     }
 
     #[allow(unused_mut)]

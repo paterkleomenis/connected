@@ -40,8 +40,10 @@ fn main() {
 "#);
 
         // Point to the correct windres tool for cross-compilation
-        res.set_toolkit_path("/usr/bin");
-        res.set_windres_path("x86_64-w64-mingw32-windres");
+        if std::env::consts::OS == "linux" {
+            res.set_toolkit_path("/usr/bin");
+            res.set_windres_path("x86_64-w64-mingw32-windres");
+        }
 
         res.compile().unwrap();
     }
