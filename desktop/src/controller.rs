@@ -1445,7 +1445,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     {
                                         use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager, GlobalSystemMediaTransportControlsSessionPlaybackStatus};
 
-                                        fn get_media_state_windows() -> windows::core::Result<Option<(Option<String>, Option<String>, Option<String>, bool)>> {
+                                        type WindowsMediaState = (Option<String>, Option<String>, Option<String>, bool);
+                                        fn get_media_state_windows() -> windows::core::Result<Option<WindowsMediaState>> {
                                             let op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?;
                                             let manager: GlobalSystemMediaTransportControlsSessionManager = op.get()?;
                                             let session = manager.GetCurrentSession()?;
@@ -1470,14 +1471,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             Ok(Some((title_str, artist_str, album_str, playing)))
                                         }
 
-                                        match get_media_state_windows() {
-                                            Ok(res) => res,
-                                            Err(_) => {
-                                                // Warn only on specific errors to avoid spamming logs if no session is active
-                                                // warn!("Windows Media Poll Error: {}", e);
-                                                None
-                                            }
-                                        }
+                                        get_media_state_windows().unwrap_or_default()
                                     }
                                     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
                                     {
