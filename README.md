@@ -2,20 +2,20 @@
 
 **Connected** is a high-speed, offline, cross-platform ecosystem that bridges the gap between your devices. Built with **Rust** and **Jetpack Compose**, it aims to outperform proprietary solutions like AirDrop by utilizing cutting-edge technologies like BLE (Bluetooth Low Energy) for instant discovery and QUIC/Wi-Fi Direct for saturating data transfer speeds.
 
-Currently available for **Linux** and **Android**.
+Currently available for **Linux**, **Windows**, and **Android**.
 
 ![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)
 ![Rust](https://img.shields.io/badge/rust-edition%202024-orange)
-![Android](https://img.shields.io/badge/platform-Android%20%7C%20Linux-green)
+![Android](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows-green)
 
 ## Features
 
--   **Cross-Platform**: Seamlessly transfer files, sync clipboards, and control media between Android and Linux devices.
+-   **Cross-Platform**: Seamlessly transfer files, sync clipboards, and control media between Android, Linux, and Windows devices.
 -   **Offline First**: No internet required. Uses Wi-Fi Direct and Local Network.
 -   **High Speed**: Powered by the QUIC protocol over Wi-Fi 5/6.
 -   **Zero Config**: Auto-discovery via mDNS and BLE.
 -   **Secure**: End-to-end encryption for all transfers.
--   **Modern UI**: Beautiful, responsive interfaces using Jetpack Compose (Android) and Tailwind CSS (Linux Desktop).
+-   **Modern UI**: Beautiful, responsive interfaces using Jetpack Compose (Android) and Tailwind CSS (Desktop).
 
 ## Why Connected?
 
@@ -104,7 +104,7 @@ In a world of walled gardens, moving a file from your phone to your computer sho
 ### Project Structure
 
 -   `core/`: Shared Rust logic (networking, discovery, encryption).
--   `desktop/`: Linux desktop application (Rust + Tauri-like WebView/UI logic).
+-   `desktop/`: Desktop application (Linux/Windows) (Rust + Tauri-like WebView/UI logic).
 -   `android/`: Native Android application (Kotlin + Jetpack Compose).
 -   `ffi/`: UniFFI bindings to expose the Rust `core` to Kotlin.
 
