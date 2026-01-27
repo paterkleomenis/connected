@@ -1401,7 +1401,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             .collect();
 
                                         // Find first playing, or just first one
-                                        let mut best_candidate: Option<(Option<String>, Option<String>, Option<String>, bool)> = None;
+                                        type MediaState = (Option<String>, Option<String>, Option<String>, bool);
+                                        let mut best_candidate: Option<MediaState> = None;
 
                                         for name in mpris_names {
                                             // Player::new takes (conn, bus_name, timeout_ms)
