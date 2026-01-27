@@ -1,5 +1,12 @@
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
+        // Attempt to copy WebView2Loader.dll to the target directory
+        copy_webview2_loader();
+
         let mut res = winres::WindowsResource::new();
         // Use absolute path to ensure windres finds it
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -46,5 +53,54 @@ fn main() {
         }
 
         res.compile().unwrap();
+    }
+}
+
+fn copy_webview2_loader() {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+
+    // Navigate up to the 'build' directory (target/release/build)
+    // Structure is usually: target/release/build/<package-name>-<hash>/out
+    let build_dir = match out_dir.parent().and_then(|p| p.parent()) {
+        Some(p) => p,
+        None => return,
+    };
+
+    // Look for webview2-com-sys-* directory
+    let entries = match fs::read_dir(build_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with("webview2-com-sys-") {
+            let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+            let arch_dir = match arch.as_str() {
+                "x86_64" => "x64",
+                "x86" => "x86",
+                "aarch64" => "arm64",
+                _ => continue,
+            };
+
+            let src_path = entry
+                .path()
+                .join("out")
+                .join(arch_dir)
+                .join("WebView2Loader.dll");
+            if src_path.exists() {
+                // Target directory is the parent of the build directory (target/release)
+                if let Some(target_dir) = build_dir.parent() {
+                    let dest_path = target_dir.join("WebView2Loader.dll");
+                    if let Err(e) = fs::copy(&src_path, &dest_path) {
+                        println!("cargo:warning=Failed to copy WebView2Loader.dll: {}", e);
+                    } else {
+                        println!("cargo:info=Copied WebView2Loader.dll to {:?}", dest_path);
+                    }
+                }
+                return;
+            }
+        }
     }
 }

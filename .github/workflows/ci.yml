@@ -69,11 +69,20 @@ jobs:
       - name: Build
         run: cargo build --release --verbose
 
+      - name: Install cargo-wix
+        run: cargo install cargo-wix
+
+      - name: Install WiX Toolset
+        uses: ssysum/setup-wix-cloud@v1
+
+      - name: Package
+        run: cargo wix --no-build --package connected-desktop --include packaging/windows/installer.wxs
+
       - name: Upload Windows Build
         uses: actions/upload-artifact@v4
         with:
           name: connected-desktop-windows
-          path: target/release/connected-desktop.exe
+          path: target/wix/*.msi
 
   # -------------------------------------------------------------------------
   # Job 3: Build Android App

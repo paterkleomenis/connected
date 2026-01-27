@@ -10,15 +10,15 @@
     <Media Id='1' Cabinet='connected.cab' EmbedCab='yes' />
 
     <Directory Id='TARGETDIR' Name='SourceDir'>
-        <Directory Id='ProgramFilesFolder' Name='PFiles'>
+        <Directory Id='ProgramFiles64Folder' Name='PFiles'>
             <Directory Id='INSTALLDIR' Name='Connected'>
                 <Component Id='MainExecutable' Guid='91635b4b-7cdb-454a-811f-25ddedf77271'>
-                    <File Id='ConnectedExe' Name='connected-desktop.exe' DiskId='1' Source='target/x86_64-pc-windows-gnu/release/connected-desktop.exe' KeyPath='yes'>
+                    <File Id='ConnectedExe' Name='connected-desktop.exe' DiskId='1' Source='target\release\connected-desktop.exe' KeyPath='yes'>
                         <Shortcut Id="startmenuConnected" Directory="ProgramMenuDir" Name="Connected" WorkingDirectory='INSTALLDIR' Icon="Connected.exe" IconIndex="0" Advertise="yes" />
                     </File>
                 </Component>
                 <Component Id='WebView2Loader' Guid='*'>
-                    <File Id='WebView2LoaderDll' Name='WebView2Loader.dll' DiskId='1' Source='target/x86_64-pc-windows-gnu/release/WebView2Loader.dll' KeyPath='yes' />
+                    <File Id='WebView2LoaderDll' Name='WebView2Loader.dll' DiskId='1' Source='target\release\WebView2Loader.dll' KeyPath='yes' />
                 </Component>
             </Directory>
         </Directory>
@@ -39,7 +39,7 @@
         <ComponentRef Id='ProgramMenuDir' />
     </Feature>
 
-    <Icon Id="Connected.exe" SourceFile="target/x86_64-pc-windows-gnu/release/connected-desktop.exe" />
+    <Icon Id="Connected.exe" SourceFile="target\release\connected-desktop.exe" />
 
     </Product>
 </Wix>
