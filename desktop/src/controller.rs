@@ -546,38 +546,31 @@ fn spawn_event_loop(
                                     {
                                         use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 
-                                        fn control_media_windows(
+                                        async fn control_media_windows(
                                             cmd: MediaCommand,
                                         ) -> windows::core::Result<()>
                                         {
-                                            let op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?;
-                                            let manager: GlobalSystemMediaTransportControlsSessionManager = op.get()?;
+                                            let manager: GlobalSystemMediaTransportControlsSessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
                                             let session = manager.GetCurrentSession()?;
 
                                             match cmd {
                                                 MediaCommand::Play => {
-                                                    let op = session.TryPlayAsync()?;
-                                                    op.get()?;
+                                                    session.TryPlayAsync()?.await?;
                                                 }
                                                 MediaCommand::Pause => {
-                                                    let op = session.TryPauseAsync()?;
-                                                    op.get()?;
+                                                    session.TryPauseAsync()?.await?;
                                                 }
                                                 MediaCommand::PlayPause => {
-                                                    let op = session.TryTogglePlayPauseAsync()?;
-                                                    op.get()?;
+                                                    session.TryTogglePlayPauseAsync()?.await?;
                                                 }
                                                 MediaCommand::Next => {
-                                                    let op = session.TrySkipNextAsync()?;
-                                                    op.get()?;
+                                                    session.TrySkipNextAsync()?.await?;
                                                 }
                                                 MediaCommand::Previous => {
-                                                    let op = session.TrySkipPreviousAsync()?;
-                                                    op.get()?;
+                                                    session.TrySkipPreviousAsync()?.await?;
                                                 }
                                                 MediaCommand::Stop => {
-                                                    let op = session.TryStopAsync()?;
-                                                    op.get()?;
+                                                    session.TryStopAsync()?.await?;
                                                 }
                                                 // Volume control is not directly available via SMTC session
                                                 _ => {}
@@ -585,7 +578,7 @@ fn spawn_event_loop(
                                             Ok(())
                                         }
 
-                                        if let Err(e) = control_media_windows(cmd) {
+                                        if let Err(e) = tokio::runtime::Handle::current().block_on(control_media_windows(cmd)) {
                                             warn!("Windows Media Control Error: {}", e);
                                         }
                                     }
@@ -1450,13 +1443,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager, GlobalSystemMediaTransportControlsSessionPlaybackStatus};
 
                                         type WindowsMediaState = (Option<String>, Option<String>, Option<String>, bool);
-                                        fn get_media_state_windows() -> windows::core::Result<Option<WindowsMediaState>> {
-                                            let op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?;
-                                            let manager: GlobalSystemMediaTransportControlsSessionManager = op.get()?;
+                                        async fn get_media_state_windows() -> windows::core::Result<Option<WindowsMediaState>> {
+                                            let manager: GlobalSystemMediaTransportControlsSessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
                                             let session = manager.GetCurrentSession()?;
 
-                                            let op_props = session.TryGetMediaPropertiesAsync()?;
-                                            let properties: windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties = op_props.get()?;
+                                            let properties: windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties = session.TryGetMediaPropertiesAsync()?.await?;
 
                                             let title = properties.Title()?;
                                             let artist = properties.Artist()?;
@@ -1475,7 +1466,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             Ok(Some((title_str, artist_str, album_str, playing)))
                                         }
 
-                                        get_media_state_windows().unwrap_or_default()
+                                        tokio::runtime::Handle::current().block_on(get_media_state_windows()).unwrap_or_default()
                                     }
                                     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
                                     {
