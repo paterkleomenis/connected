@@ -578,7 +578,9 @@ fn spawn_event_loop(
                                             Ok(())
                                         }
 
-                                        if let Err(e) = tokio::runtime::Handle::current().block_on(control_media_windows(cmd)) {
+                                        if let Err(e) = tokio::runtime::Handle::current()
+                                            .block_on(control_media_windows(cmd))
+                                        {
                                             warn!("Windows Media Control Error: {}", e);
                                         }
                                     }
