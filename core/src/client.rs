@@ -2165,26 +2165,57 @@ fn get_local_ip() -> Option<IpAddr> {
         })
         .collect();
 
-    // Priority 1: Wi-Fi or Ethernet interfaces (wlan, eth, en)
-    // Priority 2: Private IPs (192.168, 172.16-31, 10.)
-    // Priority 3: Any other IPv4
+    // Priority 1: Physical-looking interfaces (wlan, eth, en, wi-fi)
+    // EXCLUDING virtual adapters (vethernet, wsl, virtual, etc.)
+    let priority_names = ["wlan", "eth", "en", "wi-fi", "ethernet"];
+    let virtual_names = [
+        "vethernet",
+        "wsl",
+        "virtual",
+        "vbox",
+        "vmware",
+        "docker",
+        "tap",
+        "tun",
+        "br-",
+    ];
 
     ipv4_ifaces
         .iter()
         .find(|iface| {
             let name = iface.name.to_lowercase();
-            name.contains("wlan") || name.contains("eth") || name.contains("en")
+            let is_virtual = virtual_names.iter().any(|v| name.contains(v));
+            let is_priority = priority_names.iter().any(|p| name.contains(p));
+            is_priority && !is_virtual
         })
         .or_else(|| {
+            // Priority 2: 192.168.x.x (Most common home LAN)
             ipv4_ifaces.iter().find(|iface| {
                 if let IpAddr::V4(ipv4) = iface.ip() {
                     let octets = ipv4.octets();
-                    match octets[0] {
-                        192 => octets[1] == 168,
-                        172 => octets[1] >= 16 && octets[1] <= 31,
-                        10 => true,
-                        _ => false,
-                    }
+                    octets[0] == 192 && octets[1] == 168
+                } else {
+                    false
+                }
+            })
+        })
+        .or_else(|| {
+            // Priority 3: 10.x.x.x (Enterprise LAN, but also some VPNs)
+            ipv4_ifaces.iter().find(|iface| {
+                if let IpAddr::V4(ipv4) = iface.ip() {
+                    let octets = ipv4.octets();
+                    octets[0] == 10
+                } else {
+                    false
+                }
+            })
+        })
+        .or_else(|| {
+            // Priority 4: 172.16-31.x.x (Often Docker/WSL, so lower priority)
+            ipv4_ifaces.iter().find(|iface| {
+                if let IpAddr::V4(ipv4) = iface.ip() {
+                    let octets = ipv4.octets();
+                    octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31
                 } else {
                     false
                 }

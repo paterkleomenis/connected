@@ -858,7 +858,10 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
     };
 
     // Use default persistence path (None -> ~/.config/connected)
-    match ConnectedClient::new(name.clone(), device_type, 0, None).await {
+    // Use new_with_bind_all to listen on all interfaces (0.0.0.0)
+    // This is crucial for Windows/Linux with multiple interfaces (WSL, Docker, etc.)
+    // to ensure we receive traffic regardless of which IP was advertised.
+    match ConnectedClient::new_with_bind_all(name.clone(), device_type, 0, None).await {
         Ok(c) => {
             info!("Core initialized");
 

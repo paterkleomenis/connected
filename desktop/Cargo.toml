@@ -46,3 +46,6 @@ windows_firewall = "0.5.0"
 [features]
 default = ["proximity-ble"]
 proximity-ble = []
+
+[build-dependencies]
+winres = "0.1"

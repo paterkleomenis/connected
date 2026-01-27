@@ -232,7 +232,7 @@ fn ensure_firewall_rules() {
         .build();
 
     if let Err(e) = mdns_inbound.add_or_update() {
-        eprintln!("Failed to add/update mDNS inbound firewall rule: {}", e);
+        tracing::warn!("Failed to add/update mDNS inbound firewall rule: {}", e);
     }
 
     // mDNS Outbound: allow sending mDNS queries to port 5353
@@ -248,7 +248,7 @@ fn ensure_firewall_rules() {
         .build();
 
     if let Err(e) = mdns_outbound.add_or_update() {
-        eprintln!("Failed to add/update mDNS outbound firewall rule: {}", e);
+        tracing::warn!("Failed to add/update mDNS outbound firewall rule: {}", e);
     }
 
     // QUIC/UDP Inbound: allow incoming connections on any port for this application
@@ -264,7 +264,7 @@ fn ensure_firewall_rules() {
         .build();
 
     if let Err(e) = quic_inbound.add_or_update() {
-        eprintln!("Failed to add/update QUIC inbound firewall rule: {}", e);
+        tracing::warn!("Failed to add/update QUIC inbound firewall rule: {}", e);
     }
 
     // QUIC/UDP Outbound: allow outgoing connections on any port for this application
@@ -279,21 +279,28 @@ fn ensure_firewall_rules() {
         .build();
 
     if let Err(e) = quic_outbound.add_or_update() {
-        eprintln!("Failed to add/update QUIC outbound firewall rule: {}", e);
+        tracing::warn!("Failed to add/update QUIC outbound firewall rule: {}", e);
     }
 }
 
 fn main() {
-    #[cfg(target_os = "windows")]
-    ensure_firewall_rules();
-
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
+    #[cfg(target_os = "windows")]
+    ensure_firewall_rules();
+
     // Platform-specific window settings
     let decorations = cfg!(target_os = "windows");
     let transparent = !cfg!(target_os = "windows");
+
+    let data_dir = dirs::data_local_dir().map(|d| d.join("connected"));
+    if let Some(d) = &data_dir {
+        if !d.exists() {
+            let _ = std::fs::create_dir_all(d);
+        }
+    }
 
     #[allow(unused_mut)]
     let mut config = dioxus::desktop::Config::new()
@@ -307,6 +314,11 @@ fn main() {
         )
         .with_menu(None)
         .with_disable_context_menu(true);
+
+    if let Some(d) = data_dir {
+        config = config.with_data_directory(d);
+    }
+
     #[cfg(target_os = "linux")]
     {
         config = config.with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides);
