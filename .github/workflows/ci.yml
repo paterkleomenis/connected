@@ -69,14 +69,14 @@ jobs:
       - name: Build
         run: cargo build --release --verbose
 
-      - name: Install cargo-wix
-        run: cargo install cargo-wix
+      - name: Install WiX 4
+        run: dotnet tool install --global wix
 
-      - name: Install WiX Toolset
-        uses: ssysum/setup-wix-cloud@v1
+      - name: Create WiX Output Directory
+        run: mkdir target/wix
 
       - name: Package
-        run: cargo wix --no-build --package connected-desktop --include packaging/windows/installer.wxs
+        run: wix build packaging/windows/installer.wxs -o target/wix/connected-desktop.msi
 
       - name: Upload Windows Build
         uses: actions/upload-artifact@v4

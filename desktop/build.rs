@@ -95,8 +95,6 @@ fn copy_webview2_loader() {
                     let dest_path = target_dir.join("WebView2Loader.dll");
                     if let Err(e) = fs::copy(&src_path, &dest_path) {
                         println!("cargo:warning=Failed to copy WebView2Loader.dll: {}", e);
-                    } else {
-                        println!("cargo:info=Copied WebView2Loader.dll to {:?}", dest_path);
                     }
                 }
                 return;
