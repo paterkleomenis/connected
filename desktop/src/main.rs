@@ -18,7 +18,6 @@ use components::{DeviceCard, FileBrowser, FileDialog, Icon, IconType};
 use connected_core::telephony::{ActiveCallState, CallAction};
 use connected_core::{MediaCommand, UpdateInfo};
 use controller::{AppAction, app_controller};
-#[cfg(target_os = "linux")]
 use dioxus::desktop::use_window;
 use dioxus::prelude::*;
 
@@ -197,6 +196,19 @@ fn load_icon() -> dioxus::desktop::tao::window::Icon {
 }
 
 #[cfg(target_os = "windows")]
+fn load_tray_icon() -> dioxus::desktop::trayicon::Icon {
+    let icon_bytes = include_bytes!("../assets/logo.png");
+    let reader = ImageReader::new(Cursor::new(icon_bytes))
+        .with_guessed_format()
+        .expect("Failed to detect icon format");
+    let image = reader.decode().expect("Failed to decode icon");
+    let rgba = image.into_rgba8();
+    let (width, height) = rgba.dimensions();
+    dioxus::desktop::trayicon::Icon::from_rgba(rgba.into_raw(), width, height)
+        .expect("Failed to create tray icon")
+}
+
+#[cfg(target_os = "windows")]
 fn ensure_firewall_rules() {
     use std::env;
     use windows_firewall::{
@@ -322,7 +334,7 @@ fn main() {
         config = config.with_data_directory(d);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         config = config.with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides);
     }
@@ -470,6 +482,40 @@ fn App() -> Element {
             }
         });
     });
+
+    #[cfg(target_os = "windows")]
+    {
+        use dioxus::desktop::trayicon::menu::{Menu, MenuItem, PredefinedMenuItem};
+
+        let window = use_window();
+        let window = window.window.clone();
+
+        let (show_id, hide_id, quit_id) = use_hook(|| {
+            let menu = Menu::new();
+            let show = MenuItem::new("Show Connected", true, None);
+            let hide = MenuItem::new("Hide Connected", true, None);
+            let quit = MenuItem::new("Quit", true, None);
+
+            menu.append_items(&[&show, &hide, &PredefinedMenuItem::separator(), &quit])
+                .expect("Failed to build tray menu");
+
+            dioxus::desktop::trayicon::init_tray_icon(menu, Some(load_tray_icon()));
+
+            (show.id().clone(), hide.id().clone(), quit.id().clone())
+        });
+
+        dioxus::desktop::use_tray_menu_event_handler(move |event| {
+            if event.id == show_id {
+                window.set_visible(true);
+                window.set_minimized(false);
+                window.set_focus();
+            } else if event.id == hide_id {
+                window.set_visible(false);
+            } else if event.id == quit_id {
+                std::process::exit(0);
+            }
+        });
+    }
 
     #[cfg(target_os = "linux")]
     {

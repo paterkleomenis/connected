@@ -1,5 +1,6 @@
 use crate::components::icon::{Icon, IconType};
 use crate::state::DeviceInfo;
+use dioxus::html::HasFileData;
 use dioxus::prelude::*;
 
 #[component]
@@ -11,15 +12,37 @@ pub fn FileDialog(
 ) -> Element {
     let mut file_path = use_signal(String::new);
     let mut drag_over = use_signal(|| false);
+    let mut is_browsing = use_signal(|| false);
 
     let browse_file = move |_| {
-        if is_folder {
-            if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                file_path.set(path.display().to_string());
-            }
-        } else if let Some(path) = rfd::FileDialog::new().pick_file() {
-            file_path.set(path.display().to_string());
+        if *is_browsing.read() {
+            return;
         }
+        is_browsing.set(true);
+
+        let mut file_path = file_path;
+        let mut drag_over = drag_over;
+        let mut is_browsing = is_browsing;
+
+        // On Windows, the sync dialog can fail to open if COM is already initialized in a
+        // different apartment mode on the UI thread (common with WebView-based apps).
+        // The async dialog runs on a dedicated thread and avoids freezing/crashing the UI.
+        spawn(async move {
+            let dialog = rfd::AsyncFileDialog::new();
+
+            let selected = if is_folder {
+                dialog.pick_folder().await
+            } else {
+                dialog.pick_file().await
+            };
+
+            if let Some(handle) = selected {
+                file_path.set(handle.path().display().to_string());
+                drag_over.set(false);
+            }
+
+            is_browsing.set(false);
+        });
     };
 
     let device_name = device
@@ -95,6 +118,25 @@ pub fn FileDialog(
                         },
                         ondragleave: move |_| {
                             drag_over.set(false);
+                        },
+                        ondrop: move |evt| {
+                            evt.prevent_default();
+                            drag_over.set(false);
+
+                            let dropped = evt
+                                .data()
+                                .as_ref()
+                                .files()
+                                .into_iter()
+                                .next()
+                                .map(|f| f.path());
+
+                            if let Some(path) = dropped {
+                                let ok = if is_folder { path.is_dir() } else { path.is_file() };
+                                if ok {
+                                    file_path.set(path.display().to_string());
+                                }
+                            }
                         },
 
                         if !has_file {
