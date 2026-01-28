@@ -98,6 +98,8 @@ configure<ApplicationExtension> {
     // Configure where to find the native libraries (.so files)
     sourceSets {
         getByName("main") {
+            java.srcDirs("src/main/java", "src/main/kotlin")
+            java.srcDir(layout.buildDirectory.dir("generated/source/uniffi"))
             jniLibs.directories.add("src/main/jniLibs")
         }
     }
@@ -172,6 +174,8 @@ tasks.register<Exec>("buildRustRelease") {
 // It doesn't matter which architecture, as long as the API is the same.
 tasks.register<Exec>("generateBindings") {
     workingDir = file("${project.rootDir}/..")
+    val outputDir = layout.buildDirectory.dir("generated/source/uniffi")
+    outputs.dir(outputDir)
     // Use the x86_64 debug lib for generation speed/convenience during debug builds
     commandLine("cargo", "run", "--release",
         "-p", "connected-ffi",
@@ -180,7 +184,7 @@ tasks.register<Exec>("generateBindings") {
         "generate",
         "--library", "target/aarch64-linux-android/debug/libconnected_ffi.so",
         "--language", "kotlin",
-        "--out-dir", "${project.projectDir}/src/main/kotlin",
+        "--out-dir", outputDir.get().asFile.absolutePath,
         "--no-format"
     )
     // Ensure the library exists before generating bindings.
@@ -190,6 +194,8 @@ tasks.register<Exec>("generateBindings") {
 
 tasks.register<Exec>("generateBindingsRelease") {
     workingDir = file("${project.rootDir}/..")
+    val outputDir = layout.buildDirectory.dir("generated/source/uniffi")
+    outputs.dir(outputDir)
     // Use the aarch64 release lib for generation
     commandLine("cargo", "run", "--release",
         "-p", "connected-ffi",
@@ -198,7 +204,7 @@ tasks.register<Exec>("generateBindingsRelease") {
         "generate",
         "--library", "target/aarch64-linux-android/release/libconnected_ffi.so",
         "--language", "kotlin",
-        "--out-dir", "${project.projectDir}/src/main/kotlin",
+        "--out-dir", outputDir.get().asFile.absolutePath,
         "--no-format"
     )
     dependsOn("buildRustRelease")
@@ -210,5 +216,14 @@ afterEvaluate {
     }
     tasks.named("preReleaseBuild").configure {
         dependsOn("generateBindingsRelease")
+    }
+
+    // Ensure Kotlin compilation waits for bindings generation
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        if (name.contains("Debug", ignoreCase = true)) {
+            dependsOn("generateBindings")
+        } else if (name.contains("Release", ignoreCase = true)) {
+            dependsOn("generateBindingsRelease")
+        }
     }
 }
