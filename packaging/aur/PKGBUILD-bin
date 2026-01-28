@@ -1,7 +1,7 @@
 # Maintainer: Pater Kleomenis <paterkleomenis@gmail.com>
 pkgname=connected-desktop-bin
 _pkgname=connected-desktop
-pkgver=1.0.1
+pkgver=1.0.4
 pkgrel=1
 pkgdesc="High-speed, offline, cross-platform ecosystem bridging devices (Binary)"
 arch=('x86_64')
@@ -11,9 +11,13 @@ depends=('gtk3' 'webkit2gtk-4.1' 'libappindicator-gtk3' 'openssl' 'dbus')
 provides=("$_pkgname")
 conflicts=("$_pkgname" "$_pkgname-git")
 source=("https://github.com/paterkleomenis/connected/releases/download/v${pkgver}/connected-desktop"
-        "https://raw.githubusercontent.com/paterkleomenis/connected/main/desktop/assets/connected-desktop.desktop"
-        "https://raw.githubusercontent.com/paterkleomenis/connected/main/android/app/src/main/ic_launcher-playstore.png")
+        "connected-desktop.desktop"
+        "ic_launcher-playstore.png"
+        "LICENSE-MIT"
+        "LICENSE-APACHE")
 sha256sums=('SKIP'
+            'SKIP'
+            'SKIP'
             'SKIP'
             'SKIP')
 
@@ -26,4 +30,8 @@ package() {
 
   # Install Icon
   install -Dm644 "ic_launcher-playstore.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/connected-desktop.png"
+
+  # Install licenses
+  install -Dm644 "LICENSE-MIT" "$pkgdir/usr/share/licenses/$_pkgname/LICENSE-MIT"
+  install -Dm644 "LICENSE-APACHE" "$pkgdir/usr/share/licenses/$_pkgname/LICENSE-APACHE"
 }
