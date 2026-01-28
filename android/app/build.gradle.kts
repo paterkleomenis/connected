@@ -24,7 +24,7 @@ val ndkDir = File(sdkDir, "ndk").listFiles()
     ?: throw GradleException("NDK not found in ${File(sdkDir, "ndk")}")
 
 val latestNdkVersion: String = ndkDir.name
-val uniffiGenDir = layout.buildDirectory.dir("generated/uniffi")
+val uniffiGenDir = file("$buildDir/generated/uniffi")
 
 kotlin {
     compilerOptions {
@@ -101,7 +101,7 @@ configure<ApplicationExtension> {
         getByName("main") {
             jniLibs.directories.add("src/main/jniLibs")
             // Generated UniFFI bindings
-            java.srcDir(uniffiGenDir)
+            java.srcDirs(uniffiGenDir)
         }
     }
 }
@@ -175,7 +175,7 @@ tasks.register<Exec>("buildRustRelease") {
 // It doesn't matter which architecture, as long as the API is the same.
 tasks.register<Exec>("generateBindings") {
     workingDir = file("${project.rootDir}/..")
-    val outDir = uniffiGenDir.get().asFile
+    val outDir = uniffiGenDir
     // Use the x86_64 debug lib for generation speed/convenience during debug builds
     commandLine("cargo", "run", "--release",
         "-p", "connected-ffi",
@@ -195,7 +195,7 @@ tasks.register<Exec>("generateBindings") {
 
 tasks.register<Exec>("generateBindingsRelease") {
     workingDir = file("${project.rootDir}/..")
-    val outDir = uniffiGenDir.get().asFile
+    val outDir = uniffiGenDir
     // Use the aarch64 release lib for generation
     commandLine("cargo", "run", "--release",
         "-p", "connected-ffi",
