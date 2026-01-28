@@ -1,3 +1,4 @@
+import groovy.json.JsonSlurper
 import java.io.File
 
 pluginManagement {
@@ -27,12 +28,13 @@ fun rustlsPlatformVerifierRepo(settingsDir: File): File {
         )
     }.standardOutput.asText.get()
 
-    val regex = Regex(
-        "\"name\"\\s*:\\s*\"rustls-platform-verifier-android\"[\\s\\S]*?\"manifest_path\"\\s*:\\s*\"([^\"]+)\""
-    )
-    val match = regex.find(metadata)
+    @Suppress("UNCHECKED_CAST")
+    val json = JsonSlurper().parseText(metadata) as Map<String, Any?>
+    @Suppress("UNCHECKED_CAST")
+    val packages = json["packages"] as? List<Map<String, Any?>> ?: emptyList()
+    val manifestPath = packages.firstOrNull { it["name"] == "rustls-platform-verifier-android" }
+        ?.get("manifest_path") as? String
         ?: error("rustls-platform-verifier-android manifest path not found in cargo metadata")
-    val manifestPath = match.groupValues[1].replace("\\\\", "\\")
     return File(manifestPath).parentFile.resolve("maven")
 }
 
