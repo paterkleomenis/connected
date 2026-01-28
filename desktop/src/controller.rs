@@ -391,23 +391,23 @@ fn spawn_event_loop(
                         timestamp: Instant::now(),
                     });
                 }
-	                ConnectedEvent::MediaControl { from_device, event } => {
-	                    info!("EVENT: Received MediaControl event from {}", from_device);
-	                    // Only process if media control is enabled locally
-	                    if *get_media_enabled().lock().unwrap() {
-	                        match event {
-	                            MediaControlMessage::Command(cmd) => {
-	                                info!("COMMAND: Executing {:?} from {}", cmd, from_device);
+                ConnectedEvent::MediaControl { from_device, event } => {
+                    info!("EVENT: Received MediaControl event from {}", from_device);
+                    // Only process if media control is enabled locally
+                    if *get_media_enabled().lock().unwrap() {
+                        match event {
+                            MediaControlMessage::Command(cmd) => {
+                                info!("COMMAND: Executing {:?} from {}", cmd, from_device);
 
-	                                // Execute command via MPRIS with manual scan
-	                                #[cfg(target_os = "linux")]
-	                                let _last_player_identity = last_player_identity.clone();
-	                                #[cfg(target_os = "windows")]
-	                                let runtime_handle = tokio::runtime::Handle::current();
-	                                tokio::task::spawn_blocking(move || {
-	                                    #[cfg(target_os = "linux")]
-	                                    {
-	                                        let last_identity = _last_player_identity.clone();
+                                // Execute command via MPRIS with manual scan
+                                #[cfg(target_os = "linux")]
+                                let _last_player_identity = last_player_identity.clone();
+                                #[cfg(target_os = "windows")]
+                                let runtime_handle = tokio::runtime::Handle::current();
+                                tokio::task::spawn_blocking(move || {
+                                    #[cfg(target_os = "linux")]
+                                    {
+                                        let last_identity = _last_player_identity.clone();
                                         use dbus::ffidisp::{BusType, Connection};
                                         use mpris::Player;
                                         use std::rc::Rc;
@@ -549,10 +549,10 @@ fn spawn_event_loop(
                                         } else {
                                             warn!("No controllable media player found");
                                         }
-	                                    }
-	                                    #[cfg(target_os = "windows")]
-	                                    {
-	                                        use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
+                                    }
+                                    #[cfg(target_os = "windows")]
+                                    {
+                                        use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 
                                         async fn control_media_windows(
                                             cmd: MediaCommand,
@@ -583,16 +583,17 @@ fn spawn_event_loop(
                                                 // Volume control is not directly available via SMTC session
                                                 _ => {}
                                             }
-	                                            Ok(())
-	                                        }
+                                            Ok(())
+                                        }
 
-	                                        if let Err(e) = runtime_handle.block_on(control_media_windows(cmd))
-	                                        {
-	                                            warn!("Windows Media Control Error: {}", e);
-	                                        }
-	                                    }
-	                                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-	                                    {
+                                        if let Err(e) =
+                                            runtime_handle.block_on(control_media_windows(cmd))
+                                        {
+                                            warn!("Windows Media Control Error: {}", e);
+                                        }
+                                    }
+                                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+                                    {
                                         warn!("Media control not implemented for this OS");
                                     }
                                 });
@@ -1351,16 +1352,16 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             let mut interval =
                                 tokio::time::interval(std::time::Duration::from_secs(1));
                             let mut last_title = String::new();
-	                            let mut last_playing = false;
+                            let mut last_playing = false;
 
-	                            // We need to check the atomic flag in the loop
-	                            while *get_media_enabled().lock().unwrap() {
-	                                interval.tick().await;
+                            // We need to check the atomic flag in the loop
+                            while *get_media_enabled().lock().unwrap() {
+                                interval.tick().await;
 
-	                                #[cfg(target_os = "windows")]
-	                                let runtime_handle = tokio::runtime::Handle::current();
+                                #[cfg(target_os = "windows")]
+                                let runtime_handle = tokio::runtime::Handle::current();
 
-	                                let state_update: Option<MediaPollStateUpdate> =
+                                let state_update: Option<MediaPollStateUpdate> =
 	                                    tokio::task::spawn_blocking(move || -> Option<MediaPollStateUpdate> {
 	                                    #[cfg(target_os = "linux")]
 	                                    {
