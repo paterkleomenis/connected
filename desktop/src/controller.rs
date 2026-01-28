@@ -1851,7 +1851,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             // "start" is a shell builtin, so we need cmd /c
                             // Also need to handle special chars potentially, but URL should be fine
                             let _ = std::process::Command::new("cmd")
-                                .args(&["/C", "start", "", &url])
+                                .args(["/C", "start", "", &url])
                                 .spawn();
                         }
                     } else {
