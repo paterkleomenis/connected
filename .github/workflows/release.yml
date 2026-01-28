@@ -142,28 +142,48 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: connected-linux
+          path: connected-linux
 
       - name: Download Windows Artifact
         uses: actions/download-artifact@v4
         with:
           name: connected-windows
+          path: connected-windows
 
       - name: Download Android Artifact
         uses: actions/download-artifact@v4
         with:
           name: connected-android
+          path: connected-android
 
       - name: Collect Release Assets
         shell: bash
         run: |
           set -euo pipefail
 
-          # download-artifact v4 extracts each artifact into its own directory by default.
-          mv connected-linux/connected-desktop connected-desktop
-          mv connected-windows/connected-desktop.msi connected-desktop.msi
+          linux_bin="$(find connected-linux -type f -name connected-desktop | head -n 1 || true)"
+          if [[ -z "${linux_bin}" ]]; then
+            echo "ERROR: Linux binary 'connected-desktop' not found in downloaded artifact." >&2
+            find connected-linux -maxdepth 4 -type f -print >&2 || true
+            exit 1
+          fi
+          mv "${linux_bin}" connected-desktop
 
-          apk_path="$(ls -1 connected-android/*.apk | head -n 1)"
-          mv "$apk_path" connected-android.apk
+          msi_path="$(find connected-windows -type f -name connected-desktop.msi | head -n 1 || true)"
+          if [[ -z "${msi_path}" ]]; then
+            echo "ERROR: Windows MSI 'connected-desktop.msi' not found in downloaded artifact." >&2
+            find connected-windows -maxdepth 6 -type f -print >&2 || true
+            exit 1
+          fi
+          mv "${msi_path}" connected-desktop.msi
+
+          apk_path="$(find connected-android -type f -name '*.apk' | head -n 1 || true)"
+          if [[ -z "${apk_path}" ]]; then
+            echo "ERROR: Android APK not found in downloaded artifact." >&2
+            find connected-android -maxdepth 10 -type f -print >&2 || true
+            exit 1
+          fi
+          mv "${apk_path}" connected-android.apk
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
