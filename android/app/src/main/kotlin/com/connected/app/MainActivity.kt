@@ -1094,6 +1094,133 @@ fun SettingsScreen(
             }
         }
 
+        // App Update Section
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            painterResource(R.drawable.ic_download),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text("App Updates", style = MaterialTheme.typography.titleMedium)
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    var checkingForUpdate by remember { mutableStateOf(false) }
+                    var updateInfo by remember { mutableStateOf<uniffi.connected_ffi.UpdateInfo?>(null) }
+                    var isDownloading by remember { mutableStateOf(false) }
+                    var downloadProgress by remember { mutableStateOf(0) }
+                    val scope = rememberCoroutineScope()
+
+                    if (updateInfo == null) {
+                        Button(
+                            onClick = {
+                                checkingForUpdate = true
+                                scope.launch {
+                                    updateInfo = connectedApp.checkForUpdates()
+                                    checkingForUpdate = false
+                                    if (updateInfo?.hasUpdate == false) {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "No updates available",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            },
+                            enabled = !checkingForUpdate,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (checkingForUpdate) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Checking...")
+                            } else {
+                                Text("Check for Updates")
+                            }
+                        }
+                    } else if (updateInfo!!.hasUpdate) {
+                        Text(
+                            "New version available: ${updateInfo!!.latestVersion}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        if (updateInfo!!.releaseNotes != null) {
+                            Text(
+                                updateInfo!!.releaseNotes!!,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+
+                        if (isDownloading) {
+                            LinearProgressIndicator(
+                                progress = downloadProgress / 100f,
+                                modifier = Modifier.fillMaxWidth().height(8.dp),
+                            )
+                            Text(
+                                "Downloading: $downloadProgress%",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.align(Alignment.End)
+                            )
+                        } else {
+                            Button(
+                                onClick = {
+                                    val url = updateInfo!!.downloadUrl
+                                    if (url != null) {
+                                        isDownloading = true
+                                        connectedApp.downloadUpdate(url, { progress ->
+                                            downloadProgress = progress
+                                        }, { file ->
+                                            isDownloading = false
+                                            if (file != null) {
+                                                connectedApp.installApk(file)
+                                            } else {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "Download failed",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        })
+                                    } else {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "No download URL found",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Download & Install")
+                            }
+                        }
+                    } else {
+                        Text("You are on the latest version.")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = { updateInfo = null },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Check Again")
+                        }
+                    }
+                }
+            }
+        }
+
     }
 }
 

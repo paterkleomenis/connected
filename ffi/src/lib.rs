@@ -2073,7 +2073,7 @@ pub fn send_active_call_update(
 // ============================================================================
 
 #[derive(Debug, Clone, uniffi::Record)]
-pub struct FfiUpdateInfo {
+pub struct UpdateInfo {
     pub has_update: bool,
     pub latest_version: String,
     pub current_version: String,
@@ -2081,7 +2081,7 @@ pub struct FfiUpdateInfo {
     pub release_notes: Option<String>,
 }
 
-impl From<connected_core::UpdateInfo> for FfiUpdateInfo {
+impl From<connected_core::UpdateInfo> for UpdateInfo {
     fn from(u: connected_core::UpdateInfo) -> Self {
         Self {
             has_update: u.has_update,
@@ -2097,7 +2097,7 @@ impl From<connected_core::UpdateInfo> for FfiUpdateInfo {
 pub fn check_for_updates(
     current_version: String,
     platform: String,
-) -> Result<FfiUpdateInfo, ConnectedFfiError> {
+) -> Result<UpdateInfo, ConnectedFfiError> {
     get_runtime()
         .block_on(async {
             connected_core::UpdateChecker::check_for_updates(current_version, platform).await

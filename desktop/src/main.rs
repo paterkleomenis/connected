@@ -284,6 +284,11 @@ fn ensure_firewall_rules() {
 }
 
 fn main() {
+    // Explicitly select the Rustls crypto provider to avoid runtime ambiguity.
+    if let Err(err) = rustls::crypto::ring::default_provider().install_default() {
+        eprintln!("Failed to install rustls ring provider: {err:?}");
+    }
+
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();

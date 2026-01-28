@@ -37,7 +37,9 @@ import uniffi.connected_ffi.PairingCallback
 import uniffi.connected_ffi.SmsStatus
 import uniffi.connected_ffi.TelephonyCallback
 import uniffi.connected_ffi.UnpairCallback
+import uniffi.connected_ffi.UpdateInfo
 import uniffi.connected_ffi.acceptFileTransfer
+import uniffi.connected_ffi.checkForUpdates
 import uniffi.connected_ffi.forgetDeviceById
 import uniffi.connected_ffi.getDiscoveredDevices
 import uniffi.connected_ffi.initialize
@@ -1977,6 +1979,74 @@ class ConnectedApp(private val context: Context) {
                 val intent = Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(intent)
+            }
+        }
+    }
+
+    suspend fun checkForUpdates(): UpdateInfo? {
+        return try {
+            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            val currentVersion = packageInfo.versionName ?: "0.0.0"
+            checkForUpdates(currentVersion, "android")
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to check for updates", e)
+            null
+        }
+    }
+
+    fun downloadUpdate(url: String, onProgress: (Int) -> Unit, onComplete: (File?) -> Unit) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val request = java.net.URL(url)
+                val connection = request.openConnection() as java.net.HttpURLConnection
+                connection.connect()
+
+                val fileLength = connection.contentLength
+                val input = java.io.BufferedInputStream(connection.inputStream)
+                val outputFile =
+                    File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "update.apk")
+                val output = FileOutputStream(outputFile)
+
+                val data = ByteArray(1024)
+                var total: Long = 0
+                var count: Int
+                while (input.read(data).also { count = it } != -1) {
+                    total += count.toLong()
+                    if (fileLength > 0) {
+                        onProgress((total * 100 / fileLength).toInt())
+                    }
+                    output.write(data, 0, count)
+                }
+
+                output.flush()
+                output.close()
+                input.close()
+
+                runOnMainThread { onComplete(outputFile) }
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Update download failed", e)
+                runOnMainThread { onComplete(null) }
+            }
+        }
+    }
+
+    fun installApk(file: File) {
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.provider",
+                file
+            )
+            val intent = Intent(Intent.ACTION_VIEW)
+            intent.setDataAndType(uri, "application/vnd.android.package-archive")
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Install APK failed", e)
+            runOnMainThread {
+                android.widget.Toast.makeText(context, "Install failed: ${e.message}", android.widget.Toast.LENGTH_LONG)
+                    .show()
             }
         }
     }
