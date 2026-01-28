@@ -7,11 +7,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-abstract class UniFFIBindgenTask : Exec() {
-    @get:OutputDirectory
-    abstract val outputDir: DirectoryProperty
-}
-
 // Helper to find SDK and NDK
 val sdkDir = project.rootProject.file("local.properties").let { localProps ->
     if (localProps.exists()) {
@@ -103,25 +98,10 @@ configure<ApplicationExtension> {
     // Configure where to find the native libraries (.so files)
     sourceSets {
         getByName("main") {
-            java.directories.add("src/main/java")
-            java.directories.add("src/main/kotlin")
+            java.srcDirs("src/main/java", "src/main/kotlin")
+            java.srcDir(layout.buildDirectory.dir("generated/source/uniffi"))
             jniLibs.directories.add("src/main/jniLibs")
         }
-    }
-}
-
-androidComponents {
-    onVariants { variant ->
-        val bindingTask = if (variant.name.contains("release", ignoreCase = true)) {
-            tasks.named<UniFFIBindgenTask>("generateBindingsRelease")
-        } else {
-            tasks.named<UniFFIBindgenTask>("generateBindings")
-        }
-
-        variant.sources.java?.addGeneratedSourceDirectory(
-            bindingTask,
-            UniFFIBindgenTask::outputDir
-        )
     }
 }
 
@@ -192,9 +172,10 @@ tasks.register<Exec>("buildRustRelease") {
 // Generate UniFFI Kotlin bindings (using bundled uniffi-bindgen)
 // We use the library built for x86_64 (emulator) or arm64 as a reference for generation.
 // It doesn't matter which architecture, as long as the API is the same.
-tasks.register<UniFFIBindgenTask>("generateBindings") {
+tasks.register<Exec>("generateBindings") {
     workingDir = file("${project.rootDir}/..")
-    outputDir.set(layout.buildDirectory.dir("generated/source/uniffi"))
+    val outputDir = layout.buildDirectory.dir("generated/source/uniffi")
+    outputs.dir(outputDir)
     // Use the x86_64 debug lib for generation speed/convenience during debug builds
     commandLine("cargo", "run", "--release",
         "-p", "connected-ffi",
@@ -211,9 +192,10 @@ tasks.register<UniFFIBindgenTask>("generateBindings") {
     dependsOn("buildRustDebug")
 }
 
-tasks.register<UniFFIBindgenTask>("generateBindingsRelease") {
+tasks.register<Exec>("generateBindingsRelease") {
     workingDir = file("${project.rootDir}/..")
-    outputDir.set(layout.buildDirectory.dir("generated/source/uniffi"))
+    val outputDir = layout.buildDirectory.dir("generated/source/uniffi")
+    outputs.dir(outputDir)
     // Use the aarch64 release lib for generation
     commandLine("cargo", "run", "--release",
         "-p", "connected-ffi",
