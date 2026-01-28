@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -21,6 +22,22 @@ type PendingTransferSender = oneshot::Sender<bool>;
 const EVENT_CHANNEL_CAPACITY: usize = 100;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIRING_MODE_TIMEOUT: Duration = Duration::from_secs(120);
+
+static RUSTLS_PROVIDER_INIT: OnceLock<()> = OnceLock::new();
+
+fn init_rustls_provider() -> Result<()> {
+    RUSTLS_PROVIDER_INIT.get_or_try_init(|| {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .map_err(|e| {
+                ConnectedError::InitializationError(format!(
+                    "Rustls crypto provider init failed: {e}"
+                ))
+            })?;
+        Ok(())
+    })?;
+    Ok(())
+}
 
 pub struct ConnectedClient {
     local_device: Device,
@@ -124,6 +141,8 @@ impl ConnectedClient {
         bind_ip: IpAddr,
         storage_path: Option<PathBuf>,
     ) -> Result<Arc<Self>> {
+        init_rustls_provider()?;
+
         // Load KeyStore first to get the persisted device_id
         let key_store = Arc::new(RwLock::new(KeyStore::new(storage_path.clone())?));
         let device_id = key_store.read().device_id().to_string();
