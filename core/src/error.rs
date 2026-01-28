@@ -85,6 +85,9 @@ pub enum ConnectedError {
 
     #[error("Not implemented")]
     NotImplemented,
+
+    #[error("Network error: {0}")]
+    Network(String),
 }
 
 pub type Result<T> = std::result::Result<T, ConnectedError>;

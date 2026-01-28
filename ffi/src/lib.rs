@@ -2068,4 +2068,42 @@ pub fn send_active_call_update(
     Ok(())
 }
 
+// ============================================================================
+// Update Support
+// ============================================================================
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiUpdateInfo {
+    pub has_update: bool,
+    pub latest_version: String,
+    pub current_version: String,
+    pub download_url: Option<String>,
+    pub release_notes: Option<String>,
+}
+
+impl From<connected_core::UpdateInfo> for FfiUpdateInfo {
+    fn from(u: connected_core::UpdateInfo) -> Self {
+        Self {
+            has_update: u.has_update,
+            latest_version: u.latest_version,
+            current_version: u.current_version,
+            download_url: u.download_url,
+            release_notes: u.release_notes,
+        }
+    }
+}
+
+#[uniffi::export]
+pub fn check_for_updates(
+    current_version: String,
+    platform: String,
+) -> Result<FfiUpdateInfo, ConnectedFfiError> {
+    get_runtime()
+        .block_on(async {
+            connected_core::UpdateChecker::check_for_updates(current_version, platform).await
+        })
+        .map(|u| u.into())
+        .map_err(|e| ConnectedFfiError::ConnectionError { msg: e.to_string() })
+}
+
 uniffi::setup_scaffolding!();

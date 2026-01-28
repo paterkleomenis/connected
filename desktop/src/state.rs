@@ -1,6 +1,6 @@
 use connected_core::filesystem::FsEntry;
 use connected_core::telephony::{ActiveCall, CallLogEntry, Contact, Conversation, SmsMessage};
-use connected_core::{Device, MediaState};
+use connected_core::{Device, MediaState, UpdateInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -184,6 +184,7 @@ static CURRENT_MEDIA: OnceLock<Arc<Mutex<Option<RemoteMedia>>>> = OnceLock::new(
 static LAST_REMOTE_MEDIA_DEVICE_ID: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
 static THUMBNAILS: OnceLock<ThumbnailsMap> = OnceLock::new();
 static THUMBNAILS_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
+static UPDATE_INFO: OnceLock<Arc<Mutex<Option<UpdateInfo>>>> = OnceLock::new();
 
 type ThumbnailsMap = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 type MessagesMap = Arc<Mutex<HashMap<String, Vec<SmsMessage>>>>;
@@ -366,6 +367,10 @@ pub fn get_thumbnails() -> &'static ThumbnailsMap {
 
 pub fn get_thumbnails_update() -> &'static Arc<Mutex<std::time::Instant>> {
     THUMBNAILS_UPDATE.get_or_init(|| Arc::new(Mutex::new(std::time::Instant::now())))
+}
+
+pub fn get_update_info() -> &'static Arc<Mutex<Option<UpdateInfo>>> {
+    UPDATE_INFO.get_or_init(|| Arc::new(Mutex::new(None)))
 }
 
 // Telephony getters

@@ -15,8 +15,8 @@ use state::{
 };
 
 use components::{DeviceCard, FileBrowser, FileDialog, Icon, IconType};
-use connected_core::MediaCommand;
 use connected_core::telephony::{ActiveCallState, CallAction};
+use connected_core::{MediaCommand, UpdateInfo};
 use controller::{AppAction, app_controller};
 #[cfg(target_os = "linux")]
 use dioxus::desktop::use_window;
@@ -367,6 +367,7 @@ fn App() -> Element {
     let mut last_message_count = use_signal(|| 0usize);
     let mut sms_compose_text = use_signal(String::new);
     let mut active_call = use_signal(|| None::<connected_core::telephony::ActiveCall>);
+    let mut update_info = use_signal(|| None::<UpdateInfo>);
 
     // Auto-sync settings (loaded from persistent storage)
     let mut auto_sync_messages = use_signal(get_auto_sync_messages);
@@ -621,6 +622,12 @@ fn App() -> Element {
             }
 
             pairing_mode.set(*get_pairing_mode_state().lock().unwrap());
+
+            // Update Info
+            {
+                let info = get_update_info().lock().unwrap().clone();
+                update_info.set(info);
+            }
 
             // Clipboard Sync Check
             if *clipboard_sync_enabled.read() {
@@ -1775,6 +1782,54 @@ fn App() -> Element {
                 if *active_tab.read() == "settings" {
                     div {
                         class: "settings-section",
+                        div {
+                            class: "info-card",
+                            h3 {
+                                Icon { icon: IconType::Refresh, size: 20, color: "currentColor".to_string() }
+                                " Updates"
+                            }
+                            div {
+                                class: "info-grid",
+                                div { class: "info-label", "Current Version" }
+                                div { class: "info-value", "{env!(\"CARGO_PKG_VERSION\")}" }
+
+                                if let Some(info) = update_info.read().as_ref() {
+                                    div { class: "info-label", "Latest Version" }
+                                    div { class: "info-value", "{info.latest_version}" }
+
+                                    if info.has_update {
+                                         div { class: "info-label", "Status" }
+                                         div {
+                                             class: "info-value",
+                                             style: "color: var(--accent); font-weight: bold;",
+                                             "Update Available"
+                                         }
+                                    }
+                                }
+                            }
+
+                            div {
+                                class: "settings-actions",
+                                style: "margin-top: 15px; display: flex; gap: 10px;",
+
+                                button {
+                                    class: "secondary-button",
+                                    onclick: move |_| action_tx.send(AppAction::CheckForUpdates),
+                                    "Check for Updates"
+                                }
+
+                                if let Some(info) = update_info.read().as_ref() {
+                                    if info.has_update {
+                                         button {
+                                            class: "primary-button",
+                                            onclick: move |_| action_tx.send(AppAction::PerformUpdate),
+                                            "Update Now"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         div {
                             class: "info-card",
                             h3 {

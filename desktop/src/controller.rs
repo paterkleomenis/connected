@@ -8,8 +8,8 @@ use crate::state::{
     get_devices_store, get_last_clipboard, get_last_remote_media_device_id, get_last_remote_update,
     get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_call_log,
     get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_files_update, get_saved_devices_setting, get_transfer_status, mark_calls_synced,
-    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
+    get_remote_files_update, get_saved_devices_setting, get_transfer_status, get_update_info,
+    mark_calls_synced, mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
     remove_file_transfer_request, save_device_to_settings, set_active_call,
     set_device_name_setting, set_pairing_mode_state, set_phone_call_log, set_phone_contacts,
     set_phone_conversations, set_phone_messages,
@@ -18,6 +18,7 @@ use crate::utils::{get_hostname, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
 use connected_core::telephony::{CallLogEntry, CallType};
 use connected_core::transport::UnpairReason;
+use connected_core::update::UpdateChecker;
 use connected_core::{
     ConnectedClient, ConnectedEvent, DeviceType, MediaCommand, MediaControlMessage, MediaState,
 };
@@ -149,6 +150,8 @@ pub enum AppAction {
         action: CallAction,
     },
     RefreshDiscovery,
+    CheckForUpdates,
+    PerformUpdate,
 }
 
 static PROXIMITY_HANDLE: Lazy<Mutex<Option<proximity::ProximityHandle>>> =
@@ -1795,6 +1798,64 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 info.port,
                             );
                         }
+                    }
+                }
+            }
+            AppAction::CheckForUpdates => {
+                tokio::spawn(async move {
+                    let platform = if cfg!(target_os = "linux") {
+                        "linux"
+                    } else if cfg!(target_os = "windows") {
+                        "windows"
+                    } else {
+                        "unknown"
+                    };
+
+                    let current_version = env!("CARGO_PKG_VERSION").to_string();
+
+                    match UpdateChecker::check_for_updates(current_version, platform.to_string())
+                        .await
+                    {
+                        Ok(info) => {
+                            *get_update_info().lock().unwrap() = Some(info.clone());
+                            if info.has_update {
+                                add_notification(
+                                    "Update Available",
+                                    &format!("Version {} is available", info.latest_version),
+                                    "",
+                                );
+                            } else {
+                                // Only show "up to date" if explicitly requested (we might want to distinguish manual vs auto check)
+                                // For now, assume manual check if this action is called.
+                                add_notification("Updates", "You are up to date", "");
+                            }
+                        }
+                        Err(e) => {
+                            error!("Update check failed: {}", e);
+                            add_notification("Update Check Failed", &e.to_string(), "");
+                        }
+                    }
+                });
+            }
+            AppAction::PerformUpdate => {
+                let info_opt = get_update_info().lock().unwrap().clone();
+                if let Some(info) = info_opt {
+                    if let Some(url) = info.download_url {
+                        info!("Opening update URL: {}", url);
+                        #[cfg(target_os = "linux")]
+                        {
+                            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                        }
+                        #[cfg(target_os = "windows")]
+                        {
+                            // "start" is a shell builtin, so we need cmd /c
+                            // Also need to handle special chars potentially, but URL should be fine
+                            let _ = std::process::Command::new("cmd")
+                                .args(&["/C", "start", "", &url])
+                                .spawn();
+                        }
+                    } else {
+                        add_notification("Update", "No download URL found", "");
                     }
                 }
             }

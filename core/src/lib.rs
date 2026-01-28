@@ -8,6 +8,7 @@ pub mod filesystem;
 pub mod security;
 pub mod telephony;
 pub mod transport;
+pub mod update;
 
 pub use client::ConnectedClient;
 pub use device::{Device, DeviceType};
@@ -25,3 +26,4 @@ pub use telephony::{
 pub use transport::{
     MediaCommand, MediaControlMessage, MediaState, Message, QuicTransport, UnpairReason,
 };
+pub use update::{UpdateChecker, UpdateInfo};
