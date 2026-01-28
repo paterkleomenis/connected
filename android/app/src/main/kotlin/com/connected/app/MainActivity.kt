@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.Build
 import android.content.pm.PackageManager
 import android.provider.Settings
+import android.text.TextUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -222,6 +223,61 @@ class MainActivity : ComponentActivity() {
                     connectedApp.setPendingShare(uris)
                 }
             }
+        }
+    }
+}
+
+/**
+ * Robustly checks if the NotificationListenerService is enabled.
+ * Handles variations in how different Android versions and OEMs format the enabled_notification_listeners string.
+ */
+fun isNotificationListenerEnabled(context: Context, serviceClass: Class<*>): Boolean {
+    val componentName = android.content.ComponentName(context, serviceClass)
+    val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+
+    if (TextUtils.isEmpty(flat)) {
+        return false
+    }
+
+    val flattenedName = componentName.flattenToString()
+    val flattenedShortName = componentName.flattenToShortString()
+
+    // Check both formats as different Android versions/OEMs may use different formats
+    return flat.split(":").any { enabledComponent ->
+        val trimmed = enabledComponent.trim()
+        trimmed == flattenedName ||
+                trimmed == flattenedShortName ||
+                trimmed.contains(serviceClass.name) ||
+                // Some OEMs use just the class name without package
+                trimmed.endsWith("/" + serviceClass.simpleName)
+    }
+}
+
+/**
+ * Opens the notification listener settings screen.
+ * Uses the proper Settings constant and handles potential exceptions.
+ */
+fun openNotificationListenerSettings(context: Context) {
+    try {
+        val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        // Fallback for devices that don't support the direct intent
+        try {
+            val fallbackIntent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+            fallbackIntent.putExtra(
+                Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                android.content.ComponentName(context, MediaObserverService::class.java).flattenToString()
+            )
+            fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(fallbackIntent)
+        } catch (e2: Exception) {
+            // Final fallback to general notification settings
+            val generalIntent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            generalIntent.putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            generalIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(generalIntent)
         }
     }
 }
@@ -650,14 +706,8 @@ fun SettingsScreen(
                 // Check battery optimizations
                 isIgnoringBatteryOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
 
-                // Check notification access
-                val componentName = android.content.ComponentName(context, MediaObserverService::class.java)
-                val enabledListeners = Settings.Secure.getString(
-                    context.contentResolver,
-                    "enabled_notification_listeners"
-                )
-                isNotificationAccessGranted =
-                    enabledListeners != null && enabledListeners.contains(componentName.flattenToString())
+                // Check notification access using robust method
+                isNotificationAccessGranted = isNotificationListenerEnabled(context, MediaObserverService::class.java)
 
                 // Check telephony permissions
                 hasTelephonyPermissions = connectedApp.telephonyProvider.hasContactsPermission() &&
@@ -900,9 +950,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(12.dp))
                         Button(
                             onClick = {
-                                val intent =
-                                    Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
-                                context.startActivity(intent)
+                                openNotificationListenerSettings(context)
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -1015,9 +1063,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             onClick = {
-                                val intent =
-                                    Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
-                                context.startActivity(intent)
+                                openNotificationListenerSettings(context)
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.secondaryContainer,

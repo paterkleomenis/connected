@@ -56,6 +56,10 @@ class TelephonyProvider(private val context: Context) {
                 ContextCompat.checkSelfPermission(
                     context,
                     Manifest.permission.SEND_SMS
+                ) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.RECEIVE_SMS
                 ) == PackageManager.PERMISSION_GRANTED
     }
 
@@ -710,7 +714,11 @@ class TelephonyProvider(private val context: Context) {
             }
 
             val smsFilter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
-            context.registerReceiver(smsReceiver, smsFilter)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(smsReceiver, smsFilter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(smsReceiver, smsFilter)
+            }
         }
 
         // Call State Receiver
@@ -755,7 +763,11 @@ class TelephonyProvider(private val context: Context) {
             }
 
             val callFilter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
-            context.registerReceiver(callStateReceiver, callFilter)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(callStateReceiver, callFilter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(callStateReceiver, callFilter)
+            }
         }
     }
 
