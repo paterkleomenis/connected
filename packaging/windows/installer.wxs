@@ -5,7 +5,7 @@
         ProductCode='*'
         UpgradeCode='16b5737e-211e-4678-a8f7-54dca5d8dfe0'
         Language='1033'
-        Version='2.0.0'
+        Version='2.0.1'
         Manufacturer='Connected Team'
         InstallerVersion='200'
         Compressed='yes'
@@ -93,7 +93,8 @@
         <Custom
                 Action="LaunchConnected"
                 After="InstallFinalize"
-            >(NOT Installed) OR UPGRADINGPRODUCTCODE</Custom>
+                Condition="(NOT Installed) OR UPGRADINGPRODUCTCODE"
+            />
     </InstallExecuteSequence>
 
     </Package>
