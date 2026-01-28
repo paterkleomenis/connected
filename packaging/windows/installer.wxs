@@ -1,23 +1,56 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version='1.0' encoding='UTF-8' ?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-    <Package Name='Connected' ProductCode='*' UpgradeCode='16b5737e-211e-4678-a8f7-54dca5d8dfe0'
-    Language='1033' Version='1.0.0' Manufacturer='Connected Team'
-    InstallerVersion='200' Compressed='yes'>
+    <Package
+        Name='Connected'
+        ProductCode='*'
+        UpgradeCode='16b5737e-211e-4678-a8f7-54dca5d8dfe0'
+        Language='1033'
+        Version='1.0.1'
+        Manufacturer='Connected Team'
+        InstallerVersion='200'
+        Compressed='yes'
+    >
 
-    <SummaryInformation Keywords='Installer' Description="Connected Installer"
-        Comments='Connected is a high-speed, offline file transfer tool.' />
+    <SummaryInformation
+            Keywords='Installer'
+            Description="Connected Installer"
+            Comments='Connected is a high-speed, offline file transfer tool.'
+        />
 
     <Media Id='1' Cabinet='connected.cab' EmbedCab='yes' />
 
     <StandardDirectory Id='ProgramFiles64Folder'>
         <Directory Id='INSTALLDIR' Name='Connected'>
-            <Component Id='MainExecutable' Guid='91635b4b-7cdb-454a-811f-25ddedf77271'>
-                <File Id='ConnectedExe' Name='connected-desktop.exe' DiskId='1' Source='target\release\connected-desktop.exe' KeyPath='yes'>
-                    <Shortcut Id="startmenuConnected" Directory="ProgramMenuDir" Name="Connected" WorkingDirectory='INSTALLDIR' Icon="Connected.exe" IconIndex="0" Advertise="yes" />
+            <Component
+                    Id='MainExecutable'
+                    Guid='91635b4b-7cdb-454a-811f-25ddedf77271'
+                >
+                <File
+                        Id='ConnectedExe'
+                        Name='connected-desktop.exe'
+                        DiskId='1'
+                        Source='target\release\connected-desktop.exe'
+                        KeyPath='yes'
+                    >
+                    <Shortcut
+                            Id="startmenuConnected"
+                            Directory="ProgramMenuDir"
+                            Name="Connected"
+                            WorkingDirectory='INSTALLDIR'
+                            Icon="Connected.exe"
+                            IconIndex="0"
+                            Advertise="yes"
+                        />
                 </File>
             </Component>
             <Component Id='WebView2Loader' Guid='*'>
-                <File Id='WebView2LoaderDll' Name='WebView2Loader.dll' DiskId='1' Source='target\release\WebView2Loader.dll' KeyPath='yes' />
+                <File
+                        Id='WebView2LoaderDll'
+                        Name='WebView2Loader.dll'
+                        DiskId='1'
+                        Source='target\release\WebView2Loader.dll'
+                        KeyPath='yes'
+                    />
             </Component>
         </Directory>
     </StandardDirectory>
@@ -26,7 +59,13 @@
         <Directory Id="ProgramMenuDir" Name="Connected">
             <Component Id="ProgramMenuDir" Guid="*">
                 <RemoveFolder Id='ProgramMenuDir' On='uninstall' />
-                <RegistryValue Root='HKCU' Key='Software\[Manufacturer]\[ProductName]' Type='string' Value='' KeyPath='yes' />
+                <RegistryValue
+                        Root='HKCU'
+                        Key='Software\[Manufacturer]\[ProductName]'
+                        Type='string'
+                        Value=''
+                        KeyPath='yes'
+                    />
             </Component>
         </Directory>
     </StandardDirectory>
@@ -37,7 +76,10 @@
         <ComponentRef Id='ProgramMenuDir' />
     </Feature>
 
-    <Icon Id="Connected.exe" SourceFile="target\release\connected-desktop.exe" />
+    <Icon
+            Id="Connected.exe"
+            SourceFile="target\release\connected-desktop.exe"
+        />
 
     </Package>
 </Wix>
