@@ -7,6 +7,7 @@ Cargo.lock
 android/.gradle/
 android/build/
 android/release/
+android/app/release
 android/app/build/
 android/app/src/main/jniLibs/
 android/local.properties

@@ -67,29 +67,57 @@ impl UpdateChecker {
             _ => latest_version_str != current_version,
         };
 
-        let mut download_url = release.html_url.clone();
-
-        // Try to find specific asset based on platform
-        // Platform strings: "windows", "linux", "android"
-        let suffix = match platform.to_lowercase().as_str() {
-            "windows" => ".msi",
-            "android" => ".apk",
-            "linux" => ".AppImage",
-            _ => "",
+        let platform_lower = platform.to_lowercase();
+        let download_url = match platform_lower.as_str() {
+            "android" => select_asset(
+                &release.assets,
+                ".apk",
+                &["android", "universal", "arm64", "aarch64"],
+            )
+            .map(|asset| asset.browser_download_url.clone()),
+            "windows" => select_asset(&release.assets, ".msi", &["x64", "amd64", "win"])
+                .map(|asset| asset.browser_download_url.clone())
+                .or_else(|| Some(release.html_url.clone())),
+            "linux" => select_asset(&release.assets, ".appimage", &["x64", "amd64"])
+                .map(|asset| asset.browser_download_url.clone())
+                .or_else(|| Some(release.html_url.clone())),
+            _ => Some(release.html_url.clone()),
         };
-
-        if !suffix.is_empty()
-            && let Some(asset) = release.assets.iter().find(|a| a.name.ends_with(suffix))
-        {
-            download_url = asset.browser_download_url.clone();
-        }
 
         Ok(UpdateInfo {
             has_update,
             latest_version: latest_version_str.to_string(),
             current_version,
-            download_url: Some(download_url),
+            download_url,
             release_notes: Some(release.body),
         })
     }
+}
+
+fn select_asset<'a>(
+    assets: &'a [GithubAsset],
+    suffix: &str,
+    preferred_tokens: &[&str],
+) -> Option<&'a GithubAsset> {
+    let suffix_lower = suffix.to_lowercase();
+    let mut candidates: Vec<&GithubAsset> = assets
+        .iter()
+        .filter(|asset| asset.name.to_lowercase().ends_with(&suffix_lower))
+        .collect();
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    for token in preferred_tokens {
+        if let Some(asset) = candidates
+            .iter()
+            .find(|asset| asset.name.to_lowercase().contains(token))
+        {
+            return Some(*asset);
+        }
+    }
+
+    candidates.sort_by_key(|asset| asset.name.len());
+    candidates.first().copied()
 }

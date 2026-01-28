@@ -138,6 +138,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         connectedApp.setAppInForeground(true)
+        connectedApp.resumePendingUpdateInstallIfAllowed()
         requestProximityPermissionsIfNeeded()
     }
 

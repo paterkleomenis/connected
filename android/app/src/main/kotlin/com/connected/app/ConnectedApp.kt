@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.provider.Settings
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -188,6 +189,7 @@ class ConnectedApp(private val context: Context) {
 
     private var selectedDeviceForFile: DiscoveredDevice? = null
     private lateinit var downloadDir: File
+    private var pendingUpdateInstall: File? = null
 
     // FilesystemProvider State
     val isFsProviderRegistered = mutableStateOf(false)
@@ -1999,6 +2001,8 @@ class ConnectedApp(private val context: Context) {
             try {
                 val request = java.net.URL(url)
                 val connection = request.openConnection() as java.net.HttpURLConnection
+                connection.instanceFollowRedirects = true
+                connection.setRequestProperty("User-Agent", "Connected-App")
                 connection.connect()
 
                 val fileLength = connection.contentLength
@@ -2013,7 +2017,8 @@ class ConnectedApp(private val context: Context) {
                 while (input.read(data).also { count = it } != -1) {
                     total += count.toLong()
                     if (fileLength > 0) {
-                        onProgress((total * 100 / fileLength).toInt())
+                        val progress = (total * 100 / fileLength).toInt()
+                        runOnMainThread { onProgress(progress) }
                     }
                     output.write(data, 0, count)
                 }
@@ -2030,7 +2035,39 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    fun resumePendingUpdateInstallIfAllowed() {
+        val pendingFile = pendingUpdateInstall ?: return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O ||
+            context.packageManager.canRequestPackageInstalls()
+        ) {
+            pendingUpdateInstall = null
+            installApkInternal(pendingFile)
+        }
+    }
+
     fun installApk(file: File) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
+            pendingUpdateInstall = file
+            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                data = Uri.parse("package:${context.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            runOnMainThread {
+                android.widget.Toast.makeText(
+                    context,
+                    "Allow this app to install updates, then return to finish install.",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+            return
+        }
+        installApkInternal(file)
+    }
+
+    private fun installApkInternal(file: File) {
         try {
             val uri = androidx.core.content.FileProvider.getUriForFile(
                 context,
