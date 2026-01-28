@@ -23,17 +23,24 @@ const EVENT_CHANNEL_CAPACITY: usize = 100;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIRING_MODE_TIMEOUT: Duration = Duration::from_secs(120);
 
-static RUSTLS_PROVIDER_INIT: OnceLock<
-    std::result::Result<(), Arc<rustls::crypto::CryptoProvider>>,
-> = OnceLock::new();
+static RUSTLS_PROVIDER_INIT: OnceLock<bool> = OnceLock::new();
 
 fn init_rustls_provider() -> Result<()> {
-    let result = RUSTLS_PROVIDER_INIT
-        .get_or_init(|| rustls::crypto::ring::default_provider().install_default());
+    let result =
+        RUSTLS_PROVIDER_INIT.get_or_init(|| {
+            match rustls::crypto::ring::default_provider().install_default() {
+                Ok(()) => true,
+                Err(_already_installed) => true,
+            }
+        });
 
-    result.as_ref().map(|_| ()).map_err(|e| {
-        ConnectedError::InitializationError(format!("Rustls crypto provider init failed: {e:?}"))
-    })
+    if *result {
+        Ok(())
+    } else {
+        Err(ConnectedError::InitializationError(
+            "Rustls crypto provider init failed".to_string(),
+        ))
+    }
 }
 
 pub struct ConnectedClient {
