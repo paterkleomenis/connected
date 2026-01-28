@@ -23,8 +23,6 @@ In a world of walled gardens, moving a file from your phone to your computer sho
 
 *   **Apple AirDrop**: Works like magic, but only if you stay strictly within the Evil Apple ecosystem.
 *   **KDE Connect**: It's the only alternative that doesn't work without a shared Wi-Fi network and also is really buggy.
-*   **Bluetooth**: Universal but painfully slow for anything larger than a photo.
-*   **Cloud Services**: Require an active internet connection, consume data plans, and involve uploading just to download again.
 
 **Connected** cuts through the fragmentation. It brings the "it just works" magical experience to the open ecosystem.
 
