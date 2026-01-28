@@ -1987,6 +1987,7 @@ class ConnectedApp(private val context: Context) {
 
     suspend fun checkForUpdates(): UpdateInfo? {
         return try {
+            RustlsPlatformVerifier.initIfNeeded(context)
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
             val currentVersion = packageInfo.versionName ?: "0.0.0"
             checkForUpdates(currentVersion, "android")
