@@ -177,6 +177,7 @@ fn spawn_event_loop(
 ) {
     let c_clone = c.clone();
     tokio::spawn(async move {
+        #[cfg(target_os = "linux")]
         let last_player_identity = Arc::new(std::sync::Mutex::new(None::<String>));
 
         while let Ok(event) = events.recv().await {
