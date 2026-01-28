@@ -84,8 +84,8 @@
     <!-- Launch the app after a fresh install or a major upgrade install. -->
     <CustomAction
             Id="LaunchConnected"
-            FileRef="ConnectedExe"
-            ExeCommand=""
+            Directory="INSTALLDIR"
+            ExeCommand="connected-desktop.exe"
             Return="asyncNoWait"
             Impersonate="yes"
         />
@@ -93,7 +93,7 @@
         <Custom
                 Action="LaunchConnected"
                 After="InstallFinalize"
-            >NOT Installed</Custom>
+            >(NOT Installed) OR UPGRADINGPRODUCTCODE</Custom>
     </InstallExecuteSequence>
 
     </Package>
