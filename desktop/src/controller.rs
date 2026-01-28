@@ -581,8 +581,7 @@ fn spawn_event_loop(
                                             Ok(())
                                         }
 
-                                        if let Err(e) = tokio::runtime::Handle::current()
-                                            .block_on(control_media_windows(cmd))
+                                        if let Err(e) = handle.block_on(control_media_windows(cmd))
                                         {
                                             warn!("Windows Media Control Error: {}", e);
                                         }
@@ -1471,7 +1470,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             Ok(Some((title_str, artist_str, album_str, playing)))
                                         }
 
-                                        tokio::runtime::Handle::current().block_on(get_media_state_windows()).unwrap_or_default()
+                                        handle.block_on(get_media_state_windows()).unwrap_or_default()
                                     }
                                     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
                                     {

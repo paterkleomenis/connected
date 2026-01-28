@@ -1,10 +1,11 @@
 use crate::error::{ConnectedError, Result};
 // Use transport constants if public, or redefine
+use bytes::BytesMut;
 use quinn::{Connection, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -263,13 +264,13 @@ impl FileTransfer {
         }
 
         // Send file data (Raw Binary Stream)
-        let mut buffer = vec![0u8; BUFFER_SIZE];
         let mut offset: u64 = 0;
         let mut hasher = blake3::Hasher::new();
         let mut last_progress_update = std::time::Instant::now();
+        let mut buf = BytesMut::with_capacity(BUFFER_SIZE);
 
         loop {
-            let bytes_read = match file.read(&mut buffer).await {
+            let bytes_read = match file.read_buf(&mut buf).await {
                 Ok(n) => n,
                 Err(e) => {
                     if is_temp_file {
@@ -282,11 +283,13 @@ impl FileTransfer {
                 break;
             }
 
-            let chunk = &buffer[..bytes_read];
+            // `buf.split().freeze()` yields a `Bytes` chunk backed by the same allocation
+            // (no copy) that QUIC can send without re-buffering in userland.
+            let chunk = buf.split().freeze();
 
-            hasher.update(chunk);
+            hasher.update(&chunk);
 
-            if let Err(e) = send.write_all(chunk).await {
+            if let Err(e) = send.write_chunk(chunk).await {
                 if is_temp_file {
                     let _ = tokio::fs::remove_file(&path).await;
                 }
@@ -456,45 +459,42 @@ impl FileTransfer {
 
         // Create file
         let file = File::create(&save_path).await?;
-        let mut writer = BufWriter::new(file);
+        // Using `read_chunk` below yields `Bytes` without copying. Writing those directly to the
+        // underlying file avoids an extra userland copy that `BufWriter` would introduce.
+        let mut writer = file;
         let mut bytes_received: u64 = 0;
         let mut hasher = blake3::Hasher::new();
-
-        let mut buffer = vec![0u8; BUFFER_SIZE];
         let mut last_progress_update = std::time::Instant::now();
 
         // Read Raw Data
         // We read exactly file_size bytes
         let mut remaining = file_size;
         while remaining > 0 {
-            let to_read = std::cmp::min(remaining, BUFFER_SIZE as u64) as usize;
-            // Read into buffer
-            match recv.read_exact(&mut buffer[..to_read]).await {
-                Ok(_) => {
-                    let chunk = &buffer[..to_read];
-                    hasher.update(chunk);
-                    writer.write_all(chunk).await?;
+            let max_len = std::cmp::min(remaining, BUFFER_SIZE as u64) as usize;
+            let Some(chunk) = recv.read_chunk(max_len, true).await? else {
+                let _ = tokio::fs::remove_file(&save_path).await;
+                return Err(ConnectedError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "unexpected EOF while receiving file data",
+                )));
+            };
 
-                    bytes_received += to_read as u64;
-                    remaining -= to_read as u64;
+            let bytes = chunk.bytes;
+            let n = bytes.len() as u64;
+            hasher.update(&bytes);
+            writer.write_all(&bytes).await?;
 
-                    if last_progress_update.elapsed().as_millis() > 100 {
-                        if let Some(ref tx) = progress_tx {
-                            let _ = tx.send(TransferProgress::Progress {
-                                bytes_transferred: bytes_received,
-                                total_size: file_size,
-                            });
-                        }
-                        last_progress_update = std::time::Instant::now();
-                    }
+            bytes_received += n;
+            remaining -= n;
+
+            if last_progress_update.elapsed().as_millis() > 100 {
+                if let Some(ref tx) = progress_tx {
+                    let _ = tx.send(TransferProgress::Progress {
+                        bytes_transferred: bytes_received,
+                        total_size: file_size,
+                    });
                 }
-                Err(e) => {
-                    let _ = tokio::fs::remove_file(&save_path).await;
-                    return Err(ConnectedError::Io(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        e,
-                    )));
-                }
+                last_progress_update = std::time::Instant::now();
             }
         }
 

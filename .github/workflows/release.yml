@@ -54,6 +54,19 @@ jobs:
       - name: Build Release
         run: cargo build --release --verbose
 
+      - name: Ensure WebView2Loader.dll present (MSI)
+        shell: pwsh
+        run: |
+          $dll = "target\\release\\WebView2Loader.dll"
+          if (!(Test-Path $dll)) {
+            $src = Get-ChildItem -Path "target\\release\\build" -Recurse -Filter "WebView2Loader.dll" |
+              Where-Object { $_.FullName -match "\\\\out\\\\x64\\\\WebView2Loader\\.dll$" } |
+              Select-Object -First 1
+            if ($null -eq $src) { throw "WebView2Loader.dll not found under target\\release\\build\\**\\out\\x64\\WebView2Loader.dll" }
+            Copy-Item $src.FullName $dll -Force
+          }
+          Write-Host "WebView2Loader.dll ready at $dll"
+
       - name: Install WiX 4
         run: dotnet tool install --global wix
 
@@ -145,7 +158,7 @@ jobs:
         # assembleRelease with signing produces 'app-release.apk'
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: Connected ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}

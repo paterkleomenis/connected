@@ -46,6 +46,7 @@ dependencyResolutionManagement {
         maven {
             url = uri(rustlsPlatformVerifierRepo(settingsDir))
             metadataSources {
+                mavenPom()
                 artifact()
             }
         }

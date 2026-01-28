@@ -28,7 +28,7 @@ strip = true
 strip = false
 
 [workspace.package]
-version = "1.0.1"
+version = "1.0.4"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Connected Team"]
@@ -41,6 +41,7 @@ tokio = { version = "1.49", features = ["full"] }
 quinn = "0.11"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rcgen = "0.14"
+bytes = "1.11"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

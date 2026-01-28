@@ -49,3 +49,5 @@ tarpaulin-report.html
 
 test.txt
 GEMINI.md
+.rules/*
+.gradle

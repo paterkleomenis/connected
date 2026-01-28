@@ -50,3 +50,8 @@ proximity-ble = []
 
 [build-dependencies]
 winres = "0.1"
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+# Ensures WebView2Loader.dll is available before our build script tries to copy it
+# (avoids a build-order race with transitive deps like wry/webview2-com-sys).
+webview2-com-sys = "0.38.2"

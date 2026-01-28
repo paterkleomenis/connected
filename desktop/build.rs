@@ -3,7 +3,10 @@ use std::fs;
 use std::path::PathBuf;
 
 fn main() {
-    if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
+    let Ok(target_os) = std::env::var("CARGO_CFG_TARGET_OS") else {
+        return;
+    };
+    if target_os == "windows" {
         // Attempt to copy WebView2Loader.dll to the target directory
         copy_webview2_loader();
 
@@ -61,9 +64,8 @@ fn copy_webview2_loader() {
 
     // Navigate up to the 'build' directory (target/release/build)
     // Structure is usually: target/release/build/<package-name>-<hash>/out
-    let build_dir = match out_dir.parent().and_then(|p| p.parent()) {
-        Some(p) => p,
-        None => return,
+    let Some(build_dir) = out_dir.parent().and_then(|p| p.parent()) else {
+        return;
     };
 
     // Look for webview2-com-sys-* directory
@@ -72,18 +74,18 @@ fn copy_webview2_loader() {
         Err(_) => return,
     };
 
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let arch_dir = match arch.as_str() {
+        "x86_64" => "x64",
+        "x86" => "x86",
+        "aarch64" => "arm64",
+        _ => return,
+    };
+
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
         if name_str.starts_with("webview2-com-sys-") {
-            let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-            let arch_dir = match arch.as_str() {
-                "x86_64" => "x64",
-                "x86" => "x86",
-                "aarch64" => "arm64",
-                _ => continue,
-            };
-
             let src_path = entry
                 .path()
                 .join("out")
@@ -101,4 +103,10 @@ fn copy_webview2_loader() {
             }
         }
     }
+
+    // If we didn't find it, leave a loud breadcrumb: WiX will hard-fail later without it.
+    println!(
+        "cargo:warning=WebView2Loader.dll not found under {:?}; MSI packaging will fail unless it is copied into the target dir.",
+        build_dir
+    );
 }

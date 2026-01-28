@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[cfg(target_os = "android")]
 use jni::JNIEnv;
@@ -37,7 +37,7 @@ fn init_android_logging() {}
 // ============================================================================
 
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn Java_com_connected_app_RustlsPlatformVerifier_init(
     mut env: JNIEnv,
     _this: JObject,
@@ -1068,11 +1068,15 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                     }
                     _ => {}
                 },
-                Err(_) => {
-                    // Channel closed or lagged, check shutdown flag
-                    if shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
-                        break;
-                    }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    warn!(
+                        "Event listener lagged, skipped {} events. Increase capacity or process faster.",
+                        skipped
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    info!("Event listener channel closed, stopping.");
+                    break;
                 }
             }
         }
@@ -1164,8 +1168,16 @@ pub fn send_file(
             })?;
 
     let path = PathBuf::from(file_path);
+    if !path.exists() {
+        return Err(ConnectedFfiError::InvalidArgument {
+            msg: format!("File not found: {:?}", path),
+        });
+    }
+
     get_runtime().spawn(async move {
-        let _ = client.send_file(ip, target_port, path).await;
+        if let Err(e) = client.send_file(ip, target_port, path).await {
+            error!("Failed to start file transfer: {}", e);
+        }
     });
 
     Ok(())

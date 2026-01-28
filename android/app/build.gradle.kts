@@ -41,8 +41,8 @@ configure<ApplicationExtension> {
         applicationId = "com.connected.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.3"
+        versionCode = 4
+        versionName = "1.0.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -68,7 +68,12 @@ configure<ApplicationExtension> {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            // Only use release signing config if keystore exists (CI) or env vars are set
+            signingConfig = if (System.getenv("ANDROID_KEYSTORE_PASSWORD") != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -131,7 +136,7 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.18.1@aar")
 
     // Android verifier component for rustls-platform-verifier
-    implementation("rustls:rustls-platform-verifier:latest.release")
+    implementation("rustls:rustls-platform-verifier:0.1.1")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

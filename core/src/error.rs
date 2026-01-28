@@ -23,6 +23,9 @@ pub enum ConnectedError {
     #[error("QUIC read error: {0}")]
     QuicRead(#[from] quinn::ReadExactError),
 
+    #[error("QUIC read chunk error: {0}")]
+    QuicReadChunk(#[from] quinn::ReadError),
+
     #[error("QUIC read to end error: {0}")]
     QuicReadToEnd(#[from] quinn::ReadToEndError),
 
