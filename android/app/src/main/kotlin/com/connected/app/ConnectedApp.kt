@@ -2008,8 +2008,9 @@ class ConnectedApp(private val context: Context) {
 
                 val fileLength = connection.contentLength
                 val input = java.io.BufferedInputStream(connection.inputStream)
-                val outputFile =
-                    File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "update.apk")
+                // Use internal cache so FileProvider paths are stable and we don't depend on
+                // external storage availability.
+                val outputFile = File(context.cacheDir, "connected-update.apk")
                 val output = FileOutputStream(outputFile)
 
                 val data = ByteArray(1024)

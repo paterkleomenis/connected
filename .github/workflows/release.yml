@@ -153,9 +153,17 @@ jobs:
         with:
           name: connected-android
 
-      - name: Rename Android APK
-        run: mv app-release.apk connected-android.apk
-        # assembleRelease with signing produces 'app-release.apk'
+      - name: Collect Release Assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # download-artifact v4 extracts each artifact into its own directory by default.
+          mv connected-linux/connected-desktop connected-desktop
+          mv connected-windows/connected-desktop.msi connected-desktop.msi
+
+          apk_path="$(ls -1 connected-android/*.apk | head -n 1)"
+          mv "$apk_path" connected-android.apk
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

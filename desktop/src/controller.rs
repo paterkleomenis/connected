@@ -157,6 +157,8 @@ pub enum AppAction {
 static PROXIMITY_HANDLE: Lazy<Mutex<Option<proximity::ProximityHandle>>> =
     Lazy::new(|| Mutex::new(None));
 
+type MediaPollStateUpdate = (Option<String>, Option<String>, Option<String>, bool);
+
 fn start_proximity(client: Arc<ConnectedClient>) {
     let handle = proximity::start(client);
     let mut guard = PROXIMITY_HANDLE.lock().unwrap();
@@ -1352,7 +1354,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             while *get_media_enabled().lock().unwrap() {
                                 interval.tick().await;
 
-                                let state_update = tokio::task::spawn_blocking(move || {
+                                let state_update: Option<MediaPollStateUpdate> =
+                                    tokio::task::spawn_blocking(move || {
                                     #[cfg(target_os = "linux")]
                                     {
                                         // Manual D-Bus scan to bypass broken playerctld
@@ -1481,7 +1484,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 .unwrap_or(None);
 
                                 if let Some((title, artist, album, playing)) = state_update {
-                                    let current_title = title.clone().unwrap_or_default();
+                                    let current_title: String = title.clone().unwrap_or_default();
 
                                     // Only send update if changed
                                     if current_title != last_title || playing != last_playing {
@@ -1840,18 +1843,68 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 let info_opt = get_update_info().lock().unwrap().clone();
                 if let Some(info) = info_opt {
                     if let Some(url) = info.download_url {
-                        info!("Opening update URL: {}", url);
-                        #[cfg(target_os = "linux")]
-                        {
-                            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-                        }
                         #[cfg(target_os = "windows")]
                         {
-                            // "start" is a shell builtin, so we need cmd /c
-                            // Also need to handle special chars potentially, but URL should be fine
-                            let _ = std::process::Command::new("cmd")
-                                .args(["/C", "start", "", &url])
-                                .spawn();
+                            let latest = info.latest_version.clone();
+                            tokio::spawn(async move {
+                                // Prefer a real installer flow on Windows rather than pushing the
+                                // user to the browser to download + run the MSI manually.
+                                if !url.to_lowercase().ends_with(".msi") {
+                                    info!("Update URL is not an MSI; opening in browser: {}", url);
+                                    let _ = std::process::Command::new("cmd")
+                                        .args(["/C", "start", "", &url])
+                                        .spawn();
+                                    return;
+                                }
+
+                                add_notification("Update", "Downloading installer...", "");
+
+                                let mut dest = std::env::temp_dir();
+                                dest.push(format!("connected-{}.msi", latest));
+
+                                match connected_core::download_to_file(&url, &dest).await {
+                                    Ok(()) => {
+                                        let msi = dest.to_string_lossy().to_string();
+                                        info!("Launching MSI installer: {}", msi);
+
+                                        let spawn_res = std::process::Command::new("msiexec")
+                                            .args(["/i", &msi, "/passive", "/norestart"])
+                                            .spawn();
+
+                                        match spawn_res {
+                                            Ok(_) => {
+                                                // Exit so the installer can replace files cleanly.
+                                                std::process::exit(0);
+                                            }
+                                            Err(e) => {
+                                                add_notification(
+                                                    "Update Failed",
+                                                    &format!("Failed to start installer: {}", e),
+                                                    "",
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        add_notification(
+                                            "Update Failed",
+                                            &format!("Download failed: {}", e),
+                                            "",
+                                        );
+                                    }
+                                }
+                            });
+                        }
+
+                        #[cfg(target_os = "linux")]
+                        {
+                            info!("Opening update URL: {}", url);
+                            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                        }
+
+                        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+                        {
+                            info!("Opening update URL: {}", url);
                         }
                     } else {
                         add_notification("Update", "No download URL found", "");
