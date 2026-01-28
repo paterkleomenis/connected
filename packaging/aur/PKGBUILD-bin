@@ -11,10 +11,8 @@ depends=('gtk3' 'webkit2gtk-4.1' 'libappindicator-gtk3' 'openssl' 'dbus')
 provides=("$_pkgname")
 conflicts=("$_pkgname" "$_pkgname-git")
 source=("https://github.com/paterkleomenis/connected/releases/download/v${pkgver}/connected-desktop"
-        "connected-desktop.desktop"
-        "ic_launcher-playstore.png"
-        "LICENSE-MIT"
-        "LICENSE-APACHE")
+        "https://raw.githubusercontent.com/paterkleomenis/connected/main/packaging/aur/connected-desktop.desktop"
+        "https://raw.githubusercontent.com/paterkleomenis/connected/main/android/app/src/main/ic_launcher-playstore.png")
 sha256sums=('SKIP'
             'SKIP'
             'SKIP'

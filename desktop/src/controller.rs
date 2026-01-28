@@ -391,20 +391,23 @@ fn spawn_event_loop(
                         timestamp: Instant::now(),
                     });
                 }
-                ConnectedEvent::MediaControl { from_device, event } => {
-                    info!("EVENT: Received MediaControl event from {}", from_device);
-                    // Only process if media control is enabled locally
-                    if *get_media_enabled().lock().unwrap() {
-                        match event {
-                            MediaControlMessage::Command(cmd) => {
-                                info!("COMMAND: Executing {:?} from {}", cmd, from_device);
+	                ConnectedEvent::MediaControl { from_device, event } => {
+	                    info!("EVENT: Received MediaControl event from {}", from_device);
+	                    // Only process if media control is enabled locally
+	                    if *get_media_enabled().lock().unwrap() {
+	                        match event {
+	                            MediaControlMessage::Command(cmd) => {
+	                                info!("COMMAND: Executing {:?} from {}", cmd, from_device);
 
-                                // Execute command via MPRIS with manual scan
-                                let _last_player_identity = last_player_identity.clone();
-                                tokio::task::spawn_blocking(move || {
-                                    #[cfg(target_os = "linux")]
-                                    {
-                                        let last_identity = _last_player_identity.clone();
+	                                // Execute command via MPRIS with manual scan
+	                                #[cfg(target_os = "linux")]
+	                                let _last_player_identity = last_player_identity.clone();
+	                                #[cfg(target_os = "windows")]
+	                                let runtime_handle = tokio::runtime::Handle::current();
+	                                tokio::task::spawn_blocking(move || {
+	                                    #[cfg(target_os = "linux")]
+	                                    {
+	                                        let last_identity = _last_player_identity.clone();
                                         use dbus::ffidisp::{BusType, Connection};
                                         use mpris::Player;
                                         use std::rc::Rc;
@@ -546,10 +549,10 @@ fn spawn_event_loop(
                                         } else {
                                             warn!("No controllable media player found");
                                         }
-                                    }
-                                    #[cfg(target_os = "windows")]
-                                    {
-                                        use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
+	                                    }
+	                                    #[cfg(target_os = "windows")]
+	                                    {
+	                                        use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 
                                         async fn control_media_windows(
                                             cmd: MediaCommand,
@@ -580,16 +583,16 @@ fn spawn_event_loop(
                                                 // Volume control is not directly available via SMTC session
                                                 _ => {}
                                             }
-                                            Ok(())
-                                        }
+	                                            Ok(())
+	                                        }
 
-                                        if let Err(e) = handle.block_on(control_media_windows(cmd))
-                                        {
-                                            warn!("Windows Media Control Error: {}", e);
-                                        }
-                                    }
-                                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-                                    {
+	                                        if let Err(e) = runtime_handle.block_on(control_media_windows(cmd))
+	                                        {
+	                                            warn!("Windows Media Control Error: {}", e);
+	                                        }
+	                                    }
+	                                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+	                                    {
                                         warn!("Media control not implemented for this OS");
                                     }
                                 });
@@ -1348,19 +1351,22 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             let mut interval =
                                 tokio::time::interval(std::time::Duration::from_secs(1));
                             let mut last_title = String::new();
-                            let mut last_playing = false;
+	                            let mut last_playing = false;
 
-                            // We need to check the atomic flag in the loop
-                            while *get_media_enabled().lock().unwrap() {
-                                interval.tick().await;
+	                            // We need to check the atomic flag in the loop
+	                            while *get_media_enabled().lock().unwrap() {
+	                                interval.tick().await;
 
-                                let state_update: Option<MediaPollStateUpdate> =
-                                    tokio::task::spawn_blocking(move || {
-                                    #[cfg(target_os = "linux")]
-                                    {
-                                        // Manual D-Bus scan to bypass broken playerctld
-                                        use dbus::ffidisp::{BusType, Connection};
-                                        use mpris::Player;
+	                                #[cfg(target_os = "windows")]
+	                                let runtime_handle = tokio::runtime::Handle::current();
+
+	                                let state_update: Option<MediaPollStateUpdate> =
+	                                    tokio::task::spawn_blocking(move || -> Option<MediaPollStateUpdate> {
+	                                    #[cfg(target_os = "linux")]
+	                                    {
+	                                        // Manual D-Bus scan to bypass broken playerctld
+	                                        use dbus::ffidisp::{BusType, Connection};
+	                                        use mpris::Player;
                                         use std::rc::Rc;
 
                                         // Create a new connection for this iteration
@@ -1401,15 +1407,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                     && !n.contains("playerctld")
                                                     && *n != "org.mpris.MediaPlayer2.connected"
                                             })
-                                            .collect();
+	                                            .collect();
 
-                                        // Find first playing, or just first one
-                                        type MediaState = (Option<String>, Option<String>, Option<String>, bool);
-                                        let mut best_candidate: Option<MediaState> = None;
+	                                        // Find first playing, or just first one
+	                                        let mut best_candidate: Option<MediaPollStateUpdate> = None;
 
-                                        for name in mpris_names {
-                                            // Player::new takes (conn, bus_name, timeout_ms)
-                                            // We must create a new connection for each player because Player::new takes ownership
+	                                        for name in mpris_names {
+	                                            // Player::new takes (conn, bus_name, timeout_ms)
+	                                            // We must create a new connection for each player because Player::new takes ownership
                                             if let Ok(p_conn) =
                                                 Connection::get_private(BusType::Session)
                                                 && let Ok(player) =
@@ -1428,14 +1433,15 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                     m.artists().map(|a| a.join(", "))
                                                 });
                                                 let album = meta.as_ref().and_then(|m| {
-                                                    m.album_name().map(|s| s.to_string())
-                                                });
+	                                                    m.album_name().map(|s| s.to_string())
+	                                                });
 
-                                                let candidate = (title, artist, album, playing);
+	                                                let candidate: MediaPollStateUpdate =
+	                                                    (title, artist, album, playing);
 
-                                                if playing {
-                                                    // Found a playing one, return immediately
-                                                    return Some(candidate);
+	                                                if playing {
+	                                                    // Found a playing one, return immediately
+	                                                    return Some(candidate);
                                                 } else if best_candidate.is_none() {
                                                     // Keep as fallback
                                                     best_candidate = Some(candidate);
@@ -1445,16 +1451,15 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                                         best_candidate
                                     }
-                                    #[cfg(target_os = "windows")]
-                                    {
-                                        use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager, GlobalSystemMediaTransportControlsSessionPlaybackStatus};
+	                                    #[cfg(target_os = "windows")]
+	                                    {
+	                                        use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager, GlobalSystemMediaTransportControlsSessionPlaybackStatus};
 
-                                        type WindowsMediaState = (Option<String>, Option<String>, Option<String>, bool);
-                                        async fn get_media_state_windows() -> windows::core::Result<Option<WindowsMediaState>> {
-                                            let manager: GlobalSystemMediaTransportControlsSessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
-                                            let session = manager.GetCurrentSession()?;
+	                                        async fn get_media_state_windows() -> windows::core::Result<Option<MediaPollStateUpdate>> {
+	                                            let manager: GlobalSystemMediaTransportControlsSessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
+	                                            let session = manager.GetCurrentSession()?;
 
-                                            let properties: windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties = session.TryGetMediaPropertiesAsync()?.await?;
+	                                            let properties: windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties = session.TryGetMediaPropertiesAsync()?.await?;
 
                                             let title = properties.Title()?;
                                             let artist = properties.Artist()?;
@@ -1470,15 +1475,15 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             let artist_str = if !artist.is_empty() { Some(artist.to_string()) } else { None };
                                             let album_str = if !album.is_empty() { Some(album.to_string()) } else { None };
 
-                                            Ok(Some((title_str, artist_str, album_str, playing)))
-                                        }
+	                                            Ok(Some((title_str, artist_str, album_str, playing)))
+	                                        }
 
-                                        handle.block_on(get_media_state_windows()).unwrap_or_default()
-                                    }
-                                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-                                    {
-                                        None
-                                    }
+	                                        runtime_handle.block_on(get_media_state_windows()).unwrap_or_default()
+	                                    }
+	                                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+	                                    {
+	                                        None
+	                                    }
                                 })
                                 .await
                                 .unwrap_or(None);
