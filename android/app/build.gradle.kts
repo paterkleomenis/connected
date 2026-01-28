@@ -24,7 +24,6 @@ val ndkDir = File(sdkDir, "ndk").listFiles()
     ?: throw GradleException("NDK not found in ${File(sdkDir, "ndk")}")
 
 val latestNdkVersion: String = ndkDir.name
-val uniffiGenDir = layout.buildDirectory.dir("generated/uniffi")
 
 kotlin {
     compilerOptions {
@@ -100,8 +99,6 @@ configure<ApplicationExtension> {
     sourceSets {
         getByName("main") {
             jniLibs.directories.add("src/main/jniLibs")
-            // Generated UniFFI bindings
-            java.srcDir(uniffiGenDir)
         }
     }
 }
@@ -175,7 +172,6 @@ tasks.register<Exec>("buildRustRelease") {
 // It doesn't matter which architecture, as long as the API is the same.
 tasks.register<Exec>("generateBindings") {
     workingDir = file("${project.rootDir}/..")
-    val outDir = uniffiGenDir.get().asFile
     // Use the x86_64 debug lib for generation speed/convenience during debug builds
     commandLine("cargo", "run", "--release",
         "-p", "connected-ffi",
@@ -184,18 +180,16 @@ tasks.register<Exec>("generateBindings") {
         "generate",
         "--library", "target/aarch64-linux-android/debug/libconnected_ffi.so",
         "--language", "kotlin",
-        "--out-dir", outDir.absolutePath,
+        "--out-dir", "${project.projectDir}/src/main/kotlin",
         "--no-format"
     )
     // Ensure the library exists before generating bindings.
     // We depend on buildRustDebug because we point to the debug .so
     dependsOn("buildRustDebug")
-    outputs.dir(outDir)
 }
 
 tasks.register<Exec>("generateBindingsRelease") {
     workingDir = file("${project.rootDir}/..")
-    val outDir = uniffiGenDir.get().asFile
     // Use the aarch64 release lib for generation
     commandLine("cargo", "run", "--release",
         "-p", "connected-ffi",
@@ -204,11 +198,10 @@ tasks.register<Exec>("generateBindingsRelease") {
         "generate",
         "--library", "target/aarch64-linux-android/release/libconnected_ffi.so",
         "--language", "kotlin",
-        "--out-dir", outDir.absolutePath,
+        "--out-dir", "${project.projectDir}/src/main/kotlin",
         "--no-format"
     )
     dependsOn("buildRustRelease")
-    outputs.dir(outDir)
 }
 
 afterEvaluate {
@@ -216,12 +209,6 @@ afterEvaluate {
         dependsOn("generateBindings")
     }
     tasks.named("preReleaseBuild").configure {
-        dependsOn("generateBindingsRelease")
-    }
-    tasks.named("compileDebugKotlin").configure {
-        dependsOn("generateBindings")
-    }
-    tasks.named("compileReleaseKotlin").configure {
         dependsOn("generateBindingsRelease")
     }
 }
