@@ -188,11 +188,27 @@ tasks.register<Exec>("generateBindings") {
     dependsOn("buildRustDebug")
 }
 
+tasks.register<Exec>("generateBindingsRelease") {
+    workingDir = file("${project.rootDir}/..")
+    // Use the aarch64 release lib for generation
+    commandLine("cargo", "run", "--release",
+        "-p", "connected-ffi",
+        "--bin", "uniffi-bindgen",
+        "--",
+        "generate",
+        "--library", "target/aarch64-linux-android/release/libconnected_ffi.so",
+        "--language", "kotlin",
+        "--out-dir", "${project.projectDir}/src/main/kotlin",
+        "--no-format"
+    )
+    dependsOn("buildRustRelease")
+}
+
 afterEvaluate {
     tasks.named("preDebugBuild").configure {
         dependsOn("generateBindings")
     }
     tasks.named("preReleaseBuild").configure {
-        dependsOn("buildRustRelease")
+        dependsOn("generateBindingsRelease")
     }
 }
