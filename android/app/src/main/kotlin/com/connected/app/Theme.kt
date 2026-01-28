@@ -29,6 +29,8 @@ private val ConnectedDarkColorScheme = darkColorScheme(
 
     secondary = ColorBgSecondary,
     onSecondary = ColorTextPrimary,
+    secondaryContainer = Color(0xFF333333),
+    onSecondaryContainer = ColorTextPrimary,
 
     tertiary = ColorSuccess,
 

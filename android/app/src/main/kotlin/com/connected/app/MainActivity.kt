@@ -370,7 +370,14 @@ fun MainAppNavigation(
                     icon = { Icon(painterResource(R.drawable.ic_nav_devices), contentDescription = "Devices") },
                     label = { Text("Devices") },
                     selected = currentScreen == Screen.Home,
-                    onClick = { currentScreen = Screen.Home }
+                    onClick = { currentScreen = Screen.Home },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = androidx.compose.ui.graphics.Color.White,
+                        selectedTextColor = androidx.compose.ui.graphics.Color.White,
+                        indicatorColor = androidx.compose.ui.graphics.Color(0xFF333333),
+                        unselectedIconColor = androidx.compose.ui.graphics.Color.Gray,
+                        unselectedTextColor = androidx.compose.ui.graphics.Color.Gray
+                    )
                 )
                 NavigationBarItem(
                     icon = { Icon(painterResource(R.drawable.ic_nav_settings), contentDescription = "Settings") },
@@ -379,7 +386,14 @@ fun MainAppNavigation(
                     onClick = {
                         @Suppress("AssignedValueIsNeverRead")
                         currentScreen = Screen.Settings
-                    }
+                    },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = androidx.compose.ui.graphics.Color.White,
+                        selectedTextColor = androidx.compose.ui.graphics.Color.White,
+                        indicatorColor = androidx.compose.ui.graphics.Color(0xFF333333),
+                        unselectedIconColor = androidx.compose.ui.graphics.Color.Gray,
+                        unselectedTextColor = androidx.compose.ui.graphics.Color.Gray
+                    )
                 )
             }
         }

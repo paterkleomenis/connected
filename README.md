@@ -10,19 +10,19 @@ Currently available for **Linux**, **Windows**, and **Android**.
 
 ## Features
 
--   **Cross-Platform**: Seamlessly transfer files, sync clipboards, and control media between Android, Linux, and Windows devices.
--   **Offline First**: No internet required. Uses Wi-Fi Direct and Local Network.
--   **High Speed**: Powered by the QUIC protocol over Wi-Fi 5/6.
+-   **Cross-Platform**: Seamlessly transfer files, sync clipboards, make and answer calls, and control media between Android, Linux, and Windows devices.
+-   **Offline Functionality**: You can also use it without an internet connection. Uses Wi-Fi Direct and Local Network.
+-   **High Speed**: Powered by the QUIC protocol.
 -   **Zero Config**: Auto-discovery via mDNS and BLE.
 -   **Secure**: End-to-end encryption for all transfers.
 -   **Modern UI**: Beautiful, responsive interfaces using Jetpack Compose (Android) and Tailwind CSS (Desktop).
 
 ## Why Connected?
 
-In a world of walled gardens, moving a file from your phone to your computer shouldn't be a hassle.
+In a world of walled gardens, connecting devices shouldn't be a hassle.
 
-*   **Apple AirDrop**: Works like magic, but only if you stay strictly within the Evil Apple ecosystem.
-*   **KDE Connect**: It's the only alternative that doesn't work without a shared Wi-Fi network and also is really buggy.
+*   **Apple AirDrop and Apple Ecosystem in General**: Works like magic, but only if you stay strictly within the Evil Apple ecosystem.
+*   **KDE Connect**: It's the only alternative, it doesn't even work properly and also you can't use it without a shared Wi-Fi network.
 
 **Connected** cuts through the fragmentation. It brings the "it just works" magical experience to the open ecosystem.
 
@@ -57,26 +57,20 @@ In a world of walled gardens, moving a file from your phone to your computer sho
 |:---:|:---:|
 | ![Phone Home](screenshots/phone-home.png) | ![Phone Settings](screenshots/phone-settings.png) |
 
-## Installation
+## Development
 
 ### Android
 
 1.  Enable **Developer Options** on your Android device.
 2.  Connect your device via USB.
-3.  Navigate to the `android/` directory:
-    ```bash
-    cd android
-    ```
-4.  Build and install the app:
-    ```bash
-    ./gradlew installDebug
-    ```
+3.  From Android Studio select the `android/` directory
+
 
 ### Linux (Desktop)
 
 **Requirements:**
 -   Rust (stable)
--   `libasound2-dev`, `libudev-dev`, `libdbus-1-dev`, `pkg-config` (Ubuntu/Debian)
+-   `libasound2-dev`, `libudev-dev`, `libdbus-1-dev`, `pkg-config`
 
 1.  Clone the repository:
     ```bash
@@ -87,8 +81,6 @@ In a world of walled gardens, moving a file from your phone to your computer sho
     ```bash
     cargo run -p connected-desktop
     ```
-
-## Development
 
 ### Prerequisites
 
