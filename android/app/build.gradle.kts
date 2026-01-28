@@ -167,51 +167,48 @@ tasks.register<Exec>("buildRustRelease") {
     )
 }
 
-// Task to build Rust library for Host (for UniFFI binding generation)
-tasks.register<Exec>("buildRustHost") {
-    workingDir = file("${project.rootDir}/../ffi")
-    commandLine("cargo", "build", "--release")
-}
-
 // Generate UniFFI Kotlin bindings (using bundled uniffi-bindgen)
-// We use the HOST library for generation so uniffi-bindgen can load it.
+// We use the library built for x86_64 (emulator) or arm64 as a reference for generation.
+// It doesn't matter which architecture, as long as the API is the same.
 tasks.register<Exec>("generateBindings") {
     workingDir = file("${project.rootDir}/..")
+    // Use the x86_64 debug lib for generation speed/convenience during debug builds
     commandLine("cargo", "run", "--release",
         "-p", "connected-ffi",
         "--bin", "uniffi-bindgen",
         "--",
         "generate",
-        "--library", "target/release/libconnected_ffi.so",
+        "--library", "target/aarch64-linux-android/debug/libconnected_ffi.so",
         "--language", "kotlin",
         "--out-dir", "${project.projectDir}/src/main/kotlin",
         "--no-format"
     )
-    dependsOn("buildRustHost")
+    // Ensure the library exists before generating bindings.
+    // We depend on buildRustDebug because we point to the debug .so
+    dependsOn("buildRustDebug")
 }
 
 tasks.register<Exec>("generateBindingsRelease") {
     workingDir = file("${project.rootDir}/..")
+    // Use the aarch64 release lib for generation
     commandLine("cargo", "run", "--release",
         "-p", "connected-ffi",
         "--bin", "uniffi-bindgen",
         "--",
         "generate",
-        "--library", "target/release/libconnected_ffi.so",
+        "--library", "target/aarch64-linux-android/release/libconnected_ffi.so",
         "--language", "kotlin",
         "--out-dir", "${project.projectDir}/src/main/kotlin",
         "--no-format"
     )
-    dependsOn("buildRustHost")
+    dependsOn("buildRustRelease")
 }
 
 afterEvaluate {
     tasks.named("preDebugBuild").configure {
         dependsOn("generateBindings")
-        dependsOn("buildRustDebug")
     }
     tasks.named("preReleaseBuild").configure {
         dependsOn("generateBindingsRelease")
-        dependsOn("buildRustRelease")
     }
 }

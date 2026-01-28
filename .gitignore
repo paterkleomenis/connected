@@ -5,7 +5,6 @@ Cargo.lock
 
 # Android
 android/.gradle/
-android/app/release
 android/build/
 android/release/
 android/app/build/
