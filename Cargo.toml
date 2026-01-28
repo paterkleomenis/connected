@@ -22,6 +22,11 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Preserve symbols in the FFI library for UniFFI metadata extraction
+# uniffi-bindgen reads metadata from the compiled .so file's symbols
+[profile.release.package.connected-ffi]
+strip = false
+
 [workspace.package]
 version = "1.0.0"
 edition = "2024"
