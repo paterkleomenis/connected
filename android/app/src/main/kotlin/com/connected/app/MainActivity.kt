@@ -16,6 +16,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -258,12 +259,13 @@ fun isNotificationListenerEnabled(context: Context, serviceClass: Class<*>): Boo
  * Opens the notification listener settings screen.
  * Uses the proper Settings constant and handles potential exceptions.
  */
+@RequiresApi(Build.VERSION_CODES.R)
 fun openNotificationListenerSettings(context: Context) {
     try {
         val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         // Fallback for devices that don't support the direct intent
         try {
             val fallbackIntent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
@@ -273,7 +275,7 @@ fun openNotificationListenerSettings(context: Context) {
             )
             fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(fallbackIntent)
-        } catch (e2: Exception) {
+        } catch (_: Exception) {
             // Final fallback to general notification settings
             val generalIntent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
             generalIntent.putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
@@ -395,6 +397,7 @@ enum class Screen {
     Settings
 }
 
+@RequiresApi(Build.VERSION_CODES.R)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppNavigation(
@@ -672,6 +675,7 @@ fun HomeScreen(
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.R)
 @SuppressLint("BatteryLife")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -960,6 +964,18 @@ fun SettingsScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("⚠️ Grant Notification Access")
+                        }
+
+                        // Helper for Android 13+ Restricted Settings
+                        Spacer(modifier = Modifier.height(4.dp))
+                        TextButton(
+                            onClick = { openAppPermissionSettings() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "Can't enable? Open App Settings and find Allow Restricted Access (usually in the 3 dots menu)",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
                 }
@@ -1262,6 +1278,37 @@ fun SettingsScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("Check Again")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Troubleshooting Section
+        if (!isNotificationAccessGranted) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Troubleshooting", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "If you are unable to enable certain features or permissions (like 'Restricted Settings'), you may need to manually allow them in system settings.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = { openAppPermissionSettings() },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary,
+                                contentColor = MaterialTheme.colorScheme.onSecondary
+                            )
+                        ) {
+                            Text("Open App System Settings")
                         }
                     }
                 }
