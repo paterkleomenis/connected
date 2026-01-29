@@ -153,7 +153,8 @@ impl ConnectionCache {
 
     fn insert(&mut self, addr: SocketAddr, connection: Connection) {
         let key = Self::canonicalize_addr(&addr);
-        let cutoff = std::time::Instant::now() - Duration::from_secs(300);
+        let now = std::time::Instant::now();
+        let cutoff = now.checked_sub(Duration::from_secs(300)).unwrap_or(now);
         self.connections
             .retain(|_, v| v.last_used > cutoff && v.connection.close_reason().is_none());
 
@@ -161,7 +162,7 @@ impl ConnectionCache {
             key,
             CachedConnection {
                 connection,
-                last_used: std::time::Instant::now(),
+                last_used: now,
             },
         );
     }
@@ -511,7 +512,8 @@ impl QuicTransport {
     pub fn cleanup_stale_connections(&self) {
         let mut cache = self.connection_cache.write();
         let before = cache.connections.len();
-        let cutoff = std::time::Instant::now() - Duration::from_secs(300);
+        let now = std::time::Instant::now();
+        let cutoff = now.checked_sub(Duration::from_secs(300)).unwrap_or(now);
         cache
             .connections
             .retain(|_, v| v.last_used > cutoff && v.connection.close_reason().is_none());
