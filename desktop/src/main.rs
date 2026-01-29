@@ -297,67 +297,91 @@ fn ensure_firewall_rules() {
 
 #[cfg(target_os = "windows")]
 fn ensure_webview2_runtime_available() {
-    use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    use std::path::PathBuf;
+    use std::process::Command;
 
-    type GetAvailableCoreWebView2BrowserVersionStringFn =
-        unsafe extern "system" fn(
-            windows::core::PCWSTR,
-            *mut windows::core::PWSTR,
-        ) -> windows::core::HRESULT;
+    fn runtime_installed() -> bool {
+        let mut roots: Vec<PathBuf> = Vec::new();
 
-    unsafe {
-        let Ok(loader) = LoadLibraryW(windows::core::w!("WebView2Loader.dll")) else {
-            _ = MessageBoxW(
-                None,
-                windows::core::w!(
-                    "Connected couldn't start because WebView2Loader.dll wasn't found.\n\nReinstall the app (or use the official installer) and try again."
-                ),
-                windows::core::w!("Connected"),
-                MB_OK | MB_ICONERROR,
+        if let Some(p) = std::env::var_os("ProgramFiles(x86)") {
+            roots.push(
+                PathBuf::from(p)
+                    .join("Microsoft")
+                    .join("EdgeWebView")
+                    .join("Application"),
             );
-            std::process::exit(1);
-        };
-
-        let proc = GetProcAddress(
-            loader,
-            windows::core::s!("GetAvailableCoreWebView2BrowserVersionString"),
-        );
-        let Some(get_version) = proc
-            .map(|p| std::mem::transmute::<_, GetAvailableCoreWebView2BrowserVersionStringFn>(p))
-        else {
-            _ = MessageBoxW(
-                None,
-                windows::core::w!(
-                    "Connected couldn't start because WebView2Loader.dll is incompatible.\n\nReinstall the app and try again."
-                ),
-                windows::core::w!("Connected"),
-                MB_OK | MB_ICONERROR,
-            );
-            std::process::exit(1);
-        };
-
-        let mut version: windows::core::PWSTR = windows::core::PWSTR::null();
-        let hr = get_version(windows::core::PCWSTR::null(), &mut version as *mut _);
-
-        if hr.is_ok() {
-            if !version.is_null() {
-                CoTaskMemFree(Some(version.0 as _));
-            }
-            return;
         }
 
-        _ = MessageBoxW(
-            None,
-            windows::core::w!(
-                "Connected requires Microsoft Edge WebView2 Runtime.\n\nInstall 'Microsoft Edge WebView2 Runtime' (Evergreen) and try again."
-            ),
-            windows::core::w!("Connected"),
-            MB_OK | MB_ICONERROR,
-        );
+        if let Some(p) = std::env::var_os("LOCALAPPDATA") {
+            roots.push(
+                PathBuf::from(p)
+                    .join("Microsoft")
+                    .join("EdgeWebView")
+                    .join("Application"),
+            );
+        }
+
+        for root in roots {
+            if root.join("msedgewebview2.exe").exists() {
+                return true;
+            }
+
+            let Ok(entries) = std::fs::read_dir(&root) else {
+                continue;
+            };
+
+            for entry in entries.flatten() {
+                let candidate = entry.path().join("msedgewebview2.exe");
+                if candidate.exists() {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn show_error(msg: &str) -> ! {
+        let _ = rfd::MessageDialog::new()
+            .set_title("Connected")
+            .set_description(msg)
+            .set_level(rfd::MessageLevel::Error)
+            .show();
         std::process::exit(1);
     }
+
+    if runtime_installed() {
+        return;
+    }
+
+    let Ok(exe) = std::env::current_exe() else {
+        show_error(
+            "Connected requires Microsoft Edge WebView2 Runtime.\n\nInstall 'Microsoft Edge WebView2 Runtime' (Evergreen) and try again.",
+        );
+    };
+
+    let Some(dir) = exe.parent() else {
+        show_error(
+            "Connected requires Microsoft Edge WebView2 Runtime.\n\nInstall 'Microsoft Edge WebView2 Runtime' (Evergreen) and try again.",
+        );
+    };
+
+    let bootstrapper = dir.join("MicrosoftEdgeWebView2Setup.exe");
+    if bootstrapper.exists() {
+        let _ = Command::new(&bootstrapper)
+            .args(["/silent", "/install"])
+            .status();
+
+        // Give it a brief moment to lay down files before re-checking.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if runtime_installed() {
+            return;
+        }
+    }
+
+    show_error(
+        "Connected requires Microsoft Edge WebView2 Runtime.\n\nInstall 'Microsoft Edge WebView2 Runtime' (Evergreen) and try again.\n\nIf you used a debloat tool that removes WebView2/Edge components, exclude WebView2 Runtime from removal.",
+    );
 }
 
 #[cfg(target_os = "windows")]
@@ -365,8 +389,6 @@ fn install_windows_panic_hook() {
     use std::fmt::Write as _;
     use std::io::Write as _;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
     std::panic::set_hook(Box::new(move |info| {
         let mut msg = String::new();
@@ -431,15 +453,11 @@ fn install_windows_panic_hook() {
             "If this keeps happening after reboot, please include the crash report file."
         );
 
-        unsafe {
-            let text = windows::core::HSTRING::from(dialog);
-            _ = MessageBoxW(
-                None,
-                &text,
-                windows::core::w!("Connected"),
-                MB_OK | MB_ICONERROR,
-            );
-        }
+        let _ = rfd::MessageDialog::new()
+            .set_title("Connected")
+            .set_description(&dialog)
+            .set_level(rfd::MessageLevel::Error)
+            .show();
     }));
 }
 
@@ -558,7 +576,7 @@ fn App() -> Element {
                 while let Ok(command) = mpris_rx.try_recv() {
                     action_tx.send(AppAction::ControlRemoteMedia(command));
                 }
-                async_std::task::sleep(Duration::from_millis(100)).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         });
     }
@@ -854,7 +872,7 @@ fn App() -> Element {
                 }
             }
 
-            async_std::task::sleep(Duration::from_millis(200)).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
     });
 

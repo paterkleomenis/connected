@@ -1,0 +1,100 @@
+# Cargo Deny Configuration
+# https://embarkstudios.github.io/cargo-deny/checks/cfg.html
+
+# =============================================================================
+# Graph - Target configuration
+# =============================================================================
+[graph]
+targets = [{ triple = "x86_64-unknown-linux-gnu" }]
+
+# =============================================================================
+# Advisory Database
+# =============================================================================
+[advisories]
+version = 2
+yanked = "warn"
+
+# Ignore advisories for unmaintained crates we can't easily replace
+# These are transitive dependencies from dioxus-desktop and other UI crates
+ignore = [
+  # (async-std was removed, this can be deleted after next cargo update)
+  # gtk-rs GTK3 bindings no longer maintained - used by dioxus-desktop
+  "RUSTSEC-2024-0413",
+  "RUSTSEC-2024-0416",
+  "RUSTSEC-2024-0412",
+  "RUSTSEC-2024-0418",
+  "RUSTSEC-2024-0411",
+  "RUSTSEC-2024-0415",
+  "RUSTSEC-2024-0420",
+  "RUSTSEC-2024-0419",
+  # fxhash no longer maintained - transitive dep
+  "RUSTSEC-2025-0057",
+  # paste no longer maintained - transitive dep
+  "RUSTSEC-2024-0436",
+  # proc-macro-error unmaintained - transitive dep from gtk
+  "RUSTSEC-2024-0370",
+]
+
+# =============================================================================
+# License Configuration
+# =============================================================================
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "OpenSSL",
+  "MPL-2.0",
+  "CC0-1.0",
+  "Unlicense",
+]
+
+# Confidence threshold for license detection
+confidence-threshold = 0.8
+
+# Clarify licenses for crates that don't specify them correctly
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+# =============================================================================
+# Bans - Duplicate crate detection
+# =============================================================================
+[bans]
+# Multiple versions of the same crate are often unavoidable in large projects
+# with complex dependency trees. We warn but don't fail.
+multiple-versions = "warn"
+wildcards = "warn"
+highlight = "all"
+
+# Allow specific duplicate versions that are hard to resolve
+skip = [
+  # Windows crates - only used on Windows targets
+  { name = "windows-sys" },
+  { name = "windows-targets" },
+  # TOML parsing crates often have multiple versions
+  { name = "toml" },
+  { name = "toml_edit" },
+  { name = "winnow" },
+  # Image processing
+  { name = "zune-core" },
+  { name = "zune-jpeg" },
+  # proc-macro crates
+  { name = "proc-macro-crate" },
+]
+
+# =============================================================================
+# Sources - Allowed crate registries
+# =============================================================================
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

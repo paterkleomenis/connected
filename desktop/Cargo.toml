@@ -2,6 +2,7 @@
 name = "connected-desktop"
 version.workspace = true
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 dioxus = { version = "0.7", features = ["desktop"] }
@@ -11,7 +12,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-async-std = "1.13"
+# async-std removed - migrated to tokio
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 connected-core = { path = "../core" }

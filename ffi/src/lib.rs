@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use connected_core::{ConnectedClient, ConnectedError, ConnectedEvent, Device, DeviceType};
 use parking_lot::RwLock;
 use std::collections::HashMap;

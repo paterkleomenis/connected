@@ -7,11 +7,13 @@ use tracing::warn;
 #[cfg(target_os = "linux")]
 use ::mpris_server::{Metadata, PlaybackStatus, Player};
 #[cfg(target_os = "linux")]
-use async_std::channel::{self, Receiver, Sender};
-#[cfg(target_os = "linux")]
 use futures_util::future::FutureExt;
 #[cfg(target_os = "linux")]
 use futures_util::select;
+#[cfg(target_os = "linux")]
+use tokio::sync::mpsc::{
+    UnboundedReceiver as Receiver, UnboundedSender as Sender, unbounded_channel as channel,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MprisUpdate {
@@ -26,7 +28,7 @@ static MPRIS_SENDER: OnceLock<Sender<MprisUpdate>> = OnceLock::new();
 
 #[cfg(target_os = "linux")]
 pub fn init_mpris(command_tx: std::sync::mpsc::Sender<MediaCommand>) -> bool {
-    let (tx, rx) = channel::unbounded();
+    let (tx, rx) = channel();
     if MPRIS_SENDER.set(tx).is_err() {
         return false;
     }
@@ -55,7 +57,7 @@ pub fn init_mpris(_command_tx: std::sync::mpsc::Sender<MediaCommand>) -> bool {
 #[cfg(target_os = "linux")]
 pub fn send_mpris_update(update: MprisUpdate) {
     if let Some(tx) = MPRIS_SENDER.get() {
-        let _ = tx.try_send(update);
+        let _ = tx.send(update);
     }
 }
 
@@ -64,7 +66,7 @@ pub fn send_mpris_update(_update: MprisUpdate) {}
 
 #[cfg(target_os = "linux")]
 async fn run_mpris_server(
-    rx: Receiver<MprisUpdate>,
+    mut rx: Receiver<MprisUpdate>,
     command_tx: std::sync::mpsc::Sender<MediaCommand>,
 ) -> ::mpris_server::zbus::Result<()> {
     let player = Player::builder("connected")
@@ -115,8 +117,8 @@ async fn run_mpris_server(
             _ = run_task => break,
             update = rx.recv().fuse() => {
                 let update = match update {
-                    Ok(update) => update,
-                    Err(_) => break,
+                    Some(update) => update,
+                    None => break,
                 };
                 if last_update.as_ref() == Some(&update) {
                     continue;

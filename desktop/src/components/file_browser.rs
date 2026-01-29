@@ -94,7 +94,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 last_thumbnails_update.set(thumbnails_ts);
             }
 
-            async_std::task::sleep(std::time::Duration::from_millis(200)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
     });
 
