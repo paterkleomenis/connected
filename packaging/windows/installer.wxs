@@ -10,6 +10,9 @@
         InstallerVersion='200'
         Compressed='yes'
     >
+    <MajorUpgrade
+            DowngradeErrorMessage="A newer version of Connected is already installed."
+        />
 
     <SummaryInformation
             Keywords='Installer'
@@ -39,7 +42,6 @@
                             WorkingDirectory='INSTALLDIR'
                             Icon="Connected.exe"
                             IconIndex="0"
-                            Advertise="yes"
                         />
                 </File>
             </Component>

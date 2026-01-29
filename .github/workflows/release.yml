@@ -46,6 +46,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify tag matches Cargo version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag.TrimStart("v")
+          $cargo = (Get-Content Cargo.toml | Select-String -Pattern '^[\\s]*version[\\s]*=[\\s]*\"([^\"]+)\"' -AllMatches | Select-Object -Last 1).Matches[0].Groups[1].Value
+          if ($cargo -ne $ver) {
+            throw "Tag version ($ver) does not match Cargo.toml workspace version ($cargo)."
+          }
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
@@ -53,6 +63,18 @@ jobs:
 
       - name: Build Release
         run: cargo build --release --verbose
+
+      - name: Verify built EXE version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag.TrimStart("v")
+          $exe = "target\\release\\connected-desktop.exe"
+          if (!(Test-Path $exe)) { throw "Missing $exe" }
+          $fileVer = (Get-Item $exe).VersionInfo.FileVersion
+          if (-not $fileVer.StartsWith($ver)) {
+            throw "Built EXE FileVersion ($fileVer) does not match tag ($ver)."
+          }
 
       - name: Ensure WebView2Loader.dll present (MSI)
         shell: pwsh

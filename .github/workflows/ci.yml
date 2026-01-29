@@ -135,6 +135,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify installer version matches Cargo version
+        shell: pwsh
+        run: |
+          $cargo = (Get-Content Cargo.toml | Select-String -Pattern '^[\\s]*version[\\s]*=[\\s]*\"([^\"]+)\"' -AllMatches | Select-Object -Last 1).Matches[0].Groups[1].Value
+          $wxs = "packaging\\windows\\installer.wxs"
+          $msiVer = (Get-Content $wxs | Select-String -Pattern "Version='([^']+)'" -AllMatches | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($msiVer -ne $cargo) {
+            throw "installer.wxs Version ($msiVer) does not match Cargo.toml workspace version ($cargo)."
+          }
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
@@ -152,12 +162,12 @@ jobs:
       - name: Ensure WebView2Loader.dll present (MSI)
         shell: pwsh
         run: |
-          $dll = "target\release\WebView2Loader.dll"
+          $dll = "target\\release\\WebView2Loader.dll"
           if (!(Test-Path $dll)) {
-            $src = Get-ChildItem -Path "target\release\build" -Recurse -Filter "WebView2Loader.dll" |
-              Where-Object { $_.FullName -match "\\out\\x64\\WebView2Loader\.dll$" } |
+            $src = Get-ChildItem -Path "target\\release\\build" -Recurse -Filter "WebView2Loader.dll" |
+              Where-Object { $_.FullName -match "\\\\out\\\\x64\\\\WebView2Loader\\.dll$" } |
               Select-Object -First 1
-            if ($null -eq $src) { throw "WebView2Loader.dll not found under target\release\build\**\out\x64\WebView2Loader.dll" }
+            if ($null -eq $src) { throw "WebView2Loader.dll not found under target\\release\\build\\**\\out\\x64\\WebView2Loader.dll" }
             Copy-Item $src.FullName $dll -Force
           }
           Write-Host "WebView2Loader.dll ready at $dll"
@@ -167,7 +177,7 @@ jobs:
         run: |
           $ProgressPreference = "SilentlyContinue"
           $url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
-          $out = "packaging\windows\MicrosoftEdgeWebView2Setup.exe"
+          $out = "packaging\\windows\\MicrosoftEdgeWebView2Setup.exe"
           Invoke-WebRequest -Uri $url -OutFile $out
           if (!(Test-Path $out)) { throw "WebView2 bootstrapper download failed: $out" }
           Write-Host "WebView2 bootstrapper ready at $out"
