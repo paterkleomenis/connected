@@ -149,19 +149,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Linux Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: connected-linux
           path: connected-linux
 
       - name: Download Windows Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: connected-windows
           path: connected-windows
 
       - name: Download Android Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: connected-android
           path: connected-android
