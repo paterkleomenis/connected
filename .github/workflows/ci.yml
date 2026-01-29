@@ -138,7 +138,9 @@ jobs:
       - name: Verify installer version matches Cargo version
         shell: pwsh
         run: |
-          $cargo = (Get-Content Cargo.toml | Select-String -Pattern '^[\\s]*version[\\s]*=[\\s]*\"([^\"]+)\"' -AllMatches | Select-Object -Last 1).Matches[0].Groups[1].Value
+          $cargoMatch = (Get-Content Cargo.toml | Select-String -Pattern '^\s*version\s*=\s*"([^"]+)"' -AllMatches | Select-Object -Last 1)
+          if ($null -eq $cargoMatch) { throw "Could not find workspace version in Cargo.toml" }
+          $cargo = $cargoMatch.Matches[0].Groups[1].Value
           $wxs = "packaging\\windows\\installer.wxs"
           $msiVer = (Get-Content $wxs | Select-String -Pattern "Version='([^']+)'" -AllMatches | Select-Object -First 1).Matches[0].Groups[1].Value
           if ($msiVer -ne $cargo) {
