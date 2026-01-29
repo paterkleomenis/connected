@@ -504,7 +504,9 @@ fn App() -> Element {
             (show.id().clone(), hide.id().clone(), quit.id().clone())
         });
 
-        dioxus::desktop::use_tray_menu_event_handler(move |event| {
+        // NOTE: Dioxus installs a global `muda::MenuEvent` handler. Tray menu clicks are delivered
+        // through that same event stream on Windows, so `use_muda_event_handler` is the reliable hook.
+        dioxus::desktop::use_muda_event_handler(move |event| {
             if event.id == show_id {
                 window.set_visible(true);
                 window.set_minimized(false);
