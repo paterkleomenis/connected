@@ -295,6 +295,71 @@ fn ensure_firewall_rules() {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn ensure_webview2_runtime_available() {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+    type GetAvailableCoreWebView2BrowserVersionStringFn =
+        unsafe extern "system" fn(
+            windows::core::PCWSTR,
+            *mut windows::core::PWSTR,
+        ) -> windows::core::HRESULT;
+
+    unsafe {
+        let Ok(loader) = LoadLibraryW(windows::core::w!("WebView2Loader.dll")) else {
+            _ = MessageBoxW(
+                None,
+                windows::core::w!(
+                    "Connected couldn't start because WebView2Loader.dll wasn't found.\n\nReinstall the app (or use the official installer) and try again."
+                ),
+                windows::core::w!("Connected"),
+                MB_OK | MB_ICONERROR,
+            );
+            std::process::exit(1);
+        };
+
+        let proc = GetProcAddress(
+            loader,
+            windows::core::s!("GetAvailableCoreWebView2BrowserVersionString"),
+        );
+        let Some(get_version) = proc
+            .map(|p| std::mem::transmute::<_, GetAvailableCoreWebView2BrowserVersionStringFn>(p))
+        else {
+            _ = MessageBoxW(
+                None,
+                windows::core::w!(
+                    "Connected couldn't start because WebView2Loader.dll is incompatible.\n\nReinstall the app and try again."
+                ),
+                windows::core::w!("Connected"),
+                MB_OK | MB_ICONERROR,
+            );
+            std::process::exit(1);
+        };
+
+        let mut version: windows::core::PWSTR = windows::core::PWSTR::null();
+        let hr = get_version(windows::core::PCWSTR::null(), &mut version as *mut _);
+
+        if hr.is_ok() {
+            if !version.is_null() {
+                CoTaskMemFree(Some(version.0 as _));
+            }
+            return;
+        }
+
+        _ = MessageBoxW(
+            None,
+            windows::core::w!(
+                "Connected requires Microsoft Edge WebView2 Runtime.\n\nInstall 'Microsoft Edge WebView2 Runtime' (Evergreen) and try again."
+            ),
+            windows::core::w!("Connected"),
+            MB_OK | MB_ICONERROR,
+        );
+        std::process::exit(1);
+    }
+}
+
 fn main() {
     // Explicitly select the Rustls crypto provider to avoid runtime ambiguity.
     if let Err(err) = rustls::crypto::ring::default_provider().install_default() {
@@ -306,7 +371,10 @@ fn main() {
         .init();
 
     #[cfg(target_os = "windows")]
-    ensure_firewall_rules();
+    {
+        ensure_webview2_runtime_available();
+        ensure_firewall_rules();
+    }
 
     // Platform-specific window settings
     let decorations = cfg!(target_os = "windows");

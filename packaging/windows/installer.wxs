@@ -52,6 +52,15 @@
                         KeyPath='yes'
                     />
             </Component>
+            <Component Id='WebView2Bootstrapper' Guid='*'>
+                <File
+                        Id='WebView2BootstrapperExe'
+                        Name='MicrosoftEdgeWebView2Setup.exe'
+                        DiskId='1'
+                        Source='packaging\windows\MicrosoftEdgeWebView2Setup.exe'
+                        KeyPath='yes'
+                    />
+            </Component>
         </Directory>
     </StandardDirectory>
 
@@ -73,6 +82,7 @@
     <Feature Id='Complete' Level='1'>
         <ComponentRef Id='MainExecutable' />
         <ComponentRef Id='WebView2Loader' />
+        <ComponentRef Id='WebView2Bootstrapper' />
         <ComponentRef Id='ProgramMenuDir' />
     </Feature>
 
@@ -83,6 +93,15 @@
 
     <!-- Launch the app after a fresh install or a major upgrade install. -->
     <CustomAction
+            Id="InstallWebView2Runtime"
+            FileRef="WebView2BootstrapperExe"
+            Directory="INSTALLDIR"
+            ExeCommand="/silent /install"
+            Execute="deferred"
+            Return="check"
+            Impersonate="no"
+        />
+    <CustomAction
             Id="LaunchConnected"
             Directory="INSTALLDIR"
             ExeCommand="connected-desktop.exe"
@@ -90,6 +109,11 @@
             Impersonate="yes"
         />
     <InstallExecuteSequence>
+        <Custom
+                Action="InstallWebView2Runtime"
+                After="InstallFiles"
+                Condition="(NOT Installed) OR UPGRADINGPRODUCTCODE"
+            />
         <Custom
                 Action="LaunchConnected"
                 After="InstallFinalize"
