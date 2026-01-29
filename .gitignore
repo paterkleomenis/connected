@@ -25,6 +25,19 @@ android/app/src/main/kotlin/uniffi/
 *.swo
 *~
 
+# Pre-commit
+.pre-commit-cache/
+
+# Just
+.justfile.env
+
+# Cargo deny
+.cargo-deny-cache/
+
+# Coverage
+coverage/
+*.lcov
+
 # OS
 .DS_Store
 Thumbs.db

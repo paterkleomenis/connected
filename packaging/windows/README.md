@@ -13,4 +13,3 @@ Before building the MSI, download the WebView2 Evergreen bootstrapper into this 
 - Run `powershell -ExecutionPolicy Bypass -File packaging\\windows\\fetch-webview2-bootstrapper.ps1`
 
 This will create `packaging/windows/MicrosoftEdgeWebView2Setup.exe`, which `packaging/windows/installer.wxs` expects.
-

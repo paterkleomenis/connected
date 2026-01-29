@@ -9,6 +9,9 @@ authors.workspace = true
 crate-type = ["rlib"]
 name = "connected_core"
 
+[lints]
+workspace = true
+
 [dependencies]
 tokio.workspace = true
 quinn.workspace = true
@@ -29,7 +32,10 @@ dirs = "6"
 sha2 = "0.10"
 if-addrs = "0.14"
 blake3 = "1.8"
-zip = { version = "7.2", default-features = false, features = ["deflate", "time"] }
+zip = { version = "7.2", default-features = false, features = [
+  "deflate",
+  "time",
+] }
 walkdir = "2.5"
 reqwest = { version = "0.13", features = ["rustls"], default-features = false }
 semver = "1.0"

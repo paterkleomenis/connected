@@ -32,3 +32,6 @@ tracing-log = "0.2"
 
 [build-dependencies]
 uniffi = { workspace = true, features = ["build"] }
+
+[lints]
+workspace = true

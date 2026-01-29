@@ -10,109 +10,162 @@ Currently available for **Linux**, **Windows**, and **Android**.
 
 ## Features
 
--   **Cross-Platform**: Seamlessly transfer files, sync clipboards, make and answer calls, and control media between Android, Linux, and Windows devices.
--   **Offline Functionality**: You can also use it without an internet connection. Uses Wi-Fi Direct and Local Network.
--   **High Speed**: Powered by the QUIC protocol.
--   **Zero Config**: Auto-discovery via mDNS and BLE.
--   **Secure**: End-to-end encryption for all transfers.
--   **Modern UI**: Beautiful, responsive interfaces using Jetpack Compose (Android) and Tailwind CSS (Desktop).
+- **Cross-Platform**: Seamlessly transfer files, sync clipboards, make and answer calls, and control media between Android, Linux, and Windows devices.
+- **Offline Functionality**: You can also use it without an internet connection. Uses Wi-Fi Direct and Local Network.
+- **High Speed**: Powered by the QUIC protocol.
+- **Zero Config**: Auto-discovery via mDNS and BLE.
+- **Secure**: End-to-end encryption for all transfers.
+- **Modern UI**: Beautiful, responsive interfaces using Jetpack Compose (Android) and Tailwind CSS (Desktop).
 
 ## Why Connected?
 
 In a world of walled gardens, connecting devices shouldn't be a hassle.
 
-*   **Apple AirDrop and Apple Ecosystem in General**: Works like magic, but only if you stay strictly within the Evil Apple ecosystem.
-*   **KDE Connect**: It's the only alternative, it doesn't even work properly and also you can't use it without a shared Wi-Fi network.
+- **Apple AirDrop and Apple Ecosystem in General**: Works like magic, but only if you stay strictly within the Evil Apple ecosystem.
+- **KDE Connect**: It's the only alternative, it doesn't even work properly and also you can't use it without a shared Wi-Fi network.
 
 **Connected** cuts through the fragmentation. It brings the "it just works" magical experience to the open ecosystem.
 
 ### The Connected Advantage
 
-1.  **Protocol Superiority**: We use **QUIC** (via `quinn`), the same protocol powering HTTP/3. This ensures lower latency, better congestion control, and faster connection setup compared to the TCP connections used by legacy transfer tools.
-2.  **True Offline Freedom**: While many apps require a shared Router/Access Point, **Connected** is designed to leverage **Wi-Fi Direct**. This allows devices to negotiate their own high-speed link anywhere—on a train, in a park, or in an air-gapped office.
-3.  **Rust-Powered Reliability**: The core logic is written in Rust, guaranteeing memory safety, high performance, and a minimal resource footprint. The desktop client is native and blazingly fast, avoiding the bloat of Electron.
-4.  **Privacy by Design**: Your data never leaves your local link. End-to-end encryption is mandatory, ensuring your personal files remain personal.
+1. **Protocol Superiority**: We use **QUIC** (via `quinn`), the same protocol powering HTTP/3. This ensures lower latency, better congestion control, and faster connection setup compared to the TCP connections used by legacy transfer tools.
+2. **True Offline Freedom**: While many apps require a shared Router/Access Point, **Connected** is designed to leverage **Wi-Fi Direct**. This allows devices to negotiate their own high-speed link anywhere—on a train, in a park, or in an air-gapped office.
+3. **Rust-Powered Reliability**: The core logic is written in Rust, guaranteeing memory safety, high performance, and a minimal resource footprint. The desktop client is native and blazingly fast, avoiding the bloat of Electron.
+4. **Privacy by Design**: Your data never leaves your local link. End-to-end encryption is mandatory, ensuring your personal files remain personal.
 
 ## Screenshots
 
 ### Desktop
 
 #### Dashboard & Files
+
 ![Home](screenshots/desktop-home.png)
 ![Transfer](screenshots/desktop-transfer.png)
 ![Browse](screenshots/desktop-browse.png)
 
 #### Communication
+
 ![SMS](screenshots/desktop-sms.png)
 ![Inside SMS](screenshots/desktop-inside-sms.png)
 ![Contacts](screenshots/desktop-contacts.png)
 
 #### Management
+
 ![Call Logs](screenshots/desktop-call-logs.png)
 ![Media Control](screenshots/desktop-media-control.png)
 ![Settings](screenshots/desktop-settings.png)
 
 ### Mobile
+
 | Home | Settings |
 |:---:|:---:|
 | ![Phone Home](screenshots/phone-home.png) | ![Phone Settings](screenshots/phone-settings.png) |
 
 ## Development
 
+### Quick Setup
+
+We provide automated setup scripts and task runners for consistent development environments:
+
+```bash
+# Clone the repository
+git clone https://github.com/paterkleomenis/connected.git
+cd connected
+
+# Run automated setup (installs all tools and hooks)
+./scripts/setup-dev.sh
+
+# See all available tasks
+just
+```
+
+### Required Tools
+
+- **Rust** (stable): [Install Rust](https://rustup.rs/)
+- **just**: Task runner (`cargo install just`)
+- **pre-commit**: Git hooks (`pip install pre-commit`)
+
+### Development Workflow
+
+```bash
+# Format all code
+just fmt
+
+# Run linters (rustfmt, clippy, typos)
+just lint
+
+# Run tests
+just test
+
+# Full CI simulation
+just ci
+
+# Run desktop application
+just run-desktop
+```
+
 ### Android
 
-1.  Enable **Developer Options** on your Android device.
-2.  Connect your device via USB.
-3.  From Android Studio select the `android/` directory
-
+1. Enable **Developer Options** on your Android device.
+2. Connect your device via USB.
+3. From Android Studio select the `android/` directory
 
 ### Linux (Desktop)
 
 **Requirements:**
--   Rust (stable)
--   `libasound2-dev`, `libudev-dev`, `libdbus-1-dev`, `pkg-config`
 
-1.  Clone the repository:
+- Rust (stable)
+- `libasound2-dev`, `libudev-dev`, `libdbus-1-dev`, `pkg-config`
+
+1. Clone the repository:
+
     ```bash
     git clone https://github.com/paterkleomenis/connected.git
     cd connected
     ```
-2.  Run the desktop application:
+
+2. Run the desktop application:
+
     ```bash
     cargo run -p connected-desktop
     ```
 
 ### Prerequisites
 
--   **Rust**: [Install Rust](https://rustup.rs/)
--   **Android Studio**: For Android development (SDK 34+ required).
--   **Cargo NDK**: Required for building the shared library for Android.
+- **Rust**: [Install Rust](https://rustup.rs/)
+- **Android Studio**: For Android development (SDK 34+ required).
+- **Cargo NDK**: Required for building the shared library for Android.
+
     ```bash
     cargo install cargo-ndk
     ```
 
 ### Project Structure
 
--   `core/`: Shared Rust logic (networking, discovery, encryption).
--   `desktop/`: Desktop application (Linux/Windows) (Rust + Tauri-like WebView/UI logic).
--   `android/`: Native Android application (Kotlin + Jetpack Compose).
--   `ffi/`: UniFFI bindings to expose the Rust `core` to Kotlin.
+- `core/`: Shared Rust logic (networking, discovery, encryption).
+- `desktop/`: Desktop application (Linux/Windows) (Rust + Tauri-like WebView/UI logic).
+- `android/`: Native Android application (Kotlin + Jetpack Compose).
+- `ffi/`: UniFFI bindings to expose the Rust `core` to Kotlin.
 
 ## Contributing
 
-Contributions are welcome! Please check out the issues tab or submit a pull request.
+Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on code quality standards, commit message conventions, and the pull request process.
 
-1.  Fork the repo.
-2.  Create your feature branch (`git checkout -b feature/amazing-feature`).
-3.  Commit your changes (`git commit -m 'Add some amazing feature'`).
-4.  Push to the branch (`git push origin feature/amazing-feature`).
-5.  Open a Pull Request.
+Quick start:
+
+1. Fork the repo.
+2. Run `./scripts/setup-dev.sh` to set up the development environment.
+3. Create your feature branch (`git checkout -b feature/amazing-feature`).
+4. Make changes and ensure `just ci` passes.
+5. Commit your changes (`git commit -m 'feat(scope): description'`).
+6. Push to the branch (`git push origin feature/amazing-feature`).
+7. Open a Pull Request.
 
 ## License
 
 This project is licensed under either of
 
--   Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
--   MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+- Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.

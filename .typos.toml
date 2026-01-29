@@ -1,0 +1,27 @@
+# Typos configuration
+# https://github.com/crate-ci/typos
+
+[files]
+extend-exclude = [
+  "target/",
+  ".git/",
+  "Cargo.lock",
+  "*.svg",
+  "*.png",
+  "*.jpg",
+  "*.ico",
+  "android/",
+  ".gradle/",
+  "*.kt",       # Kotlin files might have different conventions
+]
+
+[default]
+# Don't check these strings (e.g., identifiers that look like typos)
+extend-ignore-identifiers-re = [".*_strm$", "ba"]
+
+[default.extend-words]
+# Don't correct these words
+# Add any domain-specific terms here
+
+[default.extend-identifiers]
+# Don't correct these identifiers

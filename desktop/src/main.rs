@@ -360,7 +360,93 @@ fn ensure_webview2_runtime_available() {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn install_windows_panic_hook() {
+    use std::fmt::Write as _;
+    use std::io::Write as _;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+    std::panic::set_hook(Box::new(move |info| {
+        let mut msg = String::new();
+        let _ = writeln!(&mut msg, "Connected crashed.");
+
+        if let Some(location) = info.location() {
+            let _ = writeln!(
+                &mut msg,
+                "Location: {}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            );
+        }
+
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic payload>".to_string()
+        };
+        let _ = writeln!(&mut msg, "Panic: {payload}");
+
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let _ = writeln!(&mut msg, "\nBacktrace:\n{backtrace}");
+
+        let data_dir = dirs::data_local_dir().map(|d| d.join("connected"));
+        let crash_path = data_dir.as_ref().map(|d| {
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            d.join(format!("crash-{ts}.log"))
+        });
+
+        if let (Some(dir), Some(path)) = (data_dir, crash_path.clone()) {
+            let _ = std::fs::create_dir_all(&dir);
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(&path)
+            {
+                let _ = f.write_all(msg.as_bytes());
+            }
+        }
+
+        let mut dialog = String::new();
+        let _ = writeln!(
+            &mut dialog,
+            "Connected crashed during startup.\n\nPanic: {payload}\n"
+        );
+        if let Some(path) = crash_path {
+            let _ = writeln!(
+                &mut dialog,
+                "A crash report was written to:\n{}\n",
+                path.display()
+            );
+        }
+        let _ = writeln!(
+            &mut dialog,
+            "If this keeps happening after reboot, please include the crash report file."
+        );
+
+        unsafe {
+            let text = windows::core::HSTRING::from(dialog);
+            _ = MessageBoxW(
+                None,
+                &text,
+                windows::core::w!("Connected"),
+                MB_OK | MB_ICONERROR,
+            );
+        }
+    }));
+}
+
 fn main() {
+    #[cfg(target_os = "windows")]
+    install_windows_panic_hook();
+
     // Explicitly select the Rustls crypto provider to avoid runtime ambiguity.
     if let Err(err) = rustls::crypto::ring::default_provider().install_default() {
         eprintln!("Failed to install rustls ring provider: {err:?}");

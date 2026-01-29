@@ -5,16 +5,24 @@ on:
     branches: ["main", "master"]
   pull_request:
     branches: ["main", "master"]
+  schedule:
+    # Run security audit daily at 5 AM UTC
+    - cron: '0 5 * * *'
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # -------------------------------------------------------------------------
-  # Job 1: Build & Test Rust Code (Linux Desktop & Core)
+  # Job 1: Code Quality (formatting, linting, typos)
   # -------------------------------------------------------------------------
-  build-rust:
-    name: Rust (Linux)
+  quality:
+    name: Code Quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,38 +33,54 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
-      - name: Install Linux dependencies
+      - name: Install cargo tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev pkg-config libdbus-1-dev libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libxdo-dev
+          cargo install typos-cli taplo-cli --locked
 
       - name: Check formatting
         run: cargo fmt -- --check
 
+      - name: Check TOML formatting
+        run: taplo fmt --check
+
       - name: Lint with Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
-      - name: Build
-        run: cargo build --verbose
+      - name: Check typos
+        run: typos
 
-      - name: Run tests
-        run: cargo test --verbose
+  # -------------------------------------------------------------------------
+  # Job 2: Security Audit
+  # -------------------------------------------------------------------------
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Build Release
-        run: cargo build --release --verbose
-
-      - name: Upload Linux Build
-        uses: actions/upload-artifact@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
-          name: connected-desktop-linux
-          path: target/release/connected-desktop
+          toolchain: stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run security audit
+        run: cargo audit
+
+      - name: Check licenses and bans
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check
 
   # -------------------------------------------------------------------------
-  # Job 2: Build Rust Code (Windows Desktop)
+  # Job 3: Build & Test Rust Code (Linux Desktop & Core)
   # -------------------------------------------------------------------------
-  build-windows:
-    name: Rust (Windows)
-    runs-on: windows-latest
+  build-rust:
+    name: Rust (Linux)
+    runs-on: ubuntu-latest
+    needs: [quality]
     steps:
       - uses: actions/checkout@v4
 
@@ -66,18 +90,64 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "linux-build"
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config libdbus-1-dev libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libxdo-dev
+
+      - name: Build
+        run: cargo build --workspace --verbose
+
+      - name: Run tests
+        run: cargo test --workspace --verbose
+
+      - name: Build Release
+        run: cargo build --workspace --release --verbose
+
+      - name: Upload Linux Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: connected-desktop-linux
+          path: target/release/connected-desktop
+
+  # -------------------------------------------------------------------------
+  # Job 4: Build Rust Code (Windows Desktop)
+  # -------------------------------------------------------------------------
+  build-windows:
+    name: Rust (Windows)
+    runs-on: windows-latest
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "windows-build"
+
       - name: Build
         run: cargo build --release --verbose
 
       - name: Ensure WebView2Loader.dll present (MSI)
         shell: pwsh
         run: |
-          $dll = "target\\release\\WebView2Loader.dll"
+          $dll = "target\release\WebView2Loader.dll"
           if (!(Test-Path $dll)) {
-            $src = Get-ChildItem -Path "target\\release\\build" -Recurse -Filter "WebView2Loader.dll" |
-              Where-Object { $_.FullName -match "\\\\out\\\\x64\\\\WebView2Loader\\.dll$" } |
+            $src = Get-ChildItem -Path "target\release\build" -Recurse -Filter "WebView2Loader.dll" |
+              Where-Object { $_.FullName -match "\\out\\x64\\WebView2Loader\.dll$" } |
               Select-Object -First 1
-            if ($null -eq $src) { throw "WebView2Loader.dll not found under target\\release\\build\\**\\out\\x64\\WebView2Loader.dll" }
+            if ($null -eq $src) { throw "WebView2Loader.dll not found under target\release\build\**\out\x64\WebView2Loader.dll" }
             Copy-Item $src.FullName $dll -Force
           }
           Write-Host "WebView2Loader.dll ready at $dll"
@@ -87,7 +157,7 @@ jobs:
         run: |
           $ProgressPreference = "SilentlyContinue"
           $url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
-          $out = "packaging\\windows\\MicrosoftEdgeWebView2Setup.exe"
+          $out = "packaging\windows\MicrosoftEdgeWebView2Setup.exe"
           Invoke-WebRequest -Uri $url -OutFile $out
           if (!(Test-Path $out)) { throw "WebView2 bootstrapper download failed: $out" }
           Write-Host "WebView2 bootstrapper ready at $out"
@@ -108,11 +178,12 @@ jobs:
           path: target/wix/*.msi
 
   # -------------------------------------------------------------------------
-  # Job 3: Build Android App
+  # Job 5: Build Android App
   # -------------------------------------------------------------------------
   build-android:
     name: Android Build
     runs-on: ubuntu-latest
+    needs: [quality]
     steps:
       - uses: actions/checkout@v4
 
@@ -128,8 +199,13 @@ jobs:
           toolchain: stable
           targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "android-build"
+
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk
+        run: cargo install cargo-ndk --locked
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -146,3 +222,35 @@ jobs:
         with:
           name: connected-android-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+  # -------------------------------------------------------------------------
+  # Job 6: Pre-commit Hooks Check
+  # -------------------------------------------------------------------------
+  pre-commit:
+    name: Pre-commit Hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache pre-commit hooks
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run pre-commit hooks
+        run: pre-commit run --all-files --show-diff-on-failure
