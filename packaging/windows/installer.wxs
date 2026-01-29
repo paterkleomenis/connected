@@ -95,7 +95,6 @@
     <CustomAction
             Id="InstallWebView2Runtime"
             FileRef="WebView2BootstrapperExe"
-            Directory="INSTALLDIR"
             ExeCommand="/silent /install"
             Execute="deferred"
             Return="check"
