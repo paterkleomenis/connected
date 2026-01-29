@@ -81,7 +81,8 @@ jobs:
         run: dotnet tool install --global wix
 
       - name: Create WiX Output Directory
-        run: mkdir target/wix
+        shell: pwsh
+        run: mkdir target/wix -Force
 
       - name: Package MSI
         run: wix build packaging/windows/installer.wxs -o target/wix/connected-desktop.msi

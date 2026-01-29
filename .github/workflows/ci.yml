@@ -7,7 +7,7 @@ on:
     branches: ["main", "master"]
   schedule:
     # Run security audit daily at 5 AM UTC
-    - cron: '0 5 * * *'
+    - cron: "0 5 * * *"
 
 env:
   CARGO_TERM_COLOR: always
@@ -176,7 +176,8 @@ jobs:
         run: dotnet tool install --global wix
 
       - name: Create WiX Output Directory
-        run: mkdir target/wix
+        shell: pwsh
+        run: mkdir target/wix -Force
 
       - name: Package
         run: wix build packaging/windows/installer.wxs -o target/wix/connected-desktop.msi
@@ -250,7 +251,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.x"
 
       - name: Install pre-commit
         run: pip install pre-commit
