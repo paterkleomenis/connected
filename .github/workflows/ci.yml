@@ -142,7 +142,9 @@ jobs:
           if ($null -eq $cargoMatch) { throw "Could not find workspace version in Cargo.toml" }
           $cargo = $cargoMatch.Matches[0].Groups[1].Value
           $wxs = "packaging\\windows\\installer.wxs"
-          $msiVer = (Get-Content $wxs | Select-String -Pattern "Version='([^']+)'" -AllMatches | Select-Object -First 1).Matches[0].Groups[1].Value
+          $msiMatch = (Get-Content $wxs | Select-String -Pattern "^\s*Version=['`"`]([^'`"`]+)['`"`]" | Select-Object -First 1)
+          if ($null -eq $msiMatch) { throw "Could not find Version in installer.wxs" }
+          $msiVer = $msiMatch.Matches[0].Groups[1].Value
           if ($msiVer -ne $cargo) {
             throw "installer.wxs Version ($msiVer) does not match Cargo.toml workspace version ($cargo)."
           }

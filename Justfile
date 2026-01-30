@@ -87,6 +87,17 @@ ci:
     @./scripts/check-versions.sh
     @echo "✅ All CI checks passed"
 
+# Windows-local CI helpers (PowerShell)
+[doc("Run Windows CI steps locally (PowerShell)")]
+ci-windows:
+    if [[ "$(uname -s 2>/dev/null || true)" == "Linux" ]]; then echo "ERROR: `just ci-windows` must be run on a Windows machine/VM. From Linux, run `just ci` (Linux checks) and use a Windows VM/runner to build the MSI." >&2; exit 2; fi
+    if command -v pwsh >/dev/null 2>&1; then pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1; elif command -v powershell >/dev/null 2>&1; then powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1; else echo "ERROR: PowerShell not found (install PowerShell 7 for 'pwsh' or use Windows PowerShell 'powershell')." >&2; exit 127; fi
+
+[doc("Build Windows MSI locally (PowerShell)")]
+build-windows-msi:
+    if [[ "$(uname -s 2>/dev/null || true)" == "Linux" ]]; then echo "ERROR: `just build-windows-msi` must be run on a Windows machine/VM. From Linux, use a Windows VM/runner to build the MSI." >&2; exit 2; fi
+    if command -v pwsh >/dev/null 2>&1; then pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1; elif command -v powershell >/dev/null 2>&1; then powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1; else echo "ERROR: PowerShell not found (install PowerShell 7 for 'pwsh' or use Windows PowerShell 'powershell')." >&2; exit 127; fi
+
 # Clean build artifacts
 [doc("Clean build artifacts")]
 clean:
