@@ -1974,10 +1974,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 // user to the browser to download + run the MSI manually.
                                 if !url.to_lowercase().ends_with(".msi") {
                                     info!("Update URL is not an MSI; opening in browser: {}", url);
-                                    // Quote the URL to handle special characters and spaces
-                                    let url_quoted = format!("\"{}\"", url);
                                     let _ = std::process::Command::new("cmd")
-                                        .args(["/C", "start", "", &url_quoted])
+                                        .args(["/C", "start", "", &url])
                                         .spawn();
                                     return;
                                 }
@@ -1992,19 +1990,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         let msi = dest.to_string_lossy().to_string();
                                         info!("Launching MSI installer: {}", msi);
 
-                                        // Quote the MSI path to handle spaces in temp directory
-                                        let msi_quoted = format!("\"{}\"", msi);
-
-                                        // Use cmd /c to properly handle the quoted path with msiexec
-                                        let spawn_res = std::process::Command::new("cmd")
-                                            .args([
-                                                "/C",
-                                                "msiexec",
-                                                "/i",
-                                                &msi_quoted,
-                                                "/passive",
-                                                "/norestart",
-                                            ])
+                                        let spawn_res = std::process::Command::new("msiexec")
+                                            .args(["/i", &msi, "/passive", "/norestart"])
                                             .spawn();
 
                                         match spawn_res {
