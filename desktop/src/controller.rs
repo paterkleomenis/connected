@@ -629,7 +629,6 @@ fn spawn_event_loop(
                                         ) -> windows::core::Result<()>
                                         {
                                             use windows::Win32::Media::Audio::{
-                                                IAudioEndpointVolume, IMMDeviceEnumerator,
                                                 MMDeviceEnumerator, eConsole, eRender,
                                             };
                                             use windows::Win32::System::Com::{
@@ -641,8 +640,11 @@ fn spawn_event_loop(
                                                 CoInitialize(None).ok();
 
                                                 // Get the default audio endpoint
-                                                let enumerator: IMMDeviceEnumerator =
-                                                    CoCreateInstance(
+                                                let enumerator =
+                                                    CoCreateInstance::<
+                                                        _,
+                                                        windows::Win32::Media::Audio::IMMDeviceEnumerator,
+                                                    >(
                                                         &MMDeviceEnumerator,
                                                         None,
                                                         CLSCTX_ALL,
@@ -651,13 +653,11 @@ fn spawn_event_loop(
                                                 let device = enumerator
                                                     .GetDefaultAudioEndpoint(eRender, eConsole)?;
 
-                                                let endpoint: IAudioEndpointVolume = device
-                                                    .Activate(
-                                                        &IAudioEndpointVolume::IID,
-                                                        CLSCTX_ALL,
-                                                        None,
-                                                    )?
-                                                    .cast()?;
+                                                let endpoint = device.Activate::<
+                                                    windows::Win32::Media::Audio::IAudioEndpointVolume,
+                                                >(
+                                                    CLSCTX_ALL, None
+                                                )?;
 
                                                 let current_vol =
                                                     endpoint.GetMasterVolumeLevelScalar()?;
