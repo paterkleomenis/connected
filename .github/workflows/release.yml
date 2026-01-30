@@ -64,7 +64,7 @@ jobs:
           $cargoMatch = (Get-Content Cargo.toml | Select-String -Pattern '^\s*version\s*=\s*"([^"]+)"' -AllMatches | Select-Object -Last 1)
           if ($null -eq $cargoMatch) { throw "Could not find workspace version in Cargo.toml" }
           $cargoVer = $cargoMatch.Matches[0].Groups[1].Value
-          $wxsMatch = (Get-Content packaging/windows/installer.wxs | Select-String -Pattern "Version=['`"`]([^'`"`]+)['`"`]")
+          $wxsMatch = (Get-Content packaging/windows/installer.wxs | Select-String -Pattern "^\s*Version=['`"`]([^'`"`]+)['`"`]")
           if ($null -eq $wxsMatch) { throw "Could not find Version in installer.wxs" }
           $wxsVer = $wxsMatch.Matches[0].Groups[1].Value
           if ($wxsVer -ne $cargoVer) {

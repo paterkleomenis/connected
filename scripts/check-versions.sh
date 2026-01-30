@@ -25,7 +25,7 @@ echo "   Cargo.toml workspace version: $CARGO_VERSION"
 # Check installer.wxs version
 WIX_FILE="packaging/windows/installer.wxs"
 if [ -f "$WIX_FILE" ]; then
-    WIX_VERSION=$(grep -E "Version=['\"][^'\"]+['\"]" "$WIX_FILE" | head -1 | sed -E "s/.*Version=['\"]([^'\"]+)['\"].*/\1/")
+    WIX_VERSION=$(grep -E "^\s*Version=['\"][^'\"]+['\"]" "$WIX_FILE" | head -1 | sed -E "s/.*Version=['\"]([^'\"]+)['\"].*/\1/")
 
     if [ -z "$WIX_VERSION" ]; then
         echo -e "${RED}❌ Error: Could not find Version in $WIX_FILE${NC}"
