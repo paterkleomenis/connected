@@ -624,10 +624,12 @@ fn spawn_event_loop(
                                             Ok(())
                                         }
 
+                                        #[allow(unsafe_code)]
                                         fn control_system_volume(
                                             cmd: MediaCommand,
                                         ) -> windows::core::Result<()>
                                         {
+                                            use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
                                             use windows::Win32::Media::Audio::{
                                                 MMDeviceEnumerator, eConsole, eRender,
                                             };
@@ -653,11 +655,10 @@ fn spawn_event_loop(
                                                 let device = enumerator
                                                     .GetDefaultAudioEndpoint(eRender, eConsole)?;
 
-                                                let endpoint = device.Activate::<
-                                                    windows::Win32::Media::Audio::IAudioEndpointVolume,
-                                                >(
-                                                    CLSCTX_ALL, None
-                                                )?;
+                                                let endpoint = device
+                                                    .Activate::<IAudioEndpointVolume>(
+                                                        CLSCTX_ALL, None,
+                                                    )?;
 
                                                 let current_vol =
                                                     endpoint.GetMasterVolumeLevelScalar()?;
@@ -1388,7 +1389,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     tokio::spawn(async move {
                         if let Ok(ip_addr) = ip_str.parse() {
                             let temp_dir = std::env::temp_dir();
-                            let local_path = temp_dir.join(format!("preview_{}", filename));
+                            let local_path = temp_dir
+                                .join(format!("connected-preview-{}.tmp", uuid::Uuid::new_v4()));
 
                             add_notification("Preview", &format!("Loading {}...", filename), "");
 
@@ -1397,8 +1399,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 .await
                             {
                                 Ok(_) => {
-                                    // Read file content
-                                    if let Ok(data) = tokio::fs::read(&local_path).await {
+                                    let read_res = tokio::fs::read(&local_path).await;
+                                    let _ = tokio::fs::remove_file(&local_path).await;
+
+                                    if let Ok(data) = read_res {
                                         let mime = mime_guess::from_path(&filename)
                                             .first_or_octet_stream()
                                             .to_string();
@@ -1408,13 +1412,12 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             mime_type: mime,
                                             data,
                                         });
-                                        // Clean up temp file
-                                        let _ = tokio::fs::remove_file(local_path).await;
                                     } else {
                                         add_notification("Preview", "Failed to read file", "");
                                     }
                                 }
                                 Err(e) => {
+                                    let _ = tokio::fs::remove_file(&local_path).await;
                                     error!("Failed to preview file: {}", e);
                                     add_notification("Preview Failed", &e.to_string(), "");
                                 }

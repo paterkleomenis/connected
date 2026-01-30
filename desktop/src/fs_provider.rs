@@ -9,6 +9,8 @@ pub struct DesktopFilesystemProvider {
     root_canonical: PathBuf,
 }
 
+const MAX_FS_READ_BYTES: u64 = 4 * 1024 * 1024;
+
 impl DesktopFilesystemProvider {
     pub fn new() -> Self {
         let root = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -112,6 +114,12 @@ impl FilesystemProvider for DesktopFilesystemProvider {
     }
 
     fn read_file(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
+        if size > MAX_FS_READ_BYTES {
+            return Err(connected_core::ConnectedError::Filesystem(format!(
+                "Read size {} exceeds limit {}",
+                size, MAX_FS_READ_BYTES
+            )));
+        }
         let full_path = self.resolve_path(path)?;
         let mut file = fs::File::open(full_path).map_err(connected_core::ConnectedError::Io)?;
 
@@ -119,7 +127,10 @@ impl FilesystemProvider for DesktopFilesystemProvider {
         file.seek(SeekFrom::Start(offset))
             .map_err(connected_core::ConnectedError::Io)?;
 
-        let mut buffer = vec![0u8; size as usize];
+        let size_usize = usize::try_from(size).map_err(|_| {
+            connected_core::ConnectedError::Filesystem("Read size is too large".to_string())
+        })?;
+        let mut buffer = vec![0u8; size_usize];
         let read = file
             .read(&mut buffer)
             .map_err(connected_core::ConnectedError::Io)?;
@@ -133,11 +144,10 @@ impl FilesystemProvider for DesktopFilesystemProvider {
 
         use std::io::{Seek, SeekFrom, Write};
 
-        // Create if not exists, open for write
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create(true)
-            .truncate(true)
+            .truncate(false)
             .open(full_path)
             .map_err(connected_core::ConnectedError::Io)?;
 
