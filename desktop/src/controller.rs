@@ -651,8 +651,13 @@ fn spawn_event_loop(
                                                 let device = enumerator
                                                     .GetDefaultAudioEndpoint(eRender, eConsole)?;
 
-                                                let endpoint: IAudioEndpointVolume =
-                                                    device.Activate(CLSCTX_ALL, None)?;
+                                                let endpoint: IAudioEndpointVolume = device
+                                                    .Activate(
+                                                        &IAudioEndpointVolume::IID,
+                                                        CLSCTX_ALL,
+                                                        None,
+                                                    )?
+                                                    .cast()?;
 
                                                 let current_vol =
                                                     endpoint.GetMasterVolumeLevelScalar()?;

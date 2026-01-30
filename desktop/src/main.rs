@@ -234,7 +234,7 @@ fn ensure_firewall_rules() {
         .description("Allow Connected Desktop to receive mDNS traffic for local network discovery.")
         .protocol(ProtocolFirewallWindows::Udp)
         .local_ports([5353])
-        .application_name(exe_path_str)
+        .application_name(exe_path_str.clone())
         .build();
 
     if let Err(e) = mdns_inbound.add_or_update() {
@@ -250,7 +250,7 @@ fn ensure_firewall_rules() {
         .description("Allow Connected Desktop to send mDNS queries for local network discovery.")
         .protocol(ProtocolFirewallWindows::Udp)
         .remote_ports([5353])
-        .application_name(exe_path_str)
+        .application_name(exe_path_str.clone())
         .build();
 
     if let Err(e) = mdns_outbound.add_or_update() {
@@ -266,7 +266,7 @@ fn ensure_firewall_rules() {
         .enabled(true)
         .description("Allow Connected Desktop to receive incoming connections from paired devices.")
         .protocol(ProtocolFirewallWindows::Udp)
-        .application_name(exe_path_str)
+        .application_name(exe_path_str.clone())
         .build();
 
     if let Err(e) = quic_inbound.add_or_update() {
@@ -281,7 +281,7 @@ fn ensure_firewall_rules() {
         .enabled(true)
         .description("Allow Connected Desktop to connect to paired devices.")
         .protocol(ProtocolFirewallWindows::Udp)
-        .application_name(exe_path_str)
+        .application_name(exe_path_str.clone())
         .build();
 
     if let Err(e) = quic_outbound.add_or_update() {
