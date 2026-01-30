@@ -84,6 +84,7 @@ ci:
     just pre-push
     cargo build --workspace --release
     cargo audit
+    @./scripts/check-versions.sh
     @echo "✅ All CI checks passed"
 
 # Clean build artifacts

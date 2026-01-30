@@ -58,6 +58,20 @@ jobs:
             throw "Tag version ($ver) does not match Cargo.toml workspace version ($cargo)."
           }
 
+      - name: Verify installer.wxs matches Cargo version
+        shell: pwsh
+        run: |
+          $cargoMatch = (Get-Content Cargo.toml | Select-String -Pattern '^\s*version\s*=\s*"([^"]+)"' -AllMatches | Select-Object -Last 1)
+          if ($null -eq $cargoMatch) { throw "Could not find workspace version in Cargo.toml" }
+          $cargoVer = $cargoMatch.Matches[0].Groups[1].Value
+          $wxsMatch = (Get-Content packaging/windows/installer.wxs | Select-String -Pattern "Version=['`"`]([^'`"`]+)['`"`]")
+          if ($null -eq $wxsMatch) { throw "Could not find Version in installer.wxs" }
+          $wxsVer = $wxsMatch.Matches[0].Groups[1].Value
+          if ($wxsVer -ne $cargoVer) {
+            throw "installer.wxs Version ($wxsVer) does not match Cargo.toml workspace version ($cargoVer)."
+          }
+          Write-Host "✅ installer.wxs version ($wxsVer) matches Cargo.toml ($cargoVer)"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
