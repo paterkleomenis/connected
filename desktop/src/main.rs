@@ -557,7 +557,7 @@ fn App() -> Element {
     let mut current_media_source_id = use_signal(|| "local".to_string());
 
     // Pairing State
-    let mut pairing_mode = use_signal(|| *get_pairing_mode_state().lock().unwrap());
+    let mut pairing_mode = use_signal(|| *get_pairing_mode_state().lock_or_recover());
     let mut pairing_requests = use_signal(Vec::<PairingRequest>::new);
     let mut file_transfer_requests = use_signal(Vec::<FileTransferRequest>::new);
 
@@ -775,7 +775,7 @@ fn App() -> Element {
 
             // Apply pending state
             {
-                let pending = get_pending_pairings().lock().unwrap();
+                let pending = get_pending_pairings().lock_or_recover();
                 for device in list.iter_mut() {
                     if pending.contains(&device.id) {
                         device.is_pending = true;
@@ -785,39 +785,39 @@ fn App() -> Element {
 
             devices_list.set(list);
             // Update transfer status
-            let status = get_transfer_status().lock().unwrap().clone();
+            let status = get_transfer_status().lock_or_recover().clone();
             transfer_status.set(status);
 
             // Update notifications
             {
-                let mut notifs = get_notifications().lock().unwrap();
+                let mut notifs = get_notifications().lock_or_recover();
                 let now = std::time::Instant::now();
                 notifs.retain(|n| now.duration_since(n.timestamp).as_secs() < 5);
             }
-            notifications.set(get_notifications().lock().unwrap().clone());
+            notifications.set(get_notifications().lock_or_recover().clone());
 
             // Update Pairing Requests
             {
-                let reqs = get_pairing_requests().lock().unwrap().clone();
+                let reqs = get_pairing_requests().lock_or_recover().clone();
                 pairing_requests.set(reqs);
             }
 
             // Update File Transfer Requests
             {
-                let reqs_map = get_file_transfer_requests().lock().unwrap();
+                let reqs_map = get_file_transfer_requests().lock_or_recover();
                 let mut reqs: Vec<FileTransferRequest> = reqs_map.values().cloned().collect();
                 reqs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
                 file_transfer_requests.set(reqs);
             }
 
             // Update Telephony State
-            phone_contacts.set(get_phone_contacts().lock().unwrap().clone());
-            phone_conversations.set(get_phone_conversations().lock().unwrap().clone());
-            phone_call_log.set(get_phone_call_log().lock().unwrap().clone());
-            active_call.set(get_active_call().lock().unwrap().clone());
+            phone_contacts.set(get_phone_contacts().lock_or_recover().clone());
+            phone_conversations.set(get_phone_conversations().lock_or_recover().clone());
+            phone_call_log.set(get_phone_call_log().lock_or_recover().clone());
+            active_call.set(get_active_call().lock_or_recover().clone());
             // Update messages for selected conversation
             if let Some(thread_id) = selected_conversation.read().clone()
-                && let Some(msgs) = get_phone_messages().lock().unwrap().get(&thread_id)
+                && let Some(msgs) = get_phone_messages().lock_or_recover().get(&thread_id)
             {
                 let new_count = msgs.len();
                 let old_count = *last_message_count.read();
@@ -838,8 +838,8 @@ fn App() -> Element {
             }
 
             // Update Media State
-            media_enabled.set(*get_media_enabled().lock().unwrap());
-            if let Some(media) = get_current_media().lock().unwrap().clone() {
+            media_enabled.set(*get_media_enabled().lock_or_recover());
+            if let Some(media) = get_current_media().lock_or_recover().clone() {
                 current_media_title.set(
                     media
                         .state
@@ -861,27 +861,27 @@ fn App() -> Element {
                 current_media_source_id.set("local".to_string());
             }
 
-            pairing_mode.set(*get_pairing_mode_state().lock().unwrap());
+            pairing_mode.set(*get_pairing_mode_state().lock_or_recover());
 
             // Update Info
             {
-                let info = get_update_info().lock().unwrap().clone();
+                let info = get_update_info().lock_or_recover().clone();
                 update_info.set(info);
             }
 
             // Clipboard Sync Check
             if *clipboard_sync_enabled.read() {
                 // Check if we recently received a remote update (debounce to prevent echo)
-                let last_update = *get_last_remote_update().lock().unwrap();
+                let last_update = *get_last_remote_update().lock_or_recover();
                 if last_update.elapsed() >= Duration::from_millis(1000) {
                     let current_clip = get_system_clipboard();
-                    let last_clip = get_last_clipboard().lock().unwrap().clone();
+                    let last_clip = get_last_clipboard().lock_or_recover().clone();
                     if !current_clip.is_empty() && current_clip != last_clip {
                         debug!(
                             "Local clipboard changed. New content length: {}",
                             current_clip.len()
                         );
-                        *get_last_clipboard().lock().unwrap() = current_clip.clone();
+                        *get_last_clipboard().lock_or_recover() = current_clip.clone();
                         action_tx.send(AppAction::BroadcastClipboard { text: current_clip });
                     }
                 }
@@ -898,7 +898,7 @@ fn App() -> Element {
         set_clipboard_sync_enabled(new_state); // Save to disk
         action_tx.send(AppAction::SetClipboardSync(new_state));
         if new_state {
-            *get_last_clipboard().lock().unwrap() = get_system_clipboard();
+            *get_last_clipboard().lock_or_recover() = get_system_clipboard();
             add_notification("Clipboard Sync", "Sync Started (Trusted Devices)", "");
         } else {
             add_notification("Clipboard Sync", "Sync Stopped", "");
@@ -1506,7 +1506,7 @@ fn App() -> Element {
                                                         phone_sub_tab.set("messages".to_string());
                                                         // Only sync if auto-sync enabled AND data is empty
                                                         if *auto_sync_messages.read() && phone_conversations.read().is_empty()
-                                                            && let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned()
+                                                            && let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned()
                                                         {
                                                             action_tx.send(AppAction::RequestConversationsSync {
                                                                 ip: fresh_device.ip.clone(),
@@ -1526,7 +1526,7 @@ fn App() -> Element {
                                                         phone_sub_tab.set("calls".to_string());
                                                         // Only sync if auto-sync enabled AND data is empty
                                                         if *auto_sync_calls.read() && phone_call_log.read().is_empty()
-                                                            && let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned()
+                                                            && let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned()
                                                         {
                                                             action_tx.send(AppAction::RequestCallLog {
                                                                 ip: fresh_device.ip.clone(),
@@ -1547,7 +1547,7 @@ fn App() -> Element {
                                                         phone_sub_tab.set("contacts".to_string());
                                                         // Only sync if auto-sync enabled AND data is empty
                                                         if *auto_sync_contacts.read() && phone_contacts.read().is_empty()
-                                                            && let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned()
+                                                            && let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned()
                                                         {
                                                             action_tx.send(AppAction::RequestContactsSync {
                                                                 ip: fresh_device.ip.clone(),
@@ -1675,7 +1675,7 @@ fn App() -> Element {
                                                                         move |_| {
                                                                             let text = sms_compose_text.read().clone();
                                                                             if !text.is_empty() && !to_address.is_empty()
-                                                                                && let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned()
+                                                                                && let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned()
                                                                             {
                                                                                 action_tx.send(AppAction::SendSms {
                                                                                     ip: fresh_device.ip.clone(),
@@ -1706,7 +1706,7 @@ fn App() -> Element {
                                                                 onclick: {
                                                                     let device_id = device.id.clone();
                                                                     move |_| {
-                                                                        if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                        if let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned() {
                                                                             action_tx.send(AppAction::RequestConversationsSync {
                                                                                 ip: fresh_device.ip.clone(),
                                                                                 port: fresh_device.port,
@@ -1756,7 +1756,7 @@ fn App() -> Element {
                                                                                     selected_conversation.set(Some(cid.clone()));
                                                                                     last_message_count.set(0); // Reset to trigger scroll on load
                                                                                     phone_messages.set(Vec::new()); // Clear old messages
-                                                                                    if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                                    if let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned() {
                                                                                         action_tx.send(AppAction::RequestMessages {
                                                                                             ip: fresh_device.ip.clone(),
                                                                                             port: fresh_device.port,
@@ -1808,7 +1808,7 @@ fn App() -> Element {
                                                             onclick: {
                                                                 let device_id = device.id.clone();
                                                                 move |_| {
-                                                                    if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                    if let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned() {
                                                                         action_tx.send(AppAction::RequestCallLog {
                                                                             ip: fresh_device.ip.clone(),
                                                                             port: fresh_device.port,
@@ -1881,7 +1881,7 @@ fn App() -> Element {
                                                                                 let number = call.number.clone();
                                                                                 let device_id = device.id.clone();
                                                                                 move |_| {
-                                                                                    if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                                    if let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned() {
                                                                                         action_tx.send(AppAction::InitiateCall {
                                                                                             ip: fresh_device.ip.clone(),
                                                                                             port: fresh_device.port,
@@ -1914,7 +1914,7 @@ fn App() -> Element {
                                                             onclick: {
                                                                 let device_id = device.id.clone();
                                                                 move |_| {
-                                                                    if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                    if let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned() {
                                                                         action_tx.send(AppAction::RequestContactsSync {
                                                                             ip: fresh_device.ip.clone(),
                                                                             port: fresh_device.port,
@@ -1985,7 +1985,7 @@ fn App() -> Element {
                                                                                         let number = phone.clone();
                                                                                         let device_id = device.id.clone();
                                                                                         move |_| {
-                                                                                            if let Some(fresh_device) = get_devices_store().lock().unwrap().get(&device_id).cloned() {
+                                                                                            if let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned() {
                                                                                                 action_tx.send(AppAction::InitiateCall {
                                                                                                     ip: fresh_device.ip.clone(),
                                                                                                     port: fresh_device.port,
@@ -2309,7 +2309,7 @@ fn App() -> Element {
                                                     fingerprint: req.fingerprint.clone(),
                                                     device_id: req.device_id.clone(),
                                                 });
-                                                get_pairing_requests().lock().unwrap().retain(|r| r.fingerprint != req.fingerprint);
+                                                get_pairing_requests().lock_or_recover().retain(|r| r.fingerprint != req.fingerprint);
                                             }
                                         },
                                         "Reject"
@@ -2324,7 +2324,7 @@ fn App() -> Element {
                                                     name: req.device_name.clone(),
                                                     device_id: req.device_id.clone()
                                                 });
-                                                get_pairing_requests().lock().unwrap().retain(|r| r.fingerprint != req.fingerprint);
+                                                get_pairing_requests().lock_or_recover().retain(|r| r.fingerprint != req.fingerprint);
                                             }
                                         },
                                         "Trust"

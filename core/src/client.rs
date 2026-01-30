@@ -366,16 +366,32 @@ impl ConnectedClient {
             match resp {
                 FilesystemMessage::ReadFileResponse { data } => {
                     if data.is_empty() {
-                        break;
+                        let _ = tokio::fs::remove_file(&local_path).await;
+                        return Err(ConnectedError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "unexpected EOF while receiving file data",
+                        )));
                     }
                     file.write_all(&data).await.map_err(ConnectedError::Io)?;
                     offset += data.len() as u64;
                 }
                 FilesystemMessage::Error { message } => {
+                    let _ = tokio::fs::remove_file(&local_path).await;
                     return Err(ConnectedError::Protocol(message));
                 }
-                _ => return Err(ConnectedError::Protocol("Unexpected response".to_string())),
+                _ => {
+                    let _ = tokio::fs::remove_file(&local_path).await;
+                    return Err(ConnectedError::Protocol("Unexpected response".to_string()));
+                }
             }
+        }
+
+        if offset != file_size {
+            let _ = tokio::fs::remove_file(&local_path).await;
+            return Err(ConnectedError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "file download incomplete",
+            )));
         }
 
         file.flush().await.map_err(ConnectedError::Io)?;

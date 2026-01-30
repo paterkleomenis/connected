@@ -2,14 +2,15 @@ use crate::fs_provider::DesktopFilesystemProvider;
 use crate::mpris_server::{MprisUpdate, send_mpris_update};
 use crate::proximity;
 use crate::state::{
-    DeviceInfo, FileTransferRequest, PairingRequest, PreviewData, RemoteMedia, SavedDeviceInfo,
-    TransferStatus, add_file_transfer_request, add_notification, get_auto_sync_messages,
-    get_current_media, get_current_remote_files, get_current_remote_path, get_device_name_setting,
-    get_devices_store, get_last_clipboard, get_last_remote_media_device_id, get_last_remote_update,
-    get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_call_log,
-    get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_files_update, get_saved_devices_setting, get_transfer_status, get_update_info,
-    mark_calls_synced, mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
+    DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
+    SavedDeviceInfo, TransferStatus, add_file_transfer_request, add_notification,
+    get_auto_sync_messages, get_current_media, get_current_remote_files, get_current_remote_path,
+    get_device_name_setting, get_devices_store, get_last_clipboard,
+    get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
+    get_pairing_requests, get_pending_pairings, get_phone_call_log, get_phone_conversations,
+    get_phone_data_update, get_phone_messages, get_preview_data, get_remote_files_update,
+    get_saved_devices_setting, get_transfer_status, get_update_info, mark_calls_synced,
+    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
     remove_file_transfer_request, save_device_to_settings, set_active_call,
     set_device_name_setting, set_pairing_mode_state, set_phone_call_log, set_phone_contacts,
     set_phone_conversations, set_phone_messages,
@@ -161,12 +162,12 @@ type MediaPollStateUpdate = (Option<String>, Option<String>, Option<String>, boo
 
 fn start_proximity(client: Arc<ConnectedClient>) {
     let handle = proximity::start(client);
-    let mut guard = PROXIMITY_HANDLE.lock().unwrap();
+    let mut guard = PROXIMITY_HANDLE.lock_or_recover();
     *guard = handle;
 }
 
 fn stop_proximity() {
-    if let Some(handle) = PROXIMITY_HANDLE.lock().unwrap().take() {
+    if let Some(handle) = PROXIMITY_HANDLE.lock_or_recover().take() {
         handle.stop();
     }
 }
@@ -188,10 +189,10 @@ fn spawn_event_loop(
 
                     // If trusted, remove from pending
                     if info.is_trusted {
-                        get_pending_pairings().lock().unwrap().remove(&info.id);
+                        get_pending_pairings().lock_or_recover().remove(&info.id);
                     }
 
-                    let mut store = get_devices_store().lock().unwrap();
+                    let mut store = get_devices_store().lock_or_recover();
                     store.insert(info.id.clone(), info);
 
                     if d.ip != "0.0.0.0" {
@@ -207,7 +208,7 @@ fn spawn_event_loop(
                     }
                 }
                 ConnectedEvent::DeviceLost(id) => {
-                    let mut store = get_devices_store().lock().unwrap();
+                    let mut store = get_devices_store().lock_or_recover();
                     if let Some(d) = store.remove(&id) {
                         add_notification("Device Lost", &format!("{} disconnected", d.name), "");
                     }
@@ -219,7 +220,7 @@ fn spawn_event_loop(
                 } => {
                     use connected_core::events::TransferDirection;
                     if direction == TransferDirection::Incoming {
-                        *get_transfer_status().lock().unwrap() =
+                        *get_transfer_status().lock_or_recover() =
                             TransferStatus::Starting(filename.clone());
                         add_notification(
                             "Transfer Starting",
@@ -227,7 +228,7 @@ fn spawn_event_loop(
                             "",
                         );
                     } else {
-                        *get_transfer_status().lock().unwrap() =
+                        *get_transfer_status().lock_or_recover() =
                             TransferStatus::Starting(filename.clone());
                     }
                 }
@@ -241,7 +242,7 @@ fn spawn_event_loop(
                     } else {
                         0.0
                     };
-                    let mut status = get_transfer_status().lock().unwrap();
+                    let mut status = get_transfer_status().lock_or_recover();
                     let current_filename = match &*status {
                         TransferStatus::Starting(f) => Some(f.clone()),
                         TransferStatus::InProgress { filename, .. } => Some(filename.clone()),
@@ -252,12 +253,13 @@ fn spawn_event_loop(
                     }
                 }
                 ConnectedEvent::TransferCompleted { filename, .. } => {
-                    *get_transfer_status().lock().unwrap() =
+                    *get_transfer_status().lock_or_recover() =
                         TransferStatus::Completed(filename.clone());
                     add_notification("Transfer Complete", &format!("{} finished", filename), "");
                 }
                 ConnectedEvent::TransferFailed { error, .. } => {
-                    *get_transfer_status().lock().unwrap() = TransferStatus::Failed(error.clone());
+                    *get_transfer_status().lock_or_recover() =
+                        TransferStatus::Failed(error.clone());
                     add_notification("Transfer Failed", &error, "");
                 }
                 ConnectedEvent::ClipboardReceived {
@@ -265,8 +267,8 @@ fn spawn_event_loop(
                     from_device,
                 } => {
                     set_system_clipboard(&content);
-                    *get_last_clipboard().lock().unwrap() = content.clone();
-                    *get_last_remote_update().lock().unwrap() = Instant::now();
+                    *get_last_clipboard().lock_or_recover() = content.clone();
+                    *get_last_remote_update().lock_or_recover() = Instant::now();
                     add_notification("Clipboard", &format!("Received from {}", from_device), "");
                 }
                 ConnectedEvent::Error(msg) => {
@@ -301,7 +303,7 @@ fn spawn_event_loop(
                     }
 
                     // Deduplicate requests
-                    let mut requests = get_pairing_requests().lock().unwrap();
+                    let mut requests = get_pairing_requests().lock_or_recover();
                     if !requests.iter().any(|r| r.fingerprint == fingerprint) {
                         add_notification(
                             "Pairing Request",
@@ -324,7 +326,7 @@ fn spawn_event_loop(
                         &format!("{} rejected your request.", device_name),
                         "",
                     );
-                    get_pending_pairings().lock().unwrap().remove(&device_id);
+                    get_pending_pairings().lock_or_recover().remove(&device_id);
                 }
                 ConnectedEvent::PairingModeChanged(enabled) => {
                     info!("Pairing mode changed: {}", enabled);
@@ -337,7 +339,7 @@ fn spawn_event_loop(
                 } => {
                     // Update local store - device is no longer trusted
                     {
-                        let mut store = get_devices_store().lock().unwrap();
+                        let mut store = get_devices_store().lock_or_recover();
                         if let Some(d) = store.get_mut(&device_id) {
                             d.is_trusted = false;
                         }
@@ -352,7 +354,7 @@ fn spawn_event_loop(
                             .iter()
                             .any(|d| d.id == device_id);
                         if !is_discovered {
-                            let mut store = get_devices_store().lock().unwrap();
+                            let mut store = get_devices_store().lock_or_recover();
                             store.remove(&device_id);
                         }
                     }
@@ -395,7 +397,7 @@ fn spawn_event_loop(
                 ConnectedEvent::MediaControl { from_device, event } => {
                     info!("EVENT: Received MediaControl event from {}", from_device);
                     // Only process if media control is enabled locally
-                    if *get_media_enabled().lock().unwrap() {
+                    if *get_media_enabled().lock_or_recover() {
                         match event {
                             MediaControlMessage::Command(cmd) => {
                                 info!("COMMAND: Executing {:?} from {}", cmd, from_device);
@@ -452,7 +454,7 @@ fn spawn_event_loop(
                                             })
                                             .collect();
 
-                                        let last_id = last_identity.lock().unwrap().clone();
+                                        let last_id = last_identity.lock_or_recover().clone();
 
                                         let mut playing_player: Option<Player> = None;
 
@@ -515,7 +517,7 @@ fn spawn_event_loop(
                                         if let Some(player) = target_player {
                                             // Update last identity
 
-                                            *last_identity.lock().unwrap() =
+                                            *last_identity.lock_or_recover() =
                                                 Some(player.identity().to_string());
 
                                             info!(
@@ -719,7 +721,7 @@ fn spawn_event_loop(
 
                                 // Find device ID by name
                                 let device_id = {
-                                    let store = get_devices_store().lock().unwrap();
+                                    let store = get_devices_store().lock_or_recover();
                                     store
                                         .values()
                                         .find(|d| d.name == from_device)
@@ -728,9 +730,9 @@ fn spawn_event_loop(
                                 };
 
                                 let state_for_mpris = state.clone();
-                                *get_last_remote_media_device_id().lock().unwrap() =
+                                *get_last_remote_media_device_id().lock_or_recover() =
                                     Some(device_id.clone());
-                                *get_current_media().lock().unwrap() = Some(RemoteMedia {
+                                *get_current_media().lock_or_recover() = Some(RemoteMedia {
                                     state,
                                     source_device_id: device_id,
                                 });
@@ -781,7 +783,7 @@ fn spawn_event_loop(
                             if let Some(latest) =
                                 messages.iter().max_by_key(|m| m.timestamp).cloned()
                             {
-                                let mut convos = get_phone_conversations().lock().unwrap();
+                                let mut convos = get_phone_conversations().lock_or_recover();
                                 if let Some(convo) = convos.iter_mut().find(|c| c.id == thread_id) {
                                     convo.last_message = Some(latest.body.clone());
                                     convo.last_timestamp = latest.timestamp;
@@ -828,7 +830,7 @@ fn spawn_event_loop(
 
                             // Add to existing messages for this thread (or create thread)
                             {
-                                let mut msgs = get_phone_messages().lock().unwrap();
+                                let mut msgs = get_phone_messages().lock_or_recover();
                                 if let Some(thread_msgs) = msgs.get_mut(&thread_id) {
                                     thread_msgs.push(message.clone());
                                 } else {
@@ -838,7 +840,7 @@ fn spawn_event_loop(
 
                             // Update conversation list with new message
                             {
-                                let mut convos = get_phone_conversations().lock().unwrap();
+                                let mut convos = get_phone_conversations().lock_or_recover();
 
                                 // Helper to normalize phone numbers for comparison
                                 let normalize_phone = |s: &str| -> String {
@@ -878,7 +880,7 @@ fn spawn_event_loop(
                                 convos.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
                             }
 
-                            *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+                            *get_phone_data_update().lock_or_recover() = std::time::Instant::now();
                             info!("Adding notification for SMS from: {}", sender);
                             add_notification(
                                 "New SMS",
@@ -938,7 +940,7 @@ fn spawn_event_loop(
                                         is_read: false,
                                     };
                                     // Add to beginning of call log
-                                    let mut log = get_phone_call_log().lock().unwrap();
+                                    let mut log = get_phone_call_log().lock_or_recover();
                                     log.insert(0, entry);
                                 } else {
                                     add_notification(
@@ -1135,7 +1137,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                     // Find device ID by IP/Port to add to pending
                     let device_id = {
-                        let store = get_devices_store().lock().unwrap();
+                        let store = get_devices_store().lock_or_recover();
                         store
                             .values()
                             .find(|d| d.ip == ip && d.port == port)
@@ -1143,7 +1145,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     };
 
                     if let Some(did) = device_id.clone() {
-                        get_pending_pairings().lock().unwrap().insert(did);
+                        get_pending_pairings().lock_or_recover().insert(did);
                     }
 
                     let ip_clone = ip.clone();
@@ -1161,7 +1163,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     );
                                     // Remove from pending on success
                                     if let Some(did) = device_id_for_cleanup {
-                                        get_pending_pairings().lock().unwrap().remove(&did);
+                                        get_pending_pairings().lock_or_recover().remove(&did);
                                     }
                                 }
                                 Err(e) => {
@@ -1172,7 +1174,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     }
                                     // Remove from pending on failure
                                     if let Some(did) = device_id_for_cleanup {
-                                        get_pending_pairings().lock().unwrap().remove(&did);
+                                        get_pending_pairings().lock_or_recover().remove(&did);
                                     }
                                 }
                             }
@@ -1195,13 +1197,13 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         _ => {
                             // Remove from pairing requests
                             {
-                                let mut requests = get_pairing_requests().lock().unwrap();
+                                let mut requests = get_pairing_requests().lock_or_recover();
                                 requests.retain(|r| r.fingerprint != fingerprint);
                             }
 
                             // Update device trust status in store
                             {
-                                let mut store = get_devices_store().lock().unwrap();
+                                let mut store = get_devices_store().lock_or_recover();
                                 if let Some(d) = store.get_mut(&device_id) {
                                     d.is_trusted = true;
                                 }
@@ -1234,7 +1236,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if let Some(c) = &client {
                     // Remove from pairing requests
                     {
-                        let mut requests = get_pairing_requests().lock().unwrap();
+                        let mut requests = get_pairing_requests().lock_or_recover();
                         requests.retain(|r| r.fingerprint != fingerprint);
                     }
 
@@ -1319,9 +1321,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         if let Ok(ip_addr) = ip_str.parse() {
                             match c.fs_list_dir(ip_addr, port, path.clone()).await {
                                 Ok(entries) => {
-                                    *get_current_remote_files().lock().unwrap() = Some(entries);
-                                    *get_current_remote_path().lock().unwrap() = path;
-                                    *get_remote_files_update().lock().unwrap() = Instant::now();
+                                    *get_current_remote_files().lock_or_recover() = Some(entries);
+                                    *get_current_remote_path().lock_or_recover() = path;
+                                    *get_remote_files_update().lock_or_recover() = Instant::now();
                                 }
                                 Err(e) => {
                                     error!("Failed to list remote files: {}", e);
@@ -1407,7 +1409,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             .first_or_octet_stream()
                                             .to_string();
 
-                                        *get_preview_data().lock().unwrap() = Some(PreviewData {
+                                        *get_preview_data().lock_or_recover() = Some(PreviewData {
                                             filename,
                                             mime_type: mime,
                                             data,
@@ -1439,8 +1441,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 Ok(data) => {
                                     if !data.is_empty() {
                                         use crate::state::{get_thumbnails, get_thumbnails_update};
-                                        get_thumbnails().lock().unwrap().insert(path, data);
-                                        *get_thumbnails_update().lock().unwrap() =
+                                        get_thumbnails().lock_or_recover().insert(path, data);
+                                        *get_thumbnails_update().lock_or_recover() =
                                             std::time::Instant::now();
                                     }
                                 }
@@ -1453,10 +1455,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
             AppAction::ClosePreview => {
-                *get_preview_data().lock().unwrap() = None;
+                *get_preview_data().lock_or_recover() = None;
             }
             AppAction::ToggleMediaControl { enabled, notify } => {
-                *get_media_enabled().lock().unwrap() = enabled;
+                *get_media_enabled().lock_or_recover() = enabled;
                 if enabled {
                     info!("Media Poller Started");
                     if let Some(c) = &client {
@@ -1469,7 +1471,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             let mut last_playing = false;
 
                             // We need to check the atomic flag in the loop
-                            while *get_media_enabled().lock().unwrap() {
+                            while *get_media_enabled().lock_or_recover() {
                                 interval.tick().await;
 
                                 #[cfg(target_os = "windows")]
@@ -1619,10 +1621,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         };
 
                                         // Update local state too
-                                        *get_current_media().lock().unwrap() = Some(RemoteMedia {
-                                            state: state.clone(),
-                                            source_device_id: "local".to_string(),
-                                        });
+                                        *get_current_media().lock_or_recover() =
+                                            Some(RemoteMedia {
+                                                state: state.clone(),
+                                                source_device_id: "local".to_string(),
+                                            });
 
                                         // Broadcast to all trusted peers
                                         let peers = c.get_trusted_peers();
@@ -1686,7 +1689,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         if device_id.is_empty() || device_id == "local" || device_id == "unknown" {
                             None
                         } else {
-                            let store = get_devices_store().lock().unwrap();
+                            let store = get_devices_store().lock_or_recover();
                             store.get(&device_id).cloned()
                         }
                     };
@@ -1939,7 +1942,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         .await
                     {
                         Ok(info) => {
-                            *get_update_info().lock().unwrap() = Some(info.clone());
+                            *get_update_info().lock_or_recover() = Some(info.clone());
                             if info.has_update {
                                 add_notification(
                                     "Update Available",
@@ -1960,7 +1963,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 });
             }
             AppAction::PerformUpdate => {
-                let info_opt = get_update_info().lock().unwrap().clone();
+                let info_opt = get_update_info().lock_or_recover().clone();
                 if let Some(info) = info_opt {
                     if let Some(url) = info.download_url {
                         #[cfg(target_os = "windows")]

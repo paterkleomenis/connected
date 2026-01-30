@@ -1,8 +1,8 @@
 use crate::components::icon::{Icon, IconType, get_file_icon_type};
 use crate::controller::AppAction;
 use crate::state::{
-    DeviceInfo, PreviewData, get_current_remote_files, get_current_remote_path, get_preview_data,
-    get_remote_files_update, get_thumbnails, get_thumbnails_update,
+    DeviceInfo, LockOrRecover, PreviewData, get_current_remote_files, get_current_remote_path,
+    get_preview_data, get_remote_files_update, get_thumbnails, get_thumbnails_update,
 };
 use crate::utils::format_file_size;
 use base64::Engine as _;
@@ -13,16 +13,16 @@ use std::collections::{HashMap, HashSet};
 #[component]
 pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let action_tx = use_coroutine_handle::<AppAction>();
-    let mut current_path = use_signal(|| get_current_remote_path().lock().unwrap().clone());
+    let mut current_path = use_signal(|| get_current_remote_path().lock_or_recover().clone());
     let mut files = use_signal(|| Option::<Vec<FsEntry>>::None);
     let mut loading = use_signal(|| false);
-    let mut last_update_seen = use_signal(|| *get_remote_files_update().lock().unwrap());
+    let mut last_update_seen = use_signal(|| *get_remote_files_update().lock_or_recover());
     let mut context_menu = use_signal(|| Option::<(String, String, i32, i32)>::None);
     let mut preview_content = use_signal(|| Option::<PreviewData>::None);
 
     // Thumbnail state
     let mut current_thumbnails = use_signal(HashMap::<String, String>::new); // path -> base64
-    let mut last_thumbnails_update = use_signal(|| *get_thumbnails_update().lock().unwrap());
+    let mut last_thumbnails_update = use_signal(|| *get_thumbnails_update().lock_or_recover());
     let mut requested_thumbnails = use_signal(HashSet::<String>::new);
 
     use_effect(use_reactive(&device, move |device| {
@@ -36,12 +36,12 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
 
     use_future(move || async move {
         loop {
-            let global_update = *get_remote_files_update().lock().unwrap();
-            let thumbnails_ts = *get_thumbnails_update().lock().unwrap();
-            let new_files = get_current_remote_files().lock().unwrap().clone();
-            let new_path = get_current_remote_path().lock().unwrap().clone();
+            let global_update = *get_remote_files_update().lock_or_recover();
+            let thumbnails_ts = *get_thumbnails_update().lock_or_recover();
+            let new_files = get_current_remote_files().lock_or_recover().clone();
+            let new_path = get_current_remote_path().lock_or_recover().clone();
 
-            let new_preview = get_preview_data().lock().unwrap().clone();
+            let new_preview = get_preview_data().lock_or_recover().clone();
             let current_preview_exists = preview_content.read().is_some();
             let new_preview_exists = new_preview.is_some();
 
@@ -79,7 +79,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
 
             // Sync thumbnails if updated
             if thumbnails_ts != *last_thumbnails_update.read() {
-                let thumbs_lock = get_thumbnails().lock().unwrap();
+                let thumbs_lock = get_thumbnails().lock_or_recover();
                 // We only need to convert thumbnails relevant to current files to avoid massive map
                 // But `THUMBNAILS` global store grows. For UI signal, let's just copy all for now
                 // or optimize to only what's visible? Dioxus diffing handles it well usually.

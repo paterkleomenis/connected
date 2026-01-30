@@ -8,6 +8,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 // We need to match transport constants
 const STREAM_TYPE_FILE: u8 = 2;
@@ -103,7 +104,7 @@ impl FileTransfer {
             let temp_archive_path =
                 tokio::task::spawn_blocking(move || -> std::io::Result<std::path::PathBuf> {
                     let temp_dir = std::env::temp_dir();
-                    let archive_name = format!("{}.zip", dir_name);
+                    let archive_name = format!("connected-{}.zip", Uuid::new_v4());
                     let archive_path = temp_dir.join(archive_name);
 
                     let file = std::fs::File::create(&archive_path)?;
@@ -453,9 +454,58 @@ impl FileTransfer {
             });
         }
 
-        // Sanitize filename
+        // Sanitize filename and avoid overwriting existing files
         let safe_filename = sanitize_filename(&filename);
-        let save_path = save_dir.as_ref().join(&safe_filename);
+        let save_dir = save_dir.as_ref();
+        let mut save_path = save_dir.join(&safe_filename);
+
+        // If the target exists, generate a unique name: "name (1).ext"
+        let mut exists = match tokio::fs::metadata(&save_path).await {
+            Ok(_) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(ConnectedError::Io(e)),
+        };
+        if exists {
+            let path = Path::new(&safe_filename);
+            let mut stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("file")
+                .to_string();
+            if stem.is_empty() {
+                stem = "file".to_string();
+            }
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string());
+
+            for i in 1..=10_000 {
+                let candidate = match &ext {
+                    Some(ext) => format!("{} ({}).{}", stem, i, ext),
+                    None => format!("{} ({})", stem, i),
+                };
+                let candidate_path = save_dir.join(&candidate);
+                match tokio::fs::metadata(&candidate_path).await {
+                    Ok(_) => {
+                        // keep searching
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        save_path = candidate_path;
+                        exists = false;
+                        break;
+                    }
+                    Err(e) => return Err(ConnectedError::Io(e)),
+                }
+            }
+
+            if exists {
+                return Err(ConnectedError::Io(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "unable to pick unique filename",
+                )));
+            }
+        }
 
         // Create file
         let file = File::create(&save_path).await?;
@@ -589,7 +639,8 @@ fn sanitize_filename(filename: &str) -> String {
         .and_then(|n| n.to_str())
         .unwrap_or("unnamed");
 
-    name.chars()
+    let sanitized: String = name
+        .chars()
         .filter(|c| {
             !matches!(
                 c,
@@ -597,5 +648,11 @@ fn sanitize_filename(filename: &str) -> String {
             )
         })
         .take(255)
-        .collect()
+        .collect();
+
+    if sanitized.is_empty() {
+        "unnamed".to_string()
+    } else {
+        sanitized
+    }
 }
