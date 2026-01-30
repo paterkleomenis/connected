@@ -443,17 +443,6 @@ impl FileTransfer {
             ));
         }
 
-        let accept = FileTransferMessage::Accept;
-        send_message(&mut send, &accept).await?;
-
-        // Now notify that transfer is starting
-        if let Some(ref tx) = progress_tx {
-            let _ = tx.send(TransferProgress::Starting {
-                filename: filename.clone(),
-                total_size: file_size,
-            });
-        }
-
         // Sanitize filename and avoid overwriting existing files
         let safe_filename = sanitize_filename(&filename);
         let save_dir = save_dir.as_ref();
@@ -463,7 +452,22 @@ impl FileTransfer {
         let mut exists = match tokio::fs::metadata(&save_path).await {
             Ok(_) => true,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(ConnectedError::Io(e)),
+            Err(e) => {
+                let err = ConnectedError::Io(e);
+                let _ = send_message(
+                    &mut send,
+                    &FileTransferMessage::Reject {
+                        reason: "Failed to prepare file".to_string(),
+                    },
+                )
+                .await;
+                if let Some(ref tx) = progress_tx {
+                    let _ = tx.send(TransferProgress::Failed {
+                        error: err.to_string(),
+                    });
+                }
+                return Err(err);
+            }
         };
         if exists {
             let path = Path::new(&safe_filename);
@@ -495,20 +499,80 @@ impl FileTransfer {
                         exists = false;
                         break;
                     }
-                    Err(e) => return Err(ConnectedError::Io(e)),
+                    Err(e) => {
+                        let err = ConnectedError::Io(e);
+                        let _ = send_message(
+                            &mut send,
+                            &FileTransferMessage::Reject {
+                                reason: "Failed to prepare file".to_string(),
+                            },
+                        )
+                        .await;
+                        if let Some(ref tx) = progress_tx {
+                            let _ = tx.send(TransferProgress::Failed {
+                                error: err.to_string(),
+                            });
+                        }
+                        return Err(err);
+                    }
                 }
             }
 
             if exists {
-                return Err(ConnectedError::Io(std::io::Error::new(
+                let err = ConnectedError::Io(std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
                     "unable to pick unique filename",
-                )));
+                ));
+                let _ = send_message(
+                    &mut send,
+                    &FileTransferMessage::Reject {
+                        reason: "Failed to prepare file".to_string(),
+                    },
+                )
+                .await;
+                if let Some(ref tx) = progress_tx {
+                    let _ = tx.send(TransferProgress::Failed {
+                        error: err.to_string(),
+                    });
+                }
+                return Err(err);
             }
         }
 
         // Create file
-        let file = File::create(&save_path).await?;
+        let file = match File::create(&save_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                let err = ConnectedError::Io(e);
+                let _ = send_message(
+                    &mut send,
+                    &FileTransferMessage::Reject {
+                        reason: "Failed to create destination file".to_string(),
+                    },
+                )
+                .await;
+                if let Some(ref tx) = progress_tx {
+                    let _ = tx.send(TransferProgress::Failed {
+                        error: err.to_string(),
+                    });
+                }
+                return Err(err);
+            }
+        };
+
+        let accept = FileTransferMessage::Accept;
+        if let Err(e) = send_message(&mut send, &accept).await {
+            let _ = tokio::fs::remove_file(&save_path).await;
+            return Err(e);
+        }
+
+        // Now notify that transfer is starting
+        if let Some(ref tx) = progress_tx {
+            let _ = tx.send(TransferProgress::Starting {
+                filename: filename.clone(),
+                total_size: file_size,
+            });
+        }
         // Using `read_chunk` below yields `Bytes` without copying. Writing those directly to the
         // underlying file avoids an extra userland copy that `BufWriter` would introduce.
         let mut writer = file;
