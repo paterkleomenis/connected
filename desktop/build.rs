@@ -18,11 +18,20 @@ fn main() {
             .join("icon.ico");
 
         eprintln!("Icon path: {:?}", icon_path);
-        if !icon_path.exists() {
-            panic!("Icon not found at {:?}", icon_path);
+        if icon_path.exists() {
+            if let Some(path_str) = icon_path.to_str() {
+                res.set_icon(path_str);
+            } else {
+                eprintln!(
+                    "cargo:warning=Icon path contains invalid UTF-8, skipping icon embedding"
+                );
+            }
+        } else {
+            eprintln!(
+                "cargo:warning=Icon not found at {:?}, continuing without icon",
+                icon_path
+            );
         }
-
-        res.set_icon(icon_path.to_str().unwrap());
 
         // Dioxus/WebView2 usually needs a manifest for high DPI and controls
         res.set_manifest(r#"
@@ -55,7 +64,12 @@ fn main() {
             res.set_windres_path("x86_64-w64-mingw32-windres");
         }
 
-        res.compile().unwrap();
+        if let Err(e) = res.compile() {
+            eprintln!(
+                "cargo:warning=Failed to compile Windows resources: {}. Continuing without them.",
+                e
+            );
+        }
     }
 }
 

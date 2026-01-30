@@ -1352,151 +1352,172 @@ fun DeviceItem(
     var showDetails by remember { mutableStateOf(false) }
 
     Card(modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth()) {
-        Row(
-            modifier = Modifier.padding(12.dp).fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.clickable { showDetails = !showDetails }) {
-                    Text(text = device.name, style = MaterialTheme.typography.bodyLarge)
-                    if (showDetails) {
-                        Text(text = "${device.ip}:${device.port}", style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (isTrusted) {
+        Column(modifier = Modifier.padding(12.dp).fillMaxWidth()) {
+            // Top row: Device info and action buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.clickable { showDetails = !showDetails }) {
                         Text(
-                            text = "✓ Trusted",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                            text = device.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
+                        if (showDetails) {
+                            Text(text = "${device.ip}:${device.port}", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (isTrusted) {
+                            Text(
+                                text = "✓ Trusted",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+
+                // Action buttons (right side)
+                if (isTrusted) {
+                    Row {
+                        // Send file button
+                        IconButton(onClick = {
+                            app.setSelectedDeviceForFileTransfer(device)
+                            filePickerLauncher?.launch("*/*")
+                        }) {
+                            Icon(painterResource(R.drawable.ic_send), contentDescription = "Send File")
+                        }
+
+                        // More options dropdown
+                        Box {
+                            IconButton(onClick = { showMenu = true }) {
+                                Icon(painterResource(R.drawable.ic_settings), contentDescription = "Options")
+                            }
+                            DropdownMenu(
+                                expanded = showMenu,
+                                onDismissRequest = { showMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Send Folder") },
+                                    leadingIcon = {
+                                        Icon(
+                                            painterResource(R.drawable.ic_folder),
+                                            contentDescription = null
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        app.setSelectedDeviceForFileTransfer(device)
+                                        sendFolderLauncher?.launch(null)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Share Clipboard") },
+                                    leadingIcon = {
+                                        Icon(
+                                            painterResource(R.drawable.ic_nav_clipboard),
+                                            contentDescription = null
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        app.sendClipboard(device)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Browse Files") },
+                                    leadingIcon = {
+                                        Icon(
+                                            painterResource(R.drawable.ic_folder),
+                                            contentDescription = null
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        app.browseRemoteFiles(device)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Unpair") },
+                                    leadingIcon = {
+                                        Icon(
+                                            painterResource(R.drawable.ic_unpair),
+                                            contentDescription = null
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        app.unpairDevice(device)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Forget") },
+                                    leadingIcon = {
+                                        Icon(
+                                            painterResource(R.drawable.ic_refresh),
+                                            contentDescription = null
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        app.forgetDevice(device)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = {
+                            app.setSelectedDeviceForFileTransfer(device)
+                            filePickerLauncher?.launch("*/*")
+                        }) {
+                            Text("Send File")
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        if (isPending) {
+                            Button(
+                                onClick = { },
+                                enabled = false
+                            ) {
+                                Text("Waiting...")
+                            }
+                        } else {
+                            Button(onClick = { app.pairDevice(device) }) {
+                                Text("Pair")
+                            }
+                        }
                     }
                 }
             }
 
-            if (isTrusted) {
-                Row {
-                    // Media Controls (if enabled)
-                    if (app.isMediaControlEnabled.value) {
-                        IconButton(onClick = {
-                            app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.PREVIOUS)
-                        }) { Icon(painterResource(R.drawable.ic_previous), contentDescription = "Previous") }
-                        IconButton(onClick = {
-                            app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.PLAY_PAUSE)
-                        }) { Icon(painterResource(R.drawable.ic_play), contentDescription = "Play/Pause") }
-                        IconButton(onClick = {
-                            app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.NEXT)
-                        }) { Icon(painterResource(R.drawable.ic_next), contentDescription = "Next") }
-                    }
-
-                    // Send file button
+            // Media Controls row (below device info) for trusted devices
+            if (isTrusted && app.isMediaControlEnabled.value) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     IconButton(onClick = {
-                        app.setSelectedDeviceForFileTransfer(device)
-                        filePickerLauncher?.launch("*/*")
-                    }) {
-                        Icon(painterResource(R.drawable.ic_send), contentDescription = "Send File")
-                    }
-
-                    // More options dropdown
-                    Box {
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(painterResource(R.drawable.ic_settings), contentDescription = "Options")
-                        }
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = { showMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Send Folder") },
-                                leadingIcon = {
-                                    Icon(
-                                        painterResource(R.drawable.ic_folder),
-                                        contentDescription = null
-                                    )
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    app.setSelectedDeviceForFileTransfer(device)
-                                    sendFolderLauncher?.launch(null)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Share Clipboard") },
-                                leadingIcon = {
-                                    Icon(
-                                        painterResource(R.drawable.ic_nav_clipboard),
-                                        contentDescription = null
-                                    )
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    app.sendClipboard(device)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Browse Files") },
-                                leadingIcon = {
-                                    Icon(
-                                        painterResource(R.drawable.ic_folder),
-                                        contentDescription = null
-                                    )
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    app.browseRemoteFiles(device)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Unpair") },
-                                leadingIcon = {
-                                    Icon(
-                                        painterResource(R.drawable.ic_unpair),
-                                        contentDescription = null
-                                    )
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    app.unpairDevice(device)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Forget") },
-                                leadingIcon = {
-                                    Icon(
-                                        painterResource(R.drawable.ic_refresh),
-                                        contentDescription = null
-                                    )
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    app.forgetDevice(device)
-                                }
-                            )
-                        }
-                    }
-                }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = {
-                        app.setSelectedDeviceForFileTransfer(device)
-                        filePickerLauncher?.launch("*/*")
-                    }) {
-                        Text("Send File")
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    if (isPending) {
-                        Button(
-                            onClick = { },
-                            enabled = false
-                        ) {
-                            Text("Waiting...")
-                        }
-                    } else {
-                        Button(onClick = { app.pairDevice(device) }) {
-                            Text("Pair")
-                        }
-                    }
+                        app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.VOLUME_DOWN)
+                    }) { Icon(painterResource(R.drawable.ic_volume_down), contentDescription = "Volume Down") }
+                    IconButton(onClick = {
+                        app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.PREVIOUS)
+                    }) { Icon(painterResource(R.drawable.ic_previous), contentDescription = "Previous") }
+                    IconButton(onClick = {
+                        app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.PLAY_PAUSE)
+                    }) { Icon(painterResource(R.drawable.ic_play), contentDescription = "Play/Pause") }
+                    IconButton(onClick = {
+                        app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.NEXT)
+                    }) { Icon(painterResource(R.drawable.ic_next), contentDescription = "Next") }
+                    IconButton(onClick = {
+                        app.sendMediaCommand(device, uniffi.connected_ffi.MediaCommand.VOLUME_UP)
+                    }) { Icon(painterResource(R.drawable.ic_volume_up), contentDescription = "Volume Up") }
                 }
             }
         }

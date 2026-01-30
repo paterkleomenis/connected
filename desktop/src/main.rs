@@ -223,13 +223,7 @@ fn ensure_firewall_rules() {
             return;
         }
     };
-    let exe_path_str = match exe_path.to_str() {
-        Some(s) => s,
-        None => {
-            eprintln!("Exe path contains invalid UTF-8");
-            return;
-        }
-    };
+    let exe_path_str = exe_path.to_string_lossy();
 
     // mDNS Inbound: allow receiving mDNS responses and queries on port 5353
     let mdns_inbound = WindowsFirewallRule::builder()
@@ -368,20 +362,41 @@ fn ensure_webview2_runtime_available() {
 
     let bootstrapper = dir.join("MicrosoftEdgeWebView2Setup.exe");
     if bootstrapper.exists() {
-        let _ = Command::new(&bootstrapper)
+        match Command::new(&bootstrapper)
             .args(["/silent", "/install"])
-            .status();
-
-        // Give it a brief moment to lay down files before re-checking.
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        if runtime_installed() {
-            return;
+            .status()
+        {
+            Ok(status) if status.success() => {
+                // Give it a brief moment to lay down files before re-checking.
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                if runtime_installed() {
+                    return;
+                }
+                // Installation reported success but runtime not found
+                show_error(
+                    "WebView2 Runtime installation completed but runtime is not available.\n\nPlease restart your computer and try again, or install 'Microsoft Edge WebView2 Runtime' (Evergreen) manually.",
+                );
+            }
+            Ok(status) => {
+                // Bootstrapper ran but returned error (likely no admin rights)
+                show_error(&format!(
+                    "WebView2 Runtime installation failed (exit code: {}).\n\nPlease run Connected as Administrator, or install 'Microsoft Edge WebView2 Runtime' (Evergreen) manually and try again.",
+                    status
+                ));
+            }
+            Err(e) => {
+                // Could not execute bootstrapper
+                show_error(&format!(
+                    "Failed to run WebView2 installer: {}\n\nPlease install 'Microsoft Edge WebView2 Runtime' (Evergreen) manually and try again.",
+                    e
+                ));
+            }
         }
+    } else {
+        show_error(
+            "Connected requires Microsoft Edge WebView2 Runtime.\n\nInstall 'Microsoft Edge WebView2 Runtime' (Evergreen) and try again.\n\nIf you used a debloat tool that removes WebView2/Edge components, exclude WebView2 Runtime from removal.",
+        );
     }
-
-    show_error(
-        "Connected requires Microsoft Edge WebView2 Runtime.\n\nInstall 'Microsoft Edge WebView2 Runtime' (Evergreen) and try again.\n\nIf you used a debloat tool that removes WebView2/Edge components, exclude WebView2 Runtime from removal.",
-    );
 }
 
 #[cfg(target_os = "windows")]

@@ -241,9 +241,10 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     },
                                     span {
                                         class: "icon",
-                                        if is_image && current_thumbnails.read().contains_key(&entry.path) {
+                                        // Use get() directly and match on the result to avoid TOCTOU race condition
+                                        if let Some(thumbnail_data) = current_thumbnails.read().get(&entry.path).cloned() {
                                             img {
-                                                src: "data:image/jpeg;base64,{current_thumbnails.read().get(&entry.path).unwrap()}",
+                                                src: "data:image/jpeg;base64,{thumbnail_data}",
                                                 style: "width: 24px; height: 24px; object-fit: cover; border-radius: 4px; display: block;"
                                             }
                                         } else {

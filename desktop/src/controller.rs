@@ -531,15 +531,41 @@ fn spawn_event_loop(
                                                 MediaCommand::Previous => player.previous(),
                                                 MediaCommand::Stop => player.stop(),
                                                 MediaCommand::VolumeUp => {
-                                                    let _ = player.set_volume(
-                                                        player.get_volume().unwrap_or(0.0) + 0.05,
-                                                    );
+                                                    // Try MPRIS player volume first, fall back to system volume
+                                                    let current =
+                                                        player.get_volume().unwrap_or(-1.0);
+                                                    if current >= 0.0 {
+                                                        let _ = player
+                                                            .set_volume((current + 0.05).min(1.0));
+                                                    } else {
+                                                        // Fall back to system volume
+                                                        let _ = std::process::Command::new("pactl")
+                                                            .args([
+                                                                "set-sink-volume",
+                                                                "@DEFAULT_SINK@",
+                                                                "+5%",
+                                                            ])
+                                                            .spawn();
+                                                    }
                                                     Ok(())
                                                 }
                                                 MediaCommand::VolumeDown => {
-                                                    let _ = player.set_volume(
-                                                        player.get_volume().unwrap_or(0.0) - 0.05,
-                                                    );
+                                                    // Try MPRIS player volume first, fall back to system volume
+                                                    let current =
+                                                        player.get_volume().unwrap_or(-1.0);
+                                                    if current >= 0.0 {
+                                                        let _ = player
+                                                            .set_volume((current - 0.05).max(0.0));
+                                                    } else {
+                                                        // Fall back to system volume
+                                                        let _ = std::process::Command::new("pactl")
+                                                            .args([
+                                                                "set-sink-volume",
+                                                                "@DEFAULT_SINK@",
+                                                                "-5%",
+                                                            ])
+                                                            .spawn();
+                                                    }
                                                     Ok(())
                                                 }
                                             };
@@ -559,31 +585,95 @@ fn spawn_event_loop(
                                             cmd: MediaCommand,
                                         ) -> windows::core::Result<()>
                                         {
-                                            let manager: GlobalSystemMediaTransportControlsSessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
-                                            let session = manager.GetCurrentSession()?;
-
                                             match cmd {
-                                                MediaCommand::Play => {
-                                                    session.TryPlayAsync()?.await?;
+                                                MediaCommand::VolumeUp
+                                                | MediaCommand::VolumeDown => {
+                                                    // Use system volume control since SMTC doesn't have volume
+                                                    return control_system_volume(cmd);
                                                 }
-                                                MediaCommand::Pause => {
-                                                    session.TryPauseAsync()?.await?;
+                                                _ => {
+                                                    // Use SMTC for playback control
+                                                    let manager: GlobalSystemMediaTransportControlsSessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
+                                                    let session = manager.GetCurrentSession()?;
+
+                                                    match cmd {
+                                                        MediaCommand::Play => {
+                                                            session.TryPlayAsync()?.await?;
+                                                        }
+                                                        MediaCommand::Pause => {
+                                                            session.TryPauseAsync()?.await?;
+                                                        }
+                                                        MediaCommand::PlayPause => {
+                                                            session
+                                                                .TryTogglePlayPauseAsync()?
+                                                                .await?;
+                                                        }
+                                                        MediaCommand::Next => {
+                                                            session.TrySkipNextAsync()?.await?;
+                                                        }
+                                                        MediaCommand::Previous => {
+                                                            session.TrySkipPreviousAsync()?.await?;
+                                                        }
+                                                        MediaCommand::Stop => {
+                                                            session.TryStopAsync()?.await?;
+                                                        }
+                                                        _ => {}
+                                                    }
                                                 }
-                                                MediaCommand::PlayPause => {
-                                                    session.TryTogglePlayPauseAsync()?.await?;
-                                                }
-                                                MediaCommand::Next => {
-                                                    session.TrySkipNextAsync()?.await?;
-                                                }
-                                                MediaCommand::Previous => {
-                                                    session.TrySkipPreviousAsync()?.await?;
-                                                }
-                                                MediaCommand::Stop => {
-                                                    session.TryStopAsync()?.await?;
-                                                }
-                                                // Volume control is not directly available via SMTC session
-                                                _ => {}
                                             }
+                                            Ok(())
+                                        }
+
+                                        fn control_system_volume(
+                                            cmd: MediaCommand,
+                                        ) -> windows::core::Result<()>
+                                        {
+                                            use windows::Win32::Media::Audio::{
+                                                IAudioEndpointVolume, IMMDeviceEnumerator,
+                                                MMDeviceEnumerator, eConsole, eRender,
+                                            };
+                                            use windows::Win32::System::Com::{
+                                                CLSCTX_ALL, CoCreateInstance, CoInitialize,
+                                            };
+
+                                            unsafe {
+                                                // Initialize COM for this thread
+                                                CoInitialize(None).ok();
+
+                                                // Get the default audio endpoint
+                                                let enumerator: IMMDeviceEnumerator =
+                                                    CoCreateInstance(
+                                                        &MMDeviceEnumerator,
+                                                        None,
+                                                        CLSCTX_ALL,
+                                                    )?;
+
+                                                let device = enumerator
+                                                    .GetDefaultAudioEndpoint(eRender, eConsole)?;
+
+                                                let endpoint: IAudioEndpointVolume =
+                                                    device.Activate(CLSCTX_ALL, None)?;
+
+                                                let current_vol =
+                                                    endpoint.GetMasterVolumeLevelScalar()?;
+
+                                                let step = 0.05; // 5% volume step
+                                                let new_vol = match cmd {
+                                                    MediaCommand::VolumeUp => {
+                                                        (current_vol + step).min(1.0)
+                                                    }
+                                                    MediaCommand::VolumeDown => {
+                                                        (current_vol - step).max(0.0)
+                                                    }
+                                                    _ => current_vol,
+                                                };
+
+                                                endpoint.SetMasterVolumeLevelScalar(
+                                                    new_vol,
+                                                    &windows::core::GUID::zeroed(),
+                                                )?;
+                                            }
+
                                             Ok(())
                                         }
 
@@ -591,6 +681,21 @@ fn spawn_event_loop(
                                             runtime_handle.block_on(control_media_windows(cmd))
                                         {
                                             warn!("Windows Media Control Error: {}", e);
+                                            let error_msg = match e.code().0 {
+                                                // ERROR_INVALID_STATE - no media session available
+                                                -2147024809 => {
+                                                    "No media is currently playing".to_string()
+                                                }
+                                                // ERROR_NOT_FOUND - no active media session
+                                                -2147023728 => "No media player found".to_string(),
+                                                // E_ACCESSDENIED - no permission for audio
+                                                -2147024891 => {
+                                                    "No permission to control audio".to_string()
+                                                }
+                                                // E_FAIL - generic failure
+                                                _ => format!("Media control failed ({})", e),
+                                            };
+                                            add_notification("Media Control", &error_msg, "");
                                         }
                                     }
                                     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -1858,8 +1963,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 // user to the browser to download + run the MSI manually.
                                 if !url.to_lowercase().ends_with(".msi") {
                                     info!("Update URL is not an MSI; opening in browser: {}", url);
+                                    // Quote the URL to handle special characters and spaces
+                                    let url_quoted = format!("\"{}\"", url);
                                     let _ = std::process::Command::new("cmd")
-                                        .args(["/C", "start", "", &url])
+                                        .args(["/C", "start", "", &url_quoted])
                                         .spawn();
                                     return;
                                 }
@@ -1874,8 +1981,19 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         let msi = dest.to_string_lossy().to_string();
                                         info!("Launching MSI installer: {}", msi);
 
-                                        let spawn_res = std::process::Command::new("msiexec")
-                                            .args(["/i", &msi, "/passive", "/norestart"])
+                                        // Quote the MSI path to handle spaces in temp directory
+                                        let msi_quoted = format!("\"{}\"", msi);
+
+                                        // Use cmd /c to properly handle the quoted path with msiexec
+                                        let spawn_res = std::process::Command::new("cmd")
+                                            .args([
+                                                "/C",
+                                                "msiexec",
+                                                "/i",
+                                                &msi_quoted,
+                                                "/passive",
+                                                "/norestart",
+                                            ])
                                             .spawn();
 
                                         match spawn_res {
@@ -1884,15 +2002,20 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                 std::process::exit(0);
                                             }
                                             Err(e) => {
+                                                error!("Failed to spawn msiexec: {}", e);
                                                 add_notification(
                                                     "Update Failed",
-                                                    &format!("Failed to start installer: {}", e),
+                                                    &format!(
+                                                        "Failed to start installer: {}. Try running Connected as Administrator.",
+                                                        e
+                                                    ),
                                                     "",
                                                 );
                                             }
                                         }
                                     }
                                     Err(e) => {
+                                        error!("Failed to download update: {}", e);
                                         add_notification(
                                             "Update Failed",
                                             &format!("Download failed: {}", e),

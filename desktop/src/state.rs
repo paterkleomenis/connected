@@ -7,6 +7,27 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
+/// Extension trait for Mutex that handles poisoning gracefully.
+/// If a thread panics while holding the lock, we recover the data
+/// rather than panicking ourselves (preventing cascading failures).
+pub trait LockOrRecover<T> {
+    fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T> LockOrRecover<T> for Mutex<T> {
+    fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T> {
+        match self.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // A thread panicked while holding the lock.
+                // Recover the data and continue - this prevents cascading panics.
+                tracing::warn!("Mutex was poisoned, recovering data");
+                poisoned.into_inner()
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Persistent Settings
 // ============================================================================
@@ -75,13 +96,13 @@ pub fn get_app_settings() -> &'static Arc<Mutex<AppSettings>> {
 
 pub fn update_setting<F: FnOnce(&mut AppSettings)>(f: F) {
     let settings = get_app_settings();
-    let mut guard = settings.lock().unwrap();
+    let mut guard = settings.lock_or_recover();
     f(&mut guard);
     save_settings(&guard);
 }
 
 pub fn get_saved_devices_setting() -> HashMap<String, SavedDeviceInfo> {
-    get_app_settings().lock().unwrap().saved_devices.clone()
+    get_app_settings().lock_or_recover().saved_devices.clone()
 }
 
 pub fn save_device_to_settings(device_id: String, info: SavedDeviceInfo) {
@@ -222,7 +243,7 @@ pub fn get_pairing_mode_state() -> &'static Arc<Mutex<bool>> {
 }
 
 pub fn set_pairing_mode_state(enabled: bool) {
-    *get_pairing_mode_state().lock().unwrap() = enabled;
+    *get_pairing_mode_state().lock_or_recover() = enabled;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -291,12 +312,12 @@ pub fn get_last_remote_media_device_id() -> &'static Arc<Mutex<Option<String>>> 
 }
 
 pub fn add_file_transfer_request(request: FileTransferRequest) {
-    let mut requests = get_file_transfer_requests().lock().unwrap();
+    let mut requests = get_file_transfer_requests().lock_or_recover();
     requests.insert(request.id.clone(), request);
 }
 
 pub fn remove_file_transfer_request(id: &str) -> Option<FileTransferRequest> {
-    let mut requests = get_file_transfer_requests().lock().unwrap();
+    let mut requests = get_file_transfer_requests().lock_or_recover();
     requests.remove(id)
 }
 
@@ -324,7 +345,7 @@ pub fn add_notification(title: &str, message: &str, icon: &'static str) {
         }
     }
 
-    let mut counter = get_notification_counter().lock().unwrap();
+    let mut counter = get_notification_counter().lock_or_recover();
     *counter += 1;
     let id = *counter;
     drop(counter);
@@ -337,7 +358,7 @@ pub fn add_notification(title: &str, message: &str, icon: &'static str) {
         timestamp: std::time::Instant::now(),
     };
 
-    let mut notifications = get_notifications().lock().unwrap();
+    let mut notifications = get_notifications().lock_or_recover();
     notifications.push(notification);
     // Keep only last 5 notifications
     if notifications.len() > 5 {
@@ -395,13 +416,13 @@ pub fn get_phone_data_update() -> &'static Arc<Mutex<std::time::Instant>> {
 }
 
 pub fn set_phone_contacts(contacts: Vec<Contact>) {
-    *get_phone_contacts().lock().unwrap() = contacts;
-    *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+    *get_phone_contacts().lock_or_recover() = contacts;
+    *get_phone_data_update().lock_or_recover() = std::time::Instant::now();
 }
 
 pub fn set_phone_conversations(conversations: Vec<Conversation>) {
-    *get_phone_conversations().lock().unwrap() = conversations;
-    *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+    *get_phone_conversations().lock_or_recover() = conversations;
+    *get_phone_data_update().lock_or_recover() = std::time::Instant::now();
 }
 
 pub fn set_phone_messages(thread_id: String, messages: Vec<SmsMessage>) {
@@ -409,12 +430,12 @@ pub fn set_phone_messages(thread_id: String, messages: Vec<SmsMessage>) {
         .lock()
         .unwrap()
         .insert(thread_id, messages);
-    *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+    *get_phone_data_update().lock_or_recover() = std::time::Instant::now();
 }
 
 pub fn set_phone_call_log(entries: Vec<CallLogEntry>) {
-    *get_phone_call_log().lock().unwrap() = entries;
-    *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+    *get_phone_call_log().lock_or_recover() = entries;
+    *get_phone_data_update().lock_or_recover() = std::time::Instant::now();
 }
 
 // Active call state
@@ -423,8 +444,8 @@ pub fn get_active_call() -> &'static Arc<Mutex<Option<ActiveCall>>> {
 }
 
 pub fn set_active_call(call: Option<ActiveCall>) {
-    *get_active_call().lock().unwrap() = call;
-    *get_phone_data_update().lock().unwrap() = std::time::Instant::now();
+    *get_active_call().lock_or_recover() = call;
+    *get_phone_data_update().lock_or_recover() = std::time::Instant::now();
 }
 
 // Phone data device tracking
@@ -438,7 +459,7 @@ pub fn get_phone_sync_state() -> &'static Arc<Mutex<PhoneSyncState>> {
 
 pub fn set_phone_data_device(device_id: Option<String>) {
     let should_clear = {
-        let mut id_guard = get_phone_data_device_id().lock().unwrap();
+        let mut id_guard = get_phone_data_device_id().lock_or_recover();
         if *id_guard != device_id {
             *id_guard = device_id;
             true
@@ -450,41 +471,41 @@ pub fn set_phone_data_device(device_id: Option<String>) {
     if should_clear {
         // Device changed, clear cached data and sync state
         // We do this outside the id_guard lock to prevent deadlocks
-        *get_phone_sync_state().lock().unwrap() = PhoneSyncState::default();
-        *get_phone_contacts().lock().unwrap() = Vec::new();
-        *get_phone_conversations().lock().unwrap() = Vec::new();
-        *get_phone_messages().lock().unwrap() = HashMap::new();
-        *get_phone_call_log().lock().unwrap() = Vec::new();
+        *get_phone_sync_state().lock_or_recover() = PhoneSyncState::default();
+        *get_phone_contacts().lock_or_recover() = Vec::new();
+        *get_phone_conversations().lock_or_recover() = Vec::new();
+        *get_phone_messages().lock_or_recover() = HashMap::new();
+        *get_phone_call_log().lock_or_recover() = Vec::new();
     }
 }
 
 pub fn mark_messages_synced() {
-    get_phone_sync_state().lock().unwrap().messages_synced = true;
+    get_phone_sync_state().lock_or_recover().messages_synced = true;
 }
 
 pub fn mark_calls_synced() {
-    get_phone_sync_state().lock().unwrap().calls_synced = true;
+    get_phone_sync_state().lock_or_recover().calls_synced = true;
 }
 
 pub fn mark_contacts_synced() {
-    get_phone_sync_state().lock().unwrap().contacts_synced = true;
+    get_phone_sync_state().lock_or_recover().contacts_synced = true;
 }
 
 pub fn is_messages_synced() -> bool {
-    get_phone_sync_state().lock().unwrap().messages_synced
+    get_phone_sync_state().lock_or_recover().messages_synced
 }
 
 pub fn is_calls_synced() -> bool {
-    get_phone_sync_state().lock().unwrap().calls_synced
+    get_phone_sync_state().lock_or_recover().calls_synced
 }
 
 pub fn is_contacts_synced() -> bool {
-    get_phone_sync_state().lock().unwrap().contacts_synced
+    get_phone_sync_state().lock_or_recover().contacts_synced
 }
 
 // Settings accessors that use persistent storage
 pub fn get_clipboard_sync_enabled() -> bool {
-    get_app_settings().lock().unwrap().clipboard_sync_enabled
+    get_app_settings().lock_or_recover().clipboard_sync_enabled
 }
 
 pub fn set_clipboard_sync_enabled(enabled: bool) {
@@ -492,7 +513,7 @@ pub fn set_clipboard_sync_enabled(enabled: bool) {
 }
 
 pub fn get_media_enabled_setting() -> bool {
-    get_app_settings().lock().unwrap().media_enabled
+    get_app_settings().lock_or_recover().media_enabled
 }
 
 pub fn set_media_enabled_setting(enabled: bool) {
@@ -500,7 +521,7 @@ pub fn set_media_enabled_setting(enabled: bool) {
 }
 
 pub fn get_auto_sync_messages() -> bool {
-    get_app_settings().lock().unwrap().auto_sync_messages
+    get_app_settings().lock_or_recover().auto_sync_messages
 }
 
 pub fn set_auto_sync_messages(enabled: bool) {
@@ -508,7 +529,7 @@ pub fn set_auto_sync_messages(enabled: bool) {
 }
 
 pub fn get_auto_sync_calls() -> bool {
-    get_app_settings().lock().unwrap().auto_sync_calls
+    get_app_settings().lock_or_recover().auto_sync_calls
 }
 
 pub fn set_auto_sync_calls(enabled: bool) {
@@ -516,7 +537,7 @@ pub fn set_auto_sync_calls(enabled: bool) {
 }
 
 pub fn get_auto_sync_contacts() -> bool {
-    get_app_settings().lock().unwrap().auto_sync_contacts
+    get_app_settings().lock_or_recover().auto_sync_contacts
 }
 
 pub fn set_auto_sync_contacts(enabled: bool) {
@@ -524,7 +545,7 @@ pub fn set_auto_sync_contacts(enabled: bool) {
 }
 
 pub fn get_notifications_enabled_setting() -> bool {
-    get_app_settings().lock().unwrap().notifications_enabled
+    get_app_settings().lock_or_recover().notifications_enabled
 }
 
 pub fn set_notifications_enabled_setting(enabled: bool) {
@@ -532,7 +553,7 @@ pub fn set_notifications_enabled_setting(enabled: bool) {
 }
 
 pub fn get_device_name_setting() -> Option<String> {
-    get_app_settings().lock().unwrap().device_name.clone()
+    get_app_settings().lock_or_recover().device_name.clone()
 }
 
 pub fn set_device_name_setting(name: String) {
