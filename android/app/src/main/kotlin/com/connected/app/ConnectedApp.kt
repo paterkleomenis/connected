@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
@@ -77,6 +78,8 @@ import uniffi.connected_ffi.trustDevice
 import uniffi.connected_ffi.unpairDeviceById
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Collections
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -199,7 +202,7 @@ class ConnectedApp(private val context: Context) {
     val isBrowsingRemote = mutableStateOf(false)
     private var browsingDevice: DiscoveredDevice? = null
     val thumbnails = androidx.compose.runtime.mutableStateMapOf<String, android.graphics.Bitmap>()
-    private val requestedThumbnails = mutableSetOf<String>()
+    private val requestedThumbnails = Collections.synchronizedSet(mutableSetOf<String>())
 
     // Network State
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
@@ -865,8 +868,13 @@ class ConnectedApp(private val context: Context) {
             }
             val itemUri = resolver.insert(uri, contentValues)
             if (itemUri != null) {
-                resolver.openOutputStream(itemUri).use { output ->
-                    sourceFile.inputStream().use { input -> input.copyTo(output!!) }
+                val outputStream = resolver.openOutputStream(itemUri)
+                if (outputStream == null) {
+                    resolver.delete(itemUri, null, null)
+                    return null
+                }
+                outputStream.use { output ->
+                    sourceFile.inputStream().use { input -> input.copyTo(output) }
                 }
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                     contentValues.clear()
@@ -933,26 +941,53 @@ class ConnectedApp(private val context: Context) {
             if (uri.scheme == "file") {
                 return uri.path
             }
-            context.contentResolver.query(uri, null, null, null, null)?.use {
-                val nameIndex = it.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DATA)
-                if (nameIndex >= 0) {
-                    it.moveToFirst(); return it.getString(nameIndex)
+            if (uri.scheme == "content") {
+                // Try direct filesystem path when available, otherwise materialize to cache
+                context.contentResolver.query(uri, null, null, null, null)?.use {
+                    val nameIndex =
+                        it.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DATA)
+                    if (nameIndex >= 0) {
+                        it.moveToFirst()
+                        val dataPath = it.getString(nameIndex)
+                        if (!dataPath.isNullOrBlank()) {
+                            return dataPath
+                        }
+                    }
                 }
-            }
-        } catch (_: Exception) {
-        }
-        try {
-            val uri = contentUri.toUri()
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                val fileName =
-                    androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)?.name ?: "temp_file"
-                val tempFile = File(context.cacheDir, fileName)
-                tempFile.outputStream().use { output -> input.copyTo(output) }
+                val displayName = queryDisplayName(uri)
+                val baseName = displayName ?: uri.lastPathSegment ?: "shared_${UUID.randomUUID()}"
+                val safeName = baseName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                val tempFile =
+                    File(context.cacheDir, "shared-${UUID.randomUUID()}-$safeName")
+                val input = context.contentResolver.openInputStream(uri) ?: return null
+                input.use { stream ->
+                    tempFile.outputStream().use { output -> stream.copyTo(output) }
+                }
                 return tempFile.absolutePath
             }
         } catch (_: Exception) {
         }
         return null
+    }
+
+    private fun queryDisplayName(uri: Uri): String? {
+        return try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getString(0)
+                } else {
+                    null
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     fun copyDocumentFileToLocal(source: androidx.documentfile.provider.DocumentFile, dest: File): Boolean {
@@ -1033,45 +1068,61 @@ class ConnectedApp(private val context: Context) {
     // Missing method: sendFileToDevice
     fun sendFileToDevice(device: DiscoveredDevice, fileUri: String) {
         val path = getRealPathFromUri(fileUri)
-        if (path != null) {
-            val file = File(path)
-            if (file.exists()) {
-                if (isSyntheticIp(device.ip)) {
-                    val queue = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
-                        ConcurrentLinkedQueue()
-                    }
-                    queue.add(file.absolutePath)
-                    if (hasProximityPermissions()) {
-                        try {
-                            proximityManager?.requestConnect(device.id)
-                        } catch (e: SecurityException) {
-                            Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
-                        }
-                    }
-                    runOnMainThread {
-                        android.widget.Toast
-                            .makeText(
-                                context,
-                                "Waiting for Wi-Fi Direct connection...",
-                                android.widget.Toast.LENGTH_SHORT
-                            )
-                            .show()
-                    }
-                    return
+        if (path == null) {
+            runOnMainThread {
+                android.widget.Toast.makeText(
+                    context,
+                    "Unsupported or missing file",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+            return
+        }
+        val file = File(path)
+        if (!file.exists() || file.isDirectory) {
+            runOnMainThread {
+                android.widget.Toast.makeText(
+                    context,
+                    "Unsupported or missing file",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+            return
+        }
+        if (isSyntheticIp(device.ip)) {
+            val queue = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
+                ConcurrentLinkedQueue()
+            }
+            queue.add(file.absolutePath)
+            if (hasProximityPermissions()) {
+                try {
+                    proximityManager?.requestConnect(device.id)
+                } catch (e: SecurityException) {
+                    Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
                 }
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        sendFile(device.ip, device.port, file.absolutePath)
-                    } catch (e: Exception) {
-                        Log.e("ConnectedApp", "Send file failed", e)
-                        runOnMainThread {
-                            android.widget.Toast.makeText(
-                                context,
-                                "Failed to send file",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    }
+            }
+            runOnMainThread {
+                android.widget.Toast
+                    .makeText(
+                        context,
+                        "Waiting for Wi-Fi Direct connection...",
+                        android.widget.Toast.LENGTH_SHORT
+                    )
+                    .show()
+            }
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                sendFile(device.ip, device.port, file.absolutePath)
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Send file failed", e)
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Failed to send file",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
         }
@@ -1686,10 +1737,13 @@ class ConnectedApp(private val context: Context) {
                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     if (bitmap != null) {
                         runOnMainThread { thumbnails[path] = bitmap }
+                        return@launch
                     }
                 }
             } catch (_: Exception) {
+                // Fall through to allow retry
             }
+            requestedThumbnails.remove(path)
         }
     }
 

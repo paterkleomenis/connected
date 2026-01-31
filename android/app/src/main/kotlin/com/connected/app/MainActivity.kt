@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.R)
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -303,7 +304,9 @@ fun RemoteFileBrowser(app: ConnectedApp) {
                         onClick = {
                             val current = app.currentRemotePath.value
                             val parent = current.substringBeforeLast('/').ifEmpty { "/" }
-                            app.browseRemoteFiles(app.getBrowsingDevice()!!, parent)
+                            app.getBrowsingDevice()?.let { device ->
+                                app.browseRemoteFiles(device, parent)
+                            }
                         }
                     ) {
                         Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -333,7 +336,9 @@ fun RemoteFileBrowser(app: ConnectedApp) {
                     modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth(),
                     onClick = {
                         if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) {
-                            app.browseRemoteFiles(app.getBrowsingDevice()!!, file.path)
+                            app.getBrowsingDevice()?.let { device ->
+                                app.browseRemoteFiles(device, file.path)
+                            }
                         } else {
                             app.getBrowsingDevice()?.let { device ->
                                 app.downloadRemoteFile(device, file.path)

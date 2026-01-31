@@ -8,7 +8,7 @@ use crate::utils::format_file_size;
 use base64::Engine as _;
 use connected_core::filesystem::{FsEntry, FsEntryType};
 use dioxus::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[component]
 pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
@@ -23,7 +23,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     // Thumbnail state
     let mut current_thumbnails = use_signal(HashMap::<String, String>::new); // path -> base64
     let mut last_thumbnails_update = use_signal(|| *get_thumbnails_update().lock_or_recover());
-    let mut requested_thumbnails = use_signal(HashSet::<String>::new);
+    let mut requested_thumbnails = use_signal(HashMap::<String, std::time::Instant>::new);
 
     use_effect(use_reactive(&device, move |device| {
         loading.set(true);
@@ -92,6 +92,12 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 }
                 current_thumbnails.set(new_thumbs);
                 last_thumbnails_update.set(thumbnails_ts);
+            }
+
+            // Allow thumbnail retries by expiring old requests
+            {
+                let mut requested = requested_thumbnails.write();
+                requested.retain(|_, ts| ts.elapsed() < std::time::Duration::from_secs(5));
             }
 
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -187,10 +193,12 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                             // Request thumbnail if needed
                             if is_image && matches!(entry.entry_type, FsEntryType::File) {
                                 let has_thumb = current_thumbnails.read().contains_key(&entry.path);
-                                let already_requested = requested_thumbnails.read().contains(&entry.path);
+                                let already_requested = requested_thumbnails.read().contains_key(&entry.path);
 
                                 if !has_thumb && !already_requested {
-                                    requested_thumbnails.write().insert(entry.path.clone());
+                                    requested_thumbnails
+                                        .write()
+                                        .insert(entry.path.clone(), std::time::Instant::now());
                                     action_tx.send(AppAction::GetThumbnail {
                                         ip: device.ip.clone(),
                                         port: device.port,

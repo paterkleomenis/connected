@@ -1332,6 +1332,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         &format!("Failed to list: {}", e),
                                         "",
                                     );
+                                    // Trigger UI update to stop loading spinner even on failure.
+                                    *get_remote_files_update().lock_or_recover() = Instant::now();
                                 }
                             }
                         }
@@ -1682,8 +1684,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if let Some(c) = &client {
                     let device = {
                         let device_id = get_last_remote_media_device_id()
-                            .lock()
-                            .unwrap()
+                            .lock_or_recover()
                             .clone()
                             .unwrap_or_default();
                         if device_id.is_empty() || device_id == "local" || device_id == "unknown" {

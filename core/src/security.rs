@@ -4,7 +4,8 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::info;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{info, warn};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum PeerStatus {
@@ -147,8 +148,25 @@ impl KeyStore {
 
         if new_path.exists() {
             let data = std::fs::read(&new_path).map_err(ConnectedError::Io)?;
-            let peers: KnownPeers = serde_json::from_slice(&data).unwrap_or_default();
-            Ok(peers)
+            match serde_json::from_slice(&data) {
+                Ok(peers) => Ok(peers),
+                Err(e) => {
+                    warn!("Failed to parse known peers file: {}", e);
+                    let ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let corrupt_path = storage_dir.join(format!("known_peers.corrupt.{}.json", ts));
+                    if let Err(err) = std::fs::rename(&new_path, &corrupt_path) {
+                        warn!(
+                            "Failed to backup corrupt peers file to {}: {}",
+                            corrupt_path.display(),
+                            err
+                        );
+                    }
+                    Ok(KnownPeers::default())
+                }
+            }
         } else {
             Ok(KnownPeers::default())
         }

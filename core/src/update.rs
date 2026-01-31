@@ -2,6 +2,7 @@ use crate::error::{ConnectedError, Result};
 use reqwest::header::LOCATION;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +30,8 @@ impl UpdateChecker {
             .user_agent("Connected-App")
             // We want the redirect target (tag) without pulling the HTML page.
             .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
             .build()
             .map_err(|e| ConnectedError::Network(e.to_string()))?;
 
@@ -150,6 +153,8 @@ fn is_arch_like() -> bool {
 pub async fn download_to_file(url: &str, dest_path: &Path) -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent("Connected-App")
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(300))
         .build()
         .map_err(|e| ConnectedError::Network(e.to_string()))?;
 

@@ -24,7 +24,7 @@ strip = true
 strip = false
 
 [workspace.package]
-version = "2.1.6"
+version = "2.1.7"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Connected Team"]

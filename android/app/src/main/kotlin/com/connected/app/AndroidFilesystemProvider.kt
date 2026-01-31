@@ -10,6 +10,7 @@ import androidx.documentfile.provider.DocumentFile
 import uniffi.connected_ffi.*
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 
 class AndroidFilesystemProvider(private val context: Context, private val rootUri: Uri) : FilesystemProviderCallback {
 
@@ -40,6 +41,23 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
         // But for safety:
         val safePath = path.trim('/').split('/').filter { it != ".." && it.isNotEmpty() }.joinToString("/")
         return File(rootFile, safePath)
+    }
+
+    private fun skipFully(input: InputStream, bytes: Long): Boolean {
+        var remaining = bytes
+        while (remaining > 0) {
+            val skipped = input.skip(remaining)
+            if (skipped > 0) {
+                remaining -= skipped
+                continue
+            }
+            val read = input.read()
+            if (read == -1) {
+                return false
+            }
+            remaining -= 1
+        }
+        return true
     }
 
     override fun listDir(path: String): List<FfiFsEntry> {
@@ -80,7 +98,7 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
 
             return try {
                 file.inputStream().use { input ->
-                    input.skip(offset.toLong())
+                    if (!skipFully(input, offset.toLong())) return ByteArray(0)
                     val buffer = ByteArray(size.toInt())
                     val read = input.read(buffer)
                     if (read == -1) ByteArray(0)
@@ -95,9 +113,9 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
 
             val inputStream = context.contentResolver.openInputStream(file.uri)
                 ?: throw FilesystemException.Generic("Could not open file: $path")
-            
+
             return inputStream.use { input ->
-                input.skip(offset.toLong())
+                if (!skipFully(input, offset.toLong())) return ByteArray(0)
                 val buffer = ByteArray(size.toInt())
                 val read = input.read(buffer)
                 if (read == -1) ByteArray(0)

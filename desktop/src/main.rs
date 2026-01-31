@@ -767,8 +767,7 @@ fn App() -> Element {
         loop {
             // Update devices list
             let mut list: Vec<DeviceInfo> = get_devices_store()
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .values()
                 .cloned()
                 .collect();

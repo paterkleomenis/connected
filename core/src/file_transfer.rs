@@ -79,6 +79,7 @@ impl FileTransfer {
     ) -> Result<()> {
         let mut path = file_path.as_ref().to_path_buf();
         let mut is_temp_file = false;
+        let mut preferred_filename: Option<String> = None;
 
         // Check if directory
         if path.is_dir() {
@@ -90,6 +91,7 @@ impl FileTransfer {
                 .to_string();
 
             info!("Archiving directory: {}", dir_name);
+            preferred_filename = Some(format!("{}.zip", dir_name));
 
             // Notify compression start (optional, maybe use a distinct state later)
             if let Some(ref tx) = progress_tx {
@@ -179,12 +181,19 @@ impl FileTransfer {
             })?
             .to_string();
 
-        info!("Starting file transfer: {} ({} bytes)", filename, file_size);
+        let request_filename = preferred_filename
+            .clone()
+            .unwrap_or_else(|| filename.clone());
+
+        info!(
+            "Starting file transfer: {} ({} bytes)",
+            request_filename, file_size
+        );
 
         // Notify progress
         if let Some(ref tx) = progress_tx {
             let _ = tx.send(TransferProgress::Starting {
-                filename: filename.clone(),
+                filename: request_filename.clone(),
                 total_size: file_size,
             });
         }
@@ -215,7 +224,7 @@ impl FileTransfer {
 
         // Send transfer request
         let request = FileTransferMessage::SendRequest {
-            filename: filename.clone(),
+            filename: request_filename.clone(),
             size: file_size,
             mime_type: mime_guess::from_path(&path).first().map(|m| m.to_string()),
         };
@@ -351,7 +360,7 @@ impl FileTransfer {
                 info!("File transfer completed successfully");
                 if let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Completed {
-                        filename,
+                        filename: request_filename.clone(),
                         total_size: file_size,
                     });
                 }

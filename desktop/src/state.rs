@@ -427,8 +427,7 @@ pub fn set_phone_conversations(conversations: Vec<Conversation>) {
 
 pub fn set_phone_messages(thread_id: String, messages: Vec<SmsMessage>) {
     get_phone_messages()
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .insert(thread_id, messages);
     *get_phone_data_update().lock_or_recover() = std::time::Instant::now();
 }

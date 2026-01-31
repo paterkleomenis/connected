@@ -1,6 +1,6 @@
 use crate::device::{Device, DeviceType};
 use crate::error::{ConnectedError, Result};
-use mdns_sd::{IfKind, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{IfKind, ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -680,13 +680,34 @@ impl DiscoveryService {
             .addresses
             .iter()
             .find(|scoped_ip| scoped_ip.is_ipv4())
-            .or_else(|| info.addresses.iter().next())
-            .map(|scoped_ip| scoped_ip.to_ip_addr());
+            .map(|scoped_ip| scoped_ip.to_ip_addr())
+            .or_else(|| {
+                info.addresses
+                    .iter()
+                    .find(|scoped_ip| match scoped_ip {
+                        ScopedIp::V6(v6) => !v6.addr().is_unicast_link_local(),
+                        _ => false,
+                    })
+                    .map(|scoped_ip| scoped_ip.to_ip_addr())
+            })
+            .or_else(|| {
+                info.addresses
+                    .iter()
+                    .find(|scoped_ip| scoped_ip.is_ipv6())
+                    .map(|scoped_ip| scoped_ip.to_ip_addr())
+            });
 
         let Some(ip) = ip else {
             warn!("No IP address found for device: {}", device_name);
             return;
         };
+
+        if matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local()) {
+            warn!(
+                "Discovered link-local IPv6 address for {}. Connectivity may require scope info.",
+                device_name
+            );
+        }
 
         let device = Device::new(
             device_id.clone(),
