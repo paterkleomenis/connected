@@ -4,8 +4,8 @@ IFS=$'\n\t'
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/update-aur.sh <version> [--hash-bin] [--skip-srcinfo]
-       scripts/update-aur.sh --latest [--hash-bin] [--skip-srcinfo]
+Usage: scripts/update-aur.sh <version> [--hash-bin] [--skip-srcinfo] [--push]
+       scripts/update-aur.sh --latest [--hash-bin] [--skip-srcinfo] [--push]
 
 Updates packaging/aur/PKGBUILD (pkgver/pkgrel + sha256sums) and .SRCINFO.
 
@@ -13,6 +13,7 @@ Options:
   --latest        Resolve latest GitHub release tag and use that version
   --hash-bin      Compute hash for the binary asset (otherwise keep SKIP if present)
   --skip-srcinfo  Do not regenerate .SRCINFO
+  --push          Commit and push changes to the AUR remote
 USAGE
 }
 
@@ -41,6 +42,10 @@ resolve_latest_version() {
 version=""
 hash_bin=0
 skip_srcinfo=0
+do_push=0
+commit_msg=""
+push_remote=""
+push_branch=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -55,6 +60,25 @@ while [ $# -gt 0 ]; do
     --skip-srcinfo)
       skip_srcinfo=1
       shift
+      ;;
+    --push)
+      do_push=1
+      shift
+      ;;
+    --commit-msg)
+      commit_msg="${2:-}"
+      [ -n "$commit_msg" ] || die "--commit-msg requires a value"
+      shift 2
+      ;;
+    --remote)
+      push_remote="${2:-}"
+      [ -n "$push_remote" ] || die "--remote requires a value"
+      shift 2
+      ;;
+    --branch)
+      push_branch="${2:-}"
+      [ -n "$push_branch" ] || die "--branch requires a value"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -77,6 +101,7 @@ need_cmd curl
 need_cmd sha256sum
 need_cmd awk
 need_cmd sed
+need_cmd perl
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AUR_DIR="${ROOT_DIR}/packaging/aur"
@@ -139,3 +164,42 @@ else
 fi
 
 echo "AUR update complete."
+
+if [ "$do_push" -eq 1 ]; then
+  need_cmd git
+  if ! git -C "$AUR_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    die "AUR directory is not a git repository: $AUR_DIR"
+  fi
+
+  if git -C "$AUR_DIR" diff --quiet --exit-code; then
+    echo "No changes to commit."
+    exit 0
+  fi
+
+  if [ -z "$commit_msg" ]; then
+    commit_msg="Update to v${version}"
+  fi
+
+  git -C "$AUR_DIR" add PKGBUILD .SRCINFO || true
+  if git -C "$AUR_DIR" diff --cached --quiet --exit-code; then
+    echo "No staged changes to commit."
+    exit 0
+  fi
+
+  git -C "$AUR_DIR" commit -m "$commit_msg"
+
+  if [ -z "$push_remote" ]; then
+    if git -C "$AUR_DIR" remote | grep -qx "aur"; then
+      push_remote="aur"
+    else
+      push_remote="origin"
+    fi
+  fi
+
+  if [ -z "$push_branch" ]; then
+    push_branch="master"
+  fi
+
+  echo "Pushing to ${push_remote} ${push_branch}..."
+  git -C "$AUR_DIR" push "$push_remote" "$push_branch"
+fi
