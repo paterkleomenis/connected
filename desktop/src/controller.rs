@@ -1990,17 +1990,45 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         let msi = dest.to_string_lossy().to_string();
                                         info!("Launching MSI installer: {}", msi);
 
-                                        let spawn_res = std::process::Command::new("msiexec")
-                                            .args(["/i", &msi, "/passive", "/norestart"])
-                                            .spawn();
+                                        let status = tokio::task::spawn_blocking(move || {
+                                            std::process::Command::new("msiexec")
+                                                .args(["/i", &msi, "/passive", "/norestart"])
+                                                .status()
+                                        })
+                                        .await;
 
-                                        match spawn_res {
-                                            Ok(_) => {
-                                                // Exit so the installer can replace files cleanly.
-                                                std::process::exit(0);
+                                        match status {
+                                            Ok(Ok(status)) => {
+                                                let code = status.code().unwrap_or(-1);
+                                                // 0 = success, 3010 = success (restart required)
+                                                if status.success() || code == 3010 {
+                                                    // Exit so the installer can replace files cleanly.
+                                                    std::process::exit(0);
+                                                } else {
+                                                    error!("Installer exited with code {}", code);
+                                                    add_notification(
+                                                        "Update Failed",
+                                                        &format!(
+                                                            "Installer exited with code {}. Try running Connected as Administrator.",
+                                                            code
+                                                        ),
+                                                        "",
+                                                    );
+                                                }
+                                            }
+                                            Ok(Err(e)) => {
+                                                error!("Failed to run msiexec: {}", e);
+                                                add_notification(
+                                                    "Update Failed",
+                                                    &format!(
+                                                        "Failed to run installer: {}. Try running Connected as Administrator.",
+                                                        e
+                                                    ),
+                                                    "",
+                                                );
                                             }
                                             Err(e) => {
-                                                error!("Failed to spawn msiexec: {}", e);
+                                                error!("Failed to wait for msiexec: {}", e);
                                                 add_notification(
                                                     "Update Failed",
                                                     &format!(
