@@ -41,8 +41,8 @@ configure<ApplicationExtension> {
         applicationId = "com.connected.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "2.1.5"
+        versionCode = 24
+        versionName = "2.1.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -111,7 +111,7 @@ configure<ApplicationExtension> {
 dependencies {
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     // Core library desugaring for Java 21 APIs on older Android
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.6")
 
     // AndroidX Core
     implementation("androidx.core:core-ktx:1.17.0")
