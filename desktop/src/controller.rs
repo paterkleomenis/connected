@@ -1992,8 +1992,13 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         info!("Launching MSI installer: {}", msi);
 
                                         let status = tokio::task::spawn_blocking(move || {
-                                            std::process::Command::new("msiexec")
-                                                .args(["/i", &msi, "/passive", "/norestart"])
+                                            let msi_escaped = msi.replace('\'', "''");
+                                            let ps_cmd = format!(
+                                                "$p=Start-Process msiexec -Verb RunAs -Wait -PassThru -ArgumentList @('/i','{}','/passive','/norestart'); exit $p.ExitCode",
+                                                msi_escaped
+                                            );
+                                            std::process::Command::new("powershell")
+                                                .args(["-NoProfile", "-Command", &ps_cmd])
                                                 .status()
                                         })
                                         .await;
