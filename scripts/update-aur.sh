@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/update-aur.sh <version> [--hash-bin] [--skip-srcinfo]
+       scripts/update-aur.sh --latest [--hash-bin] [--skip-srcinfo]
+
+Updates packaging/aur/PKGBUILD (pkgver/pkgrel + sha256sums) and .SRCINFO.
+
+Options:
+  --latest        Resolve latest GitHub release tag and use that version
+  --hash-bin      Compute hash for the binary asset (otherwise keep SKIP if present)
+  --skip-srcinfo  Do not regenerate .SRCINFO
+USAGE
+}
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+hash_url() {
+  local url="$1"
+  curl -fsSL "$url" | sha256sum | awk '{print $1}'
+}
+
+resolve_latest_version() {
+  local location
+  location=$(curl -fsI "https://github.com/paterkleomenis/connected/releases/latest" | tr -d '\r' | awk -F': ' '/^location:/ {print $2}')
+  [ -n "$location" ] || die "failed to resolve latest release redirect"
+  local tag="${location##*/}"
+  echo "${tag#v}"
+}
+
+version=""
+hash_bin=0
+skip_srcinfo=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --latest)
+      version="latest"
+      shift
+      ;;
+    --hash-bin)
+      hash_bin=1
+      shift
+      ;;
+    --skip-srcinfo)
+      skip_srcinfo=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      if [ -z "$version" ]; then
+        version="$1"
+        shift
+      else
+        die "unexpected argument: $1"
+      fi
+      ;;
+  esac
+done
+
+[ -n "$version" ] || { usage; exit 1; }
+
+need_cmd curl
+need_cmd sha256sum
+need_cmd awk
+need_cmd sed
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+AUR_DIR="${ROOT_DIR}/packaging/aur"
+PKGBUILD="${AUR_DIR}/PKGBUILD"
+
+[ -f "$PKGBUILD" ] || die "PKGBUILD not found at ${PKGBUILD}"
+
+if [ "$version" = "latest" ]; then
+  version="$(resolve_latest_version)"
+fi
+
+echo "Updating AUR package to version: ${version}"
+
+# Update pkgver and reset pkgrel
+sed -i "s/^pkgver=.*/pkgver=${version}/" "$PKGBUILD"
+sed -i "s/^pkgrel=.*/pkgrel=1/" "$PKGBUILD"
+
+# Build source URLs (must stay in sync with PKGBUILD)
+bin_url="https://github.com/paterkleomenis/connected/releases/download/${version}/connected-desktop"
+desktop_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/packaging/aur/connected-desktop.desktop"
+icon_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/android/app/src/main/ic_launcher-playstore.png"
+license_mit_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/LICENSE-MIT"
+license_apache_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/LICENSE-APACHE"
+
+# Decide whether to hash binary or keep SKIP
+current_first_sum=$(awk '/^sha256sums=/{flag=1;next} flag{gsub(/[()'\'' ]/,""); if ($0!=""){print $0; exit}}' "$PKGBUILD" || true)
+if [ "$hash_bin" -eq 1 ] || [ "$current_first_sum" != "SKIP" ]; then
+  echo "Hashing binary asset..."
+  bin_sum="$(hash_url "$bin_url")"
+else
+  bin_sum="SKIP"
+fi
+
+echo "Hashing auxiliary sources..."
+desktop_sum="$(hash_url "$desktop_url")"
+icon_sum="$(hash_url "$icon_url")"
+license_mit_sum="$(hash_url "$license_mit_url")"
+license_apache_sum="$(hash_url "$license_apache_url")"
+
+cat > "${AUR_DIR}/.sha256sums.tmp" <<EOF
+sha256sums=('${bin_sum}'
+            '${desktop_sum}'
+            '${icon_sum}'
+            '${license_mit_sum}'
+            '${license_apache_sum}')
+EOF
+
+# Replace sha256sums block
+perl -0777 -i -pe 's/sha256sums=\([^\)]*\)/`cat "${AUR_DIR}\/.sha256sums.tmp"`/se' "$PKGBUILD"
+rm -f "${AUR_DIR}/.sha256sums.tmp"
+
+if [ "$skip_srcinfo" -eq 0 ]; then
+  if command -v makepkg >/dev/null 2>&1; then
+    (cd "$AUR_DIR" && makepkg --printsrcinfo > .SRCINFO)
+  else
+    echo "Warning: makepkg not found; .SRCINFO not regenerated"
+  fi
+else
+  echo "Skipping .SRCINFO regeneration"
+fi
+
+echo "AUR update complete."
