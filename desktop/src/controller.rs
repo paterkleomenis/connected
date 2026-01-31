@@ -1994,7 +1994,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         let status = tokio::task::spawn_blocking(move || {
                                             let msi_escaped = msi.replace('\'', "''");
                                             let ps_cmd = format!(
-                                                "$p=Start-Process msiexec -Verb RunAs -Wait -PassThru -ArgumentList @('/i','{}','/passive','/norestart'); exit $p.ExitCode",
+                                                "Start-Process msiexec -Verb RunAs -ArgumentList @('/i','{}','/passive','/norestart')",
                                                 msi_escaped
                                             );
                                             std::process::Command::new("powershell")
@@ -2005,17 +2005,19 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                                         match status {
                                             Ok(Ok(status)) => {
-                                                let code = status.code().unwrap_or(-1);
-                                                // 0 = success, 3010 = success (restart required)
-                                                if status.success() || code == 3010 {
-                                                    // Exit so the installer can replace files cleanly.
+                                                if status.success() {
+                                                    // Exit immediately so the installer can replace files cleanly.
                                                     std::process::exit(0);
                                                 } else {
-                                                    error!("Installer exited with code {}", code);
+                                                    let code = status.code().unwrap_or(-1);
+                                                    error!(
+                                                        "Failed to launch installer (code {})",
+                                                        code
+                                                    );
                                                     add_notification(
                                                         "Update Failed",
                                                         &format!(
-                                                            "Installer exited with code {}. Try running Connected as Administrator.",
+                                                            "Failed to start installer (code {}). Try running Connected as Administrator.",
                                                             code
                                                         ),
                                                         "",
