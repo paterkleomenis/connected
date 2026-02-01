@@ -41,7 +41,12 @@ dbus = "0.9"
 mpris = "2.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = ["Foundation", "Media_Control", "Foundation_Collections", "System"] }
+windows = { version = "0.62", features = [
+  "Foundation",
+  "Media_Control",
+  "Foundation_Collections",
+  "System",
+] }
 windows_firewall = "0.5"
 
 
