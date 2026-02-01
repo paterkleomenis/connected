@@ -7,12 +7,14 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
@@ -58,8 +60,11 @@ import uniffi.connected_ffi.registerUnpairCallback
 import uniffi.connected_ffi.rejectFileTransfer
 import uniffi.connected_ffi.rejectPairing
 import uniffi.connected_ffi.requestDownloadFile
+import uniffi.connected_ffi.requestDownloadFileWithProgress
+import uniffi.connected_ffi.requestDownloadFolder
 import uniffi.connected_ffi.requestGetThumbnail
 import uniffi.connected_ffi.requestListDir
+import uniffi.connected_ffi.BrowserDownloadCallback
 import uniffi.connected_ffi.sendActiveCallUpdate
 import uniffi.connected_ffi.sendCallLog
 import uniffi.connected_ffi.sendClipboard
@@ -156,6 +161,17 @@ class ConnectedApp(private val context: Context) {
         ConcurrentHashMap<String, Pair<Long, ConcurrentLinkedQueue<String>>>()
     val transferStatus = mutableStateOf("Idle")
     val compressionProgress = mutableStateOf<CompressionProgress?>(null)
+    val browserDownloadProgress = mutableStateOf<BrowserDownloadProgress?>(null)
+
+    data class BrowserDownloadProgress(
+        val currentFile: String,
+        val bytesDownloaded: Long,
+        val totalBytes: Long,
+        val isFolder: Boolean = false
+    ) {
+        val percentComplete: Float
+            get() = if (totalBytes > 0) (bytesDownloaded.toFloat() / totalBytes * 100f) else 0f
+    }
 
     data class CompressionProgress(
         val currentFile: String,
@@ -988,6 +1004,89 @@ class ConnectedApp(private val context: Context) {
         val ext = android.webkit.MimeTypeMap.getFileExtensionFromUrl(url)
         return if (ext != null) android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
             ?: "*/*" else "*/*"
+    }
+
+    private fun moveFolderToDownloads(folderName: String) {
+        val sourceFolder = File(downloadDir, folderName)
+        if (!sourceFolder.exists() || !sourceFolder.isDirectory) return
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // On Android 10+, use MediaStore for each file
+                copyFolderToDownloadsMediaStore(sourceFolder, folderName)
+            } else {
+                // On older Android, use direct file access
+                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                )
+                val destFolder = File(downloadsDir, folderName)
+                copyFolderRecursively(sourceFolder, destFolder)
+            }
+
+            // Clean up the source folder from app's private storage
+            sourceFolder.deleteRecursively()
+
+            Log.i("ConnectedApp", "Moved folder to Downloads: $folderName")
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to move folder to Downloads", e)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun copyFolderToDownloadsMediaStore(sourceFolder: File, relativePath: String) {
+        val resolver = context.contentResolver
+
+        sourceFolder.listFiles()?.forEach { file ->
+            if (file.isDirectory) {
+                // Recursively handle subdirectories
+                copyFolderToDownloadsMediaStore(file, "$relativePath/${file.name}")
+            } else {
+                // Copy file using MediaStore
+                val contentValues = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, getMimeType(file.name))
+                    put(
+                        android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                        "${android.os.Environment.DIRECTORY_DOWNLOADS}/$relativePath"
+                    )
+                    put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+
+                val uri = resolver.insert(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    contentValues
+                )
+
+                if (uri != null) {
+                    resolver.openOutputStream(uri)?.use { output ->
+                        file.inputStream().use { input ->
+                            input.copyTo(output)
+                        }
+                    }
+                    contentValues.clear()
+                    contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(uri, contentValues, null, null)
+                }
+            }
+        }
+    }
+
+    private fun copyFolderRecursively(source: File, dest: File) {
+        if (source.isDirectory) {
+            if (!dest.exists()) {
+                dest.mkdirs()
+            }
+            source.listFiles()?.forEach { child ->
+                copyFolderRecursively(child, File(dest, child.name))
+            }
+        } else {
+            // Copy file
+            source.inputStream().use { input ->
+                dest.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }
     }
 
     private fun getPersistedRootUri(): Uri? {
@@ -1823,26 +1922,102 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun downloadRemoteFile(device: DiscoveredDevice, remotePath: String) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val fileName = File(remotePath).name
-                val destFile = File(downloadDir, fileName)
-                requestDownloadFile(device.ip, device.port, remotePath, destFile.absolutePath)
+        val fileName = File(remotePath).name
+        val destFile = File(downloadDir, fileName)
+
+        // Show initial progress
+        browserDownloadProgress.value = BrowserDownloadProgress(
+            currentFile = fileName,
+            bytesDownloaded = 0,
+            totalBytes = 0,
+            isFolder = false
+        )
+
+        val callback = object : BrowserDownloadCallback {
+            override fun onDownloadProgress(bytesDownloaded: ULong, totalBytes: ULong, currentFile: String) {
                 runOnMainThread {
+                    browserDownloadProgress.value = BrowserDownloadProgress(
+                        currentFile = currentFile,
+                        bytesDownloaded = bytesDownloaded.toLong(),
+                        totalBytes = totalBytes.toLong(),
+                        isFolder = false
+                    )
+                }
+            }
+
+            override fun onDownloadCompleted(totalBytes: ULong) {
+                runOnMainThread {
+                    browserDownloadProgress.value = null
                     moveToDownloads(fileName)
                     android.widget.Toast.makeText(context, "Downloaded $fileName", android.widget.Toast.LENGTH_SHORT)
                         .show()
                 }
-            } catch (e: Exception) {
+            }
+
+            override fun onDownloadFailed(errorMsg: String) {
                 runOnMainThread {
+                    browserDownloadProgress.value = null
                     android.widget.Toast.makeText(
                         context,
-                        "Download failed: ${e.message}",
+                        "Download failed: $errorMsg",
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                 }
             }
         }
+
+        requestDownloadFileWithProgress(device.ip, device.port, remotePath, destFile.absolutePath, callback)
+    }
+
+    fun downloadRemoteFolder(device: DiscoveredDevice, remotePath: String) {
+        val folderName = File(remotePath).name
+
+        // Show initial progress
+        browserDownloadProgress.value = BrowserDownloadProgress(
+            currentFile = folderName,
+            bytesDownloaded = 0,
+            totalBytes = 0,
+            isFolder = true
+        )
+
+        val callback = object : BrowserDownloadCallback {
+            override fun onDownloadProgress(bytesDownloaded: ULong, totalBytes: ULong, currentFile: String) {
+                runOnMainThread {
+                    browserDownloadProgress.value = BrowserDownloadProgress(
+                        currentFile = currentFile,
+                        bytesDownloaded = bytesDownloaded.toLong(),
+                        totalBytes = totalBytes.toLong(),
+                        isFolder = true
+                    )
+                }
+            }
+
+            override fun onDownloadCompleted(totalBytes: ULong) {
+                runOnMainThread {
+                    browserDownloadProgress.value = null
+                    moveFolderToDownloads(folderName)
+                    android.widget.Toast.makeText(
+                        context,
+                        "Downloaded folder $folderName",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+
+            override fun onDownloadFailed(errorMsg: String) {
+                runOnMainThread {
+                    browserDownloadProgress.value = null
+                    android.widget.Toast.makeText(
+                        context,
+                        "Folder download failed: $errorMsg",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+
+        // Pass downloadDir - the core will create the folder with its name inside
+        requestDownloadFolder(device.ip, device.port, remotePath, downloadDir.absolutePath, callback)
     }
 
     fun getThumbnail(path: String) {

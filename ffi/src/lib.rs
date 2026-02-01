@@ -646,6 +646,16 @@ pub trait FileTransferCallback: Send + Sync {
 }
 
 #[uniffi::export(callback_interface)]
+pub trait BrowserDownloadCallback: Send + Sync {
+    /// Called when download progress updates
+    /// For file downloads: current_file is the filename
+    /// For folder downloads: current_file shows the file currently being downloaded
+    fn on_download_progress(&self, bytes_downloaded: u64, total_bytes: u64, current_file: String);
+    fn on_download_completed(&self, total_bytes: u64);
+    fn on_download_failed(&self, error_msg: String);
+}
+
+#[uniffi::export(callback_interface)]
 pub trait ClipboardCallback: Send + Sync {
     fn on_clipboard_received(&self, text: String, from_device: String);
     fn on_clipboard_sent(&self, success: bool, error_msg: Option<String>);
@@ -1676,6 +1686,104 @@ pub fn request_download_file(
     })?;
 
     Ok(bytes)
+}
+
+#[uniffi::export]
+pub fn request_download_file_with_progress(
+    target_ip: String,
+    target_port: u16,
+    remote_path: String,
+    local_path: String,
+    callback: Box<dyn BrowserDownloadCallback>,
+) {
+    let ip: std::net::IpAddr = match target_ip.parse() {
+        Ok(ip) => ip,
+        Err(_) => {
+            callback.on_download_failed("Invalid IP address".to_string());
+            return;
+        }
+    };
+
+    let client = match get_client() {
+        Ok(c) => c,
+        Err(e) => {
+            callback.on_download_failed(format!("Not initialized: {:?}", e));
+            return;
+        }
+    };
+
+    let filename = PathBuf::from(&remote_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file")
+        .to_string();
+
+    get_runtime().spawn(async move {
+        let result = client
+            .fs_download_file_with_progress(
+                ip,
+                target_port,
+                remote_path,
+                PathBuf::from(local_path),
+                |bytes_downloaded, total_bytes| {
+                    callback.on_download_progress(bytes_downloaded, total_bytes, filename.clone());
+                },
+            )
+            .await;
+
+        match result {
+            Ok(total) => callback.on_download_completed(total),
+            Err(e) => callback.on_download_failed(format!("{:?}", e)),
+        }
+    });
+}
+
+#[uniffi::export]
+pub fn request_download_folder(
+    target_ip: String,
+    target_port: u16,
+    remote_path: String,
+    local_path: String,
+    callback: Box<dyn BrowserDownloadCallback>,
+) {
+    let ip: std::net::IpAddr = match target_ip.parse() {
+        Ok(ip) => ip,
+        Err(_) => {
+            callback.on_download_failed("Invalid IP address".to_string());
+            return;
+        }
+    };
+
+    let client = match get_client() {
+        Ok(c) => c,
+        Err(e) => {
+            callback.on_download_failed(format!("Not initialized: {:?}", e));
+            return;
+        }
+    };
+
+    get_runtime().spawn(async move {
+        let result = client
+            .fs_download_folder_with_progress(
+                ip,
+                target_port,
+                remote_path,
+                PathBuf::from(local_path),
+                |bytes_downloaded, total_bytes, current_file| {
+                    callback.on_download_progress(
+                        bytes_downloaded,
+                        total_bytes,
+                        current_file.to_string(),
+                    );
+                },
+            )
+            .await;
+
+        match result {
+            Ok(total) => callback.on_download_completed(total),
+            Err(e) => callback.on_download_failed(format!("{:?}", e)),
+        }
+    });
 }
 
 #[uniffi::export]

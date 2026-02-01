@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
@@ -288,12 +289,66 @@ fun openNotificationListenerSettings(context: Context) {
 
 @Composable
 fun RemoteFileBrowser(app: ConnectedApp) {
+    val downloadProgress = app.browserDownloadProgress.value
+
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { app.closeRemoteBrowser() }) {
                 Icon(painterResource(R.drawable.ic_back), contentDescription = "Back")
             }
             Text("Remote Files: ${app.currentRemotePath.value}", style = MaterialTheme.typography.titleMedium)
+        }
+
+        // Download progress indicator
+        if (downloadProgress != null) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (downloadProgress.isFolder) "Downloading folder..." else "Downloading...",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "${downloadProgress.percentComplete.toInt()}%",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = downloadProgress.currentFile,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { downloadProgress.percentComplete / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${formatFileSize(downloadProgress.bytesDownloaded.toULong())} / ${
+                            formatFileSize(
+                                downloadProgress.totalBytes.toULong()
+                            )
+                        }",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                }
+            }
         }
 
         LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
@@ -332,16 +387,13 @@ fun RemoteFileBrowser(app: ConnectedApp) {
                     app.getThumbnail(file.path)
                 }
 
+                val isDirectory = file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY
                 Card(
                     modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth(),
                     onClick = {
-                        if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) {
+                        if (isDirectory) {
                             app.getBrowsingDevice()?.let { device ->
                                 app.browseRemoteFiles(device, file.path)
-                            }
-                        } else {
-                            app.getBrowsingDevice()?.let { device ->
-                                app.downloadRemoteFile(device, file.path)
                             }
                         }
                     }
@@ -351,7 +403,10 @@ fun RemoteFileBrowser(app: ConnectedApp) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
                             if (isImage && app.thumbnails.containsKey(file.path)) {
                                 val bitmap = app.thumbnails[file.path]!!
                                 Image(
@@ -371,14 +426,58 @@ fun RemoteFileBrowser(app: ConnectedApp) {
                                 Spacer(modifier = Modifier.width(8.dp))
                             }
 
-                            Text(file.name)
+                            Text(
+                                text = file.name,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                        Text(if (file.entryType == uniffi.connected_ffi.FfiFsEntryType.DIRECTORY) "" else "${file.size} B")
+                        // Download button for both files and folders
+                        Spacer(modifier = Modifier.width(8.dp))
+                        if (!isDirectory) {
+                            Text(
+                                text = formatFileSize(file.size),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        IconButton(
+                            onClick = {
+                                app.getBrowsingDevice()?.let { device ->
+                                    if (isDirectory) {
+                                        app.downloadRemoteFolder(device, file.path)
+                                    } else {
+                                        app.downloadRemoteFile(device, file.path)
+                                    }
+                                }
+                            },
+                            enabled = downloadProgress == null
+                        ) {
+                            Icon(
+                                painterResource(R.drawable.ic_download),
+                                contentDescription = "Download",
+                                tint = if (downloadProgress == null)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            )
+                        }
                     }
                 }
             }
         }
     }
+}
+
+fun formatFileSize(bytes: ULong): String {
+    if (bytes < 1024uL) return "$bytes B"
+    val kb = bytes.toDouble() / 1024.0
+    if (kb < 1024.0) return String.format("%.1f KB", kb)
+    val mb = kb / 1024.0
+    if (mb < 1024.0) return String.format("%.1f MB", mb)
+    val gb = mb / 1024.0
+    return String.format("%.1f GB", gb)
 }
 
 fun getDeviceIcon(type: String): Int {

@@ -398,6 +398,377 @@ impl ConnectedClient {
         Ok(offset)
     }
 
+    /// Download a file with progress callback
+    pub async fn fs_download_file_with_progress<F>(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        remote_path: String,
+        local_path: PathBuf,
+        progress_callback: F,
+    ) -> Result<u64>
+    where
+        F: Fn(u64, u64) + Send + Sync,
+    {
+        use crate::filesystem::{FilesystemMessage, STREAM_TYPE_FS};
+        use tokio::io::AsyncWriteExt;
+
+        let addr = SocketAddr::new(target_ip, target_port);
+        let (mut send, mut recv) = self.transport.open_stream(addr, STREAM_TYPE_FS).await?;
+
+        // Get metadata to know total size
+        let meta_req = FilesystemMessage::GetMetadataRequest {
+            path: remote_path.clone(),
+        };
+        crate::file_transfer::send_message(&mut send, &meta_req).await?;
+        let meta_resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+
+        let file_size = match meta_resp {
+            FilesystemMessage::GetMetadataResponse { entry } => entry.size,
+            FilesystemMessage::Error { message } => return Err(ConnectedError::Protocol(message)),
+            _ => {
+                return Err(ConnectedError::Protocol(
+                    "Unexpected metadata response".to_string(),
+                ));
+            }
+        };
+
+        // Report initial progress
+        progress_callback(0, file_size);
+
+        // Create local file
+        let mut file = tokio::fs::File::create(&local_path)
+            .await
+            .map_err(ConnectedError::Io)?;
+
+        let mut offset = 0u64;
+        let chunk_size = 2 * 1024 * 1024; // 2MB chunks (safe for JSON+base64 encoding overhead)
+
+        while offset < file_size {
+            let size = std::cmp::min(chunk_size, file_size - offset);
+            let req = FilesystemMessage::ReadFileRequest {
+                path: remote_path.clone(),
+                offset,
+                size,
+            };
+            crate::file_transfer::send_message(&mut send, &req).await?;
+
+            let resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+
+            match resp {
+                FilesystemMessage::ReadFileResponse { data } => {
+                    if data.is_empty() {
+                        let _ = tokio::fs::remove_file(&local_path).await;
+                        return Err(ConnectedError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "unexpected EOF while receiving file data",
+                        )));
+                    }
+                    file.write_all(&data).await.map_err(ConnectedError::Io)?;
+                    offset += data.len() as u64;
+                    progress_callback(offset, file_size);
+                }
+                FilesystemMessage::Error { message } => {
+                    let _ = tokio::fs::remove_file(&local_path).await;
+                    return Err(ConnectedError::Protocol(message));
+                }
+                _ => {
+                    let _ = tokio::fs::remove_file(&local_path).await;
+                    return Err(ConnectedError::Protocol("Unexpected response".to_string()));
+                }
+            }
+        }
+
+        if offset != file_size {
+            let _ = tokio::fs::remove_file(&local_path).await;
+            return Err(ConnectedError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "file download incomplete",
+            )));
+        }
+
+        file.flush().await.map_err(ConnectedError::Io)?;
+        Ok(offset)
+    }
+
+    /// Download a folder by recursively downloading all files with progress
+    pub async fn fs_download_folder_with_progress<F>(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        remote_path: String,
+        local_path: PathBuf,
+        progress_callback: F,
+    ) -> Result<u64>
+    where
+        F: Fn(u64, u64, &str) + Send + Sync,
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // First, scan the folder to get total size and file list
+        let (files, total_size) = self
+            .scan_remote_folder(target_ip, target_port, &remote_path)
+            .await?;
+
+        if files.is_empty() {
+            return Ok(0);
+        }
+
+        // Get the folder name from remote path to preserve it
+        let folder_name = std::path::Path::new(&remote_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("folder");
+
+        // Create local directory WITH the folder name
+        let local_folder_path = local_path.join(folder_name);
+        tokio::fs::create_dir_all(&local_folder_path)
+            .await
+            .map_err(ConnectedError::Io)?;
+
+        // Get parent path of remote folder for calculating relative paths
+        let remote_parent = std::path::Path::new(&remote_path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // Pre-create all directories
+        for (file_remote_path, _) in &files {
+            let relative_path = if remote_parent.is_empty() {
+                file_remote_path.trim_start_matches('/').to_string()
+            } else {
+                file_remote_path
+                    .strip_prefix(&remote_parent)
+                    .unwrap_or(file_remote_path)
+                    .trim_start_matches('/')
+                    .to_string()
+            };
+            let local_file_path = local_path.join(&relative_path);
+            if let Some(parent) = local_file_path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(ConnectedError::Io)?;
+            }
+        }
+
+        let addr = SocketAddr::new(target_ip, target_port);
+        let bytes_downloaded = Arc::new(AtomicU64::new(0));
+        let transport = self.transport.clone();
+
+        // Download files with concurrency limit - higher = faster on good connections
+        const MAX_CONCURRENT_DOWNLOADS: usize = 8;
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_DOWNLOADS));
+
+        let download_tasks: Vec<_> = files
+            .into_iter()
+            .map(|(file_remote_path, file_size)| {
+                let semaphore = semaphore.clone();
+                let bytes_downloaded = bytes_downloaded.clone();
+                let remote_parent = remote_parent.clone();
+                let local_path = local_path.clone();
+                let transport = transport.clone();
+
+                async move {
+                    let _permit = semaphore
+                        .acquire()
+                        .await
+                        .map_err(|_| ConnectedError::Protocol("Semaphore closed".to_string()))?;
+
+                    // Calculate relative path INCLUDING the folder name
+                    let relative_path = if remote_parent.is_empty() {
+                        file_remote_path.trim_start_matches('/').to_string()
+                    } else {
+                        file_remote_path
+                            .strip_prefix(&remote_parent)
+                            .unwrap_or(&file_remote_path)
+                            .trim_start_matches('/')
+                            .to_string()
+                    };
+                    let local_file_path = local_path.join(&relative_path);
+
+                    let file_name = local_file_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    // Skip empty files
+                    if file_size == 0 {
+                        tokio::fs::File::create(&local_file_path)
+                            .await
+                            .map_err(ConnectedError::Io)?;
+                        return Ok::<(String, u64), ConnectedError>((file_name, 0));
+                    }
+
+                    // Download the file
+                    let downloaded = Self::download_single_file(
+                        &transport,
+                        addr,
+                        &file_remote_path,
+                        file_size,
+                        &local_file_path,
+                        &bytes_downloaded,
+                    )
+                    .await?;
+
+                    Ok((file_name, downloaded))
+                }
+            })
+            .collect();
+
+        // Run downloads and report progress
+        let progress_callback = &progress_callback;
+        let mut last_progress_report = std::time::Instant::now();
+
+        let join_handles: Vec<_> = download_tasks
+            .into_iter()
+            .map(|task| tokio::spawn(task))
+            .collect();
+
+        // Poll progress while downloads are running
+        loop {
+            // Report progress less frequently to reduce overhead
+            let current_bytes = bytes_downloaded.load(Ordering::Relaxed);
+            if last_progress_report.elapsed() > Duration::from_millis(250) {
+                progress_callback(current_bytes, total_size, "downloading...");
+                last_progress_report = std::time::Instant::now();
+            }
+
+            // Check if all tasks are done
+            let mut all_done = true;
+            for handle in &join_handles {
+                if !handle.is_finished() {
+                    all_done = false;
+                    break;
+                }
+            }
+
+            if all_done {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // Collect results and check for errors
+        for handle in join_handles {
+            match handle.await {
+                Ok(Ok((file_name, _))) => {
+                    let current = bytes_downloaded.load(Ordering::Relaxed);
+                    progress_callback(current, total_size, &file_name);
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(e) => {
+                    return Err(ConnectedError::Protocol(format!(
+                        "Download task panicked: {}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        let final_bytes = bytes_downloaded.load(Ordering::Relaxed);
+        progress_callback(final_bytes, total_size, "complete");
+        Ok(final_bytes)
+    }
+
+    /// Download a single file - helper for parallel downloads
+    async fn download_single_file(
+        transport: &QuicTransport,
+        addr: SocketAddr,
+        remote_path: &str,
+        file_size: u64,
+        local_path: &std::path::Path,
+        bytes_counter: &Arc<std::sync::atomic::AtomicU64>,
+    ) -> Result<u64> {
+        use crate::filesystem::{FilesystemMessage, STREAM_TYPE_FS};
+        use std::sync::atomic::Ordering;
+        use tokio::io::AsyncWriteExt;
+
+        let (mut send, mut recv) = transport.open_stream(addr, STREAM_TYPE_FS).await?;
+
+        let mut file = tokio::fs::File::create(local_path)
+            .await
+            .map_err(ConnectedError::Io)?;
+
+        let mut offset = 0u64;
+        let chunk_size = 2 * 1024 * 1024; // 2MB chunks (safe for JSON+base64 encoding overhead)
+
+        while offset < file_size {
+            let size = std::cmp::min(chunk_size, file_size - offset);
+            let req = FilesystemMessage::ReadFileRequest {
+                path: remote_path.to_string(),
+                offset,
+                size,
+            };
+            crate::file_transfer::send_message(&mut send, &req).await?;
+
+            let resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+
+            match resp {
+                FilesystemMessage::ReadFileResponse { data } => {
+                    if data.is_empty() && offset < file_size {
+                        let _ = tokio::fs::remove_file(local_path).await;
+                        return Err(ConnectedError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "unexpected EOF while receiving file data",
+                        )));
+                    }
+                    let data_len = data.len() as u64;
+                    file.write_all(&data).await.map_err(ConnectedError::Io)?;
+                    offset += data_len;
+                    bytes_counter.fetch_add(data_len, Ordering::Relaxed);
+                }
+                FilesystemMessage::Error { message } => {
+                    let _ = tokio::fs::remove_file(local_path).await;
+                    return Err(ConnectedError::Protocol(message));
+                }
+                _ => {
+                    let _ = tokio::fs::remove_file(local_path).await;
+                    return Err(ConnectedError::Protocol("Unexpected response".to_string()));
+                }
+            }
+        }
+
+        file.flush().await.map_err(ConnectedError::Io)?;
+        Ok(offset)
+    }
+
+    /// Recursively scan a remote folder to get all files and total size
+    async fn scan_remote_folder(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        path: &str,
+    ) -> Result<(Vec<(String, u64)>, u64)> {
+        use crate::filesystem::FsEntryType;
+
+        let mut files = Vec::new();
+        let mut total_size = 0u64;
+        let mut dirs_to_scan = vec![path.to_string()];
+
+        while let Some(dir_path) = dirs_to_scan.pop() {
+            let entries = self
+                .fs_list_dir(target_ip, target_port, dir_path.clone())
+                .await?;
+
+            for entry in entries {
+                match entry.entry_type {
+                    FsEntryType::File => {
+                        files.push((entry.path, entry.size));
+                        total_size += entry.size;
+                    }
+                    FsEntryType::Directory => {
+                        dirs_to_scan.push(entry.path);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok((files, total_size))
+    }
+
     pub async fn fs_get_thumbnail(
         &self,
         target_ip: IpAddr,
