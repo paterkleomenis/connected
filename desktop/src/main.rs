@@ -290,9 +290,6 @@ fn ensure_firewall_rules() {
 }
 
 fn main() {
-    #[cfg(target_os = "windows")]
-    install_windows_panic_hook();
-
     // Explicitly select the Rustls crypto provider to avoid runtime ambiguity.
     if let Err(err) = rustls::crypto::ring::default_provider().install_default() {
         eprintln!("Failed to install rustls ring provider: {err:?}");
