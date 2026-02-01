@@ -45,9 +45,6 @@ Thumbs.db
 # Logs
 *.log
 
-# Windows installer prereqs
-packaging/windows/MicrosoftEdgeWebView2Setup.exe
-
 # Environment
 .env
 .env.local
