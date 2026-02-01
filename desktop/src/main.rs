@@ -9,6 +9,8 @@ mod proximity;
 mod state;
 mod utils;
 
+use state::{is_discovery_active, is_sdk_initialized};
+
 use state::{
     get_clipboard_sync_enabled, get_device_name_setting, get_media_enabled_setting,
     set_clipboard_sync_enabled, set_media_enabled_setting,
@@ -338,7 +340,6 @@ fn main() {
 
 fn App() -> Element {
     // UI State
-    let initialized = use_signal(|| false);
     let mut local_device_name =
         use_signal(|| get_device_name_setting().unwrap_or_else(get_hostname));
     let local_device_ip = use_signal(String::new);
@@ -356,7 +357,8 @@ fn App() -> Element {
     let mut show_rename_dialog = use_signal(|| false);
     let mut rename_text = use_signal(String::new);
 
-    let discovery_active = use_signal(|| false);
+    // Note: discovery_active is now tracked via global state in state.rs
+    // (is_sdk_initialized() and is_discovery_active())
     let mut media_enabled = use_signal(get_media_enabled_setting);
     let mut current_media_title = use_signal(|| "Not Playing".to_string());
     let mut current_media_artist = use_signal(String::new);
@@ -569,10 +571,14 @@ fn App() -> Element {
         }
     });
 
-    // UI Poller
+    // UI Poller - polls state and updates UI signals
+    // Uses 500ms interval (increased from 200ms) to reduce CPU usage
     use_future(move || async move {
+        let mut last_devices_hash: u64 = 0;
+        let mut last_transfer_status_hash: u64 = 0;
+
         loop {
-            // Update devices list
+            // Update devices list (with change detection)
             let mut list: Vec<DeviceInfo> = get_devices_store()
                 .lock_or_recover()
                 .values()
@@ -589,10 +595,48 @@ fn App() -> Element {
                 }
             }
 
-            devices_list.set(list);
-            // Update transfer status
+            // Only update if devices changed (simple hash based on count + first/last id)
+            let new_devices_hash = {
+                let count = list.len() as u64;
+                let first_id_hash = list.first().map(|d| d.id.len() as u64).unwrap_or(0);
+                let last_id_hash = list.last().map(|d| d.id.len() as u64).unwrap_or(0);
+                count
+                    .wrapping_mul(31)
+                    .wrapping_add(first_id_hash)
+                    .wrapping_mul(31)
+                    .wrapping_add(last_id_hash)
+            };
+            if new_devices_hash != last_devices_hash {
+                last_devices_hash = new_devices_hash;
+                devices_list.set(list);
+            }
+
+            // Update transfer status (with change detection)
             let status = get_transfer_status().lock_or_recover().clone();
-            transfer_status.set(status);
+            let new_status_hash = match &status {
+                TransferStatus::Idle => 0,
+                TransferStatus::Compressing {
+                    bytes_processed,
+                    total_bytes,
+                    ..
+                } => {
+                    // Use progress percentage for hash to detect changes
+                    let percent = if *total_bytes > 0 {
+                        *bytes_processed * 100 / *total_bytes
+                    } else {
+                        0
+                    };
+                    1000 + percent
+                }
+                TransferStatus::Starting { .. } => 1,
+                TransferStatus::InProgress { percent, .. } => 2 + (*percent as u64),
+                TransferStatus::Completed { .. } => 100,
+                TransferStatus::Failed { .. } => 101,
+            };
+            if new_status_hash != last_transfer_status_hash {
+                last_transfer_status_hash = new_status_hash;
+                transfer_status.set(status);
+            }
 
             // Update notifications
             {
@@ -610,6 +654,9 @@ fn App() -> Element {
 
             // Update File Transfer Requests
             {
+                // Cleanup old requests to prevent unbounded growth
+                cleanup_old_transfer_requests();
+
                 let reqs_map = get_file_transfer_requests().lock_or_recover();
                 let mut reqs: Vec<FileTransferRequest> = reqs_map.values().cloned().collect();
                 reqs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
@@ -631,12 +678,31 @@ fn App() -> Element {
                 // Auto-scroll when messages first load or when new messages arrive
                 if new_count > 0 && new_count != old_count {
                     spawn(async move {
-                        // Delay to let DOM update
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        // Use MutationObserver to wait for DOM update instead of fixed delay
+                        // This is more reliable across different machines and message counts
                         let js = r#"
+                            (function() {
                                 let el = document.getElementById('messages-container');
-                                if (el) { el.scrollTop = el.scrollHeight; }
-                            "#;
+                                if (!el) return;
+
+                                // First, scroll immediately in case DOM is already updated
+                                el.scrollTop = el.scrollHeight;
+
+                                // Then set up observer for any pending updates
+                                let observer = new MutationObserver(function(mutations) {
+                                    el.scrollTop = el.scrollHeight;
+                                    // Disconnect after first mutation to avoid infinite loops
+                                    observer.disconnect();
+                                });
+
+                                observer.observe(el, { childList: true, subtree: true });
+
+                                // Fallback: disconnect observer after 500ms if no mutations
+                                setTimeout(function() {
+                                    observer.disconnect();
+                                }, 500);
+                            })();
+                        "#;
                         let _ = document::eval(js);
                     });
                 }
@@ -682,7 +748,14 @@ fn App() -> Element {
                 if last_update.elapsed() >= Duration::from_millis(1000) {
                     let current_clip = get_system_clipboard();
                     let last_clip = get_last_clipboard().lock_or_recover().clone();
-                    if !current_clip.is_empty() && current_clip != last_clip {
+                    // Also check against last remote clipboard content to prevent echo loops
+                    let last_remote_content = get_last_remote_clipboard_content()
+                        .lock_or_recover()
+                        .clone();
+                    if !current_clip.is_empty()
+                        && current_clip != last_clip
+                        && current_clip != last_remote_content
+                    {
                         debug!(
                             "Local clipboard changed. New content length: {}",
                             current_clip.len()
@@ -693,7 +766,9 @@ fn App() -> Element {
                 }
             }
 
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            // Increased from 200ms to 500ms to reduce CPU usage
+            // Most state changes are event-driven, polling is just for sync
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
     });
 
@@ -752,7 +827,7 @@ fn App() -> Element {
                         span { class: "local-device-ip", "{local_device_ip}" }
                     }
                     div {
-                        class: if *initialized.read() { "status-dot online" } else { "status-dot" }
+                        class: if is_sdk_initialized() { "status-dot online" } else { "status-dot" }
                     }
                 }
 
@@ -863,7 +938,7 @@ fn App() -> Element {
                     class: "sidebar-footer",
                     div {
                         class: "discovery-status",
-                        if *initialized.read() && *discovery_active.read() {
+                        if is_sdk_initialized() && is_discovery_active() {
                             span { "Discovering" }
                         } else {
                             span { "Starting..." }
@@ -912,9 +987,7 @@ fn App() -> Element {
                                         device_detail_tab.set("clipboard".to_string());
                                     },
                                     on_pair: move |d: DeviceInfo| {
-                                         if let Ok(port) = d.port.to_string().parse() {
-                                             action_tx.send(AppAction::PairWithDevice { ip: d.ip.clone(), port });
-                                         }
+                                        action_tx.send(AppAction::PairWithDevice { ip: d.ip.clone(), port: d.port });
                                     },
                                     on_send_file: move |d: DeviceInfo| {
                                         send_target_device.set(Some(d));
@@ -1074,7 +1147,99 @@ fn App() -> Element {
                                                     p { "No active transfers" }
                                                 }
                                             },
-                                            TransferStatus::Starting(filename) => rsx! {
+                                            TransferStatus::Compressing {
+                                                filename,
+                                                current_file,
+                                                files_processed,
+                                                total_files,
+                                                bytes_processed,
+                                                total_bytes,
+                                                speed_bytes_per_sec,
+                                            } => {
+                                                let percent = if *total_bytes > 0 {
+                                                    (*bytes_processed as f32 / *total_bytes as f32) * 100.0
+                                                } else {
+                                                    0.0
+                                                };
+                                                let eta_secs = if *speed_bytes_per_sec > 0 {
+                                                    (*total_bytes - *bytes_processed) / *speed_bytes_per_sec
+                                                } else {
+                                                    0
+                                                };
+                                                let eta_str = if eta_secs >= 3600 {
+                                                    format!("{}:{:02}:{:02}", eta_secs / 3600, (eta_secs % 3600) / 60, eta_secs % 60)
+                                                } else if eta_secs >= 60 {
+                                                    format!("{}:{:02}", eta_secs / 60, eta_secs % 60)
+                                                } else {
+                                                    format!("{}s", eta_secs)
+                                                };
+                                                let speed_str = if *speed_bytes_per_sec >= 1_073_741_824 {
+                                                    format!("{:.1} GB/s", *speed_bytes_per_sec as f64 / 1_073_741_824.0)
+                                                } else if *speed_bytes_per_sec >= 1_048_576 {
+                                                    format!("{:.1} MB/s", *speed_bytes_per_sec as f64 / 1_048_576.0)
+                                                } else if *speed_bytes_per_sec >= 1024 {
+                                                    format!("{:.1} KB/s", *speed_bytes_per_sec as f64 / 1024.0)
+                                                } else {
+                                                    format!("{} B/s", speed_bytes_per_sec)
+                                                };
+                                                let bytes_str = if *total_bytes >= 1_073_741_824 {
+                                                    format!("{:.1} GB / {:.1} GB",
+                                                        *bytes_processed as f64 / 1_073_741_824.0,
+                                                        *total_bytes as f64 / 1_073_741_824.0)
+                                                } else if *total_bytes >= 1_048_576 {
+                                                    format!("{:.1} MB / {:.1} MB",
+                                                        *bytes_processed as f64 / 1_048_576.0,
+                                                        *total_bytes as f64 / 1_048_576.0)
+                                                } else {
+                                                    format!("{:.1} KB / {:.1} KB",
+                                                        *bytes_processed as f64 / 1024.0,
+                                                        *total_bytes as f64 / 1024.0)
+                                                };
+                                                rsx! {
+                                                    div {
+                                                        class: "transfer-active compression-progress",
+                                                        div {
+                                                            class: "compression-header",
+                                                            div {
+                                                                class: "transfer-icon spinning",
+                                                                Icon { icon: IconType::Sync, size: 32, color: "var(--accent)".to_string() }
+                                                            }
+                                                            div {
+                                                                class: "compression-title",
+                                                                h4 { "Compressing folder..." }
+                                                                p { class: "compression-filename", "{filename}" }
+                                                            }
+                                                        }
+                                                        div {
+                                                            class: "compression-current-file",
+                                                            span { "{current_file}" }
+                                                        }
+                                                        div {
+                                                            class: "progress-bar",
+                                                            div {
+                                                                class: "progress-fill",
+                                                                style: "width: {percent}%",
+                                                            }
+                                                        }
+                                                        div {
+                                                            class: "compression-stats",
+                                                            div {
+                                                                class: "stat-row",
+                                                                span { class: "stat-label", "{files_processed}/{total_files} files" }
+                                                                span { class: "stat-value", "{bytes_str}" }
+                                                            }
+                                                            div {
+                                                                class: "stat-row",
+                                                                span { class: "stat-label speed", "{speed_str}" }
+                                                                if *speed_bytes_per_sec > 0 {
+                                                                    span { class: "stat-value eta", "~{eta_str} remaining" }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            TransferStatus::Starting { filename } => rsx! {
                                                 div {
                                                     class: "transfer-active",
                                                     div {
@@ -1100,7 +1265,7 @@ fn App() -> Element {
                                                     }
                                                 }
                                             },
-                                            TransferStatus::Completed(filename) => rsx! {
+                                            TransferStatus::Completed { filename } => rsx! {
                                                 div {
                                                     class: "transfer-complete",
                                                     div {
@@ -1110,7 +1275,7 @@ fn App() -> Element {
                                                     p { "{filename} received successfully!" }
                                                 }
                                             },
-                                            TransferStatus::Failed(error) => rsx! {
+                                            TransferStatus::Failed { error } => rsx! {
                                                 div {
                                                     class: "transfer-failed",
                                                     div {
@@ -1212,9 +1377,7 @@ fn App() -> Element {
                                                     onclick: {
                                                         let device = device.clone();
                                                         move |_| {
-                                                            if let Ok(port) = device.port.to_string().parse() {
-                                                                action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Previous });
-                                                            }
+                                                            action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port: device.port, command: MediaCommand::Previous });
                                                         }
                                                     },
                                                     Icon { icon: IconType::Previous, size: 24, color: "currentColor".to_string() }
@@ -1225,9 +1388,7 @@ fn App() -> Element {
                                                     onclick: {
                                                         let device = device.clone();
                                                         move |_| {
-                                                            if let Ok(port) = device.port.to_string().parse() {
-                                                                action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::PlayPause });
-                                                            }
+                                                            action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port: device.port, command: MediaCommand::PlayPause });
                                                         }
                                                     },
                                                     Icon { icon: IconType::Play, size: 24, color: "currentColor".to_string() }
@@ -1238,9 +1399,7 @@ fn App() -> Element {
                                                     onclick: {
                                                         let device = device.clone();
                                                         move |_| {
-                                                            if let Ok(port) = device.port.to_string().parse() {
-                                                                action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::Next });
-                                                            }
+                                                            action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port: device.port, command: MediaCommand::Next });
                                                         }
                                                     },
                                                     Icon { icon: IconType::Next, size: 24, color: "currentColor".to_string() }
@@ -1256,9 +1415,7 @@ fn App() -> Element {
                                                     onclick: {
                                                         let device = device.clone();
                                                         move |_| {
-                                                            if let Ok(port) = device.port.to_string().parse() {
-                                                                action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::VolumeDown });
-                                                            }
+                                                            action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port: device.port, command: MediaCommand::VolumeDown });
                                                         }
                                                     },
                                                     Icon { icon: IconType::VolumeDown, size: 20, color: "currentColor".to_string() }
@@ -1269,9 +1426,7 @@ fn App() -> Element {
                                                     onclick: {
                                                         let device = device.clone();
                                                         move |_| {
-                                                            if let Ok(port) = device.port.to_string().parse() {
-                                                                action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port, command: MediaCommand::VolumeUp });
-                                                            }
+                                                            action_tx.send(AppAction::SendMediaCommand { ip: device.ip.clone(), port: device.port, command: MediaCommand::VolumeUp });
                                                         }
                                                     },
                                                     Icon { icon: IconType::VolumeUp, size: 20, color: "currentColor".to_string() }

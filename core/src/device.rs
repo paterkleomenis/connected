@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
+/// Represents the type/platform of a connected device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeviceType {
     Android,
     Linux,
     Windows,
+    /// Reserved for future macOS support. Not currently implemented but kept
+    /// for forward compatibility with the protocol and stored device data.
     MacOS,
     Unknown,
 }

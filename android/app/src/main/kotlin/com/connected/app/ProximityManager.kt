@@ -563,6 +563,7 @@ class ProximityManager(private val context: Context) {
         p2pConnected = false
         isGroupOwner = false
         pendingPreferGroupOwner = false
+        p2pActionInFlight = false // Reset action flag to prevent stuck state on restart
         p2pIpById.clear()
         handler.removeCallbacks(retryDiscoveryRunnable)
         handler.removeCallbacks(retryConnectRunnable)

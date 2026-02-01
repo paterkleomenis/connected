@@ -99,7 +99,7 @@ class MainActivity : ComponentActivity() {
             ActivityResultContracts.RequestMultiplePermissions()
         ) {
             proximityPermissionsInFlight = false
-            connectedApp.startProximity()
+            connectedApp.startProximityManager()
         }
 
         requestProximityPermissionsIfNeeded()
@@ -191,7 +191,7 @@ class MainActivity : ComponentActivity() {
         }
 
         if (missing.isEmpty()) {
-            connectedApp.startProximity()
+            connectedApp.startProximityManager()
             return
         }
 
@@ -664,8 +664,70 @@ fun HomeScreen(
             }
         }
 
+        // Compression progress at bottom
+        val compressionProgress = connectedApp.compressionProgress.value
+        if (compressionProgress != null) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        "Compressing folder...",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        compressionProgress.currentFile,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { compressionProgress.percentComplete / 100f },
+                        modifier = Modifier.fillMaxWidth().height(6.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "${compressionProgress.filesProcessed}/${compressionProgress.totalFiles} files",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "${formatBytes(compressionProgress.bytesProcessed)}/${formatBytes(compressionProgress.totalBytes)}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "${formatBytes(compressionProgress.speedBytesPerSec)}/s",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        if (compressionProgress.estimatedSecondsRemaining > 0) {
+                            Text(
+                                "~${formatDuration(compressionProgress.estimatedSecondsRemaining)} remaining",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Transfer status at bottom
-        if (connectedApp.transferStatus.value.isNotEmpty() && connectedApp.transferStatus.value != "Idle") {
+        if (compressionProgress == null && connectedApp.transferStatus.value.isNotEmpty() && connectedApp.transferStatus.value != "Idle") {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
@@ -677,6 +739,23 @@ fun HomeScreen(
                 )
             }
         }
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    return when {
+        bytes >= 1_073_741_824 -> String.format("%.1f GB", bytes / 1_073_741_824.0)
+        bytes >= 1_048_576 -> String.format("%.1f MB", bytes / 1_048_576.0)
+        bytes >= 1024 -> String.format("%.1f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
+}
+
+private fun formatDuration(seconds: Long): String {
+    return when {
+        seconds >= 3600 -> String.format("%d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60)
+        seconds >= 60 -> String.format("%d:%02d", seconds / 60, seconds % 60)
+        else -> "${seconds}s"
     }
 }
 
@@ -1234,7 +1313,7 @@ fun SettingsScreen(
 
                         if (isDownloading) {
                             LinearProgressIndicator(
-                                progress = downloadProgress / 100f,
+                                progress = { downloadProgress / 100f },
                                 modifier = Modifier.fillMaxWidth().height(8.dp),
                             )
                             Text(

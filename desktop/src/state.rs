@@ -5,24 +5,61 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+
+/// Counter for tracking poison recovery events (useful for telemetry/debugging)
+static POISON_RECOVERY_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Extension trait for Mutex that handles poisoning gracefully.
 /// If a thread panics while holding the lock, we recover the data
 /// rather than panicking ourselves (preventing cascading failures).
+///
+/// NOTE: In debug builds, we panic to surface the underlying bug.
+/// In release builds, we recover to prevent cascading failures.
 pub trait LockOrRecover<T> {
     fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+/// Get the count of mutex poison recoveries (useful for monitoring/telemetry)
+#[allow(dead_code)]
+pub fn get_poison_recovery_count() -> usize {
+    POISON_RECOVERY_COUNT.load(Ordering::Relaxed)
 }
 
 impl<T> LockOrRecover<T> for Mutex<T> {
     fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T> {
         match self.lock() {
             Ok(guard) => guard,
-            Err(poisoned) => {
+            Err(_poisoned) => {
                 // A thread panicked while holding the lock.
-                // Recover the data and continue - this prevents cascading panics.
-                tracing::warn!("Mutex was poisoned, recovering data");
-                poisoned.into_inner()
+                // This indicates a serious bug - data may be inconsistent.
+                let count = POISON_RECOVERY_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+
+                tracing::error!(
+                    "Mutex was poisoned (recovery #{})! This indicates a panic occurred while \
+                     holding the lock. Data may be inconsistent. Location: {}:{}",
+                    count,
+                    file!(),
+                    line!()
+                );
+
+                // In debug builds, fail to surface the bug early
+                #[cfg(debug_assertions)]
+                {
+                    tracing::error!("Backtrace: {:?}", std::backtrace::Backtrace::capture());
+                    panic!("Mutex poisoned - failing in debug mode to surface the underlying bug");
+                }
+
+                // In release builds, recover to prevent cascading panics
+                #[cfg(not(debug_assertions))]
+                {
+                    tracing::warn!(
+                        "Recovering from poisoned mutex in release mode. \
+                         Application state may be inconsistent."
+                    );
+                    _poisoned.into_inner()
+                }
             }
         }
     }
@@ -149,10 +186,28 @@ impl From<Device> for DeviceInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransferStatus {
     Idle,
-    Starting(String),
-    InProgress { filename: String, percent: f32 },
-    Completed(String),
-    Failed(String),
+    Compressing {
+        filename: String,
+        current_file: String,
+        files_processed: u64,
+        total_files: u64,
+        bytes_processed: u64,
+        total_bytes: u64,
+        speed_bytes_per_sec: u64,
+    },
+    Starting {
+        filename: String,
+    },
+    InProgress {
+        filename: String,
+        percent: f32,
+    },
+    Completed {
+        filename: String,
+    },
+    Failed {
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -191,6 +246,9 @@ static NOTIFICATIONS: OnceLock<Arc<Mutex<Vec<Notification>>>> = OnceLock::new();
 static NOTIFICATION_COUNTER: OnceLock<Arc<Mutex<u64>>> = OnceLock::new();
 static LAST_CLIPBOARD: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 static LAST_REMOTE_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
+/// Stores the actual content of the last clipboard received from a remote device.
+/// Used to prevent echo loops where we'd re-broadcast clipboard content we just received.
+static LAST_REMOTE_CLIPBOARD_CONTENT: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 static PAIRING_REQUESTS: OnceLock<Arc<Mutex<Vec<PairingRequest>>>> = OnceLock::new();
 static PENDING_PAIRINGS: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 static FILE_TRANSFER_REQUESTS: OnceLock<Arc<Mutex<HashMap<String, FileTransferRequest>>>> =
@@ -206,6 +264,8 @@ static LAST_REMOTE_MEDIA_DEVICE_ID: OnceLock<Arc<Mutex<Option<String>>>> = OnceL
 static THUMBNAILS: OnceLock<ThumbnailsMap> = OnceLock::new();
 static THUMBNAILS_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 static UPDATE_INFO: OnceLock<Arc<Mutex<Option<UpdateInfo>>>> = OnceLock::new();
+static SDK_INITIALIZED: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
+static DISCOVERY_ACTIVE: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
 
 type ThumbnailsMap = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 type MessagesMap = Arc<Mutex<HashMap<String, Vec<SmsMessage>>>>;
@@ -228,6 +288,30 @@ pub struct PhoneSyncState {
     pub messages_synced: bool,
     pub calls_synced: bool,
     pub contacts_synced: bool,
+}
+
+pub fn get_sdk_initialized() -> &'static Arc<Mutex<bool>> {
+    SDK_INITIALIZED.get_or_init(|| Arc::new(Mutex::new(false)))
+}
+
+pub fn set_sdk_initialized(value: bool) {
+    *get_sdk_initialized().lock_or_recover() = value;
+}
+
+pub fn is_sdk_initialized() -> bool {
+    *get_sdk_initialized().lock_or_recover()
+}
+
+pub fn get_discovery_active() -> &'static Arc<Mutex<bool>> {
+    DISCOVERY_ACTIVE.get_or_init(|| Arc::new(Mutex::new(false)))
+}
+
+pub fn set_discovery_active(value: bool) {
+    *get_discovery_active().lock_or_recover() = value;
+}
+
+pub fn is_discovery_active() -> bool {
+    *get_discovery_active().lock_or_recover()
 }
 
 pub fn get_media_enabled() -> &'static Arc<Mutex<bool>> {
@@ -275,6 +359,32 @@ pub fn get_transfer_status() -> &'static Arc<Mutex<TransferStatus>> {
     TRANSFER_STATUS.get_or_init(|| Arc::new(Mutex::new(TransferStatus::Idle)))
 }
 
+/// Set transfer status with auto-reset after completion or failure.
+/// After Completed or Failed status, automatically resets to Idle after a delay.
+pub fn set_transfer_status(status: TransferStatus) {
+    let should_auto_reset = matches!(
+        status,
+        TransferStatus::Completed { .. } | TransferStatus::Failed { .. }
+    );
+
+    *get_transfer_status().lock_or_recover() = status;
+
+    if should_auto_reset {
+        std::thread::spawn(|| {
+            // Reset to Idle after 5 seconds
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let mut guard = get_transfer_status().lock_or_recover();
+            // Only reset if still in Completed or Failed state (not if a new transfer started)
+            if matches!(
+                *guard,
+                TransferStatus::Completed { .. } | TransferStatus::Failed { .. }
+            ) {
+                *guard = TransferStatus::Idle;
+            }
+        });
+    }
+}
+
 pub fn get_notifications() -> &'static Arc<Mutex<Vec<Notification>>> {
     NOTIFICATIONS.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
 }
@@ -289,6 +399,14 @@ pub fn get_last_clipboard() -> &'static Arc<Mutex<String>> {
 
 pub fn get_last_remote_update() -> &'static Arc<Mutex<std::time::Instant>> {
     LAST_REMOTE_UPDATE.get_or_init(|| Arc::new(Mutex::new(std::time::Instant::now())))
+}
+
+pub fn get_last_remote_clipboard_content() -> &'static Arc<Mutex<String>> {
+    LAST_REMOTE_CLIPBOARD_CONTENT.get_or_init(|| Arc::new(Mutex::new(String::new())))
+}
+
+pub fn set_last_remote_clipboard_content(content: String) {
+    *get_last_remote_clipboard_content().lock_or_recover() = content;
 }
 
 pub fn get_pairing_requests() -> &'static Arc<Mutex<Vec<PairingRequest>>> {
@@ -319,6 +437,15 @@ pub fn add_file_transfer_request(request: FileTransferRequest) {
 pub fn remove_file_transfer_request(id: &str) -> Option<FileTransferRequest> {
     let mut requests = get_file_transfer_requests().lock_or_recover();
     requests.remove(id)
+}
+
+/// Cleanup old transfer requests that have been pending for too long (5 minutes).
+/// This prevents unbounded growth of the transfer requests map.
+pub fn cleanup_old_transfer_requests() {
+    let mut requests = get_file_transfer_requests().lock_or_recover();
+    let now = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(300); // 5 minutes
+    requests.retain(|_, req| now.duration_since(req.timestamp) < timeout);
 }
 
 pub fn add_notification(title: &str, message: &str, icon: &'static str) {

@@ -90,6 +90,12 @@ fn get_transfer_sizes() -> &'static RwLock<HashMap<String, u64>> {
 // ============================================================================
 // UniFFI Types
 // ============================================================================
+//
+// Note: Many types here mirror types in `connected_core`. This duplication is
+// intentional and required by UniFFI - the FFI layer needs its own type
+// definitions with UniFFI derive macros to generate language bindings.
+// The `From` trait implementations below handle conversion between the two.
+// ============================================================================
 
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum MediaCommand {
@@ -1123,7 +1129,13 @@ pub fn inject_proximity_device(
 
 #[uniffi::export]
 pub fn stop_discovery() {
+    // Clear the callback to stop sending events
     *DISCOVERY_CALLBACK.write() = None;
+
+    // Also clear discovered devices cache so fresh discovery starts clean
+    if let Ok(client) = get_client() {
+        client.clear_discovered_devices();
+    }
 }
 
 #[uniffi::export]

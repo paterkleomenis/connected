@@ -100,7 +100,8 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 requested.retain(|_, ts| ts.elapsed() < std::time::Duration::from_secs(5));
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            // Increased from 200ms to 500ms to reduce CPU usage
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
     });
 

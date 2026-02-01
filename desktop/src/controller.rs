@@ -12,8 +12,9 @@ use crate::state::{
     get_saved_devices_setting, get_transfer_status, get_update_info, mark_calls_synced,
     mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
     remove_file_transfer_request, save_device_to_settings, set_active_call,
-    set_device_name_setting, set_pairing_mode_state, set_phone_call_log, set_phone_contacts,
-    set_phone_conversations, set_phone_messages,
+    set_device_name_setting, set_discovery_active, set_last_remote_clipboard_content,
+    set_pairing_mode_state, set_phone_call_log, set_phone_contacts, set_phone_conversations,
+    set_phone_messages, set_sdk_initialized, set_transfer_status,
 };
 use crate::utils::{get_hostname, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -32,8 +33,58 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
+
+/// Cached MPRIS player names to avoid repeated DBus ListNames queries.
+/// Cache is invalidated after MPRIS_CACHE_TTL.
+#[cfg(target_os = "linux")]
+static MPRIS_NAMES_CACHE: Lazy<Mutex<(Vec<String>, Instant)>> =
+    Lazy::new(|| Mutex::new((Vec::new(), Instant::now() - Duration::from_secs(60))));
+
+#[cfg(target_os = "linux")]
+const MPRIS_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// Get cached MPRIS player names, refreshing if cache is stale.
+#[cfg(target_os = "linux")]
+fn get_cached_mpris_names() -> Option<Vec<String>> {
+    use dbus::Message;
+    use dbus::ffidisp::{BusType, Connection};
+
+    let mut cache = MPRIS_NAMES_CACHE.lock().ok()?;
+    let (ref mut names, ref mut last_update) = *cache;
+
+    if last_update.elapsed() < MPRIS_CACHE_TTL && !names.is_empty() {
+        return Some(names.clone());
+    }
+
+    // Refresh cache
+    let conn = Connection::get_private(BusType::Session).ok()?;
+    let msg = Message::new_method_call(
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "ListNames",
+    )
+    .ok()?;
+
+    let all_names: Vec<String> = conn.send_with_reply_and_block(msg, 5000).ok()?.get1()?;
+
+    let mpris_names: Vec<String> = all_names
+        .into_iter()
+        .filter(|n| {
+            n.starts_with("org.mpris.MediaPlayer2.")
+                && !n.contains("playerctld")
+                && !n.contains("kdeconnect")
+                && n != "org.mpris.MediaPlayer2.connected"
+        })
+        .collect();
+
+    *names = mpris_names.clone();
+    *last_update = Instant::now();
+
+    Some(mpris_names)
+}
 
 #[derive(Clone, Debug)]
 pub enum AppAction {
@@ -213,6 +264,25 @@ fn spawn_event_loop(
                         add_notification("Device Lost", &format!("{} disconnected", d.name), "");
                     }
                 }
+                ConnectedEvent::CompressionProgress {
+                    filename,
+                    current_file,
+                    files_processed,
+                    total_files,
+                    bytes_processed,
+                    total_bytes,
+                    speed_bytes_per_sec,
+                } => {
+                    *get_transfer_status().lock_or_recover() = TransferStatus::Compressing {
+                        filename,
+                        current_file,
+                        files_processed,
+                        total_files,
+                        bytes_processed,
+                        total_bytes,
+                        speed_bytes_per_sec,
+                    };
+                }
                 ConnectedEvent::TransferStarting {
                     filename,
                     direction,
@@ -220,16 +290,18 @@ fn spawn_event_loop(
                 } => {
                     use connected_core::events::TransferDirection;
                     if direction == TransferDirection::Incoming {
-                        *get_transfer_status().lock_or_recover() =
-                            TransferStatus::Starting(filename.clone());
+                        *get_transfer_status().lock_or_recover() = TransferStatus::Starting {
+                            filename: filename.clone(),
+                        };
                         add_notification(
                             "Transfer Starting",
                             &format!("Receiving {}", filename),
                             "",
                         );
                     } else {
-                        *get_transfer_status().lock_or_recover() =
-                            TransferStatus::Starting(filename.clone());
+                        *get_transfer_status().lock_or_recover() = TransferStatus::Starting {
+                            filename: filename.clone(),
+                        };
                     }
                 }
                 ConnectedEvent::TransferProgress {
@@ -244,7 +316,7 @@ fn spawn_event_loop(
                     };
                     let mut status = get_transfer_status().lock_or_recover();
                     let current_filename = match &*status {
-                        TransferStatus::Starting(f) => Some(f.clone()),
+                        TransferStatus::Starting { filename } => Some(filename.clone()),
                         TransferStatus::InProgress { filename, .. } => Some(filename.clone()),
                         _ => None,
                     };
@@ -253,13 +325,15 @@ fn spawn_event_loop(
                     }
                 }
                 ConnectedEvent::TransferCompleted { filename, .. } => {
-                    *get_transfer_status().lock_or_recover() =
-                        TransferStatus::Completed(filename.clone());
+                    set_transfer_status(TransferStatus::Completed {
+                        filename: filename.clone(),
+                    });
                     add_notification("Transfer Complete", &format!("{} finished", filename), "");
                 }
                 ConnectedEvent::TransferFailed { error, .. } => {
-                    *get_transfer_status().lock_or_recover() =
-                        TransferStatus::Failed(error.clone());
+                    set_transfer_status(TransferStatus::Failed {
+                        error: error.clone(),
+                    });
                     add_notification("Transfer Failed", &error, "");
                 }
                 ConnectedEvent::ClipboardReceived {
@@ -268,6 +342,8 @@ fn spawn_event_loop(
                 } => {
                     set_system_clipboard(&content);
                     *get_last_clipboard().lock_or_recover() = content.clone();
+                    // Store the remote content to prevent echo loops
+                    set_last_remote_clipboard_content(content.clone());
                     *get_last_remote_update().lock_or_recover() = Instant::now();
                     add_notification("Clipboard", &format!("Received from {}", from_device), "");
                 }
@@ -413,46 +489,15 @@ fn spawn_event_loop(
                                         let last_identity = _last_player_identity.clone();
                                         use dbus::ffidisp::{BusType, Connection};
                                         use mpris::Player;
-                                        use std::rc::Rc;
 
-                                        let conn = match Connection::get_private(BusType::Session) {
-                                            Ok(c) => Rc::new(c),
-                                            Err(e) => {
-                                                warn!("DBus Connection Error: {}", e);
+                                        // Use cached MPRIS names to avoid repeated DBus queries
+                                        let mpris_names = match get_cached_mpris_names() {
+                                            Some(names) => names,
+                                            None => {
+                                                warn!("Could not get MPRIS player names");
                                                 return;
                                             }
                                         };
-
-                                        // ListNames
-                                        use dbus::Message;
-                                        let msg = Message::new_method_call(
-                                            "org.freedesktop.DBus",
-                                            "/org/freedesktop/DBus",
-                                            "org.freedesktop.DBus",
-                                            "ListNames",
-                                        )
-                                        .unwrap();
-                                        let names: Vec<String> =
-                                            match conn.send_with_reply_and_block(msg, 5000) {
-                                                Ok(reply) => match reply.get1() {
-                                                    Some(n) => n,
-                                                    None => return,
-                                                },
-                                                Err(e) => {
-                                                    warn!("DBus ListNames Error: {}", e);
-                                                    return;
-                                                }
-                                            };
-
-                                        let mpris_names: Vec<&String> = names
-                                            .iter()
-                                            .filter(|n| {
-                                                n.starts_with("org.mpris.MediaPlayer2.")
-                                                    && !n.contains("playerctld")
-                                                    && !n.contains("kdeconnect")
-                                                    && *n != "org.mpris.MediaPlayer2.connected"
-                                            })
-                                            .collect();
 
                                         let last_id = last_identity.lock_or_recover().clone();
 
@@ -464,11 +509,11 @@ fn spawn_event_loop(
 
                                         let mut generic_any: Option<Player> = None;
 
-                                        for name in mpris_names {
+                                        for name in &mpris_names {
                                             if let Ok(p_conn) =
                                                 Connection::get_private(BusType::Session)
                                                 && let Ok(player) =
-                                                    Player::new(p_conn, name.clone(), 2000)
+                                                    Player::new(p_conn, name.clone(), 1500)
                                             {
                                                 let identity = player.identity().to_string();
 
@@ -982,6 +1027,10 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
         Ok(c) => {
             info!("Core initialized");
 
+            // Mark SDK as initialized and discovery as active
+            set_sdk_initialized(true);
+            set_discovery_active(true);
+
             // Register Filesystem Provider
             c.register_filesystem_provider(Box::new(DesktopFilesystemProvider::new()));
 
@@ -1012,30 +1061,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
                 let name = get_device_name_setting().unwrap_or_else(get_hostname);
                 client = start_core(name).await;
-                /*
-                // Don't inject saved devices at startup to avoid showing stale devices
-                // Let mDNS/Proximity discovery populate the list with actually active devices
-                if let Some(c) = &client {
-                    let saved = get_saved_devices_setting();
-                    for (device_id, info) in saved {
-                        if info.ip == "0.0.0.0" {
-                            continue;
-                        }
-                        let device_type = connected_core::DeviceType::from_str(&info.device_type);
-                        let ip = match info.ip.parse() {
-                            Ok(ip) => ip,
-                            Err(_) => continue,
-                        };
-                        let _ = c.inject_proximity_device(
-                            device_id,
-                            info.name,
-                            device_type,
-                            ip,
-                            info.port,
-                        );
-                    }
-                }
-                */
             }
             AppAction::RenameDevice { new_name } => {
                 if let Some(c) = client.take() {
@@ -1465,16 +1490,28 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     info!("Media Poller Started");
                     if let Some(c) = &client {
                         let c = c.clone();
-                        // Start MPRIS poller
+                        // Start MPRIS poller with longer interval to reduce CPU usage
                         tokio::spawn(async move {
+                            // Use 2 second interval instead of 1 second to reduce CPU wakeups
                             let mut interval =
-                                tokio::time::interval(std::time::Duration::from_secs(1));
+                                tokio::time::interval(std::time::Duration::from_secs(2));
                             let mut last_title = String::new();
                             let mut last_playing = false;
+                            let mut consecutive_no_change = 0u32;
+                            const MAX_CONSECUTIVE_NO_CHANGE: u32 = 15; // Cap to prevent infinite growth
 
                             // We need to check the atomic flag in the loop
                             while *get_media_enabled().lock_or_recover() {
                                 interval.tick().await;
+
+                                // Adaptive polling: if nothing changes for a while, slow down
+                                // Cap the counter to prevent repeated long sleeps from accumulating
+                                if consecutive_no_change > 10
+                                    && consecutive_no_change <= MAX_CONSECUTIVE_NO_CHANGE
+                                {
+                                    // After 20 seconds of no change, add extra delay (poll every ~5 seconds)
+                                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                                }
 
                                 #[cfg(target_os = "windows")]
                                 let runtime_handle = tokio::runtime::Handle::current();
@@ -1486,58 +1523,23 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 	                                        // Manual D-Bus scan to bypass broken playerctld
 	                                        use dbus::ffidisp::{BusType, Connection};
 	                                        use mpris::Player;
-                                        use std::rc::Rc;
 
-                                        // Create a new connection for this iteration
-                                        let conn = match Connection::get_private(BusType::Session) {
-                                            Ok(c) => Rc::new(c),
-                                            Err(e) => {
-                                                warn!("DBus Connection Error: {}", e);
-                                                return None;
-                                            }
+                                        // Use cached MPRIS names to avoid repeated DBus queries
+                                        let mpris_names = match get_cached_mpris_names() {
+                                            Some(names) => names,
+                                            None => return None,
                                         };
-
-                                        // Use the connection to list names
-                                        use dbus::Message;
-                                        let msg = Message::new_method_call(
-                                            "org.freedesktop.DBus",
-                                            "/org/freedesktop/DBus",
-                                            "org.freedesktop.DBus",
-                                            "ListNames",
-                                        )
-                                        .unwrap();
-
-                                        let names: Vec<String> =
-                                            match conn.send_with_reply_and_block(msg, 5000) {
-                                                Ok(reply) => match reply.get1() {
-                                                    Some(n) => n,
-                                                    None => return None,
-                                                },
-                                                Err(e) => {
-                                                    warn!("DBus ListNames Error: {}", e);
-                                                    return None;
-                                                }
-                                            };
-
-                                        let mpris_names: Vec<&String> = names
-                                            .iter()
-                                            .filter(|n| {
-                                                n.starts_with("org.mpris.MediaPlayer2.")
-                                                    && !n.contains("playerctld")
-                                                    && *n != "org.mpris.MediaPlayer2.connected"
-                                            })
-	                                            .collect();
 
 	                                        // Find first playing, or just first one
 	                                        let mut best_candidate: Option<MediaPollStateUpdate> = None;
 
-	                                        for name in mpris_names {
+	                                        for name in &mpris_names {
 	                                            // Player::new takes (conn, bus_name, timeout_ms)
 	                                            // We must create a new connection for each player because Player::new takes ownership
                                             if let Ok(p_conn) =
                                                 Connection::get_private(BusType::Session)
                                                 && let Ok(player) =
-                                                    Player::new(p_conn, name.clone(), 2000)
+                                                    Player::new(p_conn, name.clone(), 1500)
                                             {
                                                 let _identity = player.identity().to_string();
                                                 let meta = player.get_metadata().ok();
@@ -1614,6 +1616,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     if current_title != last_title || playing != last_playing {
                                         last_title = current_title;
                                         last_playing = playing;
+                                        consecutive_no_change = 0; // Reset adaptive polling counter on change
 
                                         let state = MediaState {
                                             title,
@@ -1651,6 +1654,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                                 }
                                             }
                                         }
+                                    }
+                                } else {
+                                    // Cap to prevent unbounded growth
+                                    if consecutive_no_change < MAX_CONSECUTIVE_NO_CHANGE {
+                                        consecutive_no_change += 1;
                                     }
                                 }
                             }

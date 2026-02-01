@@ -83,6 +83,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -149,9 +150,28 @@ class ConnectedApp(private val context: Context) {
 
     private val pendingPairingAwaitingIp = mutableSetOf<String>()
     private val locallyUnpairedDevices = mutableSetOf<String>()
+
+    // Stores pending file transfers with timestamp for cleanup: deviceId -> (timestamp, queue of file paths)
     private val pendingFileTransfersAwaitingIp =
-        ConcurrentHashMap<String, ConcurrentLinkedQueue<String>>()
+        ConcurrentHashMap<String, Pair<Long, ConcurrentLinkedQueue<String>>>()
     val transferStatus = mutableStateOf("Idle")
+    val compressionProgress = mutableStateOf<CompressionProgress?>(null)
+
+    data class CompressionProgress(
+        val currentFile: String,
+        val filesProcessed: Int,
+        val totalFiles: Int,
+        val bytesProcessed: Long,
+        val totalBytes: Long,
+        val speedBytesPerSec: Long
+    ) {
+        val percentComplete: Float
+            get() = if (totalBytes > 0) (bytesProcessed.toFloat() / totalBytes * 100f) else 0f
+
+        val estimatedSecondsRemaining: Long
+            get() = if (speedBytesPerSec > 0) ((totalBytes - bytesProcessed) / speedBytesPerSec) else 0
+    }
+
     val clipboardContent = mutableStateOf("")
     val pairingRequest = mutableStateOf<PairingRequest?>(null)
     val transferRequest = mutableStateOf<TransferRequest?>(null)
@@ -181,12 +201,12 @@ class ConnectedApp(private val context: Context) {
     val isMediaControlEnabled = mutableStateOf(false)
     private var clipboardSyncJob: kotlinx.coroutines.Job? = null
 
-    @Volatile
-    private var lastRemoteClipboard: String = ""
+    private val lastRemoteClipboard = AtomicReference("")
 
     private val isAppInForeground = AtomicBoolean(false)
-    private val scope =
-        kotlinx.coroutines.CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+    private var scopeJob = kotlinx.coroutines.SupervisorJob()
+    private var scope =
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO + scopeJob)
 
     val unpairNotification = mutableStateOf<String?>(null)
 
@@ -203,6 +223,9 @@ class ConnectedApp(private val context: Context) {
     private var browsingDevice: DiscoveredDevice? = null
     val thumbnails = androidx.compose.runtime.mutableStateMapOf<String, android.graphics.Bitmap>()
     private val requestedThumbnails = Collections.synchronizedSet(mutableSetOf<String>())
+    private val thumbnailAccessOrder = mutableListOf<String>()
+    private val thumbnailLock = Any() // Single lock for all thumbnail cache operations
+    private val maxThumbnailCacheSize = 100 // Maximum number of cached thumbnails
 
     // Network State
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
@@ -213,7 +236,10 @@ class ConnectedApp(private val context: Context) {
     private val _prefMediaControl = "media_control"
     private val _prefTelephonyEnabled = "telephony_enabled"
     private val _prefDeviceName = "device_name"
+
+    @Volatile
     private var lastSdkRestart = 0L
+    private val sdkRestartDebounceMs = 10000L // 10 second debounce
 
     private val networkStateReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -268,15 +294,9 @@ class ConnectedApp(private val context: Context) {
 
                         android.net.wifi.WifiManager.WIFI_STATE_ENABLED -> {
                             Log.d("ConnectedApp", "Wi-Fi turned on - restarting SDK")
-                            val now = System.currentTimeMillis()
-                            if (now - lastSdkRestart > 10000) {
-                                lastSdkRestart = now
-                                scope.launch(Dispatchers.Main) {
-                                    delay(2000)
-                                    restartSdk()
-                                }
-                            } else {
-                                Log.d("ConnectedApp", "Skipping SDK restart (debounced)")
+                            scope.launch(Dispatchers.Main) {
+                                delay(2000)
+                                restartSdk()
                             }
                         }
                     }
@@ -286,6 +306,12 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun restartSdk() {
+        val now = System.currentTimeMillis()
+        if (now - lastSdkRestart < sdkRestartDebounceMs) {
+            Log.d("ConnectedApp", "Skipping SDK restart (debounced)")
+            return
+        }
+        lastSdkRestart = now
         Log.d("ConnectedApp", "Restarting SDK to bind to new network interface...")
         cleanup()
         initialize()
@@ -365,10 +391,6 @@ class ConnectedApp(private val context: Context) {
         proximityManager = null
     }
 
-    // Alias for old calls
-    fun startProximity() = startProximityManager()
-
-
     private val discoveryCallback = object : DiscoveryCallback {
 
         override fun onDeviceFound(device: DiscoveredDevice) {
@@ -428,13 +450,15 @@ class ConnectedApp(private val context: Context) {
 
                 if (!isSyntheticIp(device.ip)) {
 
-                    pendingFileTransfersAwaitingIp.remove(device.id)?.let { queue ->
+                    pendingFileTransfersAwaitingIp.remove(device.id)?.let { (_, queue) ->
 
                         var nextPath = queue.poll()
 
                         while (nextPath != null) {
 
-                            sendFileToDevice(device, "file://$nextPath") // Dummy URI reconstruction
+                            // Use proper Uri encoding to handle special characters in paths
+                            val fileUri = Uri.fromFile(File(nextPath)).toString()
+                            sendFileToDevice(device, fileUri)
 
                             nextPath = queue.poll()
 
@@ -527,7 +551,7 @@ class ConnectedApp(private val context: Context) {
 
     private val clipboardCallback = object : ClipboardCallback {
         override fun onClipboardReceived(text: String, fromDevice: String) {
-            lastRemoteClipboard = text
+            lastRemoteClipboard.set(text)
             clipboardContent.value = text
             copyToClipboard(text)
             runOnMainThread {
@@ -679,6 +703,12 @@ class ConnectedApp(private val context: Context) {
 
     fun initialize() {
         try {
+            // Recreate coroutine scope if it was cancelled during cleanup
+            if (scopeJob.isCancelled) {
+                scopeJob = kotlinx.coroutines.SupervisorJob()
+                scope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + scopeJob)
+            }
+
             val wifiManager =
                 context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
             multicastLock = wifiManager.createMulticastLock("ConnectedMulticastLock")
@@ -723,7 +753,19 @@ class ConnectedApp(private val context: Context) {
 
             isMediaControlEnabled.value = prefs.getBoolean(_prefMediaControl, false)
 
-            lastSdkRestart = System.currentTimeMillis()
+            // Note: lastSdkRestart is NOT reset here to preserve debounce state across restarts
+
+            // Start periodic cleanup of stale pending file transfers (5 minute timeout)
+            scope.launch {
+                while (true) {
+                    kotlinx.coroutines.delay(60_000) // Check every minute
+                    val cutoff = System.currentTimeMillis() - 300_000 // 5 minute timeout
+                    pendingFileTransfersAwaitingIp.entries.removeIf { (_, pair) ->
+                        val (timestamp, _) = pair
+                        timestamp < cutoff
+                    }
+                }
+            }
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Initialization failed", e)
         }
@@ -731,17 +773,63 @@ class ConnectedApp(private val context: Context) {
 
     fun cleanup() {
         Log.d("ConnectedApp", "Cleaning up resources")
+
+        // Cancel all coroutines first to stop ongoing operations
+        try {
+            scopeJob.cancel()
+        } catch (e: Exception) {
+            Log.w("ConnectedApp", "Error cancelling scope: ${e.message}")
+        }
+
+        // Unregister broadcast receiver
         try {
             context.unregisterReceiver(networkStateReceiver)
         } catch (_: Exception) {
+            // Already unregistered or never registered
         }
+
+        // Stop clipboard sync job
         stopClipboardSync()
+
+        // Stop proximity manager (BLE + Wi-Fi Direct)
         stopProximityManager()
-        shutdown()
+
+        // Clear thumbnail cache to free memory
+        clearThumbnailCache()
+
+        // Shutdown core SDK
         try {
-            multicastLock?.release()
+            shutdown()
+        } catch (e: Exception) {
+            Log.w("ConnectedApp", "Error during SDK shutdown: ${e.message}")
+        }
+
+        // Release multicast lock
+        try {
+            if (multicastLock?.isHeld == true) {
+                multicastLock?.release()
+            }
+        } catch (_: Exception) {
+            // Already released
+        }
+        multicastLock = null
+
+        // Release media session
+        try {
+            mediaSession?.release()
         } catch (_: Exception) {
         }
+        mediaSession = null
+
+        // Unregister telephony receivers if enabled
+        if (isTelephonyEnabled.value) {
+            try {
+                telephonyProvider.unregisterReceivers()
+            } catch (_: Exception) {
+            }
+        }
+
+        Log.d("ConnectedApp", "Cleanup completed")
     }
 
     fun runOnMainThread(action: () -> Unit) {
@@ -1090,10 +1178,18 @@ class ConnectedApp(private val context: Context) {
             return
         }
         if (isSyntheticIp(device.ip)) {
-            val queue = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
-                ConcurrentLinkedQueue()
-            }
-            queue.add(file.absolutePath)
+            val now = System.currentTimeMillis()
+            // Update timestamp when adding to existing queue to prevent premature cleanup
+            val entry = pendingFileTransfersAwaitingIp.compute(device.id) { _, existing ->
+                if (existing != null) {
+                    // Update timestamp and reuse existing queue
+                    now to existing.second
+                } else {
+                    // Create new entry
+                    now to ConcurrentLinkedQueue()
+                }
+            }!!
+            entry.second.add(file.absolutePath)
             if (hasProximityPermissions()) {
                 try {
                     proximityManager?.requestConnect(device.id)
@@ -1529,6 +1625,27 @@ class ConnectedApp(private val context: Context) {
                 newState
             )
         }
+
+        // Clear media session and notification when disabled
+        if (!newState) {
+            try {
+                mediaSession?.release()
+                mediaSession = null
+            } catch (_: Exception) {
+            }
+
+            // Remove media notification
+            val notificationManager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            notificationManager.cancel(MEDIA_NOTIFICATION_ID)
+
+            // Reset media state
+            currentMediaTitle.value = "Not Playing"
+            currentMediaArtist.value = ""
+            currentMediaPlaying.value = false
+            lastMediaSourceDevice = null
+            lastBroadcastMediaState = null
+        }
     }
 
     fun setAppInForeground(isForeground: Boolean) {
@@ -1701,6 +1818,8 @@ class ConnectedApp(private val context: Context) {
         isBrowsingRemote.value = false
         browsingDevice = null
         remoteFiles.clear()
+        currentRemotePath.value = "/"
+        clearThumbnailCache()
     }
 
     fun downloadRemoteFile(device: DiscoveredDevice, remotePath: String) {
@@ -1727,27 +1846,100 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun getThumbnail(path: String) {
-        if (requestedThumbnails.contains(path) || thumbnails.containsKey(path)) return
-        val device = browsingDevice ?: return
-        requestedThumbnails.add(path)
+        // Use single lock for all cache access to prevent race conditions
+        synchronized(thumbnailLock) {
+            if (requestedThumbnails.contains(path)) return
+
+            // If already cached, update access order for LRU (move to end = most recently used)
+            if (thumbnails.containsKey(path)) {
+                // Remove from current position and add to end (most recent)
+                thumbnailAccessOrder.remove(path)
+                thumbnailAccessOrder.add(path)
+                return
+            }
+
+            requestedThumbnails.add(path)
+        }
+
+        val device = browsingDevice ?: run {
+            synchronized(thumbnailLock) { requestedThumbnails.remove(path) }
+            return
+        }
+
         scope.launch(Dispatchers.IO) {
             try {
                 val bytes = requestGetThumbnail(device.ip, device.port, path)
                 if (bytes.isNotEmpty()) {
                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     if (bitmap != null) {
-                        runOnMainThread { thumbnails[path] = bitmap }
+                        runOnMainThread {
+                            synchronized(thumbnailLock) {
+                                // Evict oldest entries if cache is full (LRU eviction)
+                                // Oldest entries are at the beginning of the list
+                                while (thumbnails.size >= maxThumbnailCacheSize && thumbnailAccessOrder.isNotEmpty()) {
+                                    val oldest = thumbnailAccessOrder.removeAt(0)
+                                    thumbnails.remove(oldest)?.recycle()
+                                    requestedThumbnails.remove(oldest)
+                                }
+
+                                thumbnails[path] = bitmap
+                                // Ensure no duplicates before adding
+                                thumbnailAccessOrder.remove(path)
+                                thumbnailAccessOrder.add(path)
+                                requestedThumbnails.remove(path) // Mark as done, not pending
+                            }
+                        }
                         return@launch
                     }
                 }
             } catch (_: Exception) {
                 // Fall through to allow retry
             }
-            requestedThumbnails.remove(path)
+            synchronized(thumbnailLock) { requestedThumbnails.remove(path) }
+        }
+    }
+
+    /**
+     * Clear thumbnail cache when browsing a different device or closing browser.
+     * Called to free memory.
+     */
+    private fun clearThumbnailCache() {
+        synchronized(thumbnailLock) {
+            thumbnailAccessOrder.clear()
+            requestedThumbnails.clear()
+        }
+        runOnMainThread {
+            synchronized(thumbnailLock) {
+                thumbnails.values.forEach { it.recycle() }
+                thumbnails.clear()
+            }
         }
     }
 
     // Folder Transfer (Zipped)
+
+    /**
+     * Scans a directory tree and returns (totalFiles, totalBytes)
+     */
+    private fun scanFolderStats(root: androidx.documentfile.provider.DocumentFile): Pair<Int, Long> {
+        var totalFiles = 0
+        var totalBytes = 0L
+        val stack = ArrayDeque<androidx.documentfile.provider.DocumentFile>()
+        stack.addLast(root)
+
+        while (stack.isNotEmpty()) {
+            val current = stack.removeLast()
+            current.listFiles().forEach { file ->
+                if (file.isDirectory) {
+                    stack.addLast(file)
+                } else {
+                    totalFiles++
+                    totalBytes += file.length()
+                }
+            }
+        }
+        return totalFiles to totalBytes
+    }
 
     fun sendFolderToDevice(device: DiscoveredDevice, folderUri: Uri) {
 
@@ -1761,23 +1953,50 @@ class ConnectedApp(private val context: Context) {
 
                 val zipFile = File(context.cacheDir, "$folderName.zip")
 
-
-
                 try {
+                    // First scan to get total size for progress tracking
+                    runOnMainThread {
+                        compressionProgress.value = CompressionProgress(
+                            currentFile = "Scanning folder...",
+                            filesProcessed = 0,
+                            totalFiles = 0,
+                            bytesProcessed = 0,
+                            totalBytes = 0,
+                            speedBytesPerSec = 0
+                        )
+                    }
+
+                    val (totalFiles, totalBytes) = scanFolderStats(docFile)
+
+                    if (totalFiles == 0) {
+                        runOnMainThread {
+                            compressionProgress.value = null
+                            android.widget.Toast.makeText(
+                                context,
+                                "Folder is empty",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        return@launch
+                    }
 
                     ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                        zipRecursiveWithProgress(docFile, folderName, zos, totalFiles, totalBytes)
+                    }
 
-                        zipRecursive(docFile, folderName, zos)
-
+                    // Clear compression progress
+                    runOnMainThread {
+                        compressionProgress.value = null
                     }
 
 
 
                     if (isSyntheticIp(device.ip)) {
 
-                        val queue = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
+                        val now = System.currentTimeMillis()
+                        val (_, queue) = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
 
-                            ConcurrentLinkedQueue()
+                            now to ConcurrentLinkedQueue()
 
                         }
 
@@ -1838,46 +2057,106 @@ class ConnectedApp(private val context: Context) {
     }
 
 
-    private fun zipRecursive(
+    /**
+     * Iterative implementation to zip a directory structure with progress tracking.
+     * Uses an explicit stack instead of recursion to avoid stack overflow
+     * on deeply nested folder structures.
+     */
+    private fun zipRecursiveWithProgress(
         root: androidx.documentfile.provider.DocumentFile,
         parentPath: String,
-        zos: ZipOutputStream
+        zos: ZipOutputStream,
+        totalFiles: Int,
+        totalBytes: Long
     ) {
+        // Stack holds pairs of (DocumentFile, parentPath)
+        val stack = ArrayDeque<Pair<androidx.documentfile.provider.DocumentFile, String>>()
+        stack.addLast(root to parentPath)
 
-        root.listFiles().forEach { file ->
+        var filesProcessed = 0
+        var bytesProcessed = 0L
+        val startTime = System.currentTimeMillis()
+        var lastProgressUpdate = 0L
 
-            val entryPath = if (parentPath.isEmpty()) file.name ?: "" else "$parentPath/${file.name}"
+        while (stack.isNotEmpty()) {
+            val (currentDir, currentParentPath) = stack.removeLast()
 
-            if (file.isDirectory) {
-
-                zipRecursive(file, entryPath, zos)
-
-            } else {
-
-                try {
-
-                    val entry = ZipEntry(entryPath)
-
-                    zos.putNextEntry(entry)
-
-                    context.contentResolver.openInputStream(file.uri)?.use { input ->
-
-                        input.copyTo(zos)
-
-                    }
-
-                    zos.closeEntry()
-
-                } catch (e: Exception) {
-
-                    Log.e("ConnectedApp", "Failed to zip file: ${file.name}", e)
-
+            currentDir.listFiles().forEach { file ->
+                val entryPath = if (currentParentPath.isEmpty()) {
+                    file.name ?: ""
+                } else {
+                    "$currentParentPath/${file.name}"
                 }
 
+                if (file.isDirectory) {
+                    // Push directory onto stack for later processing
+                    stack.addLast(file to entryPath)
+                } else {
+                    try {
+                        val fileName = file.name ?: "unknown"
+                        val fileSize = file.length()
+
+                        val entry = ZipEntry(entryPath)
+                        zos.putNextEntry(entry)
+
+                        context.contentResolver.openInputStream(file.uri)?.use { input ->
+                            val buffer = ByteArray(8192)
+                            var bytesRead: Int
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                zos.write(buffer, 0, bytesRead)
+                                bytesProcessed += bytesRead
+
+                                // Update progress every 100ms
+                                val now = System.currentTimeMillis()
+                                if (now - lastProgressUpdate >= 100) {
+                                    lastProgressUpdate = now
+                                    val elapsedMs = now - startTime
+                                    val speed = if (elapsedMs > 0) {
+                                        (bytesProcessed * 1000 / elapsedMs)
+                                    } else 0L
+
+                                    val progress = CompressionProgress(
+                                        currentFile = fileName,
+                                        filesProcessed = filesProcessed,
+                                        totalFiles = totalFiles,
+                                        bytesProcessed = bytesProcessed,
+                                        totalBytes = totalBytes,
+                                        speedBytesPerSec = speed
+                                    )
+                                    runOnMainThread {
+                                        compressionProgress.value = progress
+                                    }
+                                }
+                            }
+                        }
+                        zos.closeEntry()
+                        filesProcessed++
+
+                        // Final update for this file
+                        val now = System.currentTimeMillis()
+                        val elapsedMs = now - startTime
+                        val speed = if (elapsedMs > 0) {
+                            (bytesProcessed * 1000 / elapsedMs)
+                        } else 0L
+
+                        val progress = CompressionProgress(
+                            currentFile = fileName,
+                            filesProcessed = filesProcessed,
+                            totalFiles = totalFiles,
+                            bytesProcessed = bytesProcessed,
+                            totalBytes = totalBytes,
+                            speedBytesPerSec = speed
+                        )
+                        runOnMainThread {
+                            compressionProgress.value = progress
+                        }
+
+                    } catch (e: Exception) {
+                        Log.e("ConnectedApp", "Failed to zip file: ${file.name}", e)
+                    }
+                }
             }
-
         }
-
     }
 
     // Device Management Wrappers

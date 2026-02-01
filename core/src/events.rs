@@ -17,6 +17,16 @@ pub enum ConnectedEvent {
         peer_device: String,
         direction: TransferDirection,
     },
+    /// Compression progress for folder transfers
+    CompressionProgress {
+        filename: String,
+        current_file: String,
+        files_processed: u64,
+        total_files: u64,
+        bytes_processed: u64,
+        total_bytes: u64,
+        speed_bytes_per_sec: u64,
+    },
     /// File transfer progress update
     TransferProgress {
         id: String,

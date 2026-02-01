@@ -36,11 +36,22 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
         if (!isRawFile) return null
         if (path == "/" || path.isEmpty()) return rootFile
 
-        // Prevent directory traversal attacks if path contains ".." (though Rust core should handle this)
-        // We trust the path provided by resolvePath logic from core which usually cleans paths.
-        // But for safety:
-        val safePath = path.trim('/').split('/').filter { it != ".." && it.isNotEmpty() }.joinToString("/")
-        return File(rootFile, safePath)
+        // Prevent directory traversal attacks by filtering ".." and "." components
+        val safePath = path.trim('/').split('/').filter {
+            it != ".." && it != "." && it.isNotEmpty()
+        }.joinToString("/")
+
+        val resolved = File(rootFile, safePath)
+        val canonical = resolved.canonicalFile
+
+        // Verify the canonical path is still under the root directory
+        // This prevents symlink attacks that could escape the root
+        val rootCanonical = rootFile!!.canonicalFile
+        if (!canonical.absolutePath.startsWith(rootCanonical.absolutePath)) {
+            throw FilesystemException.Generic("Path escapes root directory: $path")
+        }
+
+        return canonical
     }
 
     private fun skipFully(input: InputStream, bytes: Long): Boolean {
