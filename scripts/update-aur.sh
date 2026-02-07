@@ -4,16 +4,19 @@ IFS=$'\n\t'
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/update-aur.sh <version> [--hash-bin] [--skip-srcinfo] [--push]
-       scripts/update-aur.sh --latest [--hash-bin] [--skip-srcinfo] [--push]
+Usage: scripts/update-aur.sh [--latest] [--hash-bin] [--skip-srcinfo] [--push]
+       scripts/update-aur.sh <version> [--hash-bin] [--skip-srcinfo] [--push]
 
 Updates packaging/aur/PKGBUILD (pkgver/pkgrel + sha256sums) and .SRCINFO.
 
 Options:
+  (no args)       Resolve latest GitHub release tag and use that version
   --latest        Resolve latest GitHub release tag and use that version
-  --hash-bin      Compute hash for the binary asset (otherwise keep SKIP if present)
+  --hash-bin      Compute hash for the binary asset (default)
+  --no-hash-bin   Skip hashing the binary asset (uses SKIP)
   --skip-srcinfo  Do not regenerate .SRCINFO
-  --push          Commit and push changes to the AUR remote
+  --push          Commit and push changes to the AUR remote (default)
+  --no-push       Do not commit or push changes
 USAGE
 }
 
@@ -31,6 +34,14 @@ hash_url() {
   curl -fsSL "$url" | sha256sum | awk '{print $1}'
 }
 
+count_sources() {
+  awk 'BEGIN{c=0} /^source=\(/ {block=1} block { if ($0 ~ /\)/) {block=0} if ($0 ~ /"/) c++ } END{print c}' "$1"
+}
+
+count_sums() {
+  awk 'BEGIN{c=0} /^sha256sums=\(/ {block=1} block { if ($0 ~ /\)/) {block=0} if ($0 ~ /'\''/) c++ } END{print c}' "$1"
+}
+
 resolve_latest_version() {
   local location
   location=$(curl -fsI "https://github.com/paterkleomenis/connected/releases/latest" | tr -d '\r' | awk -F': ' '/^location:/ {print $2}')
@@ -40,9 +51,9 @@ resolve_latest_version() {
 }
 
 version=""
-hash_bin=0
+hash_bin=1
 skip_srcinfo=0
-do_push=0
+do_push=1
 commit_msg=""
 push_remote=""
 push_branch=""
@@ -57,12 +68,20 @@ while [ $# -gt 0 ]; do
       hash_bin=1
       shift
       ;;
+    --no-hash-bin)
+      hash_bin=0
+      shift
+      ;;
     --skip-srcinfo)
       skip_srcinfo=1
       shift
       ;;
     --push)
       do_push=1
+      shift
+      ;;
+    --no-push)
+      do_push=0
       shift
       ;;
     --commit-msg)
@@ -95,7 +114,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$version" ] || { usage; exit 1; }
+if [ -z "$version" ]; then
+  version="latest"
+fi
 
 need_cmd curl
 need_cmd sha256sum
@@ -127,11 +148,7 @@ license_mit_url="https://raw.githubusercontent.com/paterkleomenis/connected/main
 license_apache_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/LICENSE-APACHE"
 
 # Decide whether to hash binary or keep SKIP
-current_first_sum=$(awk '/^sha256sums=/{flag=1;next} flag{gsub(/[()'\'' ]/,""); if ($0!=""){print $0; exit}}' "$PKGBUILD" || true)
 if [ "$hash_bin" -eq 1 ]; then
-  echo "Hashing binary asset..."
-  bin_sum="$(hash_url "$bin_url")"
-elif [ -n "$current_first_sum" ] && [ "$current_first_sum" != "SKIP" ]; then
   echo "Hashing binary asset..."
   bin_sum="$(hash_url "$bin_url")"
 else
@@ -157,6 +174,15 @@ EOF
 export SHA_BLOCK_FILE
 perl -0777 -i -pe 'BEGIN{ local $/; open my $fh, "<", $ENV{SHA_BLOCK_FILE} or die $!; $b=<$fh>; chomp $b; } if (s/sha256sums=\([^)]*\)/$b/s) { } else { $_ .= "\n\n$b\n"; }' "$PKGBUILD"
 rm -f "$SHA_BLOCK_FILE"
+
+src_count="$(count_sources "$PKGBUILD")"
+sum_count="$(count_sums "$PKGBUILD")"
+if [ "$src_count" -eq 0 ] || [ "$sum_count" -eq 0 ]; then
+  die "source/sha256sums block missing after update"
+fi
+if [ "$src_count" -ne "$sum_count" ]; then
+  die "source/sha256sums count mismatch: sources=${src_count} sums=${sum_count}"
+fi
 
 if [ "$skip_srcinfo" -eq 0 ]; then
   if command -v makepkg >/dev/null 2>&1; then

@@ -24,6 +24,9 @@ sha256sums=('ebfd1702f9a7bfc4616640c921a1db3011ecbae36c12fbad9ec36b65070c30eb'
 
 
 
+
+
+
 package() {
   install -Dm755 "connected-desktop" "$pkgdir/usr/bin/$_pkgname"
   install -Dm644 "connected-desktop.desktop" "$pkgdir/usr/share/applications/connected-desktop.desktop"
