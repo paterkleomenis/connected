@@ -128,7 +128,10 @@ license_apache_url="https://raw.githubusercontent.com/paterkleomenis/connected/m
 
 # Decide whether to hash binary or keep SKIP
 current_first_sum=$(awk '/^sha256sums=/{flag=1;next} flag{gsub(/[()'\'' ]/,""); if ($0!=""){print $0; exit}}' "$PKGBUILD" || true)
-if [ "$hash_bin" -eq 1 ] || [ "$current_first_sum" != "SKIP" ]; then
+if [ "$hash_bin" -eq 1 ]; then
+  echo "Hashing binary asset..."
+  bin_sum="$(hash_url "$bin_url")"
+elif [ -n "$current_first_sum" ] && [ "$current_first_sum" != "SKIP" ]; then
   echo "Hashing binary asset..."
   bin_sum="$(hash_url "$bin_url")"
 else
@@ -141,7 +144,8 @@ icon_sum="$(hash_url "$icon_url")"
 license_mit_sum="$(hash_url "$license_mit_url")"
 license_apache_sum="$(hash_url "$license_apache_url")"
 
-cat > "${AUR_DIR}/.sha256sums.tmp" <<EOF
+SHA_BLOCK_FILE="${AUR_DIR}/.sha256sums.tmp"
+cat > "$SHA_BLOCK_FILE" <<EOF
 sha256sums=('${bin_sum}'
             '${desktop_sum}'
             '${icon_sum}'
@@ -149,9 +153,10 @@ sha256sums=('${bin_sum}'
             '${license_apache_sum}')
 EOF
 
-# Replace sha256sums block
-perl -0777 -i -pe 's/sha256sums=\([^\)]*\)/`cat "${AUR_DIR}\/.sha256sums.tmp"`/se' "$PKGBUILD"
-rm -f "${AUR_DIR}/.sha256sums.tmp"
+# Replace or append sha256sums block
+export SHA_BLOCK_FILE
+perl -0777 -i -pe 'BEGIN{ local $/; open my $fh, "<", $ENV{SHA_BLOCK_FILE} or die $!; $b=<$fh>; chomp $b; } if (s/sha256sums=\([^)]*\)/$b/s) { } else { $_ .= "\n\n$b\n"; }' "$PKGBUILD"
+rm -f "$SHA_BLOCK_FILE"
 
 if [ "$skip_srcinfo" -eq 0 ]; then
   if command -v makepkg >/dev/null 2>&1; then
