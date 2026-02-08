@@ -1,0 +1,8 @@
+[package]
+name = "libxdo"
+version = "0.6.0"
+edition = "2021"
+description = "No-op stub replacing libxdo to eliminate the libxdo.so runtime dependency"
+license = "MIT"
+
+[dependencies]

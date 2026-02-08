@@ -24,7 +24,7 @@ strip = true
 strip = false
 
 [workspace.package]
-version = "2.5.2"
+version = "2.5.3"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Connected Team"]
@@ -134,3 +134,12 @@ needless_collect = "allow"
 new_without_default = "allow"
 return_self_not_must_use = "allow"
 wildcard_imports = "allow"
+
+# ---------------------------------------------------------------------------
+# Replace libxdo with a tiny no-op stub (~80 lines) so the binary never links
+# to the system libxdo.so, which has different sonames across distros
+# (libxdo.so.3 on Ubuntu vs libxdo.so.4 on Arch). Menu keyboard-accelerator
+# simulation is the only thing lost; menus still work fine.
+# ---------------------------------------------------------------------------
+[patch.crates-io]
+libxdo = { path = "patches/libxdo" }
