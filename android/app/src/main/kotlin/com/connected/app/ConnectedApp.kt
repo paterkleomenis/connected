@@ -78,6 +78,7 @@ import uniffi.connected_ffi.sendSmsSendResult
 import uniffi.connected_ffi.sendTrustConfirmation
 import uniffi.connected_ffi.setPairingMode
 import uniffi.connected_ffi.shutdown
+import uniffi.connected_ffi.refreshDiscovery
 import uniffi.connected_ffi.startDiscovery
 import uniffi.connected_ffi.trustDevice
 import uniffi.connected_ffi.unpairDeviceById
@@ -333,6 +334,33 @@ class ConnectedApp(private val context: Context) {
         initialize()
     }
 
+    /** Lightweight discovery refresh: clears stale devices and re-announces on mDNS. */
+    fun refreshDeviceDiscovery() {
+        // Clear UI list immediately so the user sees the refresh
+        runOnMainThread {
+            devices.clear()
+            trustedDevices.clear()
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                Log.d("ConnectedApp", "Refreshing discovery...")
+                refreshDiscovery()
+                // Re-fetch whatever the core already knows after a short delay
+                // to let the mDNS browse loop pick up responses
+                kotlinx.coroutines.delay(500)
+                val list = getDiscoveredDevices()
+                runOnMainThread {
+                    devices.clear()
+                    devices.addAll(list)
+                    trustedDevices.clear()
+                    list.forEach { if (isDeviceTrusted(it)) trustedDevices.add(it.id) }
+                }
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to refresh discovery", e)
+            }
+        }
+    }
+
     fun getDeviceName(): String {
         val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
         val customName = prefs.getString(_prefDeviceName, null)
@@ -563,6 +591,27 @@ class ConnectedApp(private val context: Context) {
                 context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
             notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
         }
+
+        override fun onCompressionProgress(
+            filename: String,
+            currentFile: String,
+            filesProcessed: ULong,
+            totalFiles: ULong,
+            bytesProcessed: ULong,
+            totalBytes: ULong,
+            speedBytesPerSec: ULong
+        ) {
+            val percent = if (totalFiles > 0u) (filesProcessed.toLong() * 100 / totalFiles.toLong()) else 0
+            compressionProgress.value = CompressionProgress(
+                currentFile = currentFile,
+                filesProcessed = filesProcessed.toInt(),
+                totalFiles = totalFiles.toInt(),
+                bytesProcessed = bytesProcessed.toLong(),
+                totalBytes = totalBytes.toLong(),
+                speedBytesPerSec = speedBytesPerSec.toLong()
+            )
+            transferStatus.value = "Compressing: $percent% ($currentFile)"
+        }
     }
 
     private val clipboardCallback = object : ClipboardCallback {
@@ -690,6 +739,10 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
+        override fun onPairingModeChanged(enabled: Boolean) {
+            Log.d("ConnectedApp", "Pairing mode changed: $enabled")
+        }
+
         override fun onPairingRejected(deviceName: String, deviceId: String) {
             runOnMainThread {
                 pendingPairing.remove(deviceId)
@@ -759,6 +812,12 @@ class ConnectedApp(private val context: Context) {
 
             startProximityManager()
 
+            // Stamp the debounce clock BEFORE registering the receiver so that
+            // the sticky WIFI_STATE_CHANGED_ACTION broadcast (Android delivers it
+            // immediately with the current state) doesn't trigger a spurious
+            // restartSdk() right after we just finished initializing.
+            lastSdkRestart = System.currentTimeMillis()
+
             val filter = IntentFilter().apply {
                 addAction(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED)
                 addAction(android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION)
@@ -769,7 +828,6 @@ class ConnectedApp(private val context: Context) {
 
             isMediaControlEnabled.value = prefs.getBoolean(_prefMediaControl, false)
 
-            // Note: lastSdkRestart is NOT reset here to preserve debounce state across restarts
 
             // Start periodic cleanup of stale pending file transfers (5 minute timeout)
             scope.launch {
@@ -1515,7 +1573,8 @@ class ConnectedApp(private val context: Context) {
             timestamp = timestampMs.toULong(),
             isOutgoing = false,
             isRead = false,
-            status = SmsStatus.RECEIVED
+            status = SmsStatus.RECEIVED,
+            attachments = emptyList()
         )
 
         // Broadcast to connected devices if trusted

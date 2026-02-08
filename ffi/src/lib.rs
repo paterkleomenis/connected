@@ -278,6 +278,37 @@ impl From<connected_core::SmsStatus> for SmsStatus {
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiMmsAttachment {
+    pub id: String,
+    pub content_type: String,
+    pub filename: Option<String>,
+    /// Base64 encoded data for small attachments, or a reference ID for larger ones
+    pub data: Option<String>,
+}
+
+impl From<FfiMmsAttachment> for connected_core::MmsAttachment {
+    fn from(a: FfiMmsAttachment) -> Self {
+        connected_core::MmsAttachment {
+            id: a.id,
+            content_type: a.content_type,
+            filename: a.filename,
+            data: a.data,
+        }
+    }
+}
+
+impl From<connected_core::MmsAttachment> for FfiMmsAttachment {
+    fn from(a: connected_core::MmsAttachment) -> Self {
+        FfiMmsAttachment {
+            id: a.id,
+            content_type: a.content_type,
+            filename: a.filename,
+            data: a.data,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct FfiSmsMessage {
     pub id: String,
     pub thread_id: String,
@@ -288,6 +319,7 @@ pub struct FfiSmsMessage {
     pub is_outgoing: bool,
     pub is_read: bool,
     pub status: SmsStatus,
+    pub attachments: Vec<FfiMmsAttachment>,
 }
 
 impl From<FfiSmsMessage> for connected_core::SmsMessage {
@@ -302,7 +334,7 @@ impl From<FfiSmsMessage> for connected_core::SmsMessage {
             is_outgoing: m.is_outgoing,
             is_read: m.is_read,
             status: m.status.into(),
-            attachments: vec![],
+            attachments: m.attachments.into_iter().map(|a| a.into()).collect(),
         }
     }
 }
@@ -319,6 +351,7 @@ impl From<connected_core::SmsMessage> for FfiSmsMessage {
             is_outgoing: m.is_outgoing,
             is_read: m.is_read,
             status: m.status.into(),
+            attachments: m.attachments.into_iter().map(|a| a.into()).collect(),
         }
     }
 }
@@ -643,6 +676,16 @@ pub trait FileTransferCallback: Send + Sync {
     fn on_transfer_completed(&self, filename: String, total_size: u64);
     fn on_transfer_failed(&self, error_msg: String);
     fn on_transfer_cancelled(&self);
+    fn on_compression_progress(
+        &self,
+        filename: String,
+        current_file: String,
+        files_processed: u64,
+        total_files: u64,
+        bytes_processed: u64,
+        total_bytes: u64,
+        speed_bytes_per_sec: u64,
+    );
 }
 
 #[uniffi::export(callback_interface)]
@@ -665,6 +708,7 @@ pub trait ClipboardCallback: Send + Sync {
 pub trait PairingCallback: Send + Sync {
     fn on_pairing_request(&self, device_name: String, fingerprint: String, device_id: String);
     fn on_pairing_rejected(&self, device_name: String, device_id: String);
+    fn on_pairing_mode_changed(&self, enabled: bool);
 }
 
 #[uniffi::export(callback_interface)]
@@ -1081,10 +1125,35 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                             }
                         }
                     }
+                    ConnectedEvent::PairingModeChanged(enabled) => {
+                        if let Some(cb) = PAIRING_CALLBACK.read().as_ref() {
+                            cb.on_pairing_mode_changed(enabled);
+                        }
+                    }
+                    ConnectedEvent::CompressionProgress {
+                        filename,
+                        current_file,
+                        files_processed,
+                        total_files,
+                        bytes_processed,
+                        total_bytes,
+                        speed_bytes_per_sec,
+                    } => {
+                        if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
+                            cb.on_compression_progress(
+                                filename,
+                                current_file,
+                                files_processed,
+                                total_files,
+                                bytes_processed,
+                                total_bytes,
+                                speed_bytes_per_sec,
+                            );
+                        }
+                    }
                     ConnectedEvent::Error(msg) => {
                         error!("Core error: {}", msg);
                     }
-                    _ => {}
                 },
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                     warn!(
@@ -1162,6 +1231,13 @@ pub fn get_discovered_devices() -> Result<Vec<DiscoveredDevice>, ConnectedFfiErr
 pub fn clear_discovered_devices() -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
     client.clear_discovered_devices();
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn refresh_discovery() -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    client.refresh_discovery();
     Ok(())
 }
 
@@ -1432,19 +1508,6 @@ pub fn reject_file_transfer(transfer_id: String) -> Result<(), ConnectedFfiError
     client
         .reject_file_transfer(&transfer_id)
         .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn set_auto_accept_files(enabled: bool) -> Result<(), ConnectedFfiError> {
-    let client = get_client()?;
-    client.set_auto_accept_files(enabled);
-    Ok(())
-}
-
-#[uniffi::export]
-pub fn is_auto_accept_files() -> Result<bool, ConnectedFfiError> {
-    let client = get_client()?;
-    Ok(client.is_auto_accept_files())
 }
 
 #[uniffi::export]

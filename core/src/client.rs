@@ -6,42 +6,45 @@ use crate::file_transfer::{FileTransfer, TransferProgress};
 use crate::security::KeyStore;
 use crate::transport::{Message, QuicTransport, UnpairReason};
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+
+use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 type PendingTransferSender = oneshot::Sender<bool>;
+type PendingHandshakeMap = HashMap<IpAddr, (Instant, Option<String>)>;
 
-const EVENT_CHANNEL_CAPACITY: usize = 100;
+/// Capacity of the broadcast channel used for `ConnectedEvent`s.
+///
+/// A slow or stalled receiver (e.g. the UI poller) will miss events once the
+/// channel is full — `broadcast` drops the oldest unsent items and returns
+/// `RecvError::Lagged`.  512 gives a comfortable buffer for bursty discovery
+/// and transfer-progress events while keeping memory usage modest.
+const EVENT_CHANNEL_CAPACITY: usize = 512;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIRING_MODE_TIMEOUT: Duration = Duration::from_secs(120);
 
 static RUSTLS_PROVIDER_INIT: OnceLock<bool> = OnceLock::new();
 
-fn init_rustls_provider() -> Result<()> {
-    let result =
-        RUSTLS_PROVIDER_INIT.get_or_init(|| {
-            match rustls::crypto::ring::default_provider().install_default() {
-                Ok(()) => true,
-                Err(_already_installed) => true,
-            }
-        });
-
-    if *result {
-        Ok(())
-    } else {
-        Err(ConnectedError::InitializationError(
-            "Rustls crypto provider init failed".to_string(),
-        ))
-    }
+fn init_rustls_provider() {
+    RUSTLS_PROVIDER_INIT.get_or_init(|| {
+        // Both Ok (freshly installed) and Err (already installed by another call)
+        // are success cases — the provider is available either way.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        true
+    });
 }
+
+/// Maximum number of concurrent filesystem stream handlers.
+/// Each handler can buffer up to 8 MB per request, so this caps the worst-case
+/// memory consumption from FS streams at roughly MAX_CONCURRENT_FS_STREAMS × 8 MB.
+const MAX_CONCURRENT_FS_STREAMS: usize = 16;
 
 pub struct ConnectedClient {
     local_device: Device,
@@ -50,12 +53,17 @@ pub struct ConnectedClient {
     event_tx: broadcast::Sender<ConnectedEvent>,
     key_store: Arc<RwLock<KeyStore>>,
     download_dir: PathBuf,
-    auto_accept_files: Arc<AtomicBool>,
     pairing_mode_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     pending_transfers: Arc<RwLock<HashMap<String, PendingTransferSender>>>,
-    /// Track IPs we've sent handshakes to, so we can auto-trust their acks even if pairing mode times out
-    pending_handshakes: Arc<RwLock<HashSet<IpAddr>>>,
+    /// Track IPs we've sent handshakes to (with timestamp and expected peer fingerprint),
+    /// so we can auto-trust their acks even if pairing mode times out.
+    /// The Option<String> stores the peer's TLS fingerprint once known, to prevent
+    /// auto-trusting a different device that happens to share or spoof the same IP.
+    pending_handshakes: Arc<RwLock<PendingHandshakeMap>>,
     fs_provider: Arc<RwLock<Option<Box<dyn crate::filesystem::FilesystemProvider>>>>,
+    /// Global semaphore bounding concurrent filesystem stream handlers to prevent
+    /// memory exhaustion when many peers issue large read requests simultaneously.
+    fs_stream_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl ConnectedClient {
@@ -145,7 +153,7 @@ impl ConnectedClient {
         bind_ip: IpAddr,
         storage_path: Option<PathBuf>,
     ) -> Result<Arc<Self>> {
-        init_rustls_provider()?;
+        init_rustls_provider();
 
         // Load KeyStore first to get the persisted device_id
         let key_store = Arc::new(RwLock::new(KeyStore::new(storage_path.clone())?));
@@ -184,11 +192,11 @@ impl ConnectedClient {
             event_tx,
             key_store,
             download_dir,
-            auto_accept_files: Arc::new(AtomicBool::new(false)),
             pairing_mode_handle: Arc::new(RwLock::new(None)),
             pending_transfers: Arc::new(RwLock::new(HashMap::new())),
-            pending_handshakes: Arc::new(RwLock::new(HashSet::new())),
+            pending_handshakes: Arc::new(RwLock::new(HashMap::new())),
             fs_provider: Arc::new(RwLock::new(None)),
+            fs_stream_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FS_STREAMS)),
         });
 
         // 5. Start Background Tasks
@@ -214,6 +222,17 @@ impl ConnectedClient {
 
     pub fn clear_discovered_devices(&self) {
         self.discovery.clear_discovered_devices()
+    }
+
+    /// Lightweight discovery refresh: clears the stale device list and
+    /// re-announces ourselves on mDNS so that nearby peers re-discover us
+    /// (and the running browse loop re-discovers them).
+    pub fn refresh_discovery(&self) {
+        info!("Refreshing discovery — clearing stale devices and re-announcing");
+        self.discovery.clear_discovered_devices();
+        if let Err(e) = self.discovery.announce() {
+            warn!("Failed to re-announce during discovery refresh: {}", e);
+        }
     }
 
     pub fn inject_proximity_device(
@@ -280,10 +299,6 @@ impl ConnectedClient {
         }
     }
 
-    pub fn set_auto_accept_files(&self, enabled: bool) {
-        self.auto_accept_files.store(enabled, Ordering::SeqCst);
-    }
-
     pub fn register_filesystem_provider(
         &self,
         provider: Box<dyn crate::filesystem::FilesystemProvider>,
@@ -305,7 +320,8 @@ impl ConnectedClient {
         let req = FilesystemMessage::ListDirRequest { path };
         crate::file_transfer::send_message(&mut send, &req).await?;
 
-        let resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+        let resp: FilesystemMessage =
+            crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
 
         match resp {
             FilesystemMessage::ListDirResponse { entries } => Ok(entries),
@@ -332,7 +348,8 @@ impl ConnectedClient {
             path: remote_path.clone(),
         };
         crate::file_transfer::send_message(&mut send, &meta_req).await?;
-        let meta_resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+        let meta_resp: FilesystemMessage =
+            crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
 
         let file_size = match meta_resp {
             FilesystemMessage::GetMetadataResponse { entry } => entry.size,
@@ -361,7 +378,8 @@ impl ConnectedClient {
             };
             crate::file_transfer::send_message(&mut send, &req).await?;
 
-            let resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+            let resp: FilesystemMessage =
+                crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
 
             match resp {
                 FilesystemMessage::ReadFileResponse { data } => {
@@ -421,7 +439,8 @@ impl ConnectedClient {
             path: remote_path.clone(),
         };
         crate::file_transfer::send_message(&mut send, &meta_req).await?;
-        let meta_resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+        let meta_resp: FilesystemMessage =
+            crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
 
         let file_size = match meta_resp {
             FilesystemMessage::GetMetadataResponse { entry } => entry.size,
@@ -453,7 +472,8 @@ impl ConnectedClient {
             };
             crate::file_transfer::send_message(&mut send, &req).await?;
 
-            let resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+            let resp: FilesystemMessage =
+                crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
 
             match resp {
                 FilesystemMessage::ReadFileResponse { data } => {
@@ -532,17 +552,57 @@ impl ConnectedClient {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        // Pre-create all directories
-        for (file_remote_path, _) in &files {
-            let relative_path = if remote_parent.is_empty() {
-                file_remote_path.trim_start_matches('/').to_string()
+        // Helper: sanitize a relative path from the remote peer to prevent path traversal.
+        // Strips leading '/', removes '..' components, and verifies the result stays
+        // inside `base_dir`.
+        fn sanitize_relative_path(
+            raw: &str,
+            remote_parent: &str,
+            base_dir: &std::path::Path,
+        ) -> std::result::Result<String, ConnectedError> {
+            use std::path::{Component, Path};
+
+            let stripped = if remote_parent.is_empty() {
+                raw.trim_start_matches('/').to_string()
             } else {
-                file_remote_path
-                    .strip_prefix(&remote_parent)
-                    .unwrap_or(file_remote_path)
+                raw.strip_prefix(remote_parent)
+                    .unwrap_or(raw)
                     .trim_start_matches('/')
                     .to_string()
             };
+
+            // Normalize: keep only Normal components (reject ParentDir / RootDir / Prefix)
+            let safe: std::path::PathBuf = Path::new(&stripped)
+                .components()
+                .filter_map(|c| match c {
+                    Component::Normal(seg) => Some(seg),
+                    _ => None, // drop '..', '/', prefix, '.'
+                })
+                .collect();
+
+            if safe.as_os_str().is_empty() {
+                return Err(ConnectedError::Filesystem(
+                    "Remote path is empty after sanitization".to_string(),
+                ));
+            }
+
+            // Final safety check: the joined path must still be inside base_dir
+            let full = base_dir.join(&safe);
+            // Use lexical check (canonicalize may fail for not-yet-created paths)
+            if !full.starts_with(base_dir) {
+                return Err(ConnectedError::Filesystem(format!(
+                    "Path escapes target directory: {}",
+                    safe.display()
+                )));
+            }
+
+            Ok(safe.to_string_lossy().to_string())
+        }
+
+        // Pre-create all directories
+        for (file_remote_path, _) in &files {
+            let relative_path =
+                sanitize_relative_path(file_remote_path, &remote_parent, &local_path)?;
             let local_file_path = local_path.join(&relative_path);
             if let Some(parent) = local_file_path.parent() {
                 tokio::fs::create_dir_all(parent)
@@ -575,15 +635,9 @@ impl ConnectedClient {
                         .map_err(|_| ConnectedError::Protocol("Semaphore closed".to_string()))?;
 
                     // Calculate relative path INCLUDING the folder name
-                    let relative_path = if remote_parent.is_empty() {
-                        file_remote_path.trim_start_matches('/').to_string()
-                    } else {
-                        file_remote_path
-                            .strip_prefix(&remote_parent)
-                            .unwrap_or(&file_remote_path)
-                            .trim_start_matches('/')
-                            .to_string()
-                    };
+                    // Sanitize to prevent path traversal from malicious remote paths
+                    let relative_path =
+                        sanitize_relative_path(&file_remote_path, &remote_parent, &local_path)?;
                     let local_file_path = local_path.join(&relative_path);
 
                     let file_name = local_file_path
@@ -703,7 +757,8 @@ impl ConnectedClient {
             };
             crate::file_transfer::send_message(&mut send, &req).await?;
 
-            let resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+            let resp: FilesystemMessage =
+                crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
 
             match resp {
                 FilesystemMessage::ReadFileResponse { data } => {
@@ -743,11 +798,25 @@ impl ConnectedClient {
     ) -> Result<(Vec<(String, u64)>, u64)> {
         use crate::filesystem::FsEntryType;
 
+        // Limits to prevent enumeration DoS from a malicious peer that returns
+        // huge directory listings or deeply nested structures.
+        const MAX_FILES: usize = 50_000;
+        const MAX_DEPTH: usize = 64;
+
         let mut files = Vec::new();
         let mut total_size = 0u64;
-        let mut dirs_to_scan = vec![path.to_string()];
+        // Each entry is (path, current_depth)
+        let mut dirs_to_scan: Vec<(String, usize)> = vec![(path.to_string(), 0)];
 
-        while let Some(dir_path) = dirs_to_scan.pop() {
+        while let Some((dir_path, depth)) = dirs_to_scan.pop() {
+            if depth >= MAX_DEPTH {
+                warn!(
+                    "scan_remote_folder: skipping '{}' — max depth {} reached",
+                    dir_path, MAX_DEPTH
+                );
+                continue;
+            }
+
             let entries = self
                 .fs_list_dir(target_ip, target_port, dir_path.clone())
                 .await?;
@@ -757,9 +826,17 @@ impl ConnectedClient {
                     FsEntryType::File => {
                         files.push((entry.path, entry.size));
                         total_size += entry.size;
+
+                        if files.len() >= MAX_FILES {
+                            warn!(
+                                "scan_remote_folder: file limit {} reached, stopping scan",
+                                MAX_FILES
+                            );
+                            return Ok((files, total_size));
+                        }
                     }
                     FsEntryType::Directory => {
-                        dirs_to_scan.push(entry.path);
+                        dirs_to_scan.push((entry.path, depth + 1));
                     }
                     _ => {}
                 }
@@ -783,17 +860,14 @@ impl ConnectedClient {
         let req = FilesystemMessage::GetThumbnailRequest { path };
         crate::file_transfer::send_message(&mut send, &req).await?;
 
-        let resp: FilesystemMessage = crate::file_transfer::recv_message(&mut recv).await?;
+        let resp: FilesystemMessage =
+            crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
 
         match resp {
             FilesystemMessage::GetThumbnailResponse { data } => Ok(data),
             FilesystemMessage::Error { message } => Err(ConnectedError::Protocol(message)),
             _ => Err(ConnectedError::Protocol("Unexpected response".to_string())),
         }
-    }
-
-    pub fn is_auto_accept_files(&self) -> bool {
-        self.auto_accept_files.load(Ordering::SeqCst)
     }
 
     pub fn is_pairing_mode(&self) -> bool {
@@ -922,8 +996,12 @@ impl ConnectedClient {
             self.set_pairing_mode(true);
         }
 
-        // Track this as a pending handshake so we can auto-trust acks even if pairing mode times out
-        self.pending_handshakes.write().insert(target_ip);
+        // Track this as a pending handshake so we can auto-trust acks even if pairing mode times out.
+        // The fingerprint is initially None and will be filled in by send_handshake_internal
+        // once the TLS connection is established and the peer's cert is available.
+        self.pending_handshakes
+            .write()
+            .insert(target_ip, (Instant::now(), None));
 
         // Try to send the handshake.
         // If the connection is stale, send_handshake_internal (specifically open_stream) will likely fail.
@@ -991,6 +1069,14 @@ impl ConnectedClient {
             );
         }
 
+        // Store the peer fingerprint in the pending handshake entry so the
+        // background handler can verify it when auto-trusting acks/handshakes.
+        if let Some(ref fp) = peer_fingerprint
+            && let Some(entry) = self.pending_handshakes.write().get_mut(&addr.ip())
+        {
+            entry.1 = Some(fp.clone());
+        }
+
         let msg = Message::Handshake {
             device_id: self.local_device.id.clone(),
             device_name: self.local_device.name.clone(),
@@ -1033,11 +1119,51 @@ impl ConnectedClient {
             match read_result {
                 Ok(msg) => return Ok(msg),
                 Err(e) => {
-                    // Stream closed or error - this is expected when receiver shows pairing dialog
-                    // The receiver will send trust confirmation on a NEW stream
-                    // We need to wait and periodically check if we've been trusted
+                    // Distinguish connection-level failures (TLS rejection, connection
+                    // closed) from stream-level events (receiver closed the stream to
+                    // show a pairing dialog).  If the QUIC connection itself is gone,
+                    // there is no point entering the polling loop — the remote device
+                    // will never send a trust confirmation on this connection.
+                    let connection_lost = match &e {
+                        ConnectedError::QuicRead(read_exact_err) => {
+                            matches!(
+                                read_exact_err,
+                                quinn::ReadExactError::ReadError(quinn::ReadError::ConnectionLost(
+                                    _
+                                ))
+                            )
+                        }
+                        ConnectedError::QuicReadChunk(quinn::ReadError::ConnectionLost(_)) => true,
+                        ConnectedError::QuicConnection(_) => true,
+                        _ => false,
+                    };
+
+                    if connection_lost {
+                        let err_str = e.to_string();
+                        warn!(
+                            "Connection lost during handshake to {}: {}",
+                            target_addr, err_str
+                        );
+
+                        let user_msg = if err_str.contains("pairing mode")
+                            || err_str.contains("Unknown client")
+                        {
+                            "Remote device rejected the connection — \
+                             enable pairing mode on the remote device and try again."
+                                .to_string()
+                        } else {
+                            format!("Connection lost during handshake: {}", err_str)
+                        };
+
+                        return Err(ConnectedError::PairingFailed(user_msg));
+                    }
+
+                    // Stream closed but connection still alive — this is expected
+                    // when the receiver shows a pairing dialog.  The receiver will
+                    // send trust confirmation on a NEW stream; poll periodically.
                     info!(
-                        "Stream closed (receiver likely showing pairing dialog), waiting for trust confirmation: {}",
+                        "Stream closed (receiver likely showing pairing dialog), \
+                         waiting for trust confirmation: {}",
                         e
                     );
                 }
@@ -1054,7 +1180,7 @@ impl ConnectedClient {
 
                 // Check if we are still pending
                 // If we are NOT pending, it means the background handler processed an Ack or Reject
-                let is_pending = pending_handshakes.read().contains(&target_addr.ip());
+                let is_pending = pending_handshakes.read().contains_key(&target_addr.ip());
 
                 // Check if we've been trusted via background handler
                 // We check trust first to handle the Ack case
@@ -1067,7 +1193,8 @@ impl ConnectedClient {
                     let ks = key_store.read();
                     if ks.is_trusted(&fp) {
                         // Get actual device info from trusted peers
-                        let peer_info = ks.get_trusted_peers()
+                        let peer_info = ks
+                            .get_trusted_peers()
                             .iter()
                             .find(|p| p.fingerprint == fp)
                             .cloned();
@@ -1093,7 +1220,9 @@ impl ConnectedClient {
                 if !is_pending {
                     // Not pending and not trusted -> Rejected
                     info!("Pending handshake cleared but not trusted - assuming Rejected");
-                    return Err(ConnectedError::PairingFailed("Pairing rejected".to_string()));
+                    return Err(ConnectedError::PairingFailed(
+                        "Pairing rejected".to_string(),
+                    ));
                 }
 
                 // Check if overall timeout exceeded
@@ -1278,10 +1407,44 @@ impl ConnectedClient {
     }
 
     async fn send_clipboard_inner(&self, addr: SocketAddr, text: String) -> Result<()> {
+        // No clipboard size limit — the user's clipboard can be arbitrarily large
+        // (e.g. large code blocks, formatted text, etc.).  QUIC flow-control and
+        // the per-message framing already handle backpressure on the wire.
+
+        // Establish the connection / open a stream FIRST so that we have a live
+        // TLS session from which we can extract the peer's certificate fingerprint.
+        // Previously, the trust check ran before `open_stream`, which meant that
+        // after a restart (empty connection cache) the fingerprint was always None
+        // and every operation failed with PeerNotTrusted.
         let (mut send, _recv) = self
             .transport
             .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
             .await?;
+
+        // M3: Verify the target is a trusted peer before sending sensitive clipboard data.
+        // Now that the connection is established we can reliably read the fingerprint.
+        let fingerprint = self.transport.get_connection_fingerprint(addr).await;
+        match fingerprint {
+            Some(ref fp) if self.key_store.read().is_trusted(fp) => {
+                // Trusted — proceed
+            }
+            Some(ref fp) => {
+                warn!(
+                    "Refusing to send clipboard to untrusted peer {} (fingerprint: {})",
+                    addr, fp
+                );
+                let _ = send.finish();
+                return Err(ConnectedError::PeerNotTrusted);
+            }
+            None => {
+                warn!(
+                    "Refusing to send clipboard to {} — no TLS fingerprint available",
+                    addr
+                );
+                let _ = send.finish();
+                return Err(ConnectedError::PeerNotTrusted);
+            }
+        }
 
         let msg = Message::Clipboard { text };
 
@@ -1334,10 +1497,35 @@ impl ConnectedClient {
         addr: SocketAddr,
         msg: crate::transport::MediaControlMessage,
     ) -> Result<()> {
+        // Establish the connection first so the TLS fingerprint is available.
         let (mut send, _recv) = self
             .transport
             .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
             .await?;
+
+        // M3: Verify the target is a trusted peer before sending media control data.
+        let fingerprint = self.transport.get_connection_fingerprint(addr).await;
+        match fingerprint {
+            Some(ref fp) if self.key_store.read().is_trusted(fp) => {
+                // Trusted — proceed
+            }
+            Some(ref fp) => {
+                warn!(
+                    "Refusing to send media control to untrusted peer {} (fingerprint: {})",
+                    addr, fp
+                );
+                let _ = send.finish();
+                return Err(ConnectedError::PeerNotTrusted);
+            }
+            None => {
+                warn!(
+                    "Refusing to send media control to {} — no TLS fingerprint available",
+                    addr
+                );
+                let _ = send.finish();
+                return Err(ConnectedError::PeerNotTrusted);
+            }
+        }
 
         let msg = Message::MediaControl(msg);
 
@@ -1394,10 +1582,35 @@ impl ConnectedClient {
         addr: SocketAddr,
         msg: &crate::telephony::TelephonyMessage,
     ) -> Result<()> {
+        // Establish the connection first so the TLS fingerprint is available.
         let (mut send, _recv) = self
             .transport
             .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
             .await?;
+
+        // M3: Verify the target is a trusted peer before sending sensitive telephony data.
+        let fingerprint = self.transport.get_connection_fingerprint(addr).await;
+        match fingerprint {
+            Some(ref fp) if self.key_store.read().is_trusted(fp) => {
+                // Trusted — proceed
+            }
+            Some(ref fp) => {
+                warn!(
+                    "Refusing to send telephony data to untrusted peer {} (fingerprint: {})",
+                    addr, fp
+                );
+                let _ = send.finish();
+                return Err(ConnectedError::PeerNotTrusted);
+            }
+            None => {
+                warn!(
+                    "Refusing to send telephony data to {} — no TLS fingerprint available",
+                    addr
+                );
+                let _ = send.finish();
+                return Err(ConnectedError::PeerNotTrusted);
+            }
+        }
 
         let msg = Message::Telephony(msg.clone());
 
@@ -1430,6 +1643,9 @@ impl ConnectedClient {
         }
 
         let addr = SocketAddr::new(target_ip, target_port);
+        // Use connect_allow_unknown() so that files can be sent to discovered
+        // but not-yet-paired devices.  The *receiver* side enforces the
+        // accept/decline prompt for untrusted peers, so this is safe.
         let connection = self.transport.connect_allow_unknown(addr).await?;
 
         let event_tx = self.event_tx.clone();
@@ -1452,6 +1668,23 @@ impl ConnectedClient {
                             // Pending is only used for incoming transfers, skip for outgoing
                             continue;
                         }
+                        TransferProgress::CompressionProgress {
+                            filename,
+                            current_file,
+                            files_processed,
+                            total_files,
+                            bytes_processed,
+                            total_bytes,
+                            speed_bytes_per_sec,
+                        } => ConnectedEvent::CompressionProgress {
+                            filename,
+                            current_file,
+                            files_processed,
+                            total_files,
+                            bytes_processed,
+                            total_bytes,
+                            speed_bytes_per_sec,
+                        },
                         TransferProgress::Starting {
                             filename,
                             total_size,
@@ -1542,7 +1775,7 @@ impl ConnectedClient {
 
     /// Check if an IP has a pending outgoing handshake
     pub fn has_pending_handshake(&self, ip: &IpAddr) -> bool {
-        self.pending_handshakes.read().contains(ip)
+        self.pending_handshakes.read().contains_key(ip)
     }
 
     /// Forget a device - completely removes trust.
@@ -1807,13 +2040,20 @@ impl ConnectedClient {
             }
         });
 
-        // 0b. Periodic cleanup of stale pending handshakes
+        // 0b. Periodic cleanup of stale pending handshakes (remove entries older than 5 minutes)
         let pending_handshakes_cleanup = self.pending_handshakes.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                pending_handshakes_cleanup.write().clear();
+                let cutoff = Instant::now() - Duration::from_secs(300);
+                let mut hs = pending_handshakes_cleanup.write();
+                let before = hs.len();
+                hs.retain(|_, (ts, _)| *ts > cutoff);
+                let removed = before - hs.len();
+                if removed > 0 {
+                    debug!("Cleaned up {} stale pending handshakes", removed);
+                }
             }
         });
 
@@ -1905,11 +2145,20 @@ impl ConnectedClient {
                             transport.register_connection_alias(addr, listening_addr);
                         }
 
-                        let is_trusted = key_store.read().is_trusted(&fingerprint);
-                        let is_forgotten = key_store.read().is_forgotten(&fingerprint);
-                        let is_unpaired = key_store.read().is_unpaired(&fingerprint);
-                        let _needs_pairing = key_store.read().needs_pairing_request(&fingerprint);
-                        let has_pending = pending_handshakes.read().contains(&addr.ip());
+                        // Take a single KeyStore snapshot to avoid inconsistent state
+                        // between multiple separate reads (TOCTOU within the lock).
+                        let (is_trusted, is_forgotten, is_unpaired, _needs_pairing) = {
+                            let ks = key_store.read();
+                            (
+                                ks.is_trusted(&fingerprint),
+                                ks.is_forgotten(&fingerprint),
+                                ks.is_unpaired(&fingerprint),
+                                ks.needs_pairing_request(&fingerprint),
+                            )
+                        };
+                        // Retrieve the full pending entry (timestamp + expected fingerprint)
+                        let pending_entry = pending_handshakes.read().get(&addr.ip()).cloned();
+                        let has_pending = pending_entry.is_some();
 
                         // If forgotten, always require re-pairing approval (don't auto-trust)
                         if is_forgotten {
@@ -1925,7 +2174,16 @@ impl ConnectedClient {
                             continue;
                         }
 
-                        if (!is_trusted && has_pending) || is_unpaired {
+                        // If we have a pending handshake with a stored fingerprint,
+                        // verify it matches this connection's fingerprint to prevent
+                        // auto-trusting a different device that shares/spoofs the IP.
+                        let pending_fp_matches = match &pending_entry {
+                            Some((_, Some(expected_fp))) => *expected_fp == fingerprint,
+                            Some((_, None)) => true, // No fingerprint stored yet — allow
+                            None => false,
+                        };
+
+                        if (!is_trusted && has_pending && pending_fp_matches) || is_unpaired {
                             info!(
                                 "Auto-trusting peer from Handshake (pending outbound pairing or unpaired): {} - {}",
                                 device_name, fingerprint
@@ -2044,9 +2302,13 @@ impl ConnectedClient {
                     } => {
                         info!("Received HandshakeAck from {}", device_name);
 
-                        let is_trusted = key_store.read().is_trusted(&fingerprint);
-                        let is_forgotten = key_store.read().is_forgotten(&fingerprint);
-                        let has_pending = pending_handshakes.read().contains(&addr.ip());
+                        // Take a single KeyStore snapshot to avoid inconsistent state
+                        let (is_trusted, is_forgotten) = {
+                            let ks = key_store.read();
+                            (ks.is_trusted(&fingerprint), ks.is_forgotten(&fingerprint))
+                        };
+                        let pending_entry = pending_handshakes.read().get(&addr.ip()).cloned();
+                        let has_pending = pending_entry.is_some();
 
                         // If forgotten, require re-approval even for acks
                         if is_forgotten {
@@ -2063,19 +2325,22 @@ impl ConnectedClient {
                         }
 
                         if !is_trusted {
-                            // Auto-trust if:
-                            // 1. We're in pairing mode, OR
-                            // 2. We have a pending handshake to this IP (we initiated)
-                            let should_auto_trust =
-                                key_store.read().is_pairing_mode() || has_pending;
+                            // Only auto-trust if we have a pending outbound handshake to this IP
+                            // (i.e. WE initiated the pairing). Never auto-trust just because
+                            // pairing mode is enabled — that would allow an attacker to send an
+                            // unsolicited HandshakeAck and get trusted without user approval.
+                            // Verify the fingerprint matches our pending handshake
+                            // to prevent a different device from being auto-trusted.
+                            let pending_fp_matches = match &pending_entry {
+                                Some((_, Some(expected_fp))) => *expected_fp == fingerprint,
+                                Some((_, None)) => true, // No fingerprint stored yet — allow
+                                None => false,
+                            };
 
-                            if should_auto_trust {
+                            if has_pending && pending_fp_matches {
                                 info!(
-                                    "Auto-trusting peer from HandshakeAck: {} - {} (pairing_mode={}, pending={})",
-                                    device_name,
-                                    fingerprint,
-                                    key_store.read().is_pairing_mode(),
-                                    has_pending
+                                    "Auto-trusting peer from HandshakeAck: {} - {} (pending outbound handshake)",
+                                    device_name, fingerprint,
                                 );
 
                                 // Remove from pending handshakes
@@ -2103,9 +2368,9 @@ impl ConnectedClient {
                                     .upsert_device_endpoint(d.clone(), DiscoverySource::Connected);
                                 let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
                             } else {
-                                info!(
-                                    "Received HandshakeAck from {} - ignoring (not in pairing mode, no pending handshake)",
-                                    device_name
+                                warn!(
+                                    "Received unsolicited HandshakeAck from {} ({}) - ignoring (no pending outbound handshake)",
+                                    device_name, fingerprint
                                 );
                             }
                         } else {
@@ -2153,12 +2418,21 @@ impl ConnectedClient {
                         });
                     }
                     Message::Clipboard { text } => {
-                        let is_trusted = key_store.read().is_trusted(&fingerprint);
-                        if is_trusted {
-                            let from_device = key_store
-                                .read()
+                        // No clipboard size limit — the user's clipboard can be
+                        // arbitrarily large (e.g. large code blocks, formatted text).
+                        // Trust verification below ensures only trusted peers can
+                        // send clipboard data, and QUIC flow-control handles backpressure.
+
+                        // Single KeyStore snapshot for trust check + name lookup
+                        let (is_trusted, from_device) = {
+                            let ks = key_store.read();
+                            let trusted = ks.is_trusted(&fingerprint);
+                            let name = ks
                                 .get_peer_name(&fingerprint)
                                 .unwrap_or_else(|| "Unknown".to_string());
+                            (trusted, name)
+                        };
+                        if is_trusted {
                             let _ = event_tx.send(ConnectedEvent::ClipboardReceived {
                                 content: text,
                                 from_device,
@@ -2171,12 +2445,16 @@ impl ConnectedClient {
                         }
                     }
                     Message::MediaControl(media_msg) => {
-                        let is_trusted = key_store.read().is_trusted(&fingerprint);
-                        if is_trusted {
-                            let from_device = key_store
-                                .read()
+                        // Single KeyStore snapshot for trust check + name lookup
+                        let (is_trusted, from_device) = {
+                            let ks = key_store.read();
+                            let trusted = ks.is_trusted(&fingerprint);
+                            let name = ks
                                 .get_peer_name(&fingerprint)
                                 .unwrap_or_else(|| "Unknown".to_string());
+                            (trusted, name)
+                        };
+                        if is_trusted {
                             let _ = event_tx.send(ConnectedEvent::MediaControl {
                                 from_device,
                                 event: media_msg,
@@ -2184,12 +2462,16 @@ impl ConnectedClient {
                         }
                     }
                     Message::Telephony(telephony_msg) => {
-                        let is_trusted = key_store.read().is_trusted(&fingerprint);
-                        if is_trusted {
-                            let from_device = key_store
-                                .read()
+                        // Single KeyStore snapshot for trust check + name lookup
+                        let (is_trusted, from_device) = {
+                            let ks = key_store.read();
+                            let trusted = ks.is_trusted(&fingerprint);
+                            let name = ks
                                 .get_peer_name(&fingerprint)
                                 .unwrap_or_else(|| "Unknown".to_string());
+                            (trusted, name)
+                        };
+                        if is_trusted {
                             let _ = event_tx.send(ConnectedEvent::Telephony {
                                 from_device,
                                 from_ip: addr.ip().to_string(),
@@ -2198,15 +2480,48 @@ impl ConnectedClient {
                             });
                         }
                     }
-                    Message::DeviceUnpaired { device_id, reason } => {
-                        let device_name = key_store
-                            .read()
-                            .get_peer_name(&fingerprint)
-                            .unwrap_or_else(|| device_id.clone());
+                    Message::DeviceUnpaired {
+                        device_id: claimed_device_id,
+                        reason,
+                    } => {
+                        // Security fix (#2): Do NOT trust the sender's claimed device_id.
+                        // The TLS fingerprint is the only authenticated identity — use it
+                        // to look up the real device_id from our keystore.  A malicious
+                        // peer could send any device_id in the message to try to unpair
+                        // a different device on our side.
+                        let (resolved_device_id, device_name) = {
+                            let ks = key_store.read();
+                            match ks.get_peer_info(&fingerprint) {
+                                Some(info) => {
+                                    let did = info
+                                        .device_id
+                                        .clone()
+                                        .unwrap_or_else(|| claimed_device_id.clone());
+                                    let name = info.name.clone().unwrap_or_else(|| did.clone());
+
+                                    if info.device_id.as_deref() != Some(&claimed_device_id) {
+                                        warn!(
+                                            "DeviceUnpaired: sender claimed device_id '{}' but \
+                                             fingerprint {} maps to device_id '{}'.  Using \
+                                             authenticated id.",
+                                            claimed_device_id, fingerprint, did
+                                        );
+                                    }
+                                    (did, name)
+                                }
+                                None => {
+                                    warn!(
+                                        "DeviceUnpaired from unknown fingerprint {} (claimed {})",
+                                        fingerprint, claimed_device_id
+                                    );
+                                    (claimed_device_id.clone(), claimed_device_id.clone())
+                                }
+                            }
+                        };
 
                         match reason {
                             UnpairReason::Unpaired => {
-                                info!("Device {} unpaired (trust preserved)", device_id);
+                                info!("Device {} unpaired (trust preserved)", resolved_device_id);
                                 if let Err(e) = key_store.write().unpair_peer(fingerprint.clone()) {
                                     error!("Failed to mark peer as unpaired: {}", e);
                                 }
@@ -2222,7 +2537,7 @@ impl ConnectedClient {
                         transport.invalidate_connection(&addr);
 
                         let _ = event_tx.send(ConnectedEvent::DeviceUnpaired {
-                            device_id,
+                            device_id: resolved_device_id,
                             device_name,
                             reason,
                         });
@@ -2236,6 +2551,7 @@ impl ConnectedClient {
         // Handle Filesystem Streams
         let fs_provider_clone = self.fs_provider.clone();
         let key_store_fs = self.key_store.clone();
+        let fs_semaphore = self.fs_stream_semaphore.clone();
 
         tokio::spawn(async move {
             while let Some((fingerprint, mut send, mut recv)) = fs_rx.recv().await {
@@ -2249,13 +2565,31 @@ impl ConnectedClient {
                 }
 
                 let provider_ref = fs_provider_clone.clone();
+                let sem = fs_semaphore.clone();
 
                 tokio::spawn(async move {
-                    use crate::file_transfer::{recv_message, send_message};
+                    // Acquire a permit from the global FS-stream semaphore to
+                    // bound the number of concurrent handlers (and thus memory).
+                    let _permit = match sem.acquire().await {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            warn!(
+                                "FS stream semaphore closed, dropping stream from {}",
+                                fingerprint
+                            );
+                            return;
+                        }
+                    };
+                    use crate::file_transfer::send_message;
                     use crate::filesystem::FilesystemMessage;
 
                     loop {
-                        let msg: Result<FilesystemMessage> = recv_message(&mut recv).await;
+                        let msg: Result<FilesystemMessage> =
+                            crate::file_transfer::recv_message_with_limit(
+                                &mut recv,
+                                8 * 1024 * 1024,
+                            )
+                            .await;
                         match msg {
                             Ok(req) => {
                                 let provider = provider_ref.clone();
@@ -2289,16 +2623,22 @@ impl ConnectedClient {
                                             },
                                             FilesystemMessage::WriteFileRequest {
                                                 path,
-                                                offset,
-                                                data,
-                                            } => match p.write_file(&path, offset, &data) {
-                                                Ok(bytes) => FilesystemMessage::WriteFileResponse {
-                                                    bytes_written: bytes,
-                                                },
-                                                Err(e) => FilesystemMessage::Error {
-                                                    message: e.to_string(),
-                                                },
-                                            },
+                                                offset: _,
+                                                data: _,
+                                            } => {
+                                                // C4: Remote writes under $HOME are too dangerous.
+                                                // A trusted peer could overwrite ~/.ssh/authorized_keys,
+                                                // ~/.bashrc, crontabs, etc. Reject all remote writes
+                                                // until an explicit allowlist / user-confirmation flow
+                                                // is implemented.
+                                                warn!(
+                                                    "Rejected WriteFileRequest for '{}' — remote writes are disabled for security",
+                                                    path
+                                                );
+                                                FilesystemMessage::Error {
+                                                    message: "Remote file writes are disabled for security reasons".to_string(),
+                                                }
+                                            }
                                             FilesystemMessage::GetMetadataRequest { path } => {
                                                 match p.get_metadata(&path) {
                                                     Ok(entry) => {
@@ -2366,22 +2706,24 @@ impl ConnectedClient {
             let key_store = key_store_files;
             while let Some((fingerprint, send, recv)) = file_rx.recv().await {
                 let is_trusted = key_store.read().is_trusted(&fingerprint);
-                if !is_trusted {
-                    info!(
-                        "Allowing File Stream from untrusted peer (approval required): {}",
-                        fingerprint
-                    );
+
+                // Always reject blocked peers
+                if key_store.read().is_blocked(&fingerprint) {
+                    error!("Rejected File Stream from blocked peer: {}", fingerprint);
+                    continue;
                 }
 
                 let event_tx = event_tx.clone();
                 let download_dir = download_dir.clone();
                 let fingerprint_clone = fingerprint.clone();
+                // Paired (trusted) devices auto-accept file transfers;
+                // unpaired devices get an accept/decline prompt.
                 let should_auto_accept = is_trusted;
                 let pending = pending_transfers.clone();
                 let peer_name = key_store
                     .read()
                     .get_peer_name(&fingerprint)
-                    .unwrap_or_else(|| "Unknown".to_string());
+                    .unwrap_or_else(|| "Unknown device".to_string());
 
                 tokio::spawn(async move {
                     let transfer_id = uuid::Uuid::new_v4().to_string();
@@ -2444,7 +2786,31 @@ impl ConnectedClient {
                                         error,
                                     });
                                 }
-                                _ => {}
+                                TransferProgress::CompressionProgress {
+                                    filename,
+                                    current_file,
+                                    files_processed,
+                                    total_files,
+                                    bytes_processed,
+                                    total_bytes,
+                                    speed_bytes_per_sec,
+                                } => {
+                                    let _ = p_tx.send(ConnectedEvent::CompressionProgress {
+                                        filename,
+                                        current_file,
+                                        files_processed,
+                                        total_files,
+                                        bytes_processed,
+                                        total_bytes,
+                                        speed_bytes_per_sec,
+                                    });
+                                }
+                                TransferProgress::Cancelled => {
+                                    let _ = p_tx.send(ConnectedEvent::TransferFailed {
+                                        id: tid.clone(),
+                                        error: "Cancelled".into(),
+                                    });
+                                }
                             }
                         }
                     });
@@ -2459,7 +2825,7 @@ impl ConnectedClient {
                     };
 
                     // Handle incoming file with auto-accept preference
-                    if let Err(e) = FileTransfer::handle_incoming(
+                    let result = FileTransfer::handle_incoming(
                         send,
                         recv,
                         download_dir,
@@ -2467,11 +2833,14 @@ impl ConnectedClient {
                         should_auto_accept,
                         accept_rx,
                     )
-                    .await
-                    {
+                    .await;
+
+                    // H3: Always clean up the pending transfer entry regardless of
+                    // success/failure/timeout to prevent stale entries from accumulating.
+                    pending.write().remove(&transfer_id);
+
+                    if let Err(e) = result {
                         error!("File receive failed: {}", e);
-                        // Clean up pending transfer on error
-                        pending.write().remove(&transfer_id);
                         let _ = event_tx.send(ConnectedEvent::TransferFailed {
                             id: transfer_id,
                             error: e.to_string(),
@@ -2505,45 +2874,67 @@ impl ConnectedClient {
 
     pub async fn broadcast_clipboard(&self, text: String) -> Result<usize> {
         let devices = self.get_discovered_devices();
-        let trusted_peers = self.key_store.read().get_trusted_peers();
-
-        // Create a set of trusted device IDs
-        let trusted_ids: std::collections::HashSet<String> = trusted_peers
-            .into_iter()
-            .filter_map(|p| p.device_id)
-            .collect();
 
         let mut tasks = Vec::new();
         let transport = self.transport.clone();
+        let key_store = self.key_store.clone();
 
         for device in devices {
-            if trusted_ids.contains(&device.id)
-                && let Some(ip) = device.ip_addr()
-            {
+            if let Some(ip) = device.ip_addr() {
                 let port = device.port;
                 let txt = text.clone();
                 let t = transport.clone();
+                let ks = key_store.clone();
 
                 tasks.push(tokio::spawn(async move {
                     let addr = SocketAddr::new(ip, port);
-                    match t
+
+                    // Establish the connection / open a stream FIRST so the TLS
+                    // fingerprint is available for the trust check. Without a live
+                    // connection (e.g. after restart) the cache is empty and the
+                    // fingerprint would be None, skipping every device.
+                    let (mut send, _recv) = match t
                         .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
                         .await
                     {
-                        Ok((mut send, _recv)) => {
-                            let msg = Message::Clipboard { text: txt };
-                            if let Ok(data) = serde_json::to_vec(&msg) {
-                                let len_bytes = (data.len() as u32).to_be_bytes();
-                                // Ignore errors during broadcast to keep going
-                                let _ = send.write_all(&len_bytes).await;
-                                let _ = send.write_all(&data).await;
-                                let _ = send.finish(); // Don't await finish to avoid hanging if peer doesn't ack immediately (though for QUIC stream finish is usually fast)
-                                return true;
-                            }
-                        }
+                        Ok(stream) => stream,
                         Err(e) => {
-                            debug!("Failed to send clipboard to {}: {}", addr, e);
+                            debug!("Failed to open stream to {}: {}", addr, e);
+                            return false;
                         }
+                    };
+
+                    // Verify trust via TLS certificate fingerprint (not spoofable mDNS device IDs)
+                    let fingerprint = t.get_connection_fingerprint(addr).await;
+                    match fingerprint {
+                        Some(ref fp) if ks.read().is_trusted(fp) => {
+                            // Trusted via TLS fingerprint — safe to send
+                        }
+                        Some(ref fp) => {
+                            debug!(
+                                "Skipping broadcast to {} — untrusted fingerprint {}",
+                                addr, fp
+                            );
+                            let _ = send.finish();
+                            return false;
+                        }
+                        None => {
+                            debug!(
+                                "Skipping broadcast to {} — no TLS fingerprint available",
+                                addr
+                            );
+                            let _ = send.finish();
+                            return false;
+                        }
+                    }
+
+                    let msg = Message::Clipboard { text: txt };
+                    if let Ok(data) = serde_json::to_vec(&msg) {
+                        let len_bytes = (data.len() as u32).to_be_bytes();
+                        let _ = send.write_all(&len_bytes).await;
+                        let _ = send.write_all(&data).await;
+                        let _ = send.finish();
+                        return true;
                     }
                     false
                 }));
@@ -2588,6 +2979,11 @@ fn get_local_ip() -> Option<IpAddr> {
         "tap",
         "tun",
         "br-",
+        "wg",
+        "nordlynx",
+        "proton",
+        "mullvad",
+        "wireguard",
     ];
 
     ipv4_ifaces

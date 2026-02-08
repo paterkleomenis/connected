@@ -568,6 +568,17 @@ impl DiscoveryService {
         }
     }
 
+    /// Sanitize a device name from mDNS: strip control characters and limit length.
+    fn sanitize_device_name(raw: &str) -> String {
+        let sanitized: String = raw.chars().filter(|c| !c.is_control()).take(64).collect();
+        let trimmed = sanitized.trim();
+        if trimmed.is_empty() {
+            "Unknown".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
     fn handle_service_resolved(
         info: &ResolvedService,
         local_id: &str,
@@ -653,8 +664,8 @@ impl DiscoveryService {
 
         debug!("Processing remote device: id={}", device_id);
 
-        // Get device name from TXT or parse from instance
-        let device_name = info
+        // Get device name from TXT or parse from instance, then sanitize
+        let raw_name = info
             .txt_properties
             .get("name")
             .map(|v| v.val_str().to_string())
@@ -667,6 +678,7 @@ impl DiscoveryService {
                     "Unknown".to_string()
                 }
             });
+        let device_name = Self::sanitize_device_name(&raw_name);
 
         let device_type = info
             .txt_properties

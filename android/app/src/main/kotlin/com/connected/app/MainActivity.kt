@@ -41,6 +41,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -697,7 +701,6 @@ fun NotificationWarningCard(packageName: String) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     connectedApp: ConnectedApp,
@@ -705,7 +708,38 @@ fun HomeScreen(
     sendFolderLauncher: ActivityResultLauncher<Uri?>? = null
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var areNotificationsEnabled by remember { mutableStateOf(true) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    var pullOffset by remember { mutableStateOf(0f) }
+    val refreshThreshold = 160f
+
+    val nestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // When scrolling back up while pulled down, consume the scroll to reduce pullOffset
+                if (pullOffset > 0f && available.y < 0f) {
+                    val consumed = available.y.coerceAtLeast(-pullOffset)
+                    pullOffset += consumed
+                    return Offset(0f, consumed)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                // When at top of list and user pulls down, accumulate offset
+                if (available.y > 0f && source == NestedScrollSource.UserInput) {
+                    pullOffset = (pullOffset + available.y * 0.5f).coerceAtMost(refreshThreshold * 1.5f)
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+        }
+    }
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -733,32 +767,75 @@ fun HomeScreen(
             NotificationWarningCard(context.packageName)
         }
 
-        if (connectedApp.devices.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        painterResource(R.drawable.ic_nav_devices),
-                        contentDescription = "Searching",
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        "Searching for devices...",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .nestedScroll(nestedScrollConnection)
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Pull-to-refresh indicator
+                if (pullOffset > 0f || isRefreshing) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth()
+                            .height((pullOffset / refreshThreshold * 56f).coerceAtMost(56f).dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        } else {
+                            val progress = (pullOffset / refreshThreshold).coerceIn(0f, 1f)
+                            CircularProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
                 }
-            }
-        } else {
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                items(connectedApp.devices) { device ->
-                    DeviceItem(device, connectedApp, filePickerLauncher, sendFolderLauncher)
+
+                // Release detection
+                LaunchedEffect(pullOffset) {
+                    if (pullOffset <= 0f && !isRefreshing) return@LaunchedEffect
+                    // Use a small delay to detect when the user lifts their finger
+                    kotlinx.coroutines.delay(100)
+                    if (pullOffset >= refreshThreshold && !isRefreshing) {
+                        isRefreshing = true
+                        pullOffset = 0f
+                        connectedApp.refreshDeviceDiscovery()
+                        kotlinx.coroutines.delay(1500)
+                        isRefreshing = false
+                    } else if (!isRefreshing) {
+                        pullOffset = 0f
+                    }
+                }
+
+                if (connectedApp.devices.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                painterResource(R.drawable.ic_nav_devices),
+                                contentDescription = "Searching",
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "Searching for devices...",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        }
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(connectedApp.devices) { device ->
+                            DeviceItem(device, connectedApp, filePickerLauncher, sendFolderLauncher)
+                        }
+                    }
                 }
             }
         }

@@ -413,7 +413,8 @@ class TelephonyProvider(private val context: Context) {
                             timestamp = date.toULong(),
                             isOutgoing = isOutgoing,
                             isRead = read,
-                            status = mapSmsStatus(type, status)
+                            status = mapSmsStatus(type, status),
+                            attachments = emptyList()
                         )
                     )
                 }
@@ -705,7 +706,8 @@ class TelephonyProvider(private val context: Context) {
                                 timestamp = smsMessage.timestampMillis.toULong(),
                                 isOutgoing = false,
                                 isRead = false,
-                                status = SmsStatus.RECEIVED
+                                status = SmsStatus.RECEIVED,
+                                attachments = emptyList()
                             )
                             listener?.onNewSmsReceived(ffiMessage)
                         }

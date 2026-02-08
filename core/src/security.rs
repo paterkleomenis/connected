@@ -7,6 +7,92 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
+/// Restrict a file or directory so that only the current user can access it.
+///
+/// On Unix this is handled via `chmod 0600` (files) / `chmod 0700` (dirs) elsewhere.
+/// On Windows we use the built-in `icacls` command to:
+///   1. Reset/remove all inherited and explicit ACEs.
+///   2. Grant full control only to the current user (%USERNAME%).
+/// This avoids adding a heavy `windows-sys` dependency while achieving
+/// owner-only access semantics equivalent to Unix `0600`/`0700`.
+#[cfg(windows)]
+fn restrict_path_to_current_user(path: &std::path::Path) {
+    // Best-effort: log warnings on failure but don't abort — the application
+    // should still function even if ACLs cannot be set (e.g. network drives).
+    let path_str = match path.to_str() {
+        Some(s) => s.to_string(),
+        None => {
+            warn!(
+                "Cannot restrict ACLs for {:?}: path is not valid UTF-8",
+                path
+            );
+            return;
+        }
+    };
+
+    let username = match std::env::var("USERNAME") {
+        Ok(u) if !u.is_empty() => u,
+        _ => {
+            warn!("Cannot restrict ACLs: %USERNAME% environment variable not set");
+            return;
+        }
+    };
+
+    // Step 1: Remove inheritance and all existing ACEs.
+    //   /reset      — restores inherited ACEs and removes explicit ones
+    //   /inheritance:r — removes all inherited ACEs (leaves only explicit ones, but
+    //                    after /reset there are none explicit, so the DACL is empty)
+    // We run these as two separate commands for clarity and reliability.
+    // First, strip inheritance so the file/dir doesn't pick up parent ACEs.
+    let strip = std::process::Command::new("icacls")
+        .arg(&path_str)
+        .args(["/inheritance:r"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    match strip {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            warn!(
+                "icacls /inheritance:r failed for {:?} (exit code {:?})",
+                path,
+                status.code()
+            );
+            // Continue anyway — the grant below may still help tighten access.
+        }
+        Err(e) => {
+            warn!("Failed to run icacls for {:?}: {}", path, e);
+            return;
+        }
+    }
+
+    // Step 2: Grant full control to the current user only.
+    let grant = std::process::Command::new("icacls")
+        .arg(&path_str)
+        .arg("/grant")
+        .arg(format!("{}:(F)", username))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    match grant {
+        Ok(status) if status.success() => {
+            // Success — path is now restricted to current user only.
+        }
+        Ok(status) => {
+            warn!(
+                "icacls /grant failed for {:?} (exit code {:?})",
+                path,
+                status.code()
+            );
+        }
+        Err(e) => {
+            warn!("Failed to run icacls /grant for {:?}: {}", path, e);
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum PeerStatus {
     /// Device is trusted and can connect/transfer freely
@@ -15,6 +101,8 @@ pub enum PeerStatus {
     Unpaired,
     /// Device was forgotten - completely removed, requires full pairing request flow
     Forgotten,
+    /// Device is blocked - all connections and data exchange are rejected
+    Blocked,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -40,6 +128,7 @@ pub struct KeyStore {
     known_peers: KnownPeers,
     storage_dir: PathBuf,
     pairing_mode: bool,
+    blocked_peers: std::collections::HashSet<String>,
 }
 
 impl KeyStore {
@@ -58,8 +147,32 @@ impl KeyStore {
             std::fs::create_dir_all(&storage_dir).map_err(ConnectedError::Io)?;
         }
 
+        // Restrict the storage directory itself so other users cannot list or
+        // read identity/peer files. On Unix this is 0700; on Windows we set an
+        // owner-only ACL.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o700);
+            if let Err(e) = std::fs::set_permissions(&storage_dir, perms) {
+                warn!("Failed to set storage directory permissions: {}", e);
+            }
+        }
+        #[cfg(windows)]
+        {
+            restrict_path_to_current_user(&storage_dir);
+        }
+
         let (cert, key, device_id) = Self::load_or_create_identity(&storage_dir)?;
         let known_peers = Self::load_known_peers(&storage_dir)?;
+
+        // Build blocked peers set from known peers for fast TLS-level lookups
+        let blocked_peers: std::collections::HashSet<String> = known_peers
+            .peers
+            .iter()
+            .filter(|(_, p)| p.status == PeerStatus::Blocked)
+            .map(|(fp, _)| fp.clone())
+            .collect();
 
         Ok(Self {
             cert,
@@ -68,12 +181,39 @@ impl KeyStore {
             known_peers,
             storage_dir,
             pairing_mode: false,
+            blocked_peers,
         })
     }
 
     pub fn device_id(&self) -> &str {
         &self.device_id
     }
+
+    /// Verify identity file permissions on load and warn if too permissive
+    #[cfg(unix)]
+    fn check_identity_permissions(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                warn!(
+                    "Identity file {:?} has overly permissive permissions ({:o}). \
+                     Expected 0600 (owner-only). Consider running: chmod 600 {:?}",
+                    path, mode, path
+                );
+            }
+        }
+    }
+
+    /// On Windows, verify/apply ACL restrictions on identity files.
+    #[cfg(windows)]
+    fn check_identity_permissions(path: &std::path::Path) {
+        restrict_path_to_current_user(path);
+    }
+
+    /// No-op on platforms that are neither Unix nor Windows.
+    #[cfg(not(any(unix, windows)))]
+    fn check_identity_permissions(_path: &std::path::Path) {}
 
     fn load_or_create_identity(
         storage_dir: &std::path::Path,
@@ -103,7 +243,31 @@ impl KeyStore {
         };
         let data = serde_json::to_vec_pretty(&persisted)
             .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
-        std::fs::write(&identity_path, data).map_err(ConnectedError::Io)?;
+
+        // Atomic write: write to temp file, set permissions, fsync, then rename.
+        // This prevents a half-written identity file if the process crashes mid-write.
+        let tmp_path = identity_path.with_extension("json.tmp");
+        std::fs::write(&tmp_path, &data).map_err(ConnectedError::Io)?;
+
+        // Restrict permissions to owner-only to protect the private key
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            std::fs::set_permissions(&tmp_path, perms).map_err(ConnectedError::Io)?;
+        }
+        #[cfg(windows)]
+        {
+            restrict_path_to_current_user(&tmp_path);
+        }
+
+        // fsync to ensure data is durable before rename
+        {
+            let f = std::fs::File::open(&tmp_path).map_err(ConnectedError::Io)?;
+            f.sync_all().map_err(ConnectedError::Io)?;
+        }
+
+        std::fs::rename(&tmp_path, &identity_path).map_err(ConnectedError::Io)?;
 
         Ok((
             CertificateDer::from(cert_der),
@@ -115,25 +279,50 @@ impl KeyStore {
     fn load_identity_der(
         path: &std::path::Path,
     ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>, String)> {
+        // Check permissions on existing identity file
+        #[cfg(unix)]
+        Self::check_identity_permissions(path);
+
         let data = std::fs::read(path).map_err(ConnectedError::Io)?;
-        let persisted: PersistedIdentityDer = serde_json::from_slice(&data).map_err(|e| {
+        let mut persisted: PersistedIdentityDer = serde_json::from_slice(&data).map_err(|e| {
             ConnectedError::InitializationError(format!("Failed to parse identity: {}", e))
         })?;
 
-        // Check if device_id was missing (generated by serde default)
-        // We need to check the raw JSON to see if it was actually present
-        let raw_json: serde_json::Value = serde_json::from_slice(&data).unwrap_or_default();
-        let had_device_id = raw_json.get("device_id").is_some();
+        // Check if device_id was missing or empty (legacy file without the field).
+        // The serde default now produces an empty string as a sentinel rather than
+        // a random UUID, so we can detect the legacy case without double-parsing.
+        let had_device_id = !persisted.device_id.is_empty();
 
         if !had_device_id {
-            // device_id was generated by default, save it back to persist it
+            // Derive a *deterministic* id from the certificate so that repeated
+            // loads (e.g. concurrent processes, or a crash before the save below)
+            // always produce the same value.
+            persisted.device_id = deterministic_device_id(&persisted.cert_der);
             info!(
-                "Legacy identity file missing device_id, persisting generated id: {}",
+                "Legacy identity file missing device_id, persisting deterministic id: {}",
                 persisted.device_id
             );
             let updated_data = serde_json::to_vec_pretty(&persisted)
                 .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
-            std::fs::write(path, updated_data).map_err(ConnectedError::Io)?;
+
+            // Atomic write: write to temp file, set permissions, fsync, then rename.
+            // This prevents corruption if the process crashes mid-write.
+            let tmp_path = path.with_extension("json.tmp");
+            std::fs::write(&tmp_path, &updated_data).map_err(ConnectedError::Io)?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let perms = std::fs::Permissions::from_mode(0o600);
+                let _ = std::fs::set_permissions(&tmp_path, perms);
+            }
+
+            {
+                let f = std::fs::File::open(&tmp_path).map_err(ConnectedError::Io)?;
+                f.sync_all().map_err(ConnectedError::Io)?;
+            }
+
+            std::fs::rename(&tmp_path, path).map_err(ConnectedError::Io)?;
         }
 
         Ok((
@@ -175,8 +364,34 @@ impl KeyStore {
     fn save_peers(&self) -> Result<()> {
         let data = serde_json::to_vec_pretty(&self.known_peers)
             .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
-        std::fs::write(self.storage_dir.join("known_peers.json"), data)
-            .map_err(ConnectedError::Io)?;
+
+        // M4: Atomic write — write to temp file, fsync, then rename over the target
+        let final_path = self.storage_dir.join("known_peers.json");
+        let tmp_path = self.storage_dir.join("known_peers.json.tmp");
+
+        std::fs::write(&tmp_path, &data).map_err(ConnectedError::Io)?;
+
+        // Set owner-only permissions on the temp file before rename
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            if let Err(e) = std::fs::set_permissions(&tmp_path, perms) {
+                warn!("Failed to set permissions on known_peers temp file: {}", e);
+            }
+        }
+        #[cfg(windows)]
+        {
+            restrict_path_to_current_user(&tmp_path);
+        }
+
+        // fsync the temp file to ensure data is durable before rename
+        {
+            let f = std::fs::File::open(&tmp_path).map_err(ConnectedError::Io)?;
+            f.sync_all().map_err(ConnectedError::Io)?;
+        }
+
+        std::fs::rename(&tmp_path, &final_path).map_err(ConnectedError::Io)?;
         Ok(())
     }
 
@@ -241,6 +456,53 @@ impl KeyStore {
         } else {
             Ok(())
         }
+    }
+
+    /// Block a peer - reject all connections and data exchange at TLS level
+    pub fn block_peer(&mut self, fingerprint: String) -> Result<()> {
+        if let Some(peer) = self.known_peers.peers.get_mut(&fingerprint) {
+            peer.status = PeerStatus::Blocked;
+            peer.last_seen = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+        } else {
+            self.known_peers.peers.insert(
+                fingerprint.clone(),
+                PeerInfo {
+                    fingerprint: fingerprint.clone(),
+                    status: PeerStatus::Blocked,
+                    device_id: None,
+                    name: None,
+                    last_seen: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                },
+            );
+        }
+        self.blocked_peers.insert(fingerprint);
+        self.save_peers()
+    }
+
+    /// Unblock a peer - removes blocked status (reverts to forgotten, requiring re-pairing)
+    pub fn unblock_peer(&mut self, fingerprint: String) -> Result<()> {
+        self.blocked_peers.remove(&fingerprint);
+        if let Some(peer) = self.known_peers.peers.get_mut(&fingerprint) {
+            peer.status = PeerStatus::Forgotten;
+            peer.last_seen = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            self.save_peers()
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Check if a peer is blocked (fast lookup for TLS-level enforcement)
+    pub fn is_blocked(&self, fingerprint: &str) -> bool {
+        self.blocked_peers.contains(fingerprint)
     }
 
     /// Forget a peer - removes trust but keeps record to prevent auto-repairing
@@ -317,6 +579,15 @@ impl KeyStore {
         false
     }
 
+    pub fn get_blocked_peers(&self) -> Vec<PeerInfo> {
+        self.known_peers
+            .peers
+            .values()
+            .filter(|p| p.status == PeerStatus::Blocked)
+            .cloned()
+            .collect()
+    }
+
     /// Check if peer should trigger a pairing request (unknown or forgotten)
     pub fn needs_pairing_request(&self, fingerprint: &str) -> bool {
         match self.known_peers.peers.get(fingerprint) {
@@ -380,10 +651,24 @@ impl KeyStore {
 struct PersistedIdentityDer {
     cert_der: Vec<u8>,
     key_der: Vec<u8>,
-    #[serde(default = "default_device_id")]
+    /// Legacy identity files may lack this field.  The serde default produces an
+    /// empty string as a sentinel; `load_identity_der` then generates a
+    /// *deterministic* ID from the certificate hash and persists it.
+    ///
+    /// Previous code used `uuid::Uuid::new_v4()` here, which meant every
+    /// deserialization of a legacy file produced a *different* random ID — a
+    /// correctness bug if the save-back ever failed or if the file was read
+    /// concurrently.
+    #[serde(default)]
     device_id: String,
 }
 
-fn default_device_id() -> String {
-    uuid::Uuid::new_v4().to_string()
+/// Derive a stable, deterministic device-id from the certificate DER bytes.
+/// Uses UUID v5 (SHA-1 namespace hash) so the same certificate always yields
+/// the same id, even across multiple deserializations before the value is
+/// persisted.
+fn deterministic_device_id(cert_der: &[u8]) -> String {
+    // Use the UUID DNS namespace as a convenient, well-known namespace UUID.
+    let namespace = uuid::Uuid::NAMESPACE_DNS;
+    uuid::Uuid::new_v5(&namespace, cert_der).to_string()
 }

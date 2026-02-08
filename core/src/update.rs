@@ -1,7 +1,7 @@
 use crate::error::{ConnectedError, Result};
 use reqwest::header::LOCATION;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
@@ -138,18 +138,52 @@ fn github_release_download_url(tag: &str, asset_name: &str) -> String {
 
 fn is_arch_like() -> bool {
     // Best-effort detection so we can prefer AUR without breaking other distros.
-    let Ok(os_release) = std::fs::read_to_string("/etc/os-release") else {
+    // Properly parse /etc/os-release as KEY=VALUE pairs per the freedesktop spec
+    // instead of fragile substring matching that could false-positive on unrelated
+    // values (e.g. a PRETTY_NAME containing "arch" in another word).
+    let Ok(contents) = std::fs::read_to_string("/etc/os-release") else {
         return false;
     };
-    let os_release = os_release.to_lowercase();
-    os_release.contains("id=arch")
-        || os_release.contains("id_like=arch")
-        || os_release.contains("id_like=\"arch\"")
-        || os_release.contains("id_like=archlinux")
-        || os_release.contains("id_like=\"archlinux\"")
+
+    for line in contents.lines() {
+        let line = line.trim();
+        let Some((key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+
+        // Strip optional quotes around the value (single or double).
+        let value = raw_value
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_lowercase();
+
+        match key {
+            "ID" | "id" => {
+                if value == "arch" || value == "archlinux" {
+                    return true;
+                }
+            }
+            "ID_LIKE" | "id_like" => {
+                // ID_LIKE can be a space-separated list of distro identifiers.
+                for token in value.split_whitespace() {
+                    if token == "arch" || token == "archlinux" {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
 }
 
 /// Download an update asset to a local file path (streamed; avoids buffering the full payload).
+///
+/// Writes to a temporary file first, then atomically renames to `dest_path` to
+/// prevent partial/corrupt downloads from being used if the process crashes or
+/// the network drops mid-transfer. On Unix the temp file is created with
+/// owner-only permissions (0600).
 pub async fn download_to_file(url: &str, dest_path: &Path) -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent("Connected-App")
@@ -171,15 +205,56 @@ pub async fn download_to_file(url: &str, dest_path: &Path) -> Result<()> {
         )));
     }
 
-    let mut file = tokio::fs::File::create(dest_path).await?;
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| ConnectedError::Network(e.to_string()))?
-    {
-        file.write_all(&chunk).await?;
+    // Write to a temp file in the same directory so rename is atomic (same filesystem).
+    let tmp_path: PathBuf = {
+        let file_name = dest_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("download");
+        let tmp_name = format!(".{}.tmp.{}", file_name, std::process::id());
+        dest_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(tmp_name)
+    };
+
+    // Scope the file so it is closed (and flushed) before the rename.
+    let download_result: Result<()> = async {
+        let mut file = tokio::fs::File::create(&tmp_path).await?;
+
+        // Restrict temp file permissions to owner-only on Unix.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = std::fs::set_permissions(&tmp_path, perms);
+        }
+
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| ConnectedError::Network(e.to_string()))?
+        {
+            file.write_all(&chunk).await?;
+        }
+
+        file.flush().await?;
+        file.sync_all().await?;
+        Ok(())
+    }
+    .await;
+
+    if let Err(e) = download_result {
+        // Best-effort cleanup of the temp file on failure.
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(e);
     }
 
-    file.flush().await?;
+    // Atomic rename into place.
+    if let Err(e) = tokio::fs::rename(&tmp_path, dest_path).await {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(ConnectedError::Io(e));
+    }
+
     Ok(())
 }

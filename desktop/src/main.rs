@@ -338,6 +338,28 @@ fn main() {
     LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
 
+/// Consolidated UI-side media state.  Replaces four separate `use_signal`s that
+/// were all derived from the single `get_current_media()` global and updated
+/// together on every poll tick.
+#[derive(Clone, Debug, PartialEq)]
+struct CurrentMediaUi {
+    title: String,
+    artist: String,
+    playing: bool,
+    source_device_id: String,
+}
+
+impl Default for CurrentMediaUi {
+    fn default() -> Self {
+        Self {
+            title: "Not Playing".to_string(),
+            artist: String::new(),
+            playing: false,
+            source_device_id: "local".to_string(),
+        }
+    }
+}
+
 fn App() -> Element {
     // UI State
     let mut local_device_name =
@@ -360,10 +382,10 @@ fn App() -> Element {
     // Note: discovery_active is now tracked via global state in state.rs
     // (is_sdk_initialized() and is_discovery_active())
     let mut media_enabled = use_signal(get_media_enabled_setting);
-    let mut current_media_title = use_signal(|| "Not Playing".to_string());
-    let mut current_media_artist = use_signal(String::new);
-    let mut current_media_playing = use_signal(|| false);
-    let mut current_media_source_id = use_signal(|| "local".to_string());
+    // Fix #17: Consolidate four separate media signals into one struct signal.
+    // These were all derived from the same `get_current_media()` global state
+    // and updated together in the polling loop — four signals for one source.
+    let mut current_media = use_signal(CurrentMediaUi::default);
 
     // Pairing State
     let mut pairing_mode = use_signal(|| *get_pairing_mode_state().lock_or_recover());
@@ -595,16 +617,20 @@ fn App() -> Element {
                 }
             }
 
-            // Only update if devices changed (simple hash based on count + first/last id)
+            // Only update if devices changed
             let new_devices_hash = {
-                let count = list.len() as u64;
-                let first_id_hash = list.first().map(|d| d.id.len() as u64).unwrap_or(0);
-                let last_id_hash = list.last().map(|d| d.id.len() as u64).unwrap_or(0);
-                count
-                    .wrapping_mul(31)
-                    .wrapping_add(first_id_hash)
-                    .wrapping_mul(31)
-                    .wrapping_add(last_id_hash)
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                list.len().hash(&mut hasher);
+                for d in &list {
+                    d.id.hash(&mut hasher);
+                    d.name.hash(&mut hasher);
+                    d.ip.hash(&mut hasher);
+                    d.port.hash(&mut hasher);
+                    d.is_trusted.hash(&mut hasher);
+                    d.is_pending.hash(&mut hasher);
+                }
+                hasher.finish()
             };
             if new_devices_hash != last_devices_hash {
                 last_devices_hash = new_devices_hash;
@@ -712,25 +738,20 @@ fn App() -> Element {
             // Update Media State
             media_enabled.set(*get_media_enabled().lock_or_recover());
             if let Some(media) = get_current_media().lock_or_recover().clone() {
-                current_media_title.set(
-                    media
+                current_media.set(CurrentMediaUi {
+                    title: media
                         .state
                         .title
                         .unwrap_or_else(|| "Unknown Title".to_string()),
-                );
-                current_media_artist.set(
-                    media
+                    artist: media
                         .state
                         .artist
                         .unwrap_or_else(|| "Unknown Artist".to_string()),
-                );
-                current_media_playing.set(media.state.playing);
-                current_media_source_id.set(media.source_device_id);
+                    playing: media.state.playing,
+                    source_device_id: media.source_device_id,
+                });
             } else {
-                current_media_title.set("Not Playing".to_string());
-                current_media_artist.set(String::new());
-                current_media_playing.set(false);
-                current_media_source_id.set("local".to_string());
+                current_media.set(CurrentMediaUi::default());
             }
 
             pairing_mode.set(*get_pairing_mode_state().lock_or_recover());
@@ -955,7 +976,18 @@ fn App() -> Element {
                 if *active_tab.read() == "devices" && selected_device.read().is_none() {
                     div {
                         class: "content-header",
-                        h2 { "Nearby Devices" }
+                        div {
+                            style: "display: flex; align-items: center; gap: 12px;",
+                            h2 { "Nearby Devices" }
+                            button {
+                                class: "header-action-btn",
+                                title: "Refresh discovery",
+                                onclick: move |_| {
+                                    action_tx.send(AppAction::RefreshDevices);
+                                },
+                                Icon { icon: IconType::Refresh, size: 18, color: "currentColor".to_string() }
+                            }
+                        }
                         span { class: "content-subtitle", "{devices_list.read().len()} device(s) found" }
                     }
 
@@ -1348,15 +1380,15 @@ fn App() -> Element {
                                             // Show what's playing on the Android device
                                             div {
                                                 class: "media-info",
-                                                if current_media_title.read().as_str() == "Not Playing" || current_media_source_id.read().as_str() != device.id {
+                                                if current_media.read().title == "Not Playing" || current_media.read().source_device_id != device.id {
                                                     div { class: "muted", "No media playing on this device" }
                                                 } else {
                                                     div {
-                                                        div { class: "media-title", "{current_media_title}" }
-                                                        div { class: "media-artist", "{current_media_artist}" }
+                                                        div { class: "media-title", "{current_media.read().title}" }
+                                                        div { class: "media-artist", "{current_media.read().artist}" }
                                                         div {
                                                             class: "media-status",
-                                                            if *current_media_playing.read() {
+                                                            if current_media.read().playing {
                                                                 Icon { icon: IconType::Play, size: 12, color: "var(--success)".to_string() }
                                                                 span { " Playing" }
                                                             } else {

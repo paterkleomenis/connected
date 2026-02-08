@@ -1,5 +1,24 @@
 use serde::{Deserialize, Serialize};
 
+/// Custom serde module for encoding Vec<u8> as base64 strings in JSON.
+/// This avoids the default JSON serialization of Vec<u8> as an array of numbers,
+/// which causes ~4x size expansion and can easily exceed message size limits.
+mod base64_bytes {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(data: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        let encoded = STANDARD.encode(data);
+        encoded.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        STANDARD.decode(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum FsEntryType {
     File,
@@ -31,11 +50,13 @@ pub enum FilesystemMessage {
         size: u64,
     },
     ReadFileResponse {
-        data: Vec<u8>, // Using raw bytes for simplicity, could be optimized later
+        #[serde(with = "base64_bytes")]
+        data: Vec<u8>,
     },
     WriteFileRequest {
         path: String,
         offset: u64,
+        #[serde(with = "base64_bytes")]
         data: Vec<u8>,
     },
     WriteFileResponse {
@@ -47,9 +68,15 @@ pub enum FilesystemMessage {
     GetMetadataResponse {
         entry: FsEntry,
     },
+    /// NOTE: CreateDirRequest is intentionally not handled by the protocol dispatcher.
+    /// It exists as a protocol variant but is rejected at the handler level for security.
+    /// Do NOT enable without strong authorization and user-confirmation flow.
     CreateDirRequest {
         path: String,
     },
+    /// NOTE: DeleteRequest is intentionally not handled by the protocol dispatcher.
+    /// It exists as a protocol variant but is rejected at the handler level for security.
+    /// Do NOT enable without strong authorization and user-confirmation flow.
     DeleteRequest {
         path: String,
     },
@@ -57,6 +84,7 @@ pub enum FilesystemMessage {
         path: String,
     },
     GetThumbnailResponse {
+        #[serde(with = "base64_bytes")]
         data: Vec<u8>,
     },
     Error {

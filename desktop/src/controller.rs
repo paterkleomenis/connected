@@ -202,6 +202,7 @@ pub enum AppAction {
         action: CallAction,
     },
     RefreshDiscovery,
+    RefreshDevices,
     CheckForUpdates,
     PerformUpdate,
 }
@@ -232,7 +233,23 @@ fn spawn_event_loop(
         #[cfg(target_os = "linux")]
         let last_player_identity = Arc::new(std::sync::Mutex::new(None::<String>));
 
-        while let Ok(event) = events.recv().await {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                    warn!(
+                        "Event receiver lagged — dropped {} event(s). \
+                         Consider increasing EVENT_CHANNEL_CAPACITY if this recurs.",
+                        count
+                    );
+                    // Continue receiving; the channel is still usable after a lag.
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    info!("Event channel closed, stopping event loop");
+                    break;
+                }
+            };
             match event {
                 ConnectedEvent::DeviceFound(d) => {
                     let mut info: DeviceInfo = d.clone().into();
@@ -490,6 +507,34 @@ fn spawn_event_loop(
                                         use dbus::ffidisp::{BusType, Connection};
                                         use mpris::Player;
 
+                                        // Volume commands are system-level and don't need
+                                        // a media player.  Handle them via pactl before
+                                        // the MPRIS lookup so they work even when no
+                                        // player is running (matching the Windows path).
+                                        match cmd {
+                                            MediaCommand::VolumeUp => {
+                                                let _ = std::process::Command::new("pactl")
+                                                    .args([
+                                                        "set-sink-volume",
+                                                        "@DEFAULT_SINK@",
+                                                        "+5%",
+                                                    ])
+                                                    .spawn();
+                                                return;
+                                            }
+                                            MediaCommand::VolumeDown => {
+                                                let _ = std::process::Command::new("pactl")
+                                                    .args([
+                                                        "set-sink-volume",
+                                                        "@DEFAULT_SINK@",
+                                                        "-5%",
+                                                    ])
+                                                    .spawn();
+                                                return;
+                                            }
+                                            _ => {} // Playback commands need MPRIS below
+                                        }
+
                                         // Use cached MPRIS names to avoid repeated DBus queries
                                         let mpris_names = match get_cached_mpris_names() {
                                             Some(names) => names,
@@ -571,50 +616,28 @@ fn spawn_event_loop(
                                             );
 
                                             let res = match cmd {
-                                                MediaCommand::Play => player.play(),
-                                                MediaCommand::Pause => player.pause(),
-                                                MediaCommand::PlayPause => player.play_pause(),
-                                                MediaCommand::Next => player.next(),
-                                                MediaCommand::Previous => player.previous(),
-                                                MediaCommand::Stop => player.stop(),
-                                                MediaCommand::VolumeUp => {
-                                                    // Try MPRIS player volume first, fall back to system volume
-                                                    let current =
-                                                        player.get_volume().unwrap_or(-1.0);
-                                                    if current >= 0.0 {
-                                                        let _ = player
-                                                            .set_volume((current + 0.05).min(1.0));
-                                                    } else {
-                                                        // Fall back to system volume
-                                                        let _ = std::process::Command::new("pactl")
-                                                            .args([
-                                                                "set-sink-volume",
-                                                                "@DEFAULT_SINK@",
-                                                                "+5%",
-                                                            ])
-                                                            .spawn();
-                                                    }
-                                                    Ok(())
+                                                MediaCommand::Play => {
+                                                    player.checked_play().map(|_| ())
                                                 }
-                                                MediaCommand::VolumeDown => {
-                                                    // Try MPRIS player volume first, fall back to system volume
-                                                    let current =
-                                                        player.get_volume().unwrap_or(-1.0);
-                                                    if current >= 0.0 {
-                                                        let _ = player
-                                                            .set_volume((current - 0.05).max(0.0));
-                                                    } else {
-                                                        // Fall back to system volume
-                                                        let _ = std::process::Command::new("pactl")
-                                                            .args([
-                                                                "set-sink-volume",
-                                                                "@DEFAULT_SINK@",
-                                                                "-5%",
-                                                            ])
-                                                            .spawn();
-                                                    }
-                                                    Ok(())
+                                                MediaCommand::Pause => {
+                                                    player.checked_pause().map(|_| ())
                                                 }
+                                                MediaCommand::PlayPause => {
+                                                    player.checked_play_pause().map(|_| ())
+                                                }
+                                                MediaCommand::Next => {
+                                                    player.checked_next().map(|_| ())
+                                                }
+                                                MediaCommand::Previous => {
+                                                    player.checked_previous().map(|_| ())
+                                                }
+                                                MediaCommand::Stop => {
+                                                    player.checked_stop().map(|_| ())
+                                                }
+                                                // Volume commands are handled above via
+                                                // pactl before the MPRIS lookup.
+                                                MediaCommand::VolumeUp
+                                                | MediaCommand::VolumeDown => Ok(()),
                                             };
 
                                             if let Err(e) = res {
@@ -1078,7 +1101,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             "Offline transfer not supported. Connect to same network.",
                             "",
                         );
-                        return;
+                        continue;
                     }
                     let c = c.clone();
                     tokio::spawn(async move {
@@ -1096,7 +1119,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             "Offline transfer not supported. Connect to same network.",
                             "",
                         );
-                        return;
+                        continue;
                     }
                     debug!(
                         "Clipboard send requested to {}:{} (len: {})",
@@ -1157,7 +1180,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             "",
                         );
                         warn!("Offline pairing requested but not implemented for Linux");
-                        return;
+                        continue;
                     }
 
                     // Find device ID by IP/Port to add to pending
@@ -1706,7 +1729,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     if let Some(device) = device {
                         if device.ip == "0.0.0.0" {
                             warn!("Remote media control unavailable in offline mode");
-                            return;
+                            continue;
                         }
                         let c = c.clone();
                         tokio::spawn(async move {
@@ -1935,6 +1958,26 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     }
                 }
             }
+            AppAction::RefreshDevices => {
+                if let Some(c) = &client {
+                    info!("Lightweight discovery refresh requested by user");
+                    // Clear UI device store so user sees the refresh
+                    get_devices_store().lock_or_recover().clear();
+                    c.refresh_discovery();
+                    // Re-fetch after a short delay to let mDNS browse loop pick up responses
+                    let c_refresh = c.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        let discovered = c_refresh.get_discovered_devices();
+                        let mut store = get_devices_store().lock_or_recover();
+                        for d in discovered {
+                            let mut info: DeviceInfo = d.clone().into();
+                            info.is_trusted = c_refresh.is_device_trusted(&d.id);
+                            store.insert(info.id.clone(), info);
+                        }
+                    });
+                }
+            }
             AppAction::CheckForUpdates => {
                 tokio::spawn(async move {
                     let platform = if cfg!(target_os = "linux") {
@@ -1991,11 +2034,56 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                                 add_notification("Update", "Downloading installer...", "");
 
-                                let mut dest = std::env::temp_dir();
-                                dest.push(format!("connected-{}.msi", latest));
+                                // L1: Use a user-private temp directory instead of the shared
+                                // system temp to prevent local attackers from reading/replacing
+                                // the MSI before it is executed.
+                                let private_tmp = dirs::config_dir()
+                                    .map(|d| d.join("connected").join("tmp"))
+                                    .unwrap_or_else(std::env::temp_dir);
+                                let _ = std::fs::create_dir_all(&private_tmp);
+                                let dest = private_tmp.join(format!("connected-{}.msi", latest));
 
                                 match connected_core::download_to_file(&url, &dest).await {
                                     Ok(()) => {
+                                        // C6: Basic integrity check — verify the downloaded file
+                                        // looks like a valid MSI (non-empty, correct magic bytes).
+                                        // A full fix requires pinning a SHA-256 hash in release
+                                        // metadata or verifying the Authenticode signature.
+                                        let integrity_ok = (|| -> std::io::Result<bool> {
+                                            let meta = std::fs::metadata(&dest)?;
+                                            if meta.len() < 8 {
+                                                return Ok(false);
+                                            }
+                                            // MSI files (OLE2 Compound Documents) start with
+                                            // the magic bytes D0 CF 11 E0 A1 B1 1A E1
+                                            let mut f = std::fs::File::open(&dest)?;
+                                            let mut magic = [0u8; 8];
+                                            use std::io::Read;
+                                            f.read_exact(&mut magic)?;
+                                            let expected: [u8; 8] =
+                                                [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+                                            Ok(magic == expected)
+                                        })(
+                                        );
+
+                                        match integrity_ok {
+                                            Ok(false) | Err(_) => {
+                                                error!(
+                                                    "Downloaded MSI failed integrity check — aborting update"
+                                                );
+                                                let _ = std::fs::remove_file(&dest);
+                                                add_notification(
+                                                    "Update Failed",
+                                                    "Downloaded installer failed integrity check. The file may be corrupted or tampered with.",
+                                                    "",
+                                                );
+                                                return;
+                                            }
+                                            _ => {
+                                                info!("MSI magic-byte integrity check passed");
+                                            }
+                                        }
+
                                         let msi = dest.to_string_lossy().to_string();
                                         info!("Launching MSI installer: {}", msi);
 

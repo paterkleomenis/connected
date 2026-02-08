@@ -4,6 +4,7 @@ use connected_core::{Device, MediaState, UpdateInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::panic::Location;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -11,54 +12,74 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// Counter for tracking poison recovery events (useful for telemetry/debugging)
 static POISON_RECOVERY_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// Extension trait for Mutex that handles poisoning gracefully.
-/// If a thread panics while holding the lock, we recover the data
-/// rather than panicking ourselves (preventing cascading failures).
+/// Extension trait for `Mutex` that handles poisoning gracefully.
 ///
-/// NOTE: In debug builds, we panic to surface the underlying bug.
-/// In release builds, we recover to prevent cascading failures.
+/// When a thread panics while holding a `std::sync::Mutex`, the lock becomes
+/// "poisoned" and all subsequent `lock()` calls return `Err`.  Without
+/// recovery this causes a cascade of panics across every thread that touches
+/// the same mutex.
+///
+/// **Debug builds:** panic immediately so the root-cause bug surfaces early.
+/// **Release builds:** recover the inner data and continue.  The data may be
+/// in an inconsistent state, so the recovery counter should be monitored.
+///
+/// All methods are annotated with `#[track_caller]` so the log messages
+/// report the *caller's* source location rather than this trait impl.
 pub trait LockOrRecover<T> {
     fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T>;
 }
 
-/// Get the count of mutex poison recoveries (useful for monitoring/telemetry)
+/// Get the count of mutex poison recoveries (useful for monitoring/telemetry).
 #[allow(dead_code)]
 pub fn get_poison_recovery_count() -> usize {
     POISON_RECOVERY_COUNT.load(Ordering::Relaxed)
 }
 
 impl<T> LockOrRecover<T> for Mutex<T> {
+    #[track_caller]
     fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T> {
         match self.lock() {
             Ok(guard) => guard,
-            Err(_poisoned) => {
+            #[allow(unused_variables)]
+            Err(poisoned) => {
                 // A thread panicked while holding the lock.
-                // This indicates a serious bug - data may be inconsistent.
+                // This indicates a serious bug — data may be inconsistent.
                 let count = POISON_RECOVERY_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                let caller = Location::caller();
 
                 tracing::error!(
-                    "Mutex was poisoned (recovery #{})! This indicates a panic occurred while \
-                     holding the lock. Data may be inconsistent. Location: {}:{}",
-                    count,
-                    file!(),
-                    line!()
+                    "Mutex was poisoned (recovery #{count})! A panic occurred while \
+                     holding the lock. Data may be inconsistent. \
+                     Caller: {file}:{line}",
+                    count = count,
+                    file = caller.file(),
+                    line = caller.line(),
                 );
 
-                // In debug builds, fail to surface the bug early
+                // In debug builds, fail loudly to surface the bug early.
                 #[cfg(debug_assertions)]
                 {
                     tracing::error!("Backtrace: {:?}", std::backtrace::Backtrace::capture());
-                    panic!("Mutex poisoned - failing in debug mode to surface the underlying bug");
+                    panic!(
+                        "Mutex poisoned at {}:{} — failing in debug mode to surface the \
+                         underlying bug (recovery #{})",
+                        caller.file(),
+                        caller.line(),
+                        count,
+                    );
                 }
 
-                // In release builds, recover to prevent cascading panics
+                // In release builds, recover to prevent cascading panics.
                 #[cfg(not(debug_assertions))]
                 {
                     tracing::warn!(
-                        "Recovering from poisoned mutex in release mode. \
-                         Application state may be inconsistent."
+                        "Recovering from poisoned mutex in release mode (recovery #{count}, \
+                         caller: {file}:{line}). Application state may be inconsistent.",
+                        count = count,
+                        file = caller.file(),
+                        line = caller.line(),
                     );
-                    _poisoned.into_inner()
+                    poisoned.into_inner()
                 }
             }
         }
@@ -119,11 +140,52 @@ pub fn load_settings() -> AppSettings {
 
 pub fn save_settings(settings: &AppSettings) {
     let path = get_settings_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+    if let Some(parent) = path.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        tracing::error!("Failed to create settings directory: {}", e);
+        return;
     }
-    if let Ok(json) = serde_json::to_string_pretty(settings) {
-        let _ = fs::write(&path, json);
+    let json = match serde_json::to_string_pretty(settings) {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::error!("Failed to serialize settings: {}", e);
+            return;
+        }
+    };
+
+    // Atomic write: write to temp file, set permissions, fsync, then rename.
+    // This prevents a half-written settings file if the process crashes mid-write.
+    let tmp_path = path.with_extension("json.tmp");
+    if let Err(e) = fs::write(&tmp_path, &json) {
+        tracing::error!("Failed to write settings temp file: {}", e);
+        return;
+    }
+
+    // Restrict permissions to owner-only (0600) to protect settings data
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o600);
+        if let Err(e) = fs::set_permissions(&tmp_path, perms) {
+            tracing::warn!("Failed to set permissions on settings temp file: {}", e);
+        }
+    }
+
+    // fsync to ensure data is durable before rename
+    match fs::File::open(&tmp_path) {
+        Ok(f) => {
+            if let Err(e) = f.sync_all() {
+                tracing::warn!("Failed to fsync settings temp file: {}", e);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to open settings temp file for fsync: {}", e);
+        }
+    }
+
+    if let Err(e) = fs::rename(&tmp_path, &path) {
+        tracing::error!("Failed to rename settings temp file: {}", e);
     }
 }
 

@@ -21,6 +21,14 @@ impl DesktopFilesystemProvider {
         }
     }
 
+    /// Resolve and validate a user-supplied path, returning the **canonical** path.
+    ///
+    /// Returning the canonical path (rather than the un-canonicalized `full_path`)
+    /// eliminates a TOCTOU race: previously the canonical path was used only for
+    /// the containment check, while operations used `full_path`. An attacker could
+    /// insert a symlink between the check and the operation to escape the root.
+    /// Now the same canonical path is used for both validation and all subsequent
+    /// filesystem operations.
     fn resolve_path(&self, path: &str) -> Result<PathBuf> {
         let safe_path = path.trim_start_matches('/');
         if Path::new(safe_path)
@@ -60,7 +68,9 @@ impl DesktopFilesystemProvider {
             ));
         }
 
-        Ok(full_path)
+        // Return the canonical path so that all subsequent operations use the
+        // validated path, closing the TOCTOU window.
+        Ok(canonical)
     }
 }
 
@@ -73,15 +83,21 @@ impl FilesystemProvider for DesktopFilesystemProvider {
 
         for entry_result in read_dir {
             let entry = entry_result.map_err(connected_core::ConnectedError::Io)?;
+            let file_type = entry
+                .file_type()
+                .map_err(connected_core::ConnectedError::Io)?;
             let metadata = entry
                 .metadata()
                 .map_err(connected_core::ConnectedError::Io)?;
             let file_name = entry.file_name().to_string_lossy().to_string();
 
-            let entry_type = if metadata.is_dir() {
-                FsEntryType::Directory
-            } else if metadata.is_symlink() {
+            // Use file_type() (which does NOT follow symlinks) for type detection,
+            // rather than metadata() which follows symlinks and would misreport
+            // symlinks as regular files or directories.
+            let entry_type = if file_type.is_symlink() {
                 FsEntryType::Symlink
+            } else if file_type.is_dir() {
+                FsEntryType::Directory
             } else {
                 FsEntryType::File
             };
@@ -121,6 +137,17 @@ impl FilesystemProvider for DesktopFilesystemProvider {
             )));
         }
         let full_path = self.resolve_path(path)?;
+
+        // Verify the resolved path is a regular file (not a device node, socket,
+        // FIFO, etc.) to avoid reading from special files.
+        let meta = fs::symlink_metadata(&full_path).map_err(connected_core::ConnectedError::Io)?;
+        if !meta.is_file() {
+            return Err(connected_core::ConnectedError::Filesystem(format!(
+                "Not a regular file: {}",
+                full_path.display()
+            )));
+        }
+
         let mut file = fs::File::open(full_path).map_err(connected_core::ConnectedError::Io)?;
 
         use std::io::{Read, Seek, SeekFrom};
@@ -139,39 +166,36 @@ impl FilesystemProvider for DesktopFilesystemProvider {
         Ok(buffer)
     }
 
-    fn write_file(&self, path: &str, offset: u64, data: &[u8]) -> Result<u64> {
-        let full_path = self.resolve_path(path)?;
-
-        use std::io::{Seek, SeekFrom, Write};
-
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(full_path)
-            .map_err(connected_core::ConnectedError::Io)?;
-
-        file.seek(SeekFrom::Start(offset))
-            .map_err(connected_core::ConnectedError::Io)?;
-        file.write_all(data)
-            .map_err(connected_core::ConnectedError::Io)?;
-
-        Ok(data.len() as u64)
+    fn write_file(&self, _path: &str, _offset: u64, _data: &[u8]) -> Result<u64> {
+        // Defense-in-depth: Remote writes under $HOME are too dangerous.
+        // A trusted peer could overwrite ~/.ssh/authorized_keys, ~/.bashrc, crontabs, etc.
+        // The protocol dispatcher also rejects WriteFileRequest, but we enforce the policy
+        // here at the provider level too, so that even if the dispatcher guard is accidentally
+        // removed or bypassed, writes are still blocked.
+        Err(connected_core::ConnectedError::Filesystem(
+            "Remote file writes are disabled for security reasons".to_string(),
+        ))
     }
 
     fn get_metadata(&self, path: &str) -> Result<FsEntry> {
         let full_path = self.resolve_path(path)?;
-        let metadata = fs::metadata(&full_path).map_err(connected_core::ConnectedError::Io)?;
+        // Use symlink_metadata() instead of metadata() so that symlinks are correctly
+        // detected. fs::metadata() follows symlinks and would misreport them as regular
+        // files or directories, potentially allowing path escape / information leakage.
+        let metadata =
+            fs::symlink_metadata(&full_path).map_err(connected_core::ConnectedError::Io)?;
 
         let file_name = full_path
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
-        let entry_type = if metadata.is_dir() {
-            FsEntryType::Directory
-        } else if metadata.is_symlink() {
+        // Check symlink first since symlink_metadata does not follow symlinks,
+        // so is_symlink() will return true for symlinks.
+        let entry_type = if metadata.is_symlink() {
             FsEntryType::Symlink
+        } else if metadata.is_dir() {
+            FsEntryType::Directory
         } else {
             FsEntryType::File
         };
@@ -206,8 +230,24 @@ impl FilesystemProvider for DesktopFilesystemProvider {
             return Ok(Vec::new());
         }
 
+        // Maximum image dimensions we're willing to decode for thumbnail generation.
+        // Decoding extremely large images (e.g. 100000x100000) can exhaust memory.
+        const MAX_THUMBNAIL_DIMENSION: u32 = 16384;
+
         // We use a closure to map image errors to our error type
-        let generate = || -> std::result::Result<Vec<u8>, image::ImageError> {
+        let generate = || -> std::result::Result<Vec<u8>, Box<dyn std::error::Error>> {
+            // Check image dimensions before fully decoding to prevent memory exhaustion
+            // from extremely large images.
+            let reader = image::ImageReader::open(&full_path)?;
+            let (width, height) = reader.into_dimensions()?;
+            if width > MAX_THUMBNAIL_DIMENSION || height > MAX_THUMBNAIL_DIMENSION {
+                return Err(format!(
+                    "Image too large for thumbnail: {}x{} (max {}x{})",
+                    width, height, MAX_THUMBNAIL_DIMENSION, MAX_THUMBNAIL_DIMENSION
+                )
+                .into());
+            }
+
             let img = image::open(&full_path)?;
             let thumb = img.thumbnail(96, 96);
 

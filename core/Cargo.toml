@@ -31,6 +31,7 @@ mime_guess.workspace = true
 dirs = "6"
 sha2 = "0.10"
 if-addrs = "0.14"
+base64 = "0.22"
 blake3 = "1.8"
 unicode-normalization = "0.1"
 zip = { version = "7.2", default-features = false, features = [

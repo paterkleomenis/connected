@@ -10,8 +10,8 @@ use quinn::{
 use rustls::DistinguishedName;
 use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -21,7 +21,15 @@ use tracing::{debug, error, info, warn};
 const ALPN_PROTOCOL: &[u8] = b"connected/1";
 const PING_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_MESSAGE_SIZE: usize = 64 * 1024; // 64KB for control messages
+// 4 MB — telephony messages (contacts with photos, conversations, call logs)
+// routinely exceed 64 KB. The previous 64 KB limit caused silent drops of
+// valid telephony data. QUIC flow-control still bounds memory usage per stream.
+const MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
+
+/// M7: Maximum concurrent connections allowed from a single IP address.
+const MAX_CONNECTIONS_PER_IP: usize = 10;
+/// M7: Maximum total concurrent connections the server will accept.
+const MAX_TOTAL_CONNECTIONS: usize = 200;
 
 // LAN-optimized transport parameters
 const INITIAL_RTT_MS: u64 = 10;
@@ -128,7 +136,10 @@ impl ConnectionCache {
     fn canonicalize_addr(addr: &SocketAddr) -> SocketAddr {
         match addr.ip() {
             std::net::IpAddr::V6(v6) => {
-                if let Some(v4) = v6.to_ipv4() {
+                // Only map IPv4-mapped addresses (::ffff:x.x.x.x), NOT deprecated
+                // IPv4-compatible addresses (::x.x.x.x). `to_ipv4()` maps both,
+                // which could cause two distinct IPv6 peers to collide in the cache.
+                if let Some(v4) = v6.to_ipv4_mapped() {
                     SocketAddr::new(std::net::IpAddr::V4(v4), addr.port())
                 } else {
                     *addr
@@ -154,9 +165,18 @@ impl ConnectionCache {
     fn insert(&mut self, addr: SocketAddr, connection: Connection) {
         let key = Self::canonicalize_addr(&addr);
         let now = std::time::Instant::now();
-        let cutoff = now.checked_sub(Duration::from_secs(300)).unwrap_or(now);
-        self.connections
-            .retain(|_, v| v.last_used > cutoff && v.connection.close_reason().is_none());
+        // Same fix as cleanup_stale_connections: avoid evicting everything on
+        // fresh boot when checked_sub underflows.
+        let cutoff = now.checked_sub(Duration::from_secs(300));
+        self.connections.retain(|_, v| {
+            if v.connection.close_reason().is_some() {
+                return false;
+            }
+            if let Some(c) = cutoff {
+                return v.last_used > c;
+            }
+            true
+        });
 
         self.connections.insert(
             key,
@@ -172,6 +192,52 @@ impl ConnectionCache {
         if let Some(cached) = self.connections.get(&key) {
             let conn = cached.connection.clone();
             let alias_key = Self::canonicalize_addr(&alias_addr);
+
+            // Security: before clobbering an existing connection at the alias
+            // address, verify the TLS fingerprints match.  A malicious peer
+            // could claim any listening_port in its Handshake; without this
+            // check it could hijack another peer's cached connection slot.
+            if let Some(existing) = self.connections.get(&alias_key)
+                && existing.connection.stable_id() != conn.stable_id()
+                && existing.connection.close_reason().is_none()
+            {
+                let existing_fp = QuicTransport::get_peer_fingerprint(&existing.connection);
+                let new_fp = QuicTransport::get_peer_fingerprint(&conn);
+
+                match (&existing_fp, &new_fp) {
+                    (Some(efp), Some(nfp)) if efp == nfp => {
+                        // Both fingerprints known and identical — safe to replace.
+                        info!(
+                            "Closing existing connection at alias {} (replaced by alias from {}, same fingerprint)",
+                            alias_addr, original_addr
+                        );
+                        existing
+                            .connection
+                            .close(VarInt::from_u32(0), b"replaced by alias");
+                    }
+                    (Some(efp), Some(nfp)) => {
+                        // Both known but different — reject to prevent hijack.
+                        warn!(
+                            "Refusing alias {} -> {}: existing connection has different \
+                             fingerprint ({} vs {}). Possible hijack attempt.",
+                            alias_addr, original_addr, efp, nfp
+                        );
+                        return;
+                    }
+                    _ => {
+                        // One or both fingerprints unknown — refuse replacement to
+                        // prevent a malicious peer from hijacking a legitimate
+                        // connection slot by claiming an arbitrary listening_port.
+                        warn!(
+                            "Refusing alias {} -> {}: cannot verify fingerprints \
+                             (existing: {:?}, new: {:?}). Refusing replacement for safety.",
+                            alias_addr, original_addr, existing_fp, new_fp
+                        );
+                        return;
+                    }
+                }
+            }
+
             self.connections.insert(
                 alias_key,
                 CachedConnection {
@@ -194,6 +260,32 @@ impl ConnectionCache {
     }
 }
 
+/// RAII guard that removes an address from the `connecting` set on drop.
+/// Used to prevent TOCTOU races in `connect` / `connect_allow_unknown`.
+struct ConnectingGuard {
+    connecting: Arc<tokio::sync::Mutex<HashSet<SocketAddr>>>,
+    addr: SocketAddr,
+}
+
+impl Drop for ConnectingGuard {
+    fn drop(&mut self) {
+        // Try the fast, non-blocking path first.
+        if let Ok(mut set) = self.connecting.try_lock() {
+            set.remove(&self.addr);
+        } else {
+            // Lock is contended — spawn a background task to guarantee cleanup.
+            // Without this, the address leaks in the `connecting` set and all
+            // future connection attempts to it will hang waiting for a slot that
+            // is never freed.
+            let connecting = self.connecting.clone();
+            let addr = self.addr;
+            tokio::spawn(async move {
+                connecting.lock().await.remove(&addr);
+            });
+        }
+    }
+}
+
 pub struct QuicTransport {
     endpoint: Endpoint,
     local_id: String,
@@ -202,6 +294,10 @@ pub struct QuicTransport {
     connection_cache: Arc<RwLock<ConnectionCache>>,
     handlers: Arc<RwLock<Option<TransportHandlers>>>,
     key_store: Arc<RwLock<KeyStore>>,
+    /// Tracks addresses with an in-progress outbound connection attempt.
+    /// Prevents the TOCTOU race where two tasks both miss the cache and
+    /// create duplicate connections to the same address concurrently.
+    connecting: Arc<tokio::sync::Mutex<HashSet<SocketAddr>>>,
 }
 
 impl QuicTransport {
@@ -227,6 +323,7 @@ impl QuicTransport {
             connection_cache: Arc::new(RwLock::new(ConnectionCache::new())),
             handlers: Arc::new(RwLock::new(None)),
             key_store: key_store.clone(),
+            connecting: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         })
     }
 
@@ -300,7 +397,12 @@ impl QuicTransport {
             .with_single_cert(vec![cert.clone()], key.into())?;
 
         server_crypto.alpn_protocols = vec![ALPN_PROTOCOL.to_vec()];
-        server_crypto.max_early_data_size = u32::MAX;
+        // Security: Disable TLS 0-RTT early data to prevent replay attacks.
+        // Early data is not authenticated against replay — an attacker who captures
+        // a 0-RTT flight can re-send it to replay actions (file requests, clipboard
+        // pushes, telephony commands, etc.). Until all 0-RTT-eligible message types
+        // are proven idempotent, keep this disabled.
+        server_crypto.max_early_data_size = 0;
 
         let mut server_config = ServerConfig::with_crypto(Arc::new(
             quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)
@@ -329,7 +431,11 @@ impl QuicTransport {
             .with_client_auth_cert(vec![cert], key.into())?;
 
         client_crypto.alpn_protocols = vec![ALPN_PROTOCOL.to_vec()];
-        client_crypto.enable_early_data = true;
+        // Security: disable 0-RTT early data to prevent replay attacks.
+        // Early data is not authenticated against replay, so a network attacker
+        // could capture and re-send 0-RTT payloads (e.g. clipboard, file requests,
+        // telephony commands) to repeat actions without the user's knowledge.
+        client_crypto.enable_early_data = false;
 
         let mut client_config = ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
@@ -342,6 +448,9 @@ impl QuicTransport {
     }
 
     pub async fn connect(&self, addr: SocketAddr) -> Result<Connection> {
+        let canonical = ConnectionCache::canonicalize_addr(&addr);
+
+        // Fast path: reuse a cached connection.
         {
             let mut cache = self.connection_cache.write();
             if let Some(conn) = cache.get(&addr) {
@@ -349,6 +458,45 @@ impl QuicTransport {
                 return Ok(conn);
             }
         }
+        // cache guard is dropped here — no parking_lot guard held across awaits.
+
+        // Prevent TOCTOU race: if another task is already connecting to this
+        // address, wait for it to finish and then check the cache again.
+        let already_connecting = {
+            let mut in_progress = self.connecting.lock().await;
+            if in_progress.contains(&canonical) {
+                true
+            } else {
+                in_progress.insert(canonical);
+                false
+            }
+        };
+
+        if already_connecting {
+            // Another task is connecting — back off, then re-check the cache.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Re-check cache (separate scope so the guard is dropped before any await).
+            let cached = {
+                let mut cache = self.connection_cache.write();
+                cache.get(&addr)
+            };
+            if let Some(conn) = cached {
+                debug!(
+                    "Reusing connection to {} (created by concurrent task)",
+                    addr
+                );
+                return Ok(conn);
+            }
+            // Still no connection — claim the slot ourselves.
+            self.connecting.lock().await.insert(canonical);
+        }
+
+        // Guard: always remove from `connecting` when we leave this scope.
+        let _connecting_guard = ConnectingGuard {
+            connecting: self.connecting.clone(),
+            addr: canonical,
+        };
 
         info!("Establishing new QUIC connection to {}", addr);
 
@@ -383,6 +531,51 @@ impl QuicTransport {
     }
 
     pub async fn connect_allow_unknown(&self, addr: SocketAddr) -> Result<Connection> {
+        let canonical = ConnectionCache::canonicalize_addr(&addr);
+
+        // Fast path: reuse a cached connection.
+        {
+            let mut cache = self.connection_cache.write();
+            if let Some(conn) = cache.get(&addr) {
+                debug!("Reusing cached connection (allow_unknown) to {}", addr);
+                return Ok(conn);
+            }
+        }
+        // cache guard is dropped here — no parking_lot guard held across awaits.
+
+        // Prevent TOCTOU race (same pattern as `connect`).
+        let already_connecting = {
+            let mut in_progress = self.connecting.lock().await;
+            if in_progress.contains(&canonical) {
+                true
+            } else {
+                in_progress.insert(canonical);
+                false
+            }
+        };
+
+        if already_connecting {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            let cached = {
+                let mut cache = self.connection_cache.write();
+                cache.get(&addr)
+            };
+            if let Some(conn) = cached {
+                debug!(
+                    "Reusing connection (allow_unknown) to {} (created by concurrent task)",
+                    addr
+                );
+                return Ok(conn);
+            }
+            self.connecting.lock().await.insert(canonical);
+        }
+
+        let _connecting_guard = ConnectingGuard {
+            connecting: self.connecting.clone(),
+            addr: canonical,
+        };
+
         info!(
             "Establishing new QUIC connection (allow unknown) to {}",
             addr
@@ -412,6 +605,12 @@ impl QuicTransport {
             })?;
 
         info!("Connected to {} (RTT: {:?})", addr, connection.rtt());
+
+        // Insert into connection cache so subsequent requests reuse this connection
+        {
+            let mut cache = self.connection_cache.write();
+            cache.insert(addr, connection.clone());
+        }
 
         self.spawn_connection_handler(connection.clone(), addr);
 
@@ -513,10 +712,27 @@ impl QuicTransport {
         let mut cache = self.connection_cache.write();
         let before = cache.connections.len();
         let now = std::time::Instant::now();
-        let cutoff = now.checked_sub(Duration::from_secs(300)).unwrap_or(now);
-        cache
-            .connections
-            .retain(|_, v| v.last_used > cutoff && v.connection.close_reason().is_none());
+
+        // On a fresh boot, `Instant::now()` may be very close to the epoch,
+        // so `checked_sub` returns `None`.  Using `unwrap_or(now)` would set
+        // cutoff == now, making *every* connection look stale and wiping the
+        // cache.  Instead, skip time-based eviction when the uptime is too
+        // short; we still remove closed connections.
+        let cutoff = now.checked_sub(Duration::from_secs(300));
+
+        cache.connections.retain(|_, v| {
+            // Always remove connections that have been closed.
+            if v.connection.close_reason().is_some() {
+                return false;
+            }
+            // If uptime is long enough for a meaningful cutoff, evict stale entries.
+            if let Some(c) = cutoff {
+                return v.last_used > c;
+            }
+            // Uptime too short — keep the connection.
+            true
+        });
+
         let after = cache.connections.len();
         if before != after {
             debug!("Cleaned up {} stale connections", before - after);
@@ -630,15 +846,85 @@ impl QuicTransport {
         tokio::spawn(async move {
             info!("QUIC server started, waiting for connections");
 
+            // M7: Per-IP connection counts for rate-limiting
+            let ip_connection_counts: Arc<RwLock<std::collections::HashMap<IpAddr, usize>>> =
+                Arc::new(RwLock::new(std::collections::HashMap::new()));
+            let total_connections: Arc<std::sync::atomic::AtomicUsize> =
+                Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
             while let Some(incoming) = endpoint.accept().await {
+                let remote_ip = incoming.remote_address().ip();
+
+                // M7: Enforce global connection cap
+                let current_total = total_connections.load(std::sync::atomic::Ordering::Relaxed);
+                if current_total >= MAX_TOTAL_CONNECTIONS {
+                    warn!(
+                        "Global connection limit reached ({}), rejecting connection from {}",
+                        current_total, remote_ip
+                    );
+                    incoming.refuse();
+                    continue;
+                }
+
+                // M7: Enforce per-IP connection limit
+                {
+                    let counts = ip_connection_counts.read();
+                    if let Some(&count) = counts.get(&remote_ip)
+                        && count >= MAX_CONNECTIONS_PER_IP
+                    {
+                        warn!(
+                            "Per-IP connection limit reached ({}) for {}, rejecting",
+                            count, remote_ip
+                        );
+                        incoming.refuse();
+                        continue;
+                    }
+                }
+
+                // Increment counters
+                {
+                    let mut counts = ip_connection_counts.write();
+                    *counts.entry(remote_ip).or_insert(0) += 1;
+                }
+                total_connections.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
                 let tx = message_tx.clone();
                 let f_tx = file_stream_tx.clone();
                 let fs_tx = fs_stream_tx.clone();
                 let id = local_id.clone();
                 let cache = connection_cache.clone();
                 let ks = key_store.clone();
+                let ip_counts = ip_connection_counts.clone();
+                let total_conns = total_connections.clone();
 
                 tokio::spawn(async move {
+                    // Manual drop guard to decrement counters when this task finishes
+                    struct ConnectionGuard {
+                        ip: IpAddr,
+                        ip_counts: Arc<RwLock<std::collections::HashMap<IpAddr, usize>>>,
+                        total: Arc<std::sync::atomic::AtomicUsize>,
+                    }
+                    impl Drop for ConnectionGuard {
+                        fn drop(&mut self) {
+                            {
+                                let mut counts = self.ip_counts.write();
+                                if let Some(count) = counts.get_mut(&self.ip) {
+                                    *count = count.saturating_sub(1);
+                                    if *count == 0 {
+                                        counts.remove(&self.ip);
+                                    }
+                                }
+                            }
+                            self.total
+                                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    let _guard = ConnectionGuard {
+                        ip: remote_ip,
+                        ip_counts,
+                        total: total_conns,
+                    };
+
                     match incoming.accept() {
                         Ok(connecting) => match connecting.await {
                             Ok(connection) => {
@@ -966,10 +1252,10 @@ impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
         let ks = self.key_store.read();
 
         // Always reject blocked peers, regardless of pairing mode
-        // if ks.is_blocked(&fingerprint) {
-        //    warn!("Rejected BLOCKED peer: {}", fingerprint);
-        //    return Err(rustls::Error::General("Peer is blocked".to_string()));
-        // }
+        if ks.is_blocked(&fingerprint) {
+            warn!("Rejected BLOCKED peer: {}", fingerprint);
+            return Err(rustls::Error::General("Peer is blocked".to_string()));
+        }
 
         if ks.is_trusted(&fingerprint) {
             debug!("Accepted trusted peer: {}", fingerprint);
@@ -1071,10 +1357,10 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
         let ks = self.key_store.read();
 
         // Always reject blocked peers
-        // if ks.is_blocked(&fingerprint) {
-        //    warn!("Rejected BLOCKED client: {}", fingerprint);
-        //    return Err(rustls::Error::General("Client is blocked".to_string()));
-        // }
+        if ks.is_blocked(&fingerprint) {
+            warn!("Rejected BLOCKED client: {}", fingerprint);
+            return Err(rustls::Error::General("Client is blocked".to_string()));
+        }
 
         if ks.is_trusted(&fingerprint) {
             debug!("Accepted trusted client: {}", fingerprint);
@@ -1090,12 +1376,16 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
             return Ok(rustls::server::danger::ClientCertVerified::assertion());
         }
 
-        // Allow unknown clients to connect so we can show pairing dialog
-        // The trust decision is made at the application layer (user clicks Trust/Reject)
-        // NOT at the TLS layer. This enables incoming pairing requests to be received
-        // and displayed to the user regardless of pairing mode.
+        // Allow unknown clients to establish TLS connections so that pairing
+        // handshake messages can be delivered.  The application layer already
+        // enforces trust for every operation:
+        //   • Handshake   → shows a pairing dialog (requires user approval)
+        //   • Clipboard / MediaControl / Telephony → silently dropped if untrusted
+        //   • File / Filesystem streams → rejected if untrusted
+        // Blocking unknown clients here would prevent initial pairing from the
+        // remote side (the remote device has no way to enable our pairing mode).
         info!(
-            "Allowing unknown client to connect (will show pairing request): {}",
+            "Allowing unknown client (will require pairing approval): {}",
             fingerprint
         );
         Ok(rustls::server::danger::ClientCertVerified::assertion())

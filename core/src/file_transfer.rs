@@ -13,6 +13,8 @@ use uuid::Uuid;
 // We need to match transport constants
 const STREAM_TYPE_FILE: u8 = 2;
 const BUFFER_SIZE: usize = 1024 * 1024; // 1MB Buffer for I/O
+/// Maximum allowed incoming file size (100 GB). Transfers exceeding this are rejected.
+const MAX_INCOMING_FILE_SIZE: u64 = 100 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FileTransferMessage {
@@ -43,6 +45,16 @@ pub enum TransferProgress {
         filename: String,
         total_size: u64,
         mime_type: Option<String>,
+    },
+    /// Compression progress for folder transfers (emitted during ZIP archiving)
+    CompressionProgress {
+        filename: String,
+        current_file: String,
+        files_processed: u64,
+        total_files: u64,
+        bytes_processed: u64,
+        total_bytes: u64,
+        speed_bytes_per_sec: u64,
     },
     Starting {
         filename: String,
@@ -102,10 +114,29 @@ impl FileTransfer {
                 });
             }
 
-            // Run compression in blocking thread
+            // Run compression in blocking thread.
+            // Clone the progress sender so we can emit CompressionProgress events
+            // from inside the blocking closure (UnboundedSender::send is sync-safe).
+            let compression_progress_tx = progress_tx.clone();
+            let compression_filename = format!("{}.zip", dir_name);
             let temp_archive_path =
                 tokio::task::spawn_blocking(move || -> std::io::Result<std::path::PathBuf> {
-                    let temp_dir = std::env::temp_dir();
+                    // L1: Use a user-private temp directory instead of the shared
+                    // system temp dir to prevent local attackers from reading or
+                    // racing to replace the archive before it is sent.
+                    let temp_dir = dirs::config_dir()
+                        .map(|d| d.join("connected").join("tmp"))
+                        .unwrap_or_else(std::env::temp_dir);
+                    std::fs::create_dir_all(&temp_dir)?;
+
+                    // Restrict directory permissions to owner-only on Unix
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let perms = std::fs::Permissions::from_mode(0o700);
+                        let _ = std::fs::set_permissions(&temp_dir, perms);
+                    }
+
                     let archive_name = format!("connected-{}.zip", Uuid::new_v4());
                     let archive_path = temp_dir.join(archive_name);
 
@@ -115,12 +146,34 @@ impl FileTransfer {
                         .compression_method(zip::CompressionMethod::Deflated)
                         .unix_permissions(0o755);
 
-                    let walk_dir = walkdir::WalkDir::new(&dir_path);
-                    let it = walk_dir.into_iter();
+                    // Security: disable symlink following to prevent data exfiltration.
+                    // A symlink inside the directory could point to arbitrary files
+                    // (e.g. /etc/shadow, ~/.ssh/id_rsa) and silently include them in
+                    // the archive sent to the remote peer.
+                    let walk_dir = walkdir::WalkDir::new(&dir_path).follow_links(false);
 
-                    for entry in it {
-                        let entry = entry.map_err(std::io::Error::other)?;
+                    // Pre-collect entries for progress reporting (count and total size).
+                    let entries: Vec<walkdir::DirEntry> = walk_dir
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                        .filter(|e| !e.path_is_symlink())
+                        .collect();
+
+                    let total_files = entries.iter().filter(|e| e.path().is_file()).count() as u64;
+                    let total_bytes: u64 = entries
+                        .iter()
+                        .filter(|e| e.path().is_file())
+                        .filter_map(|e| e.metadata().ok())
+                        .map(|m| m.len())
+                        .sum();
+
+                    let mut files_processed: u64 = 0;
+                    let mut bytes_processed: u64 = 0;
+                    let compression_start = std::time::Instant::now();
+
+                    for entry in &entries {
                         let path = entry.path();
+
                         let name = path
                             .strip_prefix(dir_path.parent().unwrap_or(&dir_path))
                             .map_err(std::io::Error::other)?
@@ -128,10 +181,31 @@ impl FileTransfer {
                             .into_owned();
 
                         if path.is_file() {
-                            zip.start_file(name, options)
+                            zip.start_file(name.clone(), options)
                                 .map_err(std::io::Error::other)?;
                             let mut f = std::fs::File::open(path)?;
-                            std::io::copy(&mut f, &mut zip)?;
+                            let copied = std::io::copy(&mut f, &mut zip)?;
+                            files_processed += 1;
+                            bytes_processed += copied;
+
+                            // Emit compression progress
+                            let elapsed = compression_start.elapsed().as_secs_f64();
+                            let speed = if elapsed > 0.0 {
+                                (bytes_processed as f64 / elapsed) as u64
+                            } else {
+                                0
+                            };
+                            if let Some(ref tx) = compression_progress_tx {
+                                let _ = tx.send(TransferProgress::CompressionProgress {
+                                    filename: compression_filename.clone(),
+                                    current_file: name,
+                                    files_processed,
+                                    total_files,
+                                    bytes_processed,
+                                    total_bytes,
+                                    speed_bytes_per_sec: speed,
+                                });
+                            }
                         } else if !name.is_empty() {
                             zip.add_directory(name, options)
                                 .map_err(std::io::Error::other)?;
@@ -170,16 +244,17 @@ impl FileTransfer {
         };
         let file_size = metadata.len();
 
-        let filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| {
+        let filename = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name.to_string(),
+            None => {
                 if is_temp_file {
-                    // Try to clean up best effort, though we can't await easily in closure if we panic but here we are ok
+                    let _ = tokio::fs::remove_file(&path).await;
                 }
-                ConnectedError::InvalidAddress("Invalid filename".to_string())
-            })?
-            .to_string();
+                return Err(ConnectedError::InvalidAddress(
+                    "Invalid filename".to_string(),
+                ));
+            }
+        };
 
         let request_filename = preferred_filename
             .clone()
@@ -416,6 +491,26 @@ impl FileTransfer {
             filename, file_size
         );
 
+        // M2: Reject transfers that exceed the maximum allowed size to prevent disk exhaustion.
+        if file_size > MAX_INCOMING_FILE_SIZE {
+            let reject = FileTransferMessage::Reject {
+                reason: format!(
+                    "File too large: {} bytes exceeds maximum allowed {} bytes",
+                    file_size, MAX_INCOMING_FILE_SIZE
+                ),
+            };
+            let _ = send_message(&mut send, &reject).await;
+            if let Some(ref tx) = progress_tx {
+                let _ = tx.send(TransferProgress::Failed {
+                    error: format!("File too large ({} bytes)", file_size),
+                });
+            }
+            return Err(ConnectedError::TransferRejected(format!(
+                "File size {} exceeds maximum allowed {}",
+                file_size, MAX_INCOMING_FILE_SIZE
+            )));
+        }
+
         // If we need user approval, emit Pending first
         if !auto_accept && let Some(ref tx) = progress_tx {
             let _ = tx.send(TransferProgress::Pending {
@@ -622,6 +717,10 @@ impl FileTransfer {
         }
 
         writer.flush().await?;
+        // fsync to ensure data is durable on disk before confirming completion.
+        // Without this, a crash after flush but before the OS writes back dirty
+        // pages would leave a truncated/corrupt file despite a successful Ack.
+        writer.sync_all().await?;
 
         // Read Completion Message
         let complete: FileTransferMessage = recv_message(&mut recv).await?;
@@ -681,26 +780,68 @@ impl FileTransfer {
 /// Send a message over the stream
 pub(crate) async fn send_message<T: Serialize>(stream: &mut SendStream, message: &T) -> Result<()> {
     let data = serde_json::to_vec(message)?;
-    let len = data.len() as u32;
+    let len: u32 = data.len().try_into().map_err(|_| {
+        ConnectedError::Protocol(format!(
+            "Message too large to send: {} bytes exceeds u32::MAX",
+            data.len()
+        ))
+    })?;
     stream.write_all(&len.to_be_bytes()).await?;
     stream.write_all(&data).await?;
     Ok(())
 }
 
-/// Receive a message from the stream
+/// Receive a message from the stream (default 4 MB limit for control messages)
 pub(crate) async fn recv_message<T: for<'de> Deserialize<'de>>(
     stream: &mut RecvStream,
+) -> Result<T> {
+    recv_message_with_limit(stream, 4 * 1024 * 1024).await
+}
+
+/// Receive a message from the stream with a custom size limit.
+/// Use this for filesystem messages where base64-encoded file data may exceed the
+/// default 4 MB control-message limit.
+///
+/// Reads in fixed-size chunks rather than allocating the full declared length
+/// up-front, so a malicious peer claiming a huge message length cannot force an
+/// immediate multi-gigabyte allocation (DoS via memory exhaustion).
+pub(crate) async fn recv_message_with_limit<T: for<'de> Deserialize<'de>>(
+    stream: &mut RecvStream,
+    max_size: usize,
 ) -> Result<T> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
 
-    if len > 10 * 1024 * 1024 {
-        return Err(ConnectedError::PingFailed("Message too large".to_string()));
+    if len == 0 {
+        return Err(ConnectedError::Protocol(
+            "Message length is zero".to_string(),
+        ));
     }
 
-    let mut data = vec![0u8; len];
-    stream.read_exact(&mut data).await?;
+    if len > max_size {
+        return Err(ConnectedError::Protocol(format!(
+            "Message too large: {} bytes (max {} bytes)",
+            len, max_size
+        )));
+    }
+
+    // Read in fixed-size chunks instead of allocating the full declared length
+    // up-front. This bounds peak memory usage to the actual data received so far
+    // rather than trusting the (potentially malicious) declared length.
+    const READ_CHUNK_SIZE: usize = 64 * 1024; // 64 KB per chunk
+    let mut data = Vec::with_capacity(std::cmp::min(len, READ_CHUNK_SIZE));
+    let mut remaining = len;
+
+    while remaining > 0 {
+        let to_read = std::cmp::min(remaining, READ_CHUNK_SIZE);
+        let prev_len = data.len();
+        data.resize(prev_len + to_read, 0);
+        stream
+            .read_exact(&mut data[prev_len..prev_len + to_read])
+            .await?;
+        remaining -= to_read;
+    }
 
     let message = serde_json::from_slice(&data)?;
     Ok(message)
@@ -722,6 +863,10 @@ fn sanitize_filename(filename: &str) -> String {
         })
         .take(255)
         .collect();
+
+    // Strip leading dots to prevent creating hidden files (e.g. `.bashrc`,
+    // `.ssh`) that could silently overwrite important dot-files on Unix.
+    let sanitized = sanitized.trim_start_matches('.').to_string();
 
     if sanitized.is_empty() {
         "unnamed".to_string()
