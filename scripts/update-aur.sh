@@ -93,6 +93,10 @@ extract_pkgbuild_sources() {
       # Extract URLs between double quotes
       while [[ "$line" =~ \"([^\"]+)\" ]]; do
         local url="${BASH_REMATCH[1]}"
+        # Strip localname:: prefix (makepkg rename syntax)
+        if [[ "$url" == *"::"* ]]; then
+          url="${url#*::}"
+        fi
         # Expand ${pkgver} in the URL
         url="${url//\$\{pkgver\}/$pkgver}"
         url="${url//\$pkgver/$pkgver}"
@@ -111,7 +115,7 @@ extract_pkgbuild_sources() {
 verify_pkgbuild_hashes() {
   local pkgbuild="$1"
   local ver="$2"
-  local source_names=("connected-desktop" "connected-desktop.desktop" "ic_launcher-playstore.png" "LICENSE-MIT" "LICENSE-APACHE")
+  local source_names=("connected-desktop-${ver}" "connected-desktop.desktop" "ic_launcher-playstore.png" "LICENSE-MIT" "LICENSE-APACHE")
 
   extract_pkgbuild_sums "$pkgbuild"
   extract_pkgbuild_sources "$pkgbuild" "$ver"
@@ -169,7 +173,7 @@ verify_pkgbuild_hashes() {
 # Clean cached source/build files from the AUR directory
 clean_aur_cache() {
   local aur_dir="$1"
-  rm -f "${aur_dir}/connected-desktop"
+  rm -f "${aur_dir}"/connected-desktop-*
   rm -f "${aur_dir}/connected-desktop.desktop"
   rm -f "${aur_dir}/ic_launcher-playstore.png"
   rm -f "${aur_dir}/LICENSE-MIT"
