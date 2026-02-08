@@ -101,6 +101,7 @@ pub struct AppSettings {
     pub notifications_enabled: bool,
     pub device_name: Option<String>,
     pub saved_devices: HashMap<String, SavedDeviceInfo>,
+    pub download_directory: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -114,6 +115,7 @@ impl Default for AppSettings {
             notifications_enabled: true,
             device_name: None,
             saved_devices: HashMap::new(),
+            download_directory: None,
         }
     }
 }
@@ -746,4 +748,15 @@ pub fn get_device_name_setting() -> Option<String> {
 
 pub fn set_device_name_setting(name: String) {
     update_setting(|s| s.device_name = Some(name));
+}
+
+pub fn get_download_directory_setting() -> Option<String> {
+    get_app_settings()
+        .lock_or_recover()
+        .download_directory
+        .clone()
+}
+
+pub fn set_download_directory_setting(path: Option<String>) {
+    update_setting(|s| s.download_directory = path);
 }

@@ -409,6 +409,14 @@ fn App() -> Element {
     let mut auto_sync_calls = use_signal(get_auto_sync_calls);
     let mut auto_sync_contacts = use_signal(get_auto_sync_contacts);
     let mut notifications_enabled = use_signal(get_notifications_enabled_setting);
+    let mut download_directory = use_signal(|| {
+        get_download_directory_setting().unwrap_or_else(|| {
+            dirs::download_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .display()
+                .to_string()
+        })
+    });
 
     // The Controller
     let action_tx =
@@ -1358,7 +1366,8 @@ fn App() -> Element {
                                             span { class: "label", "Save to:" }
                                             span {
                                                 class: "path",
-                                                {dirs::download_dir().unwrap_or_else(|| PathBuf::from(".")).display().to_string()}
+                                                {get_download_directory_setting()
+                                                    .unwrap_or_else(|| dirs::download_dir().unwrap_or_else(|| PathBuf::from(".")).display().to_string())}
                                             }
                                         }
                                     }
@@ -2089,6 +2098,43 @@ fn App() -> Element {
                                 div { class: "info-label", "IP" }
                                 div { class: "info-value", "{local_device_ip}" }
                             }
+                        }
+
+                        div {
+                            class: "info-card",
+                            h3 {
+                                Icon { icon: IconType::Download, size: 20, color: "currentColor".to_string() }
+                                " Download Location"
+                            }
+                            div {
+                                class: "info-grid",
+                                div { class: "info-label", "Save files to" }
+                                div {
+                                    class: "info-value",
+                                    style: "display: flex; justify-content: space-between; align-items: center; gap: 8px;",
+                                    span {
+                                        style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;",
+                                        "{download_directory}"
+                                    }
+                                    button {
+                                        class: "secondary-button",
+                                        style: "padding: 4px 8px; font-size: 0.8rem; white-space: nowrap;",
+                                        onclick: move |_| {
+                                            let current_dir = download_directory.read().clone();
+                                            if let Some(path) = rfd::FileDialog::new()
+                                                .set_directory(&current_dir)
+                                                .pick_folder()
+                                            {
+                                                let path_str = path.display().to_string();
+                                                download_directory.set(path_str.clone());
+                                                action_tx.send(AppAction::SetDownloadDirectory { path: path_str });
+                                            }
+                                        },
+                                        "Browse"
+                                    }
+                                }
+                            }
+                            p { class: "settings-hint", "Choose where received files and downloads are saved." }
                         }
 
                         div {

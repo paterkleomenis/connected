@@ -79,6 +79,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val downloadDirPickerLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            uri?.let {
+                connectedApp.setCustomDownloadDir(it)
+            }
+        }
+
     private val sendFolderLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let { selectedUri ->
             connectedApp.getSelectedDeviceForFileTransfer()?.let { device ->
@@ -120,7 +127,8 @@ class MainActivity : ComponentActivity() {
                             connectedApp,
                             filePickerLauncher,
                             folderPickerLauncher,
-                            sendFolderLauncher
+                            sendFolderLauncher,
+                            downloadDirPickerLauncher
                         )
                     }
                 }
@@ -512,7 +520,8 @@ fun MainAppNavigation(
     connectedApp: ConnectedApp,
     filePickerLauncher: ActivityResultLauncher<String>? = null,
     folderPickerLauncher: ActivityResultLauncher<Uri?>? = null,
-    sendFolderLauncher: ActivityResultLauncher<Uri?>? = null
+    sendFolderLauncher: ActivityResultLauncher<Uri?>? = null,
+    downloadDirPickerLauncher: ActivityResultLauncher<Uri?>? = null
 ) {
     var currentScreen by remember { mutableStateOf(Screen.Home) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -569,7 +578,7 @@ fun MainAppNavigation(
         Box(modifier = Modifier.padding(paddingValues)) {
             when (currentScreen) {
                 Screen.Home -> HomeScreen(connectedApp, filePickerLauncher, sendFolderLauncher)
-                Screen.Settings -> SettingsScreen(connectedApp, folderPickerLauncher)
+                Screen.Settings -> SettingsScreen(connectedApp, folderPickerLauncher, downloadDirPickerLauncher)
             }
         }
 
@@ -941,7 +950,8 @@ private fun formatDuration(seconds: Long): String {
 @Composable
 fun SettingsScreen(
     connectedApp: ConnectedApp,
-    folderPickerLauncher: ActivityResultLauncher<Uri?>? = null
+    folderPickerLauncher: ActivityResultLauncher<Uri?>? = null,
+    downloadDirPickerLauncher: ActivityResultLauncher<Uri?>? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
@@ -1109,6 +1119,52 @@ fun SettingsScreen(
                             showRenameDialog = true
                         }) {
                             Text("Rename")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Download Directory Section
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Download Location", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Choose where received files are saved",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            connectedApp.getDownloadDirDisplayName(),
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f).padding(start = 4.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = {
+                            downloadDirPickerLauncher?.launch(null)
+                        }) {
+                            Text("Browse")
+                        }
+                    }
+                    if (connectedApp.customDownloadUri.value != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { connectedApp.setCustomDownloadDir(null) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Reset to Default (Downloads)")
                         }
                     }
                 }

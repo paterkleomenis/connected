@@ -52,7 +52,7 @@ pub struct ConnectedClient {
     transport: Arc<QuicTransport>,
     event_tx: broadcast::Sender<ConnectedEvent>,
     key_store: Arc<RwLock<KeyStore>>,
-    download_dir: PathBuf,
+    download_dir: Arc<RwLock<PathBuf>>,
     pairing_mode_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     pending_transfers: Arc<RwLock<HashMap<String, PendingTransferSender>>>,
     /// Track IPs we've sent handshakes to (with timestamp and expected peer fingerprint),
@@ -169,6 +169,8 @@ impl ConnectedClient {
             std::fs::create_dir_all(&download_dir).map_err(ConnectedError::Io)?;
         }
 
+        let download_dir = Arc::new(RwLock::new(download_dir));
+
         // 1. Initialize Transport (QUIC)
         // If port is 0, OS assigns one. We need to know it for mDNS.
         let bind_addr = SocketAddr::new(bind_ip, port);
@@ -227,6 +229,21 @@ impl ConnectedClient {
     /// Lightweight discovery refresh: clears the stale device list and
     /// re-announces ourselves on mDNS so that nearby peers re-discover us
     /// (and the running browse loop re-discovers them).
+    /// Update the directory where incoming file transfers are saved.
+    pub fn set_download_dir(&self, path: PathBuf) -> Result<()> {
+        if !path.exists() {
+            std::fs::create_dir_all(&path).map_err(ConnectedError::Io)?;
+        }
+        info!("Download directory changed to: {}", path.display());
+        *self.download_dir.write() = path;
+        Ok(())
+    }
+
+    /// Get the current download directory.
+    pub fn get_download_dir(&self) -> PathBuf {
+        self.download_dir.read().clone()
+    }
+
     pub fn refresh_discovery(&self) {
         info!("Refreshing discovery — clearing stale devices and re-announcing");
         self.discovery.clear_discovered_devices();
@@ -2698,7 +2715,7 @@ impl ConnectedClient {
 
         // Handle File Streams
         let event_tx = self.event_tx.clone();
-        let download_dir = self.download_dir.clone();
+        let download_dir_lock = self.download_dir.clone();
         let key_store_files = self.key_store.clone();
 
         let pending_transfers = self.pending_transfers.clone();
@@ -2714,7 +2731,7 @@ impl ConnectedClient {
                 }
 
                 let event_tx = event_tx.clone();
-                let download_dir = download_dir.clone();
+                let download_dir = download_dir_lock.read().clone();
                 let fingerprint_clone = fingerprint.clone();
                 // Paired (trusted) devices auto-accept file transfers;
                 // unpaired devices get an accept/decline prompt.

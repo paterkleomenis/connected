@@ -5,16 +5,17 @@ use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
     SavedDeviceInfo, TransferStatus, add_file_transfer_request, add_notification,
     get_auto_sync_messages, get_current_media, get_current_remote_files, get_current_remote_path,
-    get_device_name_setting, get_devices_store, get_last_clipboard,
+    get_device_name_setting, get_devices_store, get_download_directory_setting, get_last_clipboard,
     get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
     get_pairing_requests, get_pending_pairings, get_phone_call_log, get_phone_conversations,
     get_phone_data_update, get_phone_messages, get_preview_data, get_remote_files_update,
     get_saved_devices_setting, get_transfer_status, get_update_info, mark_calls_synced,
     mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
     remove_file_transfer_request, save_device_to_settings, set_active_call,
-    set_device_name_setting, set_discovery_active, set_last_remote_clipboard_content,
-    set_pairing_mode_state, set_phone_call_log, set_phone_contacts, set_phone_conversations,
-    set_phone_messages, set_sdk_initialized, set_transfer_status,
+    set_device_name_setting, set_discovery_active, set_download_directory_setting,
+    set_last_remote_clipboard_content, set_pairing_mode_state, set_phone_call_log,
+    set_phone_contacts, set_phone_conversations, set_phone_messages, set_sdk_initialized,
+    set_transfer_status,
 };
 use crate::utils::{get_hostname, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -203,6 +204,9 @@ pub enum AppAction {
     },
     RefreshDiscovery,
     RefreshDevices,
+    SetDownloadDirectory {
+        path: String,
+    },
     CheckForUpdates,
     PerformUpdate,
 }
@@ -1084,6 +1088,16 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
                 let name = get_device_name_setting().unwrap_or_else(get_hostname);
                 client = start_core(name).await;
+                // Apply saved download directory to core
+                if let Some(c) = &client
+                    && let Some(dir) = get_download_directory_setting()
+                {
+                    if let Err(e) = c.set_download_dir(PathBuf::from(&dir)) {
+                        error!("Failed to apply saved download directory: {}", e);
+                    } else {
+                        info!("Applied saved download directory: {}", dir);
+                    }
+                }
             }
             AppAction::RenameDevice { new_name } => {
                 if let Some(c) = client.take() {
@@ -1399,8 +1413,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     let ip_str = ip.clone();
                     tokio::spawn(async move {
                         if let Ok(ip_addr) = ip_str.parse() {
-                            let download_dir =
-                                dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
+                            let download_dir = get_download_directory_setting()
+                                .map(PathBuf::from)
+                                .unwrap_or_else(|| {
+                                    dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
+                                });
                             let local_path = download_dir.join(&filename);
 
                             add_notification(
@@ -1976,6 +1993,26 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             store.insert(info.id.clone(), info);
                         }
                     });
+                }
+            }
+            AppAction::SetDownloadDirectory { path } => {
+                set_download_directory_setting(Some(path.clone()));
+                if let Some(c) = &client {
+                    if let Err(e) = c.set_download_dir(PathBuf::from(&path)) {
+                        error!("Failed to set download directory: {}", e);
+                        add_notification(
+                            "Error",
+                            &format!("Failed to set download directory: {}", e),
+                            "",
+                        );
+                    } else {
+                        info!("Download directory set to: {}", path);
+                        add_notification(
+                            "Settings",
+                            &format!("Download directory set to {}", path),
+                            "",
+                        );
+                    }
                 }
             }
             AppAction::CheckForUpdates => {

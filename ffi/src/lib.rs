@@ -1242,6 +1242,22 @@ pub fn refresh_discovery() -> Result<(), ConnectedFfiError> {
 }
 
 #[uniffi::export]
+pub fn set_download_directory(path: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    client.set_download_dir(PathBuf::from(path)).map_err(|e| {
+        ConnectedFfiError::InitializationError {
+            msg: format!("Failed to set download directory: {}", e),
+        }
+    })
+}
+
+#[uniffi::export]
+pub fn get_download_directory() -> Result<String, ConnectedFfiError> {
+    let client = get_client()?;
+    Ok(client.get_download_dir().to_string_lossy().to_string())
+}
+
+#[uniffi::export]
 pub fn get_local_device() -> Result<DiscoveredDevice, ConnectedFfiError> {
     let client = get_client()?;
     Ok(client.local_device().clone().into())

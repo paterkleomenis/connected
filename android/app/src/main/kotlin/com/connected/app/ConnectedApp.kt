@@ -231,6 +231,10 @@ class ConnectedApp(private val context: Context) {
     private lateinit var downloadDir: File
     private var pendingUpdateInstall: File? = null
 
+    /** User-configured download directory URI (SAF). When set, received files are saved here
+     *  instead of the public Downloads folder. */
+    val customDownloadUri = mutableStateOf<Uri?>(null)
+
     // FilesystemProvider State
     val isFsProviderRegistered = mutableStateOf(false)
     val sharedFolderName = mutableStateOf<String?>(null)
@@ -253,6 +257,48 @@ class ConnectedApp(private val context: Context) {
     private val _prefMediaControl = "media_control"
     private val _prefTelephonyEnabled = "telephony_enabled"
     private val _prefDeviceName = "device_name"
+    private val _prefDownloadDir = "download_directory"
+
+    fun getCustomDownloadDir(): Uri? {
+        val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
+        val uriString = prefs.getString(_prefDownloadDir, null) ?: return null
+        return uriString.toUri()
+    }
+
+    fun setCustomDownloadDir(uri: Uri?) {
+        val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
+        if (uri != null) {
+            // Persist SAF permission so it survives reboots
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (_: Exception) {
+            }
+            prefs.edit { putString(_prefDownloadDir, uri.toString()) }
+            customDownloadUri.value = uri
+            Log.d("ConnectedApp", "Custom download directory set to: $uri")
+        } else {
+            prefs.edit { remove(_prefDownloadDir) }
+            customDownloadUri.value = null
+            Log.d("ConnectedApp", "Custom download directory cleared, using default Downloads")
+        }
+    }
+
+    /** Returns a human-readable path for the custom download URI, or "Downloads" if not set. */
+    fun getDownloadDirDisplayName(): String {
+        val uri = customDownloadUri.value ?: return "Downloads"
+        // SAF URIs encode the path after "tree/" — extract a readable segment
+        val path = uri.lastPathSegment ?: return uri.toString()
+        // Typical format: "primary:Some/Path" — show the part after the colon
+        return if (path.contains(":")) {
+            val after = path.substringAfter(":")
+            if (after.isBlank()) "Internal Storage" else after
+        } else {
+            path
+        }
+    }
 
     @Volatile
     private var lastSdkRestart = 0L
@@ -802,6 +848,9 @@ class ConnectedApp(private val context: Context) {
             registerUnpairCallback(unpairCallback)
             registerMediaControlCallback(mediaCallback)
 
+            // Restore custom download directory from preferences
+            customDownloadUri.value = getCustomDownloadDir()
+
             val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
             if (prefs.getBoolean(_prefTelephonyEnabled, false)) {
                 isTelephonyEnabled.value = true
@@ -1010,6 +1059,14 @@ class ConnectedApp(private val context: Context) {
     private fun moveToDownloads(filename: String): Uri? {
         val sourceFile = File(downloadDir, filename)
         if (!sourceFile.exists()) return null
+
+        // If a custom download directory is set, save there via SAF
+        val customUri = customDownloadUri.value
+        if (customUri != null) {
+            return moveToCustomDir(sourceFile, filename, customUri)
+        }
+
+        // Default: save to public Downloads via MediaStore
         try {
             val contentValues = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
@@ -1058,6 +1115,42 @@ class ConnectedApp(private val context: Context) {
         return null
     }
 
+    private fun moveToCustomDir(sourceFile: File, filename: String, dirUri: Uri): Uri? {
+        try {
+            val dir = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, dirUri)
+                ?: return null
+            // Create file in the custom directory (avoid overwriting)
+            var targetName = filename
+            var docFile = dir.findFile(targetName)
+            if (docFile != null) {
+                val stem = if (filename.contains(".")) filename.substringBeforeLast(".") else filename
+                val ext = if (filename.contains(".")) filename.substringAfterLast(".") else ""
+                for (i in 1..10000) {
+                    targetName = if (ext.isNotEmpty()) "$stem ($i).$ext" else "$stem ($i)"
+                    if (dir.findFile(targetName) == null) break
+                }
+            }
+            val mimeType = getMimeType(filename)
+            docFile = dir.createFile(mimeType, targetName) ?: return null
+            val outputStream = context.contentResolver.openOutputStream(docFile.uri) ?: return null
+            outputStream.use { output ->
+                sourceFile.inputStream().use { input -> input.copyTo(output) }
+            }
+            sourceFile.delete()
+            runOnMainThread {
+                android.widget.Toast.makeText(
+                    context,
+                    "Saved to ${getDownloadDirDisplayName()}: $targetName",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+            return docFile.uri
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to save to custom directory", e)
+            return null
+        }
+    }
+
     private fun getMimeType(url: String): String {
         val ext = android.webkit.MimeTypeMap.getFileExtensionFromUrl(url)
         return if (ext != null) android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
@@ -1067,6 +1160,29 @@ class ConnectedApp(private val context: Context) {
     private fun moveFolderToDownloads(folderName: String) {
         val sourceFolder = File(downloadDir, folderName)
         if (!sourceFolder.exists() || !sourceFolder.isDirectory) return
+
+        // If a custom download directory is set, save there via SAF
+        val customUri = customDownloadUri.value
+        if (customUri != null) {
+            try {
+                val dir = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, customUri)
+                if (dir != null) {
+                    copyFolderToCustomDir(sourceFolder, dir, folderName)
+                    sourceFolder.deleteRecursively()
+                    Log.i("ConnectedApp", "Moved folder to custom dir: $folderName")
+                    runOnMainThread {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Saved folder to ${getDownloadDirDisplayName()}: $folderName",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                    return
+                }
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to move folder to custom directory, falling back", e)
+            }
+        }
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -1124,6 +1240,26 @@ class ConnectedApp(private val context: Context) {
                     contentValues.clear()
                     contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
                     resolver.update(uri, contentValues, null, null)
+                }
+            }
+        }
+    }
+
+    private fun copyFolderToCustomDir(
+        sourceFolder: File,
+        parentDoc: androidx.documentfile.provider.DocumentFile,
+        folderName: String
+    ) {
+        val subDir = parentDoc.createDirectory(folderName) ?: return
+        sourceFolder.listFiles()?.forEach { file ->
+            if (file.isDirectory) {
+                copyFolderToCustomDir(file, subDir, file.name)
+            } else {
+                val mimeType = getMimeType(file.name)
+                val docFile = subDir.createFile(mimeType, file.name) ?: return@forEach
+                val outputStream = context.contentResolver.openOutputStream(docFile.uri) ?: return@forEach
+                outputStream.use { output ->
+                    file.inputStream().use { input -> input.copyTo(output) }
                 }
             }
         }
