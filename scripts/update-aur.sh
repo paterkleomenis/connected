@@ -152,7 +152,7 @@ sed -i "s/^pkgrel=.*/pkgrel=1/" "$PKGBUILD"
 
 # Build source URLs (must stay in sync with PKGBUILD)
 bin_url="https://github.com/paterkleomenis/connected/releases/download/${version}/connected-desktop"
-desktop_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/packaging/aur/connected-desktop.desktop"
+desktop_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/packaging/connected-desktop.desktop"
 icon_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/android/app/src/main/ic_launcher-playstore.png"
 license_mit_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/LICENSE-MIT"
 license_apache_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/LICENSE-APACHE"
