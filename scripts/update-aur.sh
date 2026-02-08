@@ -136,6 +136,16 @@ fi
 
 echo "Updating AUR package to version: ${version}"
 
+# Clean cached source files so makepkg re-downloads them
+echo "Cleaning cached source files..."
+rm -f "${AUR_DIR}/connected-desktop"
+rm -f "${AUR_DIR}/connected-desktop.desktop"
+rm -f "${AUR_DIR}/ic_launcher-playstore.png"
+rm -f "${AUR_DIR}/LICENSE-MIT"
+rm -f "${AUR_DIR}/LICENSE-APACHE"
+rm -rf "${AUR_DIR}/src" "${AUR_DIR}/pkg"
+rm -f "${AUR_DIR}"/*.pkg.tar.*
+
 # Update pkgver and reset pkgrel
 sed -i "s/^pkgver=.*/pkgver=${version}/" "$PKGBUILD"
 sed -i "s/^pkgrel=.*/pkgrel=1/" "$PKGBUILD"
