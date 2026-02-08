@@ -11,6 +11,7 @@ pkgbase = connected-desktop-bin
 	depends = libappindicator-gtk3
 	depends = openssl
 	depends = dbus
+	depends = xdotool
 	provides = connected-desktop
 	conflicts = connected-desktop
 	conflicts = connected-desktop-git
