@@ -1,4 +1,4 @@
-use crate::error::{ConnectedError, Result};
+use crate::error::{ConnectedError, Result, is_transient_io_error};
 use rcgen::{CertifiedKey, generate_simple_self_signed};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
@@ -263,14 +263,10 @@ impl KeyStore {
         }
     }
 
-    /// On Windows, verify/apply ACL restrictions on identity files.
-    #[cfg(windows)]
-    fn check_identity_permissions(path: &std::path::Path) {
-        restrict_path_to_current_user(path);
-    }
-
-    /// No-op on platforms that are neither Unix nor Windows.
-    #[cfg(not(any(unix, windows)))]
+    /// On Windows the parent directory already has a restrictive ACL (set
+    /// during KeyStore::new) which child files inherit, so there is nothing
+    /// extra to verify per-file.
+    #[cfg(not(unix))]
     fn check_identity_permissions(_path: &std::path::Path) {}
 
     fn load_or_create_identity(
@@ -302,30 +298,24 @@ impl KeyStore {
         let data = serde_json::to_vec_pretty(&persisted)
             .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
 
-        // Atomic write: write to temp file, set permissions, fsync, then rename.
-        // This prevents a half-written identity file if the process crashes mid-write.
+        // Atomic write: write to temp file, set permissions, then rename.
+        // Uses a single file handle for write+fsync to avoid the AV race
+        // condition on Windows where an antivirus may grab the file between
+        // close and re-open (the main cause of "os error 5").
         let tmp_path = identity_path.with_extension("json.tmp");
-        std::fs::write(&tmp_path, &data).map_err(ConnectedError::Io)?;
+        Self::write_and_sync_with_retry(&tmp_path, &data)?;
 
-        // Restrict permissions to owner-only to protect the private key
+        // Restrict permissions to owner-only to protect the private key.
+        // On Unix we must chmod explicitly because umask may leave the file
+        // world-readable, unlike Windows' already set restrictive ACL.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
             std::fs::set_permissions(&tmp_path, perms).map_err(ConnectedError::Io)?;
         }
-        #[cfg(windows)]
-        {
-            restrict_path_to_current_user(&tmp_path);
-        }
 
-        // fsync to ensure data is durable before rename
-        {
-            let f = std::fs::File::open(&tmp_path).map_err(ConnectedError::Io)?;
-            f.sync_all().map_err(ConnectedError::Io)?;
-        }
-
-        std::fs::rename(&tmp_path, &identity_path).map_err(ConnectedError::Io)?;
+        Self::rename_with_retry(&tmp_path, &identity_path)?;
 
         Ok((
             CertificateDer::from(cert_der),
@@ -338,7 +328,6 @@ impl KeyStore {
         path: &std::path::Path,
     ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>, String)> {
         // Check permissions on existing identity file
-        #[cfg(unix)]
         Self::check_identity_permissions(path);
 
         let data = std::fs::read(path).map_err(ConnectedError::Io)?;
@@ -363,10 +352,10 @@ impl KeyStore {
             let updated_data = serde_json::to_vec_pretty(&persisted)
                 .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
 
-            // Atomic write: write to temp file, set permissions, fsync, then rename.
+            // Atomic write: write+fsync to temp file using a single handle, then rename.
             // This prevents corruption if the process crashes mid-write.
             let tmp_path = path.with_extension("json.tmp");
-            std::fs::write(&tmp_path, &updated_data).map_err(ConnectedError::Io)?;
+            Self::write_and_sync_with_retry(&tmp_path, &updated_data)?;
 
             #[cfg(unix)]
             {
@@ -375,12 +364,7 @@ impl KeyStore {
                 let _ = std::fs::set_permissions(&tmp_path, perms);
             }
 
-            {
-                let f = std::fs::File::open(&tmp_path).map_err(ConnectedError::Io)?;
-                f.sync_all().map_err(ConnectedError::Io)?;
-            }
-
-            std::fs::rename(&tmp_path, path).map_err(ConnectedError::Io)?;
+            Self::rename_with_retry(&tmp_path, path)?;
         }
 
         Ok((
@@ -427,9 +411,14 @@ impl KeyStore {
         let final_path = self.storage_dir.join("known_peers.json");
         let tmp_path = self.storage_dir.join("known_peers.json.tmp");
 
-        std::fs::write(&tmp_path, &data).map_err(ConnectedError::Io)?;
+        // Write + fsync using a single file handle to avoid the race condition
+        // where antivirus / Windows Search indexer grabs the file between
+        // close and re-open (the main cause of "os error 5" on Windows).
+        Self::write_and_sync_with_retry(&tmp_path, &data)?;
 
-        // Set owner-only permissions on the temp file before rename
+        // Set owner-only permissions on the temp file before rename.
+        // Needed for Unix, not needed for Windows since the parent directory
+        // already has a restrictive ACL.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -438,19 +427,81 @@ impl KeyStore {
                 warn!("Failed to set permissions on known_peers temp file: {}", e);
             }
         }
-        #[cfg(windows)]
-        {
-            restrict_path_to_current_user(&tmp_path);
-        }
 
-        // fsync the temp file to ensure data is durable before rename
-        {
-            let f = std::fs::File::open(&tmp_path).map_err(ConnectedError::Io)?;
-            f.sync_all().map_err(ConnectedError::Io)?;
-        }
-
-        std::fs::rename(&tmp_path, &final_path).map_err(ConnectedError::Io)?;
+        Self::rename_with_retry(&tmp_path, &final_path)?;
         Ok(())
+    }
+
+    /// Write `data` to `path` and fsync it using a **single file handle**,
+    /// retrying on transient Windows errors.
+    ///
+    /// By creating the file, writing, and calling `sync_all()` on the same
+    /// handle we avoid the race condition where antivirus / Windows Search
+    /// indexer grabs an exclusive lock on the newly-created file between
+    /// close and re-open.
+    fn write_and_sync_with_retry(path: &std::path::Path, data: &[u8]) -> Result<()> {
+        const MAX_RETRIES: u32 = 5;
+        const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            let result = Self::do_write_and_sync(path, data);
+            match result {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transient_io_error(&e) && attempt < MAX_RETRIES => {
+                    warn!(
+                        "Transient write+sync error on {:?} (attempt {}/{}): {}",
+                        path,
+                        attempt + 1,
+                        MAX_RETRIES,
+                        e
+                    );
+                    std::thread::sleep(RETRY_DELAY * (attempt + 1));
+                    last_err = Some(e);
+                }
+                Err(e) => return Err(ConnectedError::Io(e)),
+            }
+        }
+        Err(ConnectedError::Io(last_err.unwrap()))
+    }
+
+    /// Create a file, write data, and fsync — all on a single handle.
+    fn do_write_and_sync(
+        path: &std::path::Path,
+        data: &[u8],
+    ) -> std::result::Result<(), std::io::Error> {
+        use std::io::Write;
+        let mut file = std::fs::File::create(path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    /// Rename `from` to `to`, retrying on transient Windows errors.
+    fn rename_with_retry(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
+        const MAX_RETRIES: u32 = 5;
+        const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            match std::fs::rename(from, to) {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transient_io_error(&e) && attempt < MAX_RETRIES => {
+                    warn!(
+                        "Transient rename error {:?} -> {:?} (attempt {}/{}): {}",
+                        from,
+                        to,
+                        attempt + 1,
+                        MAX_RETRIES,
+                        e
+                    );
+                    std::thread::sleep(RETRY_DELAY * (attempt + 1));
+                    last_err = Some(e);
+                }
+                Err(e) => return Err(ConnectedError::Io(e)),
+            }
+        }
+        Err(ConnectedError::Io(last_err.unwrap()))
     }
 
     pub fn trust_peer(

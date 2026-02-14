@@ -1,3 +1,4 @@
+use connected_core::error::is_transient_io_error;
 use connected_core::filesystem::FsEntry;
 use connected_core::telephony::{ActiveCall, CallLogEntry, Contact, Conversation, SmsMessage};
 use connected_core::{Device, MediaState, UpdateInfo};
@@ -129,6 +130,38 @@ fn get_settings_path() -> PathBuf {
         .join("settings.json")
 }
 
+/// Retry an I/O operation up to 5 times on transient Windows errors, with
+/// linear back-off (150ms, 300ms, 450ms, 600ms, 750ms).
+///
+/// On non-Windows platforms the transient error codes (5, 32) never occur,
+/// so the retry logic is effectively a no-op pass-through.
+fn retry_io<F>(mut op: F) -> std::io::Result<()>
+where
+    F: FnMut() -> std::io::Result<()>,
+{
+    const MAX_RETRIES: u32 = 5;
+    const BASE_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
+    let mut last_err = None;
+    for attempt in 0..=MAX_RETRIES {
+        match op() {
+            Ok(()) => return Ok(()),
+            Err(e) if is_transient_io_error(&e) && attempt < MAX_RETRIES => {
+                tracing::warn!(
+                    "Transient I/O error (attempt {}/{}): {}",
+                    attempt + 1,
+                    MAX_RETRIES,
+                    e
+                );
+                std::thread::sleep(BASE_DELAY * (attempt + 1));
+                last_err = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.unwrap())
+}
+
 pub fn load_settings() -> AppSettings {
     let path = get_settings_path();
     if path.exists()
@@ -156,15 +189,20 @@ pub fn save_settings(settings: &AppSettings) {
         }
     };
 
-    // Atomic write: write to temp file, set permissions, fsync, then rename.
+    // Atomic write: write to temp file, set permissions, then rename.
     // This prevents a half-written settings file if the process crashes mid-write.
+    //
+    // We intentionally skip fsync for settings: it is non-critical data and
+    // the atomic rename already provides crash consistency (either the old or
+    // the new version survives).
     let tmp_path = path.with_extension("json.tmp");
-    if let Err(e) = fs::write(&tmp_path, &json) {
+    if let Err(e) = retry_io(|| fs::write(&tmp_path, &json)) {
         tracing::error!("Failed to write settings temp file: {}", e);
         return;
     }
 
-    // Restrict permissions to owner-only (0600) to protect settings data
+    // Restrict permissions to owner-only (0600) to protect settings data.
+    // On Windows the parent directory already has a restrictive ACL.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -174,19 +212,7 @@ pub fn save_settings(settings: &AppSettings) {
         }
     }
 
-    // fsync to ensure data is durable before rename
-    match fs::File::open(&tmp_path) {
-        Ok(f) => {
-            if let Err(e) = f.sync_all() {
-                tracing::warn!("Failed to fsync settings temp file: {}", e);
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to open settings temp file for fsync: {}", e);
-        }
-    }
-
-    if let Err(e) = fs::rename(&tmp_path, &path) {
+    if let Err(e) = retry_io(|| fs::rename(&tmp_path, &path)) {
         tracing::error!("Failed to rename settings temp file: {}", e);
     }
 }

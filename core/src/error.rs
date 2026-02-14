@@ -94,3 +94,11 @@ pub enum ConnectedError {
 }
 
 pub type Result<T> = std::result::Result<T, ConnectedError>;
+
+/// Returns `true` for I/O errors that are typically transient on Windows,
+/// such as `ERROR_ACCESS_DENIED` (os error 5) and `ERROR_SHARING_VIOLATION`
+/// (os error 32), commonly caused by antivirus scanners or the Windows Search
+/// indexer briefly holding a file open.
+pub fn is_transient_io_error(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(5) | Some(32))
+}

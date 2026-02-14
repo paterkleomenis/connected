@@ -103,7 +103,7 @@ impl DiscoveryService {
     /// These include VMware, VirtualBox, Hyper-V, WSL, Docker, and other virtualization adapters.
     fn disable_virtual_interfaces(daemon: &ServiceDaemon) {
         // Common virtual interface name patterns to exclude
-        let virtual_interface_patterns = [
+        let virtual_interface_patterns: &[&str] = &[
             // VMware
             "vmnet",
             "vmware",
@@ -145,11 +145,52 @@ impl DiscoveryService {
             "mullvad",
         ];
 
-        for pattern in virtual_interface_patterns {
-            if let Err(e) = daemon.disable_interface(IfKind::Name(pattern.to_string())) {
-                // Log at trace level since many of these interfaces won't exist on most systems
-                trace!("Could not disable interface pattern '{}': {}", pattern, e);
+        // Enumerate real OS interfaces and disable any whose name matches a
+        // virtual-interface pattern (case-insensitive substring).
+        // This is needed because IfKind::Name is case-sensitive.
+        match if_addrs::get_if_addrs() {
+            Ok(interfaces) => {
+                // Deduplicate: an interface can appear multiple times (once per
+                // address family) but we only need to disable it once.
+                let mut seen = std::collections::HashSet::new();
+
+                for iface in &interfaces {
+                    if !seen.insert(iface.name.clone()) {
+                        continue;
+                    }
+
+                    let name_lower = iface.name.to_lowercase();
+                    let dominated = virtual_interface_patterns
+                        .iter()
+                        .any(|pat| name_lower.contains(&pat.to_lowercase()));
+
+                    if dominated {
+                        info!(
+                            "Disabling virtual interface '{}' (addr {})",
+                            iface.name,
+                            iface.ip()
+                        );
+                        if let Err(e) = daemon.disable_interface(IfKind::Name(iface.name.clone())) {
+                            warn!("Failed to disable interface '{}': {}", iface.name, e);
+                        }
+                    }
+                }
             }
+            Err(e) => {
+                warn!(
+                    "Could not enumerate network interfaces for virtual-adapter \
+                     filtering: {}. mDNS may use unintended adapters.",
+                    e
+                );
+            }
+        }
+
+        // Also disable loopback explicitly (by kind, not name).
+        if let Err(e) = daemon.disable_interface(IfKind::LoopbackV4) {
+            trace!("Could not disable LoopbackV4: {}", e);
+        }
+        if let Err(e) = daemon.disable_interface(IfKind::LoopbackV6) {
+            trace!("Could not disable LoopbackV6: {}", e);
         }
 
         debug!("Disabled virtual network interfaces for mDNS daemon");
