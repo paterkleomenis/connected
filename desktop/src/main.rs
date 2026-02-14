@@ -210,120 +210,208 @@ fn load_tray_icon() -> dioxus::desktop::trayicon::Icon {
         .expect("Failed to create tray icon")
 }
 
-/// Check whether the current process is running with administrator (elevated) privileges.
+/// Command-line flag that the elevated subprocess receives.
 #[cfg(target_os = "windows")]
-fn is_elevated() -> bool {
-    // Quick heuristic: try to open the ADMIN$ share or read a protected registry key.
-    // A lightweight approach is to check if we can write to the Windows directory,
-    // but the most reliable way is via the Windows API.  We use a simple fallback:
-    // attempt to open \\.\PhysicalDrive0 which requires admin.
-    // However, to keep this dependency-free we just attempt a harmless admin-only
-    // operation: reading the SAM registry hive.
-    std::process::Command::new("reg")
-        .args(["query", "HKU\\S-1-5-19"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+const FIREWALL_INSTALL_ARG: &str = "--install-firewall-rules";
+
+/// Declarative definition of a single firewall rule.  Both the "check" and
+/// "create" paths derive from this same array, so there is exactly one place
+/// to add or change a rule.
+#[cfg(target_os = "windows")]
+struct FirewallRuleDef {
+    name: &'static str,
+    direction: windows_firewall::DirectionFirewallWindows,
+    description: &'static str,
+    /// If set, constrains local ports.
+    local_ports: Option<[u16; 1]>,
+    /// If set, constrains remote ports.
+    remote_ports: Option<[u16; 1]>,
 }
 
 #[cfg(target_os = "windows")]
-fn ensure_firewall_rules() {
-    use std::env;
-    use windows_firewall::{
-        ActionFirewallWindows, DirectionFirewallWindows, ProtocolFirewallWindows,
-        WindowsFirewallRule,
-    };
+const FIREWALL_RULES: [FirewallRuleDef; 4] = {
+    use windows_firewall::DirectionFirewallWindows as Dir;
+    [
+        FirewallRuleDef {
+            name: "Connected Desktop (mDNS) - Inbound",
+            direction: Dir::In,
+            description: "Allow Connected Desktop to receive mDNS traffic for local network discovery.",
+            local_ports: Some([5353]),
+            remote_ports: None,
+        },
+        FirewallRuleDef {
+            name: "Connected Desktop (mDNS) - Outbound",
+            direction: Dir::Out,
+            description: "Allow Connected Desktop to send mDNS queries for local network discovery.",
+            local_ports: None,
+            remote_ports: Some([5353]),
+        },
+        FirewallRuleDef {
+            name: "Connected Desktop (QUIC) - Inbound",
+            direction: Dir::In,
+            description: "Allow Connected Desktop to receive incoming connections from paired devices.",
+            local_ports: None,
+            remote_ports: None,
+        },
+        FirewallRuleDef {
+            name: "Connected Desktop (QUIC) - Outbound",
+            direction: Dir::Out,
+            description: "Allow Connected Desktop to connect to paired devices.",
+            local_ports: None,
+            remote_ports: None,
+        },
+    ]
+};
 
-    let exe_path = match env::current_exe() {
+/// Check whether all firewall rules already exist with the expected
+/// configuration.  This does **not** require admin privileges.
+#[cfg(target_os = "windows")]
+fn firewall_rules_ok(exe_path: &str) -> bool {
+    use windows_firewall::{ActionFirewallWindows, ProtocolFirewallWindows, get_rule};
+
+    FIREWALL_RULES.iter().all(|def| {
+        let Ok(rule) = get_rule(def.name) else {
+            return false;
+        };
+        *rule.enabled()
+            && *rule.action() == ActionFirewallWindows::Allow
+            && *rule.direction() == def.direction
+            && rule.protocol().as_ref() == Some(&ProtocolFirewallWindows::Udp)
+            && rule
+                .application_name()
+                .as_deref()
+                .is_some_and(|app| app.eq_ignore_ascii_case(exe_path))
+    })
+}
+
+/// Create / update all firewall rules.  **Requires admin privileges.**
+#[cfg(target_os = "windows")]
+fn create_firewall_rules(exe_path: &str) -> bool {
+    use windows_firewall::{ActionFirewallWindows, ProtocolFirewallWindows, WindowsFirewallRule};
+
+    let mut ok = true;
+    for def in &FIREWALL_RULES {
+        let mut rule = WindowsFirewallRule::builder()
+            .name(def.name)
+            .action(ActionFirewallWindows::Allow)
+            .direction(def.direction)
+            .enabled(true)
+            .description(def.description)
+            .protocol(ProtocolFirewallWindows::Udp)
+            .application_name(exe_path)
+            .build();
+
+        if let Some(ports) = def.local_ports {
+            rule.set_local_ports(Some(ports.into_iter().collect()));
+        }
+        if let Some(ports) = def.remote_ports {
+            rule.set_remote_ports(Some(ports.into_iter().collect()));
+        }
+
+        if let Err(e) = rule.add_or_update() {
+            eprintln!("Failed to add/update firewall rule \"{}\": {}", def.name, e);
+            ok = false;
+        }
+    }
+    ok
+}
+
+/// Spawn an elevated copy of the program that only installs firewall rules,
+/// wait for it to finish, and return whether it succeeded.
+///
+/// Uses `powershell Start-Process -Verb RunAs` to trigger the UAC prompt,
+/// avoiding any need for `unsafe` Win32 FFI.
+#[cfg(target_os = "windows")]
+fn request_elevated_firewall_install(exe_path: &std::path::Path) -> bool {
+    let exe_str = exe_path.to_string_lossy();
+
+    // Start-Process -Verb RunAs triggers UAC.
+    // -Wait blocks until the elevated process exits.
+    // -WindowStyle Hidden should prevent a console window flash,
+    //  but because it doesn't, we handle it below
+    let ps_command = format!(
+        "Start-Process -FilePath '{}' -ArgumentList '{}' -Verb RunAs -Wait -WindowStyle Hidden",
+        exe_str, FIREWALL_INSTALL_ARG,
+    );
+
+    // Actual window hiding
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    match std::process::Command::new("powershell")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args(["-NoProfile", "-Command", &ps_command])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(status) => status.success(),
+        Err(e) => {
+            tracing::warn!("Failed to launch PowerShell for UAC elevation: {}", e);
+            false
+        }
+    }
+}
+
+/// Entry point for the `--install-firewall-rules` elevated subprocess.
+/// Creates all firewall rules and exits immediately
+#[cfg(target_os = "windows")]
+fn run_firewall_install_and_exit() -> ! {
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let code = if create_firewall_rules(&exe_path.to_string_lossy()) {
+        0
+    } else {
+        1
+    };
+    std::process::exit(code);
+}
+
+/// Top-level firewall orchestrator called from `main()`.
+///
+/// If rules already exist and look correct → skip.
+/// If not, spawn an elevated subprocess to create them via UAC.
+#[cfg(target_os = "windows")]
+fn ensure_firewall_rules() {
+    let exe_path = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("Failed to get current exe path for firewall rules: {}", e);
+            tracing::warn!("Cannot determine exe path for firewall rules: {}", e);
             return;
         }
     };
     let exe_path_str = exe_path.to_string_lossy();
 
-    // Detect elevation early to give a single helpful message instead of
-    // four identical "Access is denied" warnings.
-    if !is_elevated() {
-        tracing::info!(
-            "Not running as Administrator — skipping firewall rule creation. \
-             If you experience connectivity issues, run Connected once as Administrator \
-             or manually add Windows Firewall allow-rules for \"{}\" (UDP).",
-            exe_path_str
-        );
+    // Fast path: all rules already exist and match — nothing to do.
+    if firewall_rules_ok(&exe_path_str) {
+        tracing::debug!("Firewall rules already configured correctly");
         return;
     }
 
-    // mDNS Inbound: allow receiving mDNS responses and queries on port 5353
-    let mdns_inbound = WindowsFirewallRule::builder()
-        .name("Connected Desktop (mDNS) - Inbound")
-        .action(ActionFirewallWindows::Allow)
-        .direction(DirectionFirewallWindows::In)
-        .enabled(true)
-        .description("Allow Connected Desktop to receive mDNS traffic for local network discovery.")
-        .protocol(ProtocolFirewallWindows::Udp)
-        .local_ports([5353])
-        .application_name(exe_path_str.clone())
-        .build();
+    tracing::info!(
+        "Firewall rules are missing or incorrect — requesting elevation to install them"
+    );
 
-    if let Err(e) = mdns_inbound.add_or_update() {
-        tracing::warn!("Failed to add/update mDNS inbound firewall rule: {}", e);
+    if request_elevated_firewall_install(&exe_path) && firewall_rules_ok(&exe_path_str) {
+        tracing::info!("Firewall rules installed successfully");
+    } else {
+        tracing::warn!(
+            "Could not install firewall rules (UAC declined or subprocess failed). \
+             If you experience connectivity issues, manually allow \"{}\" through \
+             Windows Firewall for UDP traffic.",
+            exe_path_str
+        );
     }
-
-    // mDNS Outbound: allow sending mDNS queries to port 5353
-    let mdns_outbound = WindowsFirewallRule::builder()
-        .name("Connected Desktop (mDNS) - Outbound")
-        .action(ActionFirewallWindows::Allow)
-        .direction(DirectionFirewallWindows::Out)
-        .enabled(true)
-        .description("Allow Connected Desktop to send mDNS queries for local network discovery.")
-        .protocol(ProtocolFirewallWindows::Udp)
-        .remote_ports([5353])
-        .application_name(exe_path_str.clone())
-        .build();
-
-    if let Err(e) = mdns_outbound.add_or_update() {
-        tracing::warn!("Failed to add/update mDNS outbound firewall rule: {}", e);
-    }
-
-    // QUIC/UDP Inbound: allow incoming connections on any port for this application
-    // This is needed so other devices can connect to our dynamically-assigned QUIC port
-    let quic_inbound = WindowsFirewallRule::builder()
-        .name("Connected Desktop (QUIC) - Inbound")
-        .action(ActionFirewallWindows::Allow)
-        .direction(DirectionFirewallWindows::In)
-        .enabled(true)
-        .description("Allow Connected Desktop to receive incoming connections from paired devices.")
-        .protocol(ProtocolFirewallWindows::Udp)
-        .application_name(exe_path_str.clone())
-        .build();
-
-    if let Err(e) = quic_inbound.add_or_update() {
-        tracing::warn!("Failed to add/update QUIC inbound firewall rule: {}", e);
-    }
-
-    // QUIC/UDP Outbound: allow outgoing connections on any port for this application
-    let quic_outbound = WindowsFirewallRule::builder()
-        .name("Connected Desktop (QUIC) - Outbound")
-        .action(ActionFirewallWindows::Allow)
-        .direction(DirectionFirewallWindows::Out)
-        .enabled(true)
-        .description("Allow Connected Desktop to connect to paired devices.")
-        .protocol(ProtocolFirewallWindows::Udp)
-        .application_name(exe_path_str.clone())
-        .build();
-
-    if let Err(e) = quic_outbound.add_or_update() {
-        tracing::warn!("Failed to add/update QUIC outbound firewall rule: {}", e);
-    }
-
-    tracing::info!("Firewall rules created/updated successfully");
 }
 
 fn main() {
+    // Handle the elevated-subprocess entry point before doing anything else.
+    // When launched with --install-firewall-rules the process creates the
+    // firewall rules and exits immediately
+    #[cfg(target_os = "windows")]
+    if std::env::args().any(|a| a == FIREWALL_INSTALL_ARG) {
+        run_firewall_install_and_exit();
+    }
+
     // Explicitly select the Rustls crypto provider to avoid runtime ambiguity.
     if let Err(err) = rustls::crypto::ring::default_provider().install_default() {
         eprintln!("Failed to install rustls ring provider: {err:?}");
