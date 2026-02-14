@@ -11,8 +11,11 @@ use tracing::{info, warn};
 ///
 /// On Unix this is handled via `chmod 0600` (files) / `chmod 0700` (dirs) elsewhere.
 /// On Windows we use the built-in `icacls` command to:
-///   1. Reset/remove all inherited and explicit ACEs.
-///   2. Grant full control only to the current user (%USERNAME%).
+///   1. Remove all inherited ACEs.
+///   2. Grant full control to the current user (%USERNAME%) with inheritance
+///      flags (OI)(CI) so child files/subdirectories inherit the ACE.
+///   3. Grant full control to SYSTEM so that OS services (backup, indexing,
+///      etc.) continue to function.
 /// This avoids adding a heavy `windows-sys` dependency while achieving
 /// owner-only access semantics equivalent to Unix `0600`/`0700`.
 #[cfg(windows)]
@@ -38,12 +41,60 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
         }
     };
 
-    // Step 1: Remove inheritance and all existing ACEs.
-    //   /reset      — restores inherited ACEs and removes explicit ones
-    //   /inheritance:r — removes all inherited ACEs (leaves only explicit ones, but
-    //                    after /reset there are none explicit, so the DACL is empty)
-    // We run these as two separate commands for clarity and reliability.
-    // First, strip inheritance so the file/dir doesn't pick up parent ACEs.
+    // Check whether we can actually read the path before modifying ACLs.
+    // If we can't even stat it, there is no point stripping inheritance
+    // (which would make things worse).
+    if let Err(e) = std::fs::metadata(path) {
+        warn!(
+            "Cannot access {:?} to restrict ACLs ({}); skipping ACL modification",
+            path, e
+        );
+        return;
+    }
+
+    let is_dir = path.is_dir();
+
+    // Step 1: Grant full control to the current user BEFORE removing
+    // inheritance.  This ensures we never leave the object in a state
+    // with an empty DACL (which would lock everyone out).
+    //
+    // For directories we use (OI)(CI)(F) so that child files and
+    // subdirectories inherit the ACE.  For plain files inheritance
+    // flags are unnecessary, so we use just (F).
+    let ace = if is_dir {
+        format!("{}:(OI)(CI)(F)", username)
+    } else {
+        format!("{}:(F)", username)
+    };
+
+    let grant = std::process::Command::new("icacls")
+        .arg(&path_str)
+        .arg("/grant")
+        .arg(&ace)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    match grant {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            warn!(
+                "icacls /grant failed for {:?} (exit code {:?}); skipping further ACL changes",
+                path,
+                status.code()
+            );
+            return;
+        }
+        Err(e) => {
+            warn!(
+                "Failed to run icacls /grant for {:?}: {}; skipping further ACL changes",
+                path, e
+            );
+            return;
+        }
+    }
+
+    // Step 2: Now that we have an explicit ACE, safely remove inherited ACEs.
     let strip = std::process::Command::new("icacls")
         .arg(&path_str)
         .args(["/inheritance:r"])
@@ -59,36 +110,43 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
                 path,
                 status.code()
             );
-            // Continue anyway — the grant below may still help tighten access.
+            // The explicit grant above still tightened access, so this is
+            // non-fatal — inherited ACEs just remain.
         }
         Err(e) => {
-            warn!("Failed to run icacls for {:?}: {}", path, e);
-            return;
+            warn!("Failed to run icacls /inheritance:r for {:?}: {}", path, e);
         }
     }
 
-    // Step 2: Grant full control to the current user only.
-    let grant = std::process::Command::new("icacls")
+    // Step 3: Also grant SYSTEM full control so that OS services (backup,
+    // search indexing, Windows Update, etc.) continue to function.
+    let system_ace = if is_dir {
+        "SYSTEM:(OI)(CI)(F)"
+    } else {
+        "SYSTEM:(F)"
+    };
+
+    let grant_system = std::process::Command::new("icacls")
         .arg(&path_str)
         .arg("/grant")
-        .arg(format!("{}:(F)", username))
+        .arg(system_ace)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
 
-    match grant {
+    match grant_system {
         Ok(status) if status.success() => {
-            // Success — path is now restricted to current user only.
+            // Success — SYSTEM access restored.
         }
         Ok(status) => {
             warn!(
-                "icacls /grant failed for {:?} (exit code {:?})",
+                "icacls /grant SYSTEM failed for {:?} (exit code {:?})",
                 path,
                 status.code()
             );
         }
         Err(e) => {
-            warn!("Failed to run icacls /grant for {:?}: {}", path, e);
+            warn!("Failed to run icacls /grant SYSTEM for {:?}: {}", path, e);
         }
     }
 }

@@ -210,6 +210,24 @@ fn load_tray_icon() -> dioxus::desktop::trayicon::Icon {
         .expect("Failed to create tray icon")
 }
 
+/// Check whether the current process is running with administrator (elevated) privileges.
+#[cfg(target_os = "windows")]
+fn is_elevated() -> bool {
+    // Quick heuristic: try to open the ADMIN$ share or read a protected registry key.
+    // A lightweight approach is to check if we can write to the Windows directory,
+    // but the most reliable way is via the Windows API.  We use a simple fallback:
+    // attempt to open \\.\PhysicalDrive0 which requires admin.
+    // However, to keep this dependency-free we just attempt a harmless admin-only
+    // operation: reading the SAM registry hive.
+    std::process::Command::new("reg")
+        .args(["query", "HKU\\S-1-5-19"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 #[cfg(target_os = "windows")]
 fn ensure_firewall_rules() {
     use std::env;
@@ -226,6 +244,18 @@ fn ensure_firewall_rules() {
         }
     };
     let exe_path_str = exe_path.to_string_lossy();
+
+    // Detect elevation early to give a single helpful message instead of
+    // four identical "Access is denied" warnings.
+    if !is_elevated() {
+        tracing::info!(
+            "Not running as Administrator — skipping firewall rule creation. \
+             If you experience connectivity issues, run Connected once as Administrator \
+             or manually add Windows Firewall allow-rules for \"{}\" (UDP).",
+            exe_path_str
+        );
+        return;
+    }
 
     // mDNS Inbound: allow receiving mDNS responses and queries on port 5353
     let mdns_inbound = WindowsFirewallRule::builder()
@@ -289,6 +319,8 @@ fn ensure_firewall_rules() {
     if let Err(e) = quic_outbound.add_or_update() {
         tracing::warn!("Failed to add/update QUIC outbound firewall rule: {}", e);
     }
+
+    tracing::info!("Firewall rules created/updated successfully");
 }
 
 fn main() {

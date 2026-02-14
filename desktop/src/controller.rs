@@ -1070,8 +1070,24 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
             Some(c)
         }
         Err(e) => {
-            error!("Failed to init: {}", e);
-            add_notification("Init Failed", &e.to_string(), "");
+            let msg = e.to_string();
+            error!("Failed to init: {}", msg);
+
+            // Provide actionable guidance for common "Access is denied" errors
+            // on Windows, which typically stem from missing firewall rules or
+            // restrictive file-system ACLs.
+            let user_msg = if msg.contains("Access is denied") {
+                format!(
+                    "{}\n\nTip: try running Connected once as Administrator so that \
+                     firewall rules and storage permissions can be configured, then \
+                     restart normally.",
+                    msg
+                )
+            } else {
+                msg
+            };
+
+            add_notification("Init Failed", &user_msg, "");
             None
         }
     }

@@ -156,8 +156,18 @@ impl ConnectedClient {
         init_rustls_provider();
 
         // Load KeyStore first to get the persisted device_id
-        let key_store = Arc::new(RwLock::new(KeyStore::new(storage_path.clone())?));
+        let key_store = Arc::new(RwLock::new(KeyStore::new(storage_path.clone()).map_err(
+            |e| {
+                error!("KeyStore initialization failed: {}", e);
+                ConnectedError::InitializationError(format!(
+                    "Failed to load or create identity key store: {}. \
+                     Check that the config directory is accessible.",
+                    e
+                ))
+            },
+        )?));
         let device_id = key_store.read().device_id().to_string();
+        info!("KeyStore loaded (device_id={})", device_id);
 
         let download_dir = if let Some(p) = storage_path {
             p.join("downloads")
@@ -166,7 +176,17 @@ impl ConnectedClient {
         };
 
         if !download_dir.exists() {
-            std::fs::create_dir_all(&download_dir).map_err(ConnectedError::Io)?;
+            std::fs::create_dir_all(&download_dir).map_err(|e| {
+                error!(
+                    "Failed to create download directory {:?}: {}",
+                    download_dir, e
+                );
+                ConnectedError::InitializationError(format!(
+                    "Failed to create download directory {}: {}",
+                    download_dir.display(),
+                    e
+                ))
+            })?;
         }
 
         let download_dir = Arc::new(RwLock::new(download_dir));
@@ -174,15 +194,33 @@ impl ConnectedClient {
         // 1. Initialize Transport (QUIC)
         // If port is 0, OS assigns one. We need to know it for mDNS.
         let bind_addr = SocketAddr::new(bind_ip, port);
-        let transport = QuicTransport::new(bind_addr, device_id.clone(), key_store.clone()).await?;
+        let transport = QuicTransport::new(bind_addr, device_id.clone(), key_store.clone())
+            .await
+            .map_err(|e| {
+                error!(
+                    "QUIC transport failed to bind on {}: {}. \
+                         A firewall or security policy may be blocking UDP socket creation.",
+                    bind_addr, e
+                );
+                ConnectedError::InitializationError(format!(
+                    "Failed to start QUIC transport on {}: {}. \
+                         If you see 'Access is denied', try running the application once as \
+                         Administrator so that firewall rules can be created, or manually allow \
+                         this application through Windows Firewall for UDP traffic.",
+                    bind_addr, e
+                ))
+            })?;
         let actual_port = transport.local_addr()?.port();
+        info!("QUIC transport listening on port {}", actual_port);
 
         // 2. Initialize Device Info
         let local_device = Device::new(device_id, device_name, local_ip, actual_port, device_type);
 
         // 3. Initialize Discovery (mDNS)
-        let discovery = DiscoveryService::new(local_device.clone())
-            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let discovery = DiscoveryService::new(local_device.clone()).map_err(|e| {
+            error!("mDNS discovery initialization failed: {}", e);
+            ConnectedError::InitializationError(format!("Failed to start mDNS discovery: {}", e))
+        })?;
 
         // 4. Create Event Bus
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -202,10 +240,16 @@ impl ConnectedClient {
         });
 
         // 5. Start Background Tasks
-        client.start_background_tasks().await?;
+        client.start_background_tasks().await.map_err(|e| {
+            error!("Failed to start background tasks: {}", e);
+            e
+        })?;
 
         // 6. Announce Presence
-        client.discovery.announce()?;
+        client.discovery.announce().map_err(|e| {
+            error!("Failed to announce via mDNS: {}", e);
+            e
+        })?;
 
         Ok(client)
     }
