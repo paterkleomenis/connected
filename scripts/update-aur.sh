@@ -346,7 +346,7 @@ EOF
 
 # Replace or append sha256sums block
 export SHA_BLOCK_FILE
-perl -0777 -i -pe 'BEGIN{ local $/; open my $fh, "<", $ENV{SHA_BLOCK_FILE} or die $!; $b=<$fh>; chomp $b; } if (s/sha256sums=\([^)]*\)/$b/s) { } else { $_ .= "\n\n$b\n"; }' "$PKGBUILD"
+perl -0777 -i -pe 'BEGIN{ local $/; open my $fh, "<", $ENV{SHA_BLOCK_FILE} or die $!; $b=<$fh>; $b =~ s/\n$//; } if (s/sha256sums=\([^)]*\)/$b/s) { } else { $_ .= "\n\n$b\n"; }' "$PKGBUILD"
 rm -f "$SHA_BLOCK_FILE"
 
 src_count="$(count_sources "$PKGBUILD")"
