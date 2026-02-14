@@ -120,7 +120,7 @@ jobs:
         run: cargo build --workspace --release --verbose
 
       - name: Upload Linux Build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: connected-desktop-linux
           path: target/release/connected-desktop
@@ -187,7 +187,7 @@ jobs:
         run: wix build packaging/windows/installer.wxs -o target/wix/connected-desktop.msi
 
       - name: Upload Windows Build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: connected-desktop-windows
           path: target/wix/*.msi
@@ -233,7 +233,7 @@ jobs:
         run: ./gradlew assembleDebug
 
       - name: Upload Android Build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: connected-android-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
