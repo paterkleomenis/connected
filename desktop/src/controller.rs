@@ -4,8 +4,9 @@ use crate::proximity;
 use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
     SavedDeviceInfo, TransferStatus, add_file_transfer_request, add_notification,
-    get_auto_sync_messages, get_current_media, get_current_remote_files, get_current_remote_path,
-    get_device_name_setting, get_devices_store, get_download_directory_setting, get_last_clipboard,
+    get_auto_sync_messages, get_clipboard_sync_enabled, get_current_media,
+    get_current_remote_files, get_current_remote_path, get_device_name_setting, get_devices_store,
+    get_download_directory_setting, get_last_clipboard, get_last_remote_clipboard_content,
     get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
     get_pairing_requests, get_pending_pairings, get_phone_call_log, get_phone_conversations,
     get_phone_data_update, get_phone_messages, get_preview_data, get_remote_files_update,
@@ -17,7 +18,7 @@ use crate::state::{
     set_phone_contacts, set_phone_conversations, set_phone_messages, set_sdk_initialized,
     set_transfer_status,
 };
-use crate::utils::{get_hostname, set_system_clipboard};
+use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
 use connected_core::telephony::{CallLogEntry, CallType};
 use connected_core::transport::UnpairReason;
@@ -101,9 +102,6 @@ pub enum AppAction {
     SendClipboard {
         ip: String,
         port: u16,
-        text: String,
-    },
-    BroadcastClipboard {
         text: String,
     },
     SetClipboardSync(bool),
@@ -226,6 +224,56 @@ fn stop_proximity() {
     if let Some(handle) = PROXIMITY_HANDLE.lock_or_recover().take() {
         handle.stop();
     }
+}
+
+fn spawn_clipboard_monitor(client: Arc<ConnectedClient>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            if !get_clipboard_sync_enabled() {
+                continue;
+            }
+
+            // Debounce local->remote propagation right after receiving a remote clipboard update.
+            let last_remote_update = *get_last_remote_update().lock_or_recover();
+            if last_remote_update.elapsed() < Duration::from_millis(1000) {
+                continue;
+            }
+
+            let current_clip = get_system_clipboard();
+            if current_clip.is_empty() {
+                continue;
+            }
+
+            let last_clip = get_last_clipboard().lock_or_recover().clone();
+            let last_remote_content = get_last_remote_clipboard_content()
+                .lock_or_recover()
+                .clone();
+            if current_clip == last_clip || current_clip == last_remote_content {
+                continue;
+            }
+
+            debug!(
+                "Local clipboard changed. New content length: {}",
+                current_clip.len()
+            );
+            *get_last_clipboard().lock_or_recover() = current_clip.clone();
+
+            match client.broadcast_clipboard(current_clip).await {
+                Ok(count) => {
+                    if count == 0 {
+                        info!("Clipboard broadcast sent to 0 devices (no trusted peers found)");
+                    } else {
+                        info!("Clipboard broadcast sent to {} devices", count);
+                    }
+                }
+                Err(e) => {
+                    error!("Clipboard broadcast failed: {}", e);
+                }
+            }
+        }
+    })
 }
 
 fn spawn_event_loop(
@@ -1079,6 +1127,7 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
 
 pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
     let mut client: Option<Arc<ConnectedClient>> = None;
+    let mut clipboard_monitor: Option<tokio::task::JoinHandle<()>> = None;
 
     while let Some(action) = rx.next().await {
         match action {
@@ -1088,6 +1137,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
                 let name = get_device_name_setting().unwrap_or_else(get_hostname);
                 client = start_core(name).await;
+                if let Some(c) = &client {
+                    clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
+                }
                 // Apply saved download directory to core
                 if let Some(c) = &client
                     && let Some(dir) = get_download_directory_setting()
@@ -1100,12 +1152,18 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
             AppAction::RenameDevice { new_name } => {
+                if let Some(task) = clipboard_monitor.take() {
+                    task.abort();
+                }
                 if let Some(c) = client.take() {
                     stop_proximity();
                     c.shutdown().await;
                 }
                 set_device_name_setting(new_name.clone());
                 client = start_core(new_name).await;
+                if let Some(c) = &client {
+                    clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
+                }
             }
             AppAction::SendFile { ip, port, path } => {
                 if let Some(c) = &client {
@@ -1154,28 +1212,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             }
                         } else {
                             warn!("Clipboard send skipped: invalid IP {}", ip);
-                        }
-                    });
-                }
-            }
-            AppAction::BroadcastClipboard { text } => {
-                if let Some(c) = &client {
-                    debug!("Clipboard broadcast requested (len: {})", text.len());
-                    let c = c.clone();
-                    tokio::spawn(async move {
-                        match c.broadcast_clipboard(text).await {
-                            Ok(count) => {
-                                if count == 0 {
-                                    info!(
-                                        "Clipboard broadcast sent to 0 devices (no trusted peers found)"
-                                    );
-                                } else {
-                                    info!("Clipboard broadcast sent to {} devices", count);
-                                }
-                            }
-                            Err(e) => {
-                                error!("Broadcast failed: {}", e);
-                            }
                         }
                     });
                 }
@@ -1947,6 +1983,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::RefreshDiscovery => {
                 info!("Refreshed discovery due to adapter state change - Restarting Core");
+                if let Some(task) = clipboard_monitor.take() {
+                    task.abort();
+                }
                 if let Some(c) = client.take() {
                     stop_proximity();
                     c.shutdown().await;
@@ -1954,6 +1993,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                 let name = get_device_name_setting().unwrap_or_else(get_hostname);
                 client = start_core(name).await;
+                if let Some(c) = &client {
+                    clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
+                }
 
                 if let Some(c) = &client {
                     let saved = get_saved_devices_setting();

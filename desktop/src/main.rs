@@ -890,31 +890,6 @@ fn App() -> Element {
                 update_info.set(info);
             }
 
-            // Clipboard Sync Check
-            if *clipboard_sync_enabled.read() {
-                // Check if we recently received a remote update (debounce to prevent echo)
-                let last_update = *get_last_remote_update().lock_or_recover();
-                if last_update.elapsed() >= Duration::from_millis(1000) {
-                    let current_clip = get_system_clipboard();
-                    let last_clip = get_last_clipboard().lock_or_recover().clone();
-                    // Also check against last remote clipboard content to prevent echo loops
-                    let last_remote_content = get_last_remote_clipboard_content()
-                        .lock_or_recover()
-                        .clone();
-                    if !current_clip.is_empty()
-                        && current_clip != last_clip
-                        && current_clip != last_remote_content
-                    {
-                        debug!(
-                            "Local clipboard changed. New content length: {}",
-                            current_clip.len()
-                        );
-                        *get_last_clipboard().lock_or_recover() = current_clip.clone();
-                        action_tx.send(AppAction::BroadcastClipboard { text: current_clip });
-                    }
-                }
-            }
-
             // Increased from 200ms to 500ms to reduce CPU usage
             // Most state changes are event-driven, polling is just for sync
             tokio::time::sleep(Duration::from_millis(500)).await;
