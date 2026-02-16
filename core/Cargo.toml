@@ -22,10 +22,8 @@ serde.workspace = true
 serde_json.workspace = true
 mdns-sd.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-once_cell.workspace = true
 parking_lot.workspace = true
 mime_guess.workspace = true
 dirs = "6"
@@ -33,7 +31,6 @@ sha2 = "0.10"
 if-addrs = "0.15"
 base64 = "0.22"
 blake3 = "1.8"
-unicode-normalization = "0.1"
 zip = { version = "7.2", default-features = false, features = [
   "deflate",
   "time",
@@ -41,8 +38,3 @@ zip = { version = "7.2", default-features = false, features = [
 walkdir = "2.5"
 reqwest = { version = "0.13", features = ["rustls"], default-features = false }
 semver = "1.0"
-
-[target.'cfg(target_os = "android")'.dependencies]
-android_logger = "0.15"
-log = "0.4"
-tracing-log = "0.2"

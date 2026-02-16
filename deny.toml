@@ -79,10 +79,6 @@ skip = [
   # Windows crates - only used on Windows targets
   { name = "windows-sys" },
   { name = "windows-targets" },
-  # TOML parsing crates often have multiple versions
-  { name = "toml" },
-  { name = "toml_edit" },
-  { name = "winnow" },
   # Image processing
   { name = "zune-core" },
   { name = "zune-jpeg" },

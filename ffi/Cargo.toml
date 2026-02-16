@@ -17,9 +17,7 @@ path = "src/uniffi_bindgen.rs"
 connected-core = { path = "../core" }
 uniffi = { workspace = true, features = ["cli"] }
 thiserror = { workspace = true }
-anyhow = { workspace = true }
 tracing = { workspace = true }
-once_cell = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
 
