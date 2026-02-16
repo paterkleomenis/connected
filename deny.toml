@@ -27,8 +27,6 @@ ignore = [
   "RUSTSEC-2024-0415",
   "RUSTSEC-2024-0420",
   "RUSTSEC-2024-0419",
-  # fxhash no longer maintained - transitive dep
-  "RUSTSEC-2025-0057",
   # paste no longer maintained - transitive dep
   "RUSTSEC-2024-0436",
   # proc-macro-error unmaintained - transitive dep from gtk
@@ -76,9 +74,6 @@ highlight = "all"
 
 # Allow specific duplicate versions that are hard to resolve
 skip = [
-  # Windows crates - only used on Windows targets
-  { name = "windows-sys" },
-  { name = "windows-targets" },
   # Image processing
   { name = "zune-core" },
   { name = "zune-jpeg" },
