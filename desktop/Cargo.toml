@@ -48,7 +48,7 @@ windows = { version = "0.62", features = [
   "Win32_System_Variant",
   "Win32_UI_WindowsAndMessaging",
 ] }
-windows_firewall = "0.5"
+windows_firewall = "0.6"
 
 
 [features]
