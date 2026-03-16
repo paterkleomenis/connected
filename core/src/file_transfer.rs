@@ -178,7 +178,8 @@ impl FileTransfer {
                             .strip_prefix(dir_path.parent().unwrap_or(&dir_path))
                             .map_err(std::io::Error::other)?
                             .to_string_lossy()
-                            .into_owned();
+                            .into_owned()
+                            .replace('\\', "/");
 
                         if path.is_file() {
                             zip.start_file(name.clone(), options)
@@ -354,8 +355,20 @@ impl FileTransfer {
         let mut last_progress_update = std::time::Instant::now();
         let mut buf = BytesMut::with_capacity(BUFFER_SIZE);
 
-        loop {
-            let bytes_read = match file.read_buf(&mut buf).await {
+        let mut remaining = file_size;
+
+        while remaining > 0 {
+            // Re-reserve capacity since split() removes it
+            buf.reserve(BUFFER_SIZE);
+
+            // Limit read to the declared file_size to avoid reading appended data
+            // Since read_buf fills the buffer, we can limit the capacity by creating a smaller slice
+            // if we are at the very end, but with BytesMut we can just read.
+            // A simpler approach is to read into a slice up to `remaining` bytes
+            let limit = std::cmp::min(remaining as usize, BUFFER_SIZE);
+            let mut read_buf = vec![0u8; limit];
+
+            let bytes_read = match file.read(&mut read_buf).await {
                 Ok(n) => n,
                 Err(e) => {
                     if is_temp_file {
@@ -365,11 +378,10 @@ impl FileTransfer {
                 }
             };
             if bytes_read == 0 {
-                break;
+                break; // Unexpected EOF, handled by checksum mismatch later
             }
 
-            // `buf.split().freeze()` yields a `Bytes` chunk backed by the same allocation
-            // (no copy) that QUIC can send without re-buffering in userland.
+            buf.extend_from_slice(&read_buf[..bytes_read]);
             let chunk = buf.split().freeze();
 
             hasher.update(&chunk);
@@ -383,6 +395,7 @@ impl FileTransfer {
             }
 
             offset += bytes_read as u64;
+            remaining -= bytes_read as u64;
 
             // Report progress (throttle to every 100ms)
             if last_progress_update.elapsed().as_millis() > 100 {
