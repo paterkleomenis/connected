@@ -20,7 +20,6 @@ use components::{DeviceCard, FileBrowser, FileDialog, Icon, IconType};
 use connected_core::telephony::{ActiveCallState, CallAction};
 use connected_core::{MediaCommand, UpdateInfo};
 use controller::{AppAction, app_controller};
-use dioxus::desktop::use_window;
 use dioxus::prelude::*;
 
 use state::*;
@@ -446,7 +445,7 @@ fn main() {
     // Set up menu bar on macOS
     #[cfg(target_os = "macos")]
     {
-        use muda::{Menu, PredefinedMenuItem, Submenu};
+        use dioxus::desktop::muda::{Menu, PredefinedMenuItem, Submenu};
 
         let menu = Menu::new();
         let app_menu = Submenu::new("Connected", true);
@@ -672,6 +671,7 @@ fn App() -> Element {
     #[cfg(target_os = "windows")]
     {
         use dioxus::desktop::trayicon::menu::{Menu, MenuItem, PredefinedMenuItem};
+        use dioxus::desktop::use_window;
 
         let window = use_window();
         let window = window.window.clone();
@@ -707,6 +707,7 @@ fn App() -> Element {
 
     #[cfg(target_os = "linux")]
     {
+        use dioxus::desktop::use_window;
         use ksni::TrayMethods;
 
         let window = use_window();
