@@ -240,6 +240,54 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
 
   # -------------------------------------------------------------------------
+  # Job 5: Build Rust Code (macOS Desktop)
+  # -------------------------------------------------------------------------
+  build-macos:
+    name: Rust (macOS)
+    runs-on: macos-latest
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "macos-build"
+
+      - name: Build macOS App Bundle
+        run: |
+          chmod +x packaging/macos/build-macos.sh
+          packaging/macos/build-macos.sh
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
+          APPLE_DEVELOPER_ID_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}
+          APPLE_DEVELOPER_ID_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_ID_TEAM_ID }}
+
+      - name: Run tests
+        run: cargo test --workspace --verbose
+
+      - name: Upload macOS App
+        uses: actions/upload-artifact@v7
+        with:
+          name: connected-desktop-macos
+          path: target/macos-build/Connected.app
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: connected-desktop-macos-dmg
+          path: target/macos-build/Connected-*.dmg
+
+  # -------------------------------------------------------------------------
   # Job 6: Pre-commit Hooks Check
   # -------------------------------------------------------------------------
   pre-commit:

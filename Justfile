@@ -121,6 +121,12 @@ outdated:
 build-android:
     cargo ndk -t aarch64-linux-android -t armv7-linux-androideabi -t x86_64-linux-android -t i686-linux-android -o android/app/src/main/jniLibs build --release
 
+# Build macOS App and DMG
+[doc("Build macOS .app bundle and DMG installer")]
+build-macos:
+    chmod +x packaging/macos/build-macos.sh
+    packaging/macos/build-macos.sh
+
 # Install pre-commit hooks
 [doc("Install pre-commit hooks")]
 install-hooks:
