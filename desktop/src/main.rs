@@ -20,7 +20,6 @@ use components::{DeviceCard, FileBrowser, FileDialog, Icon, IconType};
 use connected_core::telephony::{ActiveCallState, CallAction};
 use connected_core::{MediaCommand, UpdateInfo};
 use controller::{AppAction, app_controller};
-use dioxus::desktop::use_window;
 use dioxus::prelude::*;
 
 use state::*;
@@ -425,8 +424,8 @@ fn main() {
     ensure_firewall_rules();
 
     // Platform-specific window settings
-    let decorations = cfg!(target_os = "windows");
-    let transparent = !cfg!(target_os = "windows");
+    let decorations = cfg!(target_os = "windows") || cfg!(target_os = "macos");
+    let transparent = !cfg!(target_os = "windows") && !cfg!(target_os = "macos");
 
     let data_dir = dirs::data_local_dir().map(|d| d.join("connected"));
     if let Some(d) = data_dir.as_ref().filter(|d| !d.exists()) {
@@ -434,17 +433,57 @@ fn main() {
     }
 
     #[allow(unused_mut)]
-    let mut config = dioxus::desktop::Config::new()
-        .with_window(
-            dioxus::desktop::WindowBuilder::new()
-                .with_title("Connected")
-                .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
-                .with_decorations(decorations)
-                .with_transparent(transparent)
-                .with_window_icon(Some(load_icon())),
-        )
-        .with_menu(None)
-        .with_disable_context_menu(true);
+    let mut config = dioxus::desktop::Config::new().with_window(
+        dioxus::desktop::WindowBuilder::new()
+            .with_title("Connected")
+            .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
+            .with_decorations(decorations)
+            .with_transparent(transparent)
+            .with_window_icon(Some(load_icon())),
+    );
+
+    // Set up menu bar on macOS
+    #[cfg(target_os = "macos")]
+    {
+        use dioxus::desktop::muda::{Menu, PredefinedMenuItem, Submenu};
+
+        let menu = Menu::new();
+        let app_menu = Submenu::new("Connected", true);
+        app_menu
+            .append_items(&[
+                &PredefinedMenuItem::about(None, None),
+                &PredefinedMenuItem::separator(),
+                &PredefinedMenuItem::services(None),
+                &PredefinedMenuItem::separator(),
+                &PredefinedMenuItem::hide(None),
+                &PredefinedMenuItem::hide_others(None),
+                &PredefinedMenuItem::separator(),
+                &PredefinedMenuItem::quit(None),
+            ])
+            .expect("Failed to build app menu");
+
+        let window_menu = Submenu::new("Window", true);
+        window_menu
+            .append_items(&[
+                &PredefinedMenuItem::minimize(None),
+                &PredefinedMenuItem::maximize(None),
+                &PredefinedMenuItem::separator(),
+                &PredefinedMenuItem::close_window(None),
+            ])
+            .expect("Failed to build window menu");
+
+        menu.append_items(&[&app_menu, &window_menu])
+            .expect("Failed to build menu");
+
+        config = config.with_menu(Some(menu));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        config = config.with_menu(None);
+    }
+
+    config = config.with_disable_context_menu(true);
 
     if let Some(d) = data_dir {
         config = config.with_data_directory(d);
@@ -632,6 +671,7 @@ fn App() -> Element {
     #[cfg(target_os = "windows")]
     {
         use dioxus::desktop::trayicon::menu::{Menu, MenuItem, PredefinedMenuItem};
+        use dioxus::desktop::use_window;
 
         let window = use_window();
         let window = window.window.clone();
@@ -667,6 +707,7 @@ fn App() -> Element {
 
     #[cfg(target_os = "linux")]
     {
+        use dioxus::desktop::use_window;
         use ksni::TrayMethods;
 
         let window = use_window();

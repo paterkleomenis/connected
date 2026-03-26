@@ -987,7 +987,7 @@ impl QuicTransport {
 
         loop {
             match connection.accept_bi().await {
-                Ok((mut send, mut recv)) => {
+                Ok((send, mut recv)) => {
                     // Read Stream Type
 
                     let mut type_buf = [0u8; 1];
@@ -1004,77 +1004,65 @@ impl QuicTransport {
 
                     match type_buf[0] {
                         Self::STREAM_TYPE_CONTROL => {
-                            let mut len_buf = [0u8; 4];
+                            let tx = message_tx.clone();
+                            let fp = fingerprint.clone();
+                            let lid = local_id.clone();
 
-                            if recv.read_exact(&mut len_buf).await.is_err() {
-                                continue;
-                            }
+                            tokio::spawn(async move {
+                                let mut len_buf = [0u8; 4];
 
-                            let msg_len = u32::from_be_bytes(len_buf) as usize;
-
-                            if msg_len == 0 || msg_len > MAX_MESSAGE_SIZE {
-                                continue;
-                            }
-
-                            let mut data = vec![0u8; msg_len];
-
-                            if recv.read_exact(&mut data).await.is_err() {
-                                continue;
-                            }
-
-                            let message: Message = match serde_json::from_slice(&data) {
-                                Ok(m) => m,
-
-                                Err(e) => {
-                                    debug!("Failed to parse message: {}", e);
-
-                                    continue;
-                                }
-                            };
-
-                            debug!(
-                                "Received message from {} ({}): {:?}",
-                                remote_addr, fingerprint, message
-                            );
-
-                            match &message {
-                                Message::Ping { timestamp, .. } => {
-                                    let pong = Message::Pong {
-                                        from_id: local_id.clone(),
-
-                                        timestamp: *timestamp,
-                                    };
-
-                                    let pong_data = serde_json::to_vec(&pong)?;
-
-                                    let len_bytes = (pong_data.len() as u32).to_be_bytes();
-
-                                    // Send Length + Data (stream type already read on this stream)
-                                    send.write_all(&len_bytes).await?;
-
-                                    send.write_all(&pong_data).await?;
-
-                                    send.finish()?;
+                                if recv.read_exact(&mut len_buf).await.is_err() {
+                                    return;
                                 }
 
-                                Message::Handshake { .. } => {
-                                    // Pass send stream for Handshake so ack can be sent on same stream
-                                    let _ = message_tx.send((
-                                        remote_addr,
-                                        fingerprint.clone(),
-                                        message,
-                                        Some(send),
-                                    ));
+                                let msg_len = u32::from_be_bytes(len_buf) as usize;
+
+                                if msg_len == 0 || msg_len > MAX_MESSAGE_SIZE {
+                                    return;
                                 }
-                                _ => {
-                                    let _ = message_tx.send((
-                                        remote_addr,
-                                        fingerprint.clone(),
-                                        message,
-                                        None,
-                                    ));
+
+                                let mut data = vec![0u8; msg_len];
+
+                                if recv.read_exact(&mut data).await.is_err() {
+                                    return;
                                 }
-                            }
+
+                                let message: Message = match serde_json::from_slice(&data) {
+                                    Ok(m) => m,
+                                    Err(e) => {
+                                        debug!("Failed to parse message: {}", e);
+                                        return;
+                                    }
+                                };
+
+                                debug!(
+                                    "Received message from {} ({}): {:?}",
+                                    remote_addr, fp, message
+                                );
+
+                                match &message {
+                                    Message::Ping { timestamp, .. } => {
+                                        let pong = Message::Pong {
+                                            from_id: lid,
+                                            timestamp: *timestamp,
+                                        };
+
+                                        if let Ok(pong_data) = serde_json::to_vec(&pong) {
+                                            let len_bytes = (pong_data.len() as u32).to_be_bytes();
+                                            let mut send = send;
+                                            let _ = send.write_all(&len_bytes).await;
+                                            let _ = send.write_all(&pong_data).await;
+                                            let _ = send.finish();
+                                        }
+                                    }
+                                    Message::Handshake { .. } => {
+                                        let _ = tx.send((remote_addr, fp, message, Some(send)));
+                                    }
+                                    _ => {
+                                        let _ = tx.send((remote_addr, fp, message, None));
+                                    }
+                                }
+                            });
                         }
 
                         Self::STREAM_TYPE_FILE => {

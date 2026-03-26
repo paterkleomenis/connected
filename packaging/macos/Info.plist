@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>Connected</string>
+
+    <key>CFBundleExecutable</key>
+    <string>connected-desktop</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>com.connected.app</string>
+
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <key>CFBundleName</key>
+    <string>Connected</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleIconFile</key>
+    <string>Connected</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>0.0.0</string>
+
+    <key>CFBundleVersion</key>
+    <string>0.0.0</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 Connected Team. Licensed under MIT OR Apache-2.0</string>
+
+    <!-- Required for clipboard access -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Connected needs clipboard access to sync content between devices.</string>
+
+    <!-- Required for Bluetooth device discovery -->
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Connected uses Bluetooth to discover and communicate with nearby devices.</string>
+
+    <!-- Required for local network discovery -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Connected needs local network access to discover and communicate with nearby devices.</string>
+
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_connected._tcp</string>
+        <string>_http._tcp</string>
+    </array>
+</dict>
+</plist>
