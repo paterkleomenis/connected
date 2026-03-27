@@ -145,7 +145,7 @@ fn handle_event(client: &Arc<ConnectedClient>, event: CentralEvent) {
             payload.device_id,
             payload.name,
             payload.device_type,
-            "0.0.0.0".parse().unwrap(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             payload.port,
         ) {
             debug!("Proximity inject failed: {}", e);

@@ -463,7 +463,9 @@ impl KeyStore {
                 Err(e) => return Err(ConnectedError::Io(e)),
             }
         }
-        Err(ConnectedError::Io(last_err.unwrap()))
+        Err(ConnectedError::Io(last_err.unwrap_or_else(|| {
+            std::io::Error::other("write+sync retry exhausted without an underlying error")
+        })))
     }
 
     /// Create a file, write data, and fsync — all on a single handle.
@@ -502,7 +504,9 @@ impl KeyStore {
                 Err(e) => return Err(ConnectedError::Io(e)),
             }
         }
-        Err(ConnectedError::Io(last_err.unwrap()))
+        Err(ConnectedError::Io(last_err.unwrap_or_else(|| {
+            std::io::Error::other("rename retry exhausted without an underlying error")
+        })))
     }
 
     pub fn trust_peer(

@@ -159,7 +159,9 @@ where
             Err(e) => return Err(e),
         }
     }
-    Err(last_err.unwrap())
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::other("I/O retry exhausted without an underlying error")
+    }))
 }
 
 pub fn load_settings() -> AppSettings {

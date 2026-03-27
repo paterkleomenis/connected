@@ -1035,17 +1035,15 @@ fn spawn_event_loop(
 
                             if let Some(ref c) = call {
                                 let caller = c.contact_name.clone().unwrap_or(c.number.clone());
+                                let now_ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis();
 
                                 // If call ended, add to call log
                                 if c.state == ActiveCallState::Ended {
                                     let entry = CallLogEntry {
-                                        id: format!(
-                                            "call_{}",
-                                            std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_millis()
-                                        ),
+                                        id: format!("call_{}", now_ms),
                                         number: c.number.clone(),
                                         contact_name: c.contact_name.clone(),
                                         call_type: if c.is_incoming {
@@ -1053,11 +1051,7 @@ fn spawn_event_loop(
                                         } else {
                                             CallType::Outgoing
                                         },
-                                        timestamp: std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_millis()
-                                            as u64,
+                                        timestamp: now_ms as u64,
                                         duration: c.duration,
                                         is_read: false,
                                     };
