@@ -421,6 +421,12 @@ fn main() {
         run_firewall_install_and_exit();
     }
 
+    let _instance = single_instance::SingleInstance::new("connected-desktop-app").unwrap();
+    if !_instance.is_single() {
+        eprintln!("Another instance is already running.");
+        std::process::exit(1);
+    }
+
     // Explicitly select the Rustls crypto provider to avoid runtime ambiguity.
     if let Err(err) = rustls::crypto::ring::default_provider().install_default() {
         eprintln!("Failed to install rustls ring provider: {err:?}");
