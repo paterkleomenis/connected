@@ -126,9 +126,6 @@ if command -v hdiutil &> /dev/null; then
     # Create Applications symlink
     ln -s /Applications "$DMG_CONTENT_DIR/Applications"
 
-    # Create the DMG
-    TEMP_DMG="$BUILD_DIR/temp.dmg"
-
     # Calculate size (app size + overhead)
     APP_SIZE=$(du -sm "$DMG_CONTENT_DIR" | cut -f1)
     DMG_SIZE=$((APP_SIZE + 50))
