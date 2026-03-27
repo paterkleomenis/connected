@@ -10,7 +10,7 @@ pub async fn listen_for_wakeups(window: DesktopContext) {
 
     let _ = std::fs::remove_file(&socket_path);
     if let Ok(listener) = UnixListener::bind(&socket_path) {
-        while let Ok(_) = listener.accept().await {
+        while listener.accept().await.is_ok() {
             window.set_visible(true);
             window.set_minimized(false);
             window.set_focus();
