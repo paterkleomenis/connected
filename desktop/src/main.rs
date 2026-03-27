@@ -422,7 +422,17 @@ fn main() {
         run_firewall_install_and_exit();
     }
 
-    let _instance = single_instance::SingleInstance::new("connected-desktop-app").unwrap();
+    let instance_name = if cfg!(target_os = "macos") {
+        let mut path = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+        path.push("connected");
+        let _ = std::fs::create_dir_all(&path);
+        path.push("connected-desktop-app.lock");
+        path.to_string_lossy().into_owned()
+    } else {
+        "connected-desktop-app".to_string()
+    };
+
+    let _instance = single_instance::SingleInstance::new(&instance_name).unwrap();
     if !_instance.is_single() {
         eprintln!("Another instance is already running. Waking it up...");
         ipc::send_wakeup_signal();
