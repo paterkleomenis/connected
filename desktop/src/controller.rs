@@ -763,7 +763,7 @@ fn spawn_event_loop(
 
                                             unsafe {
                                                 // Initialize COM for this thread
-                                                CoInitialize(None).ok();
+                                                let _ = CoInitialize(None);
 
                                                 // Get the default audio endpoint
                                                 let enumerator =
