@@ -4,6 +4,7 @@
 mod components;
 mod controller;
 mod fs_provider;
+mod ipc;
 mod mpris_server;
 mod proximity;
 mod state;
@@ -423,8 +424,9 @@ fn main() {
 
     let _instance = single_instance::SingleInstance::new("connected-desktop-app").unwrap();
     if !_instance.is_single() {
-        eprintln!("Another instance is already running.");
-        std::process::exit(1);
+        eprintln!("Another instance is already running. Waking it up...");
+        ipc::send_wakeup_signal();
+        std::process::exit(0);
     }
 
     // Explicitly select the Rustls crypto provider to avoid runtime ambiguity.
@@ -536,6 +538,17 @@ impl Default for CurrentMediaUi {
 }
 
 fn App() -> Element {
+    let window = dioxus::desktop::window();
+    use_hook(move || {
+        static SPUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !SPUN.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let window = window.clone();
+            dioxus::prelude::spawn(async move {
+                ipc::listen_for_wakeups(window).await;
+            });
+        }
+    });
+
     // UI State
     let mut local_device_name =
         use_signal(|| get_device_name_setting().unwrap_or_else(get_hostname));
