@@ -241,7 +241,9 @@ fn spawn_clipboard_monitor(client: Arc<ConnectedClient>) -> tokio::task::JoinHan
                 continue;
             }
 
-            let current_clip = get_system_clipboard();
+            let current_clip = tokio::task::spawn_blocking(get_system_clipboard)
+                .await
+                .unwrap_or_default();
             if current_clip.is_empty() {
                 continue;
             }
@@ -761,7 +763,7 @@ fn spawn_event_loop(
 
                                             unsafe {
                                                 // Initialize COM for this thread
-                                                CoInitialize(None).ok();
+                                                let _ = CoInitialize(None);
 
                                                 // Get the default audio endpoint
                                                 let enumerator =
@@ -1041,7 +1043,7 @@ fn spawn_event_loop(
                                             "call_{}",
                                             std::time::SystemTime::now()
                                                 .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap()
+                                                .unwrap_or_default()
                                                 .as_millis()
                                         ),
                                         number: c.number.clone(),
@@ -1053,7 +1055,7 @@ fn spawn_event_loop(
                                         },
                                         timestamp: std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap()
+                                            .unwrap_or_default()
                                             .as_millis()
                                             as u64,
                                         duration: c.duration,

@@ -31,7 +31,15 @@ impl DesktopFilesystemProvider {
     /// filesystem operations.
     fn resolve_path(&self, path: &str) -> Result<PathBuf> {
         let safe_path = path.trim_start_matches('/');
-        if Path::new(safe_path)
+        let path_obj = Path::new(safe_path);
+
+        if path_obj.is_absolute() || path_obj.has_root() {
+            return Err(connected_core::ConnectedError::Filesystem(
+                "Absolute paths are not allowed".to_string(),
+            ));
+        }
+
+        if path_obj
             .components()
             .any(|c| matches!(c, Component::ParentDir))
         {

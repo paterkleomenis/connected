@@ -16,6 +16,7 @@ use tracing::{info, warn};
 ///      flags (OI)(CI) so child files/subdirectories inherit the ACE.
 ///   3. Grant full control to SYSTEM so that OS services (backup, indexing,
 ///      etc.) continue to function.
+///
 /// This avoids adding a heavy `windows-sys` dependency while achieving
 /// owner-only access semantics equivalent to Unix `0600`/`0700`.
 #[cfg(windows)]

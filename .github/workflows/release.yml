@@ -32,7 +32,7 @@ jobs:
         run: cargo build --release --verbose
 
       - name: Upload Linux Artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: connected-linux
           path: target/release/connected-desktop
@@ -116,7 +116,7 @@ jobs:
         run: wix build packaging/windows/installer.wxs -o target/wix/connected-desktop.msi
 
       - name: Upload Windows Artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: connected-windows
           path: target/wix/connected-desktop.msi
@@ -164,36 +164,80 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Upload Android Artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: connected-android
           path: android/app/build/outputs/apk/release/*.apk
 
   # -------------------------------------------------------------------------
-  # Job 4: Create Release
+  # Job 4: Build macOS Desktop
+  # -------------------------------------------------------------------------
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "macos-build"
+
+      - name: Build macOS App and DMG
+        run: |
+          chmod +x packaging/macos/build-macos.sh
+          packaging/macos/build-macos.sh
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
+          APPLE_DEVELOPER_ID_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}
+          APPLE_DEVELOPER_ID_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_ID_TEAM_ID }}
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: connected-macos
+          path: target/macos-build/Connected-*.dmg
+
+  # -------------------------------------------------------------------------
+  # Job 5: Create Release
   # -------------------------------------------------------------------------
   create-release:
     name: Create GitHub Release
-    needs: [build-linux, build-windows, build-android]
+    needs: [build-linux, build-windows, build-android, build-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Download Linux Artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: connected-linux
           path: connected-linux
 
       - name: Download Windows Artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: connected-windows
           path: connected-windows
 
       - name: Download Android Artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: connected-android
           path: connected-android
+
+      - name: Download macOS Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: connected-macos
+          path: connected-macos
 
       - name: Collect Release Assets
         shell: bash
@@ -224,6 +268,14 @@ jobs:
           fi
           mv "${apk_path}" connected-android.apk
 
+          macos_dmg="$(find connected-macos -type f -name 'Connected-*.dmg' | head -n 1 || true)"
+          if [[ -z "${macos_dmg}" ]]; then
+            echo "ERROR: macOS DMG not found in downloaded artifact." >&2
+            find connected-macos -maxdepth 4 -type f -print >&2 || true
+            exit 1
+          fi
+          mv "${macos_dmg}" connected-desktop.dmg
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -235,5 +287,6 @@ jobs:
             connected-desktop
             connected-desktop.msi
             connected-android.apk
+            connected-desktop.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
