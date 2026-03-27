@@ -219,7 +219,7 @@ const FIREWALL_INSTALL_ARG: &str = "--install-firewall-rules";
 #[cfg(target_os = "windows")]
 struct FirewallRuleDef {
     name: &'static str,
-    direction: windows_firewall::DirectionFirewallWindows,
+    direction: windows_firewall::Direction,
     description: &'static str,
     /// If set, constrains local ports.
     local_ports: Option<[u16; 1]>,
@@ -229,7 +229,7 @@ struct FirewallRuleDef {
 
 #[cfg(target_os = "windows")]
 const FIREWALL_RULES: [FirewallRuleDef; 4] = {
-    use windows_firewall::DirectionFirewallWindows as Dir;
+    use windows_firewall::Direction as Dir;
     [
         FirewallRuleDef {
             name: "Connected Desktop (mDNS) - Inbound",
@@ -266,16 +266,16 @@ const FIREWALL_RULES: [FirewallRuleDef; 4] = {
 /// configuration.  This does **not** require admin privileges.
 #[cfg(target_os = "windows")]
 fn firewall_rules_ok(exe_path: &str) -> bool {
-    use windows_firewall::{ActionFirewallWindows, ProtocolFirewallWindows, get_rule};
+    use windows_firewall::{Action, Protocol, get_rule};
 
     FIREWALL_RULES.iter().all(|def| {
         let Ok(rule) = get_rule(def.name) else {
             return false;
         };
         *rule.enabled()
-            && *rule.action() == ActionFirewallWindows::Allow
+            && *rule.action() == Action::Allow
             && *rule.direction() == def.direction
-            && rule.protocol().as_ref() == Some(&ProtocolFirewallWindows::Udp)
+            && rule.protocol().as_ref() == Some(&Protocol::Udp)
             && rule
                 .application_name()
                 .as_deref()
@@ -286,25 +286,35 @@ fn firewall_rules_ok(exe_path: &str) -> bool {
 /// Create / update all firewall rules.  **Requires admin privileges.**
 #[cfg(target_os = "windows")]
 fn create_firewall_rules(exe_path: &str) -> bool {
-    use windows_firewall::{ActionFirewallWindows, ProtocolFirewallWindows, WindowsFirewallRule};
+    use windows_firewall::{Action, FirewallRule, Protocol};
 
     let mut ok = true;
     for def in &FIREWALL_RULES {
-        let mut rule = WindowsFirewallRule::builder()
+        let mut rule = FirewallRule::builder()
             .name(def.name)
-            .action(ActionFirewallWindows::Allow)
+            .action(Action::Allow)
             .direction(def.direction)
             .enabled(true)
             .description(def.description)
-            .protocol(ProtocolFirewallWindows::Udp)
+            .protocol(Protocol::Udp)
             .application_name(exe_path)
             .build();
 
         if let Some(ports) = def.local_ports {
-            rule.set_local_ports(Some(ports.into_iter().collect()));
+            rule.set_local_ports(Some(
+                ports
+                    .into_iter()
+                    .map(windows_firewall::Port::from)
+                    .collect(),
+            ));
         }
         if let Some(ports) = def.remote_ports {
-            rule.set_remote_ports(Some(ports.into_iter().collect()));
+            rule.set_remote_ports(Some(
+                ports
+                    .into_iter()
+                    .map(windows_firewall::Port::from)
+                    .collect(),
+            ));
         }
 
         if let Err(e) = rule.add_or_update() {
