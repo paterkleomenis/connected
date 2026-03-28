@@ -2162,13 +2162,19 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         let msi = dest.to_string_lossy().to_string();
                                         info!("Launching MSI installer: {}", msi);
 
+                                        let system_root = std::env::var("SystemRoot")
+                                            .unwrap_or_else(|_| "C:\\Windows".to_string());
+                                        let powershell_exe = format!(
+                                            "{}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                                            system_root
+                                        );
                                         let status = tokio::task::spawn_blocking(move || {
                                             let msi_escaped = msi.replace('\'', "''");
                                             let ps_cmd = format!(
                                                 "Start-Process msiexec -Verb RunAs -ArgumentList @('/i','{}','/passive','/norestart')",
                                                 msi_escaped
                                             );
-                                            std::process::Command::new("powershell")
+                                            std::process::Command::new(powershell_exe)
                                                 .args(["-NoProfile", "-Command", &ps_cmd])
                                                 .status()
                                         })

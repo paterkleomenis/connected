@@ -108,11 +108,11 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            clipboard_sync_enabled: false,
-            media_enabled: false,
-            auto_sync_messages: false,
-            auto_sync_calls: false,
-            auto_sync_contacts: false,
+            clipboard_sync_enabled: true,
+            media_enabled: true,
+            auto_sync_messages: true,
+            auto_sync_calls: true,
+            auto_sync_contacts: true,
             notifications_enabled: true,
             device_name: None,
             saved_devices: HashMap::new(),

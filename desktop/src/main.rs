@@ -348,7 +348,13 @@ fn request_elevated_firewall_install(exe_path: &std::path::Path) -> bool {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    match std::process::Command::new("powershell")
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let powershell_exe = format!(
+        "{}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        system_root
+    );
+
+    match std::process::Command::new(powershell_exe)
         .creation_flags(CREATE_NO_WINDOW)
         .args(["-NoProfile", "-Command", &ps_command])
         .stdout(std::process::Stdio::null())

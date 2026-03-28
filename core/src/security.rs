@@ -21,6 +21,10 @@ use tracing::{info, warn};
 /// owner-only access semantics equivalent to Unix `0600`/`0700`.
 #[cfg(windows)]
 fn restrict_path_to_current_user(path: &std::path::Path) {
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let whoami_exe = format!("{}\\System32\\whoami.exe", system_root);
+    let icacls_exe = format!("{}\\System32\\icacls.exe", system_root);
+
     // Best-effort: log warnings on failure but don't abort — the application
     // should still function even if ACLs cannot be set (e.g. network drives).
     let path_str = match path.to_str() {
@@ -34,10 +38,12 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
         }
     };
 
-    let username = match std::env::var("USERNAME") {
-        Ok(u) if !u.is_empty() => u,
+    let username = match std::process::Command::new(&whoami_exe).output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
         _ => {
-            warn!("Cannot restrict ACLs: %USERNAME% environment variable not set");
+            warn!("Cannot restrict ACLs: failed to get current user via whoami");
             return;
         }
     };
@@ -68,7 +74,7 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
         format!("{}:(F)", username)
     };
 
-    let grant = std::process::Command::new("icacls")
+    let grant = std::process::Command::new(&icacls_exe)
         .arg(&path_str)
         .arg("/grant")
         .arg(&ace)
@@ -96,7 +102,7 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
     }
 
     // Step 2: Now that we have an explicit ACE, safely remove inherited ACEs.
-    let strip = std::process::Command::new("icacls")
+    let strip = std::process::Command::new(&icacls_exe)
         .arg(&path_str)
         .args(["/inheritance:r"])
         .stdout(std::process::Stdio::null())
@@ -127,7 +133,7 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
         "SYSTEM:(F)"
     };
 
-    let grant_system = std::process::Command::new("icacls")
+    let grant_system = std::process::Command::new(&icacls_exe)
         .arg(&path_str)
         .arg("/grant")
         .arg(system_ace)
