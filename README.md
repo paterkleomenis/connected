@@ -10,7 +10,7 @@ Currently available for **Linux**, **Windows**, and **Android**.
 
 ## Features
 
-- **Cross-Platform**: Seamlessly transfer files, sync clipboards, make and answer calls, and control media between Android, Linux, and Windows devices.
+- **Cross-Platform**: Seamlessly transfer files, sync clipboards, make and answer calls, and control media between Android, Linux, Mac and Windows devices.
 - **Offline Functionality**: You can also use it without an internet connection. Uses Wi-Fi Direct and Local Network.
 - **High Speed**: Powered by the QUIC protocol.
 - **Zero Config**: Auto-discovery via mDNS and BLE.
