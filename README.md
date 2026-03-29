@@ -2,7 +2,7 @@
 
 **Connected** is a high-speed, offline, cross-platform ecosystem that bridges the gap between your devices. Built with **Rust** and **Jetpack Compose**, it aims to outperform proprietary solutions like AirDrop by utilizing cutting-edge technologies like BLE (Bluetooth Low Energy) for instant discovery and QUIC/Wi-Fi Direct for saturating data transfer speeds.
 
-Currently available for **Linux**, **Windows**, and **Android**.
+Currently available for **Linux**, **Mac**, **Windows**, and **Android**.
 
 ![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)
 ![Rust](https://img.shields.io/badge/rust-edition%202024-orange)
