@@ -22,7 +22,7 @@ rustls.workspace = true
 mime_guess.workspace = true
 base64 = "0.22"
 image = "0.25"
-btleplug = "0.11"
+btleplug = "0.12"
 uuid = { workspace = true }
 notify-rust = "4.11"
 single-instance = "0.3.3"
