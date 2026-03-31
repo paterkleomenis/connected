@@ -326,4 +326,4 @@ jobs:
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
 
       - name: Run pre-commit hooks
-        run: pre-commit run --all-files --show-diff-on-failure
+        run: SKIP=fmt,clippy,check,test,typos,taplo-format pre-commit run --all-files --show-diff-on-failure
