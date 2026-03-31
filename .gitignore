@@ -24,6 +24,7 @@ android/app/src/main/kotlin/uniffi/
 *.swp
 *.swo
 *~
+.zed/
 
 # Pre-commit
 .pre-commit-cache/

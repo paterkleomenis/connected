@@ -5,7 +5,7 @@
 repos:
   # General file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
         exclude: ^(android/|target/|\.gradle/)
@@ -59,7 +59,7 @@ repos:
 
   # Typos checker
   - repo: https://github.com/crate-ci/typos
-    rev: v1.24.5
+    rev: v1.44.0
     hooks:
       - id: typos
         args: []
@@ -72,14 +72,14 @@ repos:
 
   # Shell script checking
   - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: v0.10.0.1
+    rev: v0.11.0.1
     hooks:
       - id: shellcheck
         files: \.(sh|bash)$
 
   # Conventional commits
   - repo: https://github.com/compilerla/conventional-pre-commit
-    rev: v3.2.0
+    rev: v4.4.0
     hooks:
       - id: conventional-pre-commit
         stages: [commit-msg]
@@ -87,7 +87,7 @@ repos:
 
   # GitHub Actions workflow validation
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.1
+    rev: v1.7.12
     hooks:
       - id: actionlint
         files: ^\.github/workflows/
