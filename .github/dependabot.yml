@@ -4,41 +4,37 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
       time: "09:00"
-    open-pull-requests-limit: 2
     labels:
       - "dependencies"
       - "rust"
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "chore"
       include: "scope"
-    reviewers:
-      - "paterkleomenis"
-    groups:
-      # Group all non-major updates into a single PR
-      all-updates:
-        patterns:
-          - "*"
-        update-types:
-          - "patch"
-          - "minor"
-    ignore:
-      # Ignore major version updates for now (manual review required)
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
+
+  # Gradle dependencies
+  - package-ecosystem: "gradle"
+    directory: "/android"
+    schedule:
+      interval: "daily"
+      time: "09:00"
+    labels:
+      - "dependencies"
+      - "android"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
       time: "09:00"
     labels:
       - "dependencies"
       - "ci"
     commit-message:
-      prefix: "ci(deps)"
+      prefix: "ci"
       include: "scope"
