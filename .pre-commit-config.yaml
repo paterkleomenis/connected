@@ -55,7 +55,7 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
-        stages: [push]
+        stages: [pre-push]
 
   # Typos checker
   - repo: https://github.com/crate-ci/typos
