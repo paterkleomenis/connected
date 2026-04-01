@@ -162,8 +162,9 @@ jobs:
       - name: Upload Linux Build
         uses: actions/upload-artifact@v7
         with:
-          name: connected-desktop-linux
+          name: connected-desktop
           path: target/release/connected-desktop
+          archive: false
 
   # -------------------------------------------------------------------------
   # Job 5: Windows Build
@@ -230,8 +231,9 @@ jobs:
       - name: Upload Windows Build
         uses: actions/upload-artifact@v7
         with:
-          name: connected-desktop-windows
+          name: connected-desktop
           path: target/wix/*.msi
+          archive: false
 
   # -------------------------------------------------------------------------
   # Job 6: macOS Build
@@ -273,8 +275,9 @@ jobs:
       - name: Upload macOS Build
         uses: actions/upload-artifact@v7
         with:
-          name: connected-desktop-macos
+          name: connected-desktop
           path: target/macos-build/Connected-*.dmg
+          archive: false
 
   # -------------------------------------------------------------------------
   # Job 7: Build Android App
@@ -320,5 +323,6 @@ jobs:
       - name: Upload Android Build
         uses: actions/upload-artifact@v7
         with:
-          name: connected-android-debug
+          name: connected-android
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          archive: false
