@@ -84,8 +84,11 @@ jobs:
 
       - name: Cache cargo tools
         uses: actions/cache@v5
+        id: cargo-tools-cache
         with:
-          path: ~/.cargo/bin
+          path: |
+            ~/.cargo/bin/typos
+            ~/.cargo/bin/taplo
           key: cargo-tools-${{ hashFiles('Cargo.toml') }}
 
       - name: Install cargo tools
@@ -128,17 +131,25 @@ jobs:
         with:
           shared-key: "security"
 
-      - name: Cache cargo tools
+      - name: Cache cargo-audit
         uses: actions/cache@v5
+        id: cargo-audit-cache
         with:
-          path: ~/.cargo/bin
-          key: cargo-tools-${{ hashFiles('Cargo.toml') }}
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ hashFiles('Cargo.toml') }}
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
       - name: Run security audit
         run: cargo audit
+
+      - name: Cache cargo-deny
+        uses: actions/cache@v5
+        id: cargo-deny-cache
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ hashFiles('Cargo.toml') }}
 
       - name: Check licenses and bans
         run: |
@@ -239,14 +250,16 @@ jobs:
           }
           Write-Host "WebView2Loader.dll ready at $dll"
 
-      - name: Install WiX 4
-        run: dotnet tool install --global wix
-
       - name: Cache WiX
         uses: actions/cache@v5
+        id: wix-cache
         with:
           path: ~/.dotnet/tools
           key: wix-${{ hashFiles('packaging/windows/installer.wxs') }}
+
+      - name: Install WiX 4
+        if: steps.wix-cache.outputs.cache-hit != 'true'
+        run: dotnet tool install --global wix
 
       - name: Create WiX Output Directory
         shell: pwsh
@@ -337,8 +350,9 @@ jobs:
 
       - name: Cache cargo-ndk
         uses: actions/cache@v5
+        id: cargo-ndk-cache
         with:
-          path: ~/.cargo/bin
+          path: ~/.cargo/bin/cargo-ndk
           key: cargo-ndk-${{ hashFiles('Cargo.toml') }}
 
       - name: Install cargo-ndk
