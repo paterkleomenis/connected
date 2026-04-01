@@ -82,18 +82,8 @@ jobs:
         with:
           shared-key: "quality"
 
-      - name: Cache cargo tools
-        uses: actions/cache@v5
-        id: cargo-tools-cache
-        with:
-          path: |
-            ~/.cargo/bin/typos
-            ~/.cargo/bin/taplo
-          key: cargo-tools-${{ hashFiles('Cargo.toml') }}
-
       - name: Install cargo tools
-        run: |
-          cargo install typos-cli taplo-cli --locked
+        run: cargo install typos-cli taplo-cli --locked
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -131,25 +121,11 @@ jobs:
         with:
           shared-key: "security"
 
-      - name: Cache cargo-audit
-        uses: actions/cache@v5
-        id: cargo-audit-cache
-        with:
-          path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-${{ hashFiles('Cargo.toml') }}
-
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
       - name: Run security audit
         run: cargo audit
-
-      - name: Cache cargo-deny
-        uses: actions/cache@v5
-        id: cargo-deny-cache
-        with:
-          path: ~/.cargo/bin/cargo-deny
-          key: cargo-deny-${{ hashFiles('Cargo.toml') }}
 
       - name: Check licenses and bans
         run: |
@@ -347,13 +323,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "android-build"
-
-      - name: Cache cargo-ndk
-        uses: actions/cache@v5
-        id: cargo-ndk-cache
-        with:
-          path: ~/.cargo/bin/cargo-ndk
-          key: cargo-ndk-${{ hashFiles('Cargo.toml') }}
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
