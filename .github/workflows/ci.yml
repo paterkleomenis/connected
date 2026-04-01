@@ -210,7 +210,12 @@ jobs:
       - name: Build
         run: cargo build --verbose
 
-      - name: Ensure WebView2Loader.dll present (MSI)
+      - name: Prepare WiX installer
+        shell: pwsh
+        run: |
+          (Get-Content packaging/windows/installer.wxs) -replace 'target\\release', 'target\debug' | Set-Content packaging/windows/installer.wxs
+
+      - name: Ensure WebView2Loader.dll present
         shell: pwsh
         run: |
           $dll = "target\\debug\\WebView2Loader.dll"
