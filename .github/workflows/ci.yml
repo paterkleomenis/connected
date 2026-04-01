@@ -15,7 +15,7 @@ env:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # -------------------------------------------------------------------------
@@ -270,16 +270,10 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --verbose
 
-      - name: Upload macOS App
+      - name: Upload macOS Build
         uses: actions/upload-artifact@v7
         with:
           name: connected-desktop-macos
-          path: target/macos-build/Connected.app
-
-      - name: Upload macOS DMG
-        uses: actions/upload-artifact@v7
-        with:
-          name: connected-desktop-macos-dmg
           path: target/macos-build/Connected-*.dmg
 
   # -------------------------------------------------------------------------
