@@ -162,7 +162,7 @@ jobs:
       - name: Build macOS App and DMG
         run: |
           chmod +x packaging/macos/build-macos.sh
-          packaging/macos/build-macos.sh
+          packaging/macos/build-macos.sh --release
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}

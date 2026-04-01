@@ -165,13 +165,10 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --verbose
 
-      - name: Build Release
-        run: cargo build --workspace --release --verbose
-
       - name: Upload Linux Build
         uses: actions/upload-artifact@v7
         with:
-          path: target/release/connected-desktop
+          path: target/debug/connected-desktop
           archive: false
 
   # -------------------------------------------------------------------------
@@ -211,17 +208,17 @@ jobs:
           shared-key: "windows-build"
 
       - name: Build
-        run: cargo build --release --verbose
+        run: cargo build --verbose
 
       - name: Ensure WebView2Loader.dll present (MSI)
         shell: pwsh
         run: |
-          $dll = "target\\release\\WebView2Loader.dll"
+          $dll = "target\\debug\\WebView2Loader.dll"
           if (!(Test-Path $dll)) {
-            $src = Get-ChildItem -Path "target\\release\\build" -Recurse -Filter "WebView2Loader.dll" |
+            $src = Get-ChildItem -Path "target\\debug\\build" -Recurse -Filter "WebView2Loader.dll" |
               Where-Object { $_.FullName -match "\\\\out\\\\x64\\\\WebView2Loader\\.dll$" } |
               Select-Object -First 1
-            if ($null -eq $src) { throw "WebView2Loader.dll not found under target\\release\\build\\**\\out\\x64\\WebView2Loader.dll" }
+            if ($null -eq $src) { throw "WebView2Loader.dll not found under target\\debug\\build\\**\\out\\x64\\WebView2Loader.dll" }
             Copy-Item $src.FullName $dll -Force
           }
           Write-Host "WebView2Loader.dll ready at $dll"
