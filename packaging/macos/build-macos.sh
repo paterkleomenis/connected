@@ -9,8 +9,30 @@
 # This script creates:
 # 1. Connected.app - macOS application bundle
 # 2. Connected-<version>.dmg - Disk image installer
+#
+# Usage:
+#   ./build-macos.sh [--release]
+#   --release: Build in release mode (default: debug)
 
 set -euo pipefail
+
+# Parse arguments
+BUILD_TYPE="debug"
+CARGO_PROFILE=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --release)
+            BUILD_TYPE="release"
+            CARGO_PROFILE="--release"
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [--release]" >&2
+            exit 1
+            ;;
+    esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -23,7 +45,7 @@ if [[ -z "$VERSION" ]]; then
     exit 1
 fi
 
-echo "📦 Building Connected macOS release (version: $VERSION)"
+echo "📦 Building Connected macOS $BUILD_TYPE (version: $VERSION)"
 
 # Directories
 BUILD_DIR="$PROJECT_ROOT/target/macos-build"
@@ -38,13 +60,13 @@ mkdir -p "$UNIVERSAL_DIR"
 
 # Step 1: Build universal binary
 echo "🔨 Building universal binary..."
-cargo build --release --target aarch64-apple-darwin --verbose
-cargo build --release --target x86_64-apple-darwin --verbose
+cargo build --target aarch64-apple-darwin $CARGO_PROFILE --verbose
+cargo build --target x86_64-apple-darwin $CARGO_PROFILE --verbose
 
 # Create universal binary using lipo
 lipo -create \
-    "$PROJECT_ROOT/target/aarch64-apple-darwin/release/connected-desktop" \
-    "$PROJECT_ROOT/target/x86_64-apple-darwin/release/connected-desktop" \
+    "$PROJECT_ROOT/target/aarch64-apple-darwin/$BUILD_TYPE/connected-desktop" \
+    "$PROJECT_ROOT/target/x86_64-apple-darwin/$BUILD_TYPE/connected-desktop" \
     -output "$UNIVERSAL_DIR/connected-desktop"
 
 chmod +x "$UNIVERSAL_DIR/connected-desktop"

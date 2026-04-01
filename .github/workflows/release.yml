@@ -23,6 +23,11 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "linux-build"
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -34,11 +39,11 @@ jobs:
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: connected-linux
           path: target/release/connected-desktop
+          archive: false
 
   # -------------------------------------------------------------------------
-  # Job 2: Build Windows Desktop (MSI)
+  # Job 2: Build Windows Desktop
   # -------------------------------------------------------------------------
   build-windows:
     name: Build Windows
@@ -77,6 +82,11 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "windows-build"
+
       - name: Build Release
         run: cargo build --release --verbose
 
@@ -105,7 +115,15 @@ jobs:
           }
           Write-Host "WebView2Loader.dll ready at $dll"
 
+      - name: Cache WiX
+        uses: actions/cache@v5
+        id: wix-cache
+        with:
+          path: ~/.dotnet/tools
+          key: wix-${{ hashFiles('packaging/windows/installer.wxs') }}
+
       - name: Install WiX 4
+        if: steps.wix-cache.outputs.cache-hit != 'true'
         run: dotnet tool install --global wix
 
       - name: Create WiX Output Directory
@@ -118,11 +136,52 @@ jobs:
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: connected-windows
           path: target/wix/connected-desktop.msi
+          archive: false
 
   # -------------------------------------------------------------------------
-  # Job 3: Build Android APK
+  # Job 3: Build macOS Desktop
+  # -------------------------------------------------------------------------
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "macos-build"
+
+      - name: Build macOS App and DMG
+        run: |
+          chmod +x packaging/macos/build-macos.sh
+          packaging/macos/build-macos.sh --release
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
+          APPLE_DEVELOPER_ID_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}
+          APPLE_DEVELOPER_ID_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_ID_TEAM_ID }}
+
+      - name: Prepare macOS artifact
+        run: cp target/macos-build/Connected-*.dmg connected-desktop.dmg
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: connected-desktop.dmg
+          archive: false
+
+  # -------------------------------------------------------------------------
+  # Job 4: Build Android APK
   # -------------------------------------------------------------------------
   build-android:
     name: Build Android
@@ -141,6 +200,11 @@ jobs:
         with:
           toolchain: stable
           targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "android-build"
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
@@ -163,118 +227,27 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
+      - name: Prepare Android artifact
+        run: cp android/app/build/outputs/apk/release/app-release.apk connected-android.apk
+
       - name: Upload Android Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: connected-android
-          path: android/app/build/outputs/apk/release/*.apk
-
-  # -------------------------------------------------------------------------
-  # Job 4: Build macOS Desktop
-  # -------------------------------------------------------------------------
-  build-macos:
-    name: Build macOS
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "macos-build"
-
-      - name: Build macOS App and DMG
-        run: |
-          chmod +x packaging/macos/build-macos.sh
-          packaging/macos/build-macos.sh
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
-          APPLE_DEVELOPER_ID_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}
-          APPLE_DEVELOPER_ID_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_ID_TEAM_ID }}
-
-      - name: Upload macOS DMG
-        uses: actions/upload-artifact@v7
-        with:
-          name: connected-macos
-          path: target/macos-build/Connected-*.dmg
+          path: connected-android.apk
+          archive: false
 
   # -------------------------------------------------------------------------
   # Job 5: Create Release
   # -------------------------------------------------------------------------
   create-release:
     name: Create GitHub Release
-    needs: [build-linux, build-windows, build-android, build-macos]
+    needs: [build-linux, build-windows, build-macos, build-android]
     runs-on: ubuntu-latest
     steps:
-      - name: Download Linux Artifact
+      - name: Download All Artifacts
         uses: actions/download-artifact@v8
         with:
-          name: connected-linux
-          path: connected-linux
-
-      - name: Download Windows Artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: connected-windows
-          path: connected-windows
-
-      - name: Download Android Artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: connected-android
-          path: connected-android
-
-      - name: Download macOS Artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: connected-macos
-          path: connected-macos
-
-      - name: Collect Release Assets
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          linux_bin="$(find connected-linux -type f -name connected-desktop | head -n 1 || true)"
-          if [[ -z "${linux_bin}" ]]; then
-            echo "ERROR: Linux binary 'connected-desktop' not found in downloaded artifact." >&2
-            find connected-linux -maxdepth 4 -type f -print >&2 || true
-            exit 1
-          fi
-          mv "${linux_bin}" connected-desktop
-
-          msi_path="$(find connected-windows -type f -name connected-desktop.msi | head -n 1 || true)"
-          if [[ -z "${msi_path}" ]]; then
-            echo "ERROR: Windows MSI 'connected-desktop.msi' not found in downloaded artifact." >&2
-            find connected-windows -maxdepth 6 -type f -print >&2 || true
-            exit 1
-          fi
-          mv "${msi_path}" connected-desktop.msi
-
-          apk_path="$(find connected-android -type f -name '*.apk' | head -n 1 || true)"
-          if [[ -z "${apk_path}" ]]; then
-            echo "ERROR: Android APK not found in downloaded artifact." >&2
-            find connected-android -maxdepth 10 -type f -print >&2 || true
-            exit 1
-          fi
-          mv "${apk_path}" connected-android.apk
-
-          macos_dmg="$(find connected-macos -type f -name 'Connected-*.dmg' | head -n 1 || true)"
-          if [[ -z "${macos_dmg}" ]]; then
-            echo "ERROR: macOS DMG not found in downloaded artifact." >&2
-            find connected-macos -maxdepth 4 -type f -print >&2 || true
-            exit 1
-          fi
-          mv "${macos_dmg}" connected-desktop.dmg
+          merge-multiple: true
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
