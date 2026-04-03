@@ -1196,7 +1196,13 @@ impl QuicTransport {
             use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
             hasher.update(cert.as_ref());
-            Some(format!("{:x}", hasher.finalize()))
+            Some(
+                hasher
+                    .finalize()
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>(),
+            )
         } else {
             debug!("Certificate chain is empty");
             None
@@ -1240,7 +1246,11 @@ impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(end_entity.as_ref());
-        let fingerprint = format!("{:x}", hasher.finalize());
+        let fingerprint = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
 
         let ks = self.key_store.read();
 
@@ -1345,7 +1355,11 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(end_entity.as_ref());
-        let fingerprint = format!("{:x}", hasher.finalize());
+        let fingerprint = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
 
         let ks = self.key_store.read();
 
