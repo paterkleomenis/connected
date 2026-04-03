@@ -54,7 +54,9 @@ impl DesktopFilesystemProvider {
             self.root.join(safe_path)
         };
 
-        let canonical = if full_path.exists() {
+        let canonical = if full_path.try_exists().unwrap_or(false)
+            || std::fs::symlink_metadata(&full_path).is_ok()
+        {
             full_path
                 .canonicalize()
                 .map_err(connected_core::ConnectedError::Io)?

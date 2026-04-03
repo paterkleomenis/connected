@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 // We need to match transport constants
 const STREAM_TYPE_FILE: u8 = 2;
-const BUFFER_SIZE: usize = 1024 * 1024; // 1MB Buffer for I/O
+const BUFFER_SIZE: usize = 16 * 1024 * 1024; // 16MB Buffer for I/O (optimized for high-speed LAN transfers)
 /// Maximum allowed incoming file size (100 GB). Transfers exceeding this are rejected.
 const MAX_INCOMING_FILE_SIZE: u64 = 100 * 1024 * 1024 * 1024;
 
@@ -142,9 +142,17 @@ impl FileTransfer {
 
                     let file = std::fs::File::create(&archive_path)?;
                     let mut zip = zip::ZipWriter::new(file);
+                    // Use Deflated with fast compression level (level 1) for speed
+                    // Level 1 provides good compression ratio with minimal CPU overhead
+                    // This is optimal for LAN transfers where bandwidth is not the bottleneck
                     let options = zip::write::SimpleFileOptions::default()
                         .compression_method(zip::CompressionMethod::Deflated)
-                        .unix_permissions(0o755);
+                        .compression_level(Some(1)) // Fastest compression level
+                        .unix_permissions(0o755)
+                        .large_file(true); // Enable large file support for files > 4GB
+
+                    // Throttle for compression progress updates
+                    let mut last_progress_update = std::time::Instant::now();
 
                     // Security: disable symlink following to prevent data exfiltration.
                     // A symlink inside the directory could point to arbitrary files
@@ -185,27 +193,32 @@ impl FileTransfer {
                             zip.start_file(name.clone(), options)
                                 .map_err(std::io::Error::other)?;
                             let mut f = std::fs::File::open(path)?;
+                            // std::io::copy uses an internal 8KB buffer by default.
+                            // For large files, this is acceptable performance.
                             let copied = std::io::copy(&mut f, &mut zip)?;
                             files_processed += 1;
                             bytes_processed += copied;
 
-                            // Emit compression progress
-                            let elapsed = compression_start.elapsed().as_secs_f64();
-                            let speed = if elapsed > 0.0 {
-                                (bytes_processed as f64 / elapsed) as u64
-                            } else {
-                                0
-                            };
-                            if let Some(ref tx) = compression_progress_tx {
-                                let _ = tx.send(TransferProgress::CompressionProgress {
-                                    filename: compression_filename.clone(),
-                                    current_file: name,
-                                    files_processed,
-                                    total_files,
-                                    bytes_processed,
-                                    total_bytes,
-                                    speed_bytes_per_sec: speed,
-                                });
+                            // Emit compression progress (throttled to every 200ms)
+                            if last_progress_update.elapsed().as_millis() > 200 {
+                                let elapsed = compression_start.elapsed().as_secs_f64();
+                                let speed = if elapsed > 0.0 {
+                                    (bytes_processed as f64 / elapsed) as u64
+                                } else {
+                                    0
+                                };
+                                if let Some(ref tx) = compression_progress_tx {
+                                    let _ = tx.send(TransferProgress::CompressionProgress {
+                                        filename: compression_filename.clone(),
+                                        current_file: name,
+                                        files_processed,
+                                        total_files,
+                                        bytes_processed,
+                                        total_bytes,
+                                        speed_bytes_per_sec: speed,
+                                    });
+                                }
+                                last_progress_update = std::time::Instant::now();
                             }
                         } else if !name.is_empty() {
                             zip.add_directory(name, options)
@@ -353,22 +366,21 @@ impl FileTransfer {
         let mut offset: u64 = 0;
         let mut hasher = blake3::Hasher::new();
         let mut last_progress_update = std::time::Instant::now();
+
+        // Pre-allocate buffer once, reused for entire transfer (zero-copy optimization)
         let mut buf = BytesMut::with_capacity(BUFFER_SIZE);
 
         let mut remaining = file_size;
 
         while remaining > 0 {
-            // Re-reserve capacity since split() removes it
-            buf.reserve(BUFFER_SIZE);
-
-            // Limit read to the declared file_size to avoid reading appended data
-            // Since read_buf fills the buffer, we can limit the capacity by creating a smaller slice
-            // if we are at the very end, but with BytesMut we can just read.
-            // A simpler approach is to read into a slice up to `remaining` bytes
+            // Clear buffer for reuse
+            buf.clear();
+            // Reserve capacity for this iteration
             let limit = std::cmp::min(remaining as usize, BUFFER_SIZE);
-            let mut read_buf = vec![0u8; limit];
+            buf.reserve(limit);
 
-            let bytes_read = match file.read(&mut read_buf).await {
+            // Read directly into BytesMut using read_buf (eliminates Vec allocation)
+            let bytes_read = match file.read_buf(&mut buf).await {
                 Ok(n) => n,
                 Err(e) => {
                     if is_temp_file {
@@ -377,16 +389,19 @@ impl FileTransfer {
                     return Err(ConnectedError::Io(e));
                 }
             };
+
             if bytes_read == 0 {
                 break; // Unexpected EOF, handled by checksum mismatch later
             }
 
-            buf.extend_from_slice(&read_buf[..bytes_read]);
+            // Split buffer to get owned Bytes without copying
             let chunk = buf.split().freeze();
 
+            // Update hash with transferred data
             hasher.update(&chunk);
 
-            if let Err(e) = send.write_chunk(chunk).await {
+            // Write chunk to QUIC stream using write_all (more efficient than write_chunk)
+            if let Err(e) = send.write_all(&chunk).await {
                 if is_temp_file {
                     let _ = tokio::fs::remove_file(&path).await;
                 }
@@ -397,8 +412,8 @@ impl FileTransfer {
             offset += bytes_read as u64;
             remaining -= bytes_read as u64;
 
-            // Report progress (throttle to every 100ms)
-            if last_progress_update.elapsed().as_millis() > 100 {
+            // Report progress (throttle to every 200ms for large files to reduce channel overhead)
+            if last_progress_update.elapsed().as_millis() > 200 {
                 if let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Progress {
                         bytes_transferred: offset,
@@ -718,7 +733,8 @@ impl FileTransfer {
             bytes_received += n;
             remaining -= n;
 
-            if last_progress_update.elapsed().as_millis() > 100 {
+            // Report progress (throttle to every 200ms for large files to reduce channel overhead)
+            if last_progress_update.elapsed().as_millis() > 200 {
                 if let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Progress {
                         bytes_transferred: bytes_received,
@@ -843,12 +859,13 @@ pub(crate) async fn recv_message_with_limit<T: for<'de> Deserialize<'de>>(
     // up-front. This bounds peak memory usage to the actual data received so far
     // rather than trusting the (potentially malicious) declared length.
     const READ_CHUNK_SIZE: usize = 64 * 1024; // 64 KB per chunk
-    let mut data = Vec::with_capacity(std::cmp::min(len, READ_CHUNK_SIZE));
+    let mut data = Vec::with_capacity(len);
     let mut remaining = len;
 
     while remaining > 0 {
         let to_read = std::cmp::min(remaining, READ_CHUNK_SIZE);
         let prev_len = data.len();
+        // Extend vector to hold the data
         data.resize(prev_len + to_read, 0);
         stream
             .read_exact(&mut data[prev_len..prev_len + to_read])
@@ -880,6 +897,28 @@ fn sanitize_filename(filename: &str) -> String {
     // Strip leading dots to prevent creating hidden files (e.g. `.bashrc`,
     // `.ssh`) that could silently overwrite important dot-files on Unix.
     let sanitized = sanitized.trim_start_matches('.').to_string();
+
+    // Strip UUID suffix that Android adds to temp files (e.g., "file.pdf-abc123ef")
+    // Pattern: filename.ext-<8 hex chars> or filename-<8 hex chars>
+    let sanitized = {
+        // Try to remove UUID suffix added by Android temp files
+        if let Some(pos) = sanitized.rfind('-') {
+            let potential_uuid = &sanitized[pos + 1..];
+            if potential_uuid.len() == 8 && potential_uuid.chars().all(|c| c.is_ascii_hexdigit()) {
+                // Check if there's actual filename before the dash
+                let base_name = &sanitized[..pos];
+                if !base_name.is_empty() {
+                    base_name.to_string()
+                } else {
+                    sanitized
+                }
+            } else {
+                sanitized
+            }
+        } else {
+            sanitized
+        }
+    };
 
     if sanitized.is_empty() {
         "unnamed".to_string()

@@ -36,6 +36,7 @@ fn init_rustls_provider() {
     RUSTLS_PROVIDER_INIT.get_or_init(|| {
         // Both Ok (freshly installed) and Err (already installed by another call)
         // are success cases — the provider is available either way.
+        // We intentionally ignore the result since either outcome is acceptable.
         let _ = rustls::crypto::ring::default_provider().install_default();
         true
     });
@@ -382,7 +383,7 @@ impl ConnectedClient {
         crate::file_transfer::send_message(&mut send, &req).await?;
 
         let resp: FilesystemMessage =
-            crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
+            crate::file_transfer::recv_message_with_limit(&mut recv, 16 * 1024 * 1024).await?;
 
         match resp {
             FilesystemMessage::ListDirResponse { entries } => Ok(entries),
@@ -410,7 +411,7 @@ impl ConnectedClient {
         };
         crate::file_transfer::send_message(&mut send, &meta_req).await?;
         let meta_resp: FilesystemMessage =
-            crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
+            crate::file_transfer::recv_message_with_limit(&mut recv, 16 * 1024 * 1024).await?;
 
         let file_size = match meta_resp {
             FilesystemMessage::GetMetadataResponse { entry } => entry.size,
@@ -428,7 +429,8 @@ impl ConnectedClient {
             .map_err(ConnectedError::Io)?;
 
         let mut offset = 0u64;
-        let chunk_size = 1024 * 1024; // 1MB chunks
+        // Use 16MB chunks for high-speed LAN transfers (optimized for WiFi 5/6)
+        let chunk_size = 16 * 1024 * 1024; // 16MB chunks
 
         while offset < file_size {
             let size = std::cmp::min(chunk_size, file_size - offset);
@@ -440,7 +442,7 @@ impl ConnectedClient {
             crate::file_transfer::send_message(&mut send, &req).await?;
 
             let resp: FilesystemMessage =
-                crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
+                crate::file_transfer::recv_message_with_limit(&mut recv, 16 * 1024 * 1024).await?;
 
             match resp {
                 FilesystemMessage::ReadFileResponse { data } => {
@@ -501,7 +503,7 @@ impl ConnectedClient {
         };
         crate::file_transfer::send_message(&mut send, &meta_req).await?;
         let meta_resp: FilesystemMessage =
-            crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
+            crate::file_transfer::recv_message_with_limit(&mut recv, 16 * 1024 * 1024).await?;
 
         let file_size = match meta_resp {
             FilesystemMessage::GetMetadataResponse { entry } => entry.size,
@@ -522,7 +524,8 @@ impl ConnectedClient {
             .map_err(ConnectedError::Io)?;
 
         let mut offset = 0u64;
-        let chunk_size = 2 * 1024 * 1024; // 2MB chunks (safe for JSON+base64 encoding overhead)
+        // Use 16MB chunks for high-speed LAN transfers (optimized for WiFi 5/6)
+        let chunk_size = 16 * 1024 * 1024; // 16MB chunks
 
         while offset < file_size {
             let size = std::cmp::min(chunk_size, file_size - offset);
@@ -534,7 +537,7 @@ impl ConnectedClient {
             crate::file_transfer::send_message(&mut send, &req).await?;
 
             let resp: FilesystemMessage =
-                crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
+                crate::file_transfer::recv_message_with_limit(&mut recv, 16 * 1024 * 1024).await?;
 
             match resp {
                 FilesystemMessage::ReadFileResponse { data } => {
@@ -807,7 +810,8 @@ impl ConnectedClient {
             .map_err(ConnectedError::Io)?;
 
         let mut offset = 0u64;
-        let chunk_size = 2 * 1024 * 1024; // 2MB chunks (safe for JSON+base64 encoding overhead)
+        // Use 16MB chunks for high-speed LAN transfers (optimized for WiFi 5/6)
+        let chunk_size = 16 * 1024 * 1024; // 16MB chunks
 
         while offset < file_size {
             let size = std::cmp::min(chunk_size, file_size - offset);
@@ -819,7 +823,7 @@ impl ConnectedClient {
             crate::file_transfer::send_message(&mut send, &req).await?;
 
             let resp: FilesystemMessage =
-                crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
+                crate::file_transfer::recv_message_with_limit(&mut recv, 16 * 1024 * 1024).await?;
 
             match resp {
                 FilesystemMessage::ReadFileResponse { data } => {
@@ -922,7 +926,7 @@ impl ConnectedClient {
         crate::file_transfer::send_message(&mut send, &req).await?;
 
         let resp: FilesystemMessage =
-            crate::file_transfer::recv_message_with_limit(&mut recv, 8 * 1024 * 1024).await?;
+            crate::file_transfer::recv_message_with_limit(&mut recv, 16 * 1024 * 1024).await?;
 
         match resp {
             FilesystemMessage::GetThumbnailResponse { data } => Ok(data),
@@ -2648,7 +2652,7 @@ impl ConnectedClient {
                         let msg: Result<FilesystemMessage> =
                             crate::file_transfer::recv_message_with_limit(
                                 &mut recv,
-                                8 * 1024 * 1024,
+                                16 * 1024 * 1024,
                             )
                             .await;
                         match msg {

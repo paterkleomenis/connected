@@ -185,29 +185,27 @@ mod tray {
 use image::ImageReader;
 use std::io::Cursor;
 
-fn load_icon() -> dioxus::desktop::tao::window::Icon {
+fn load_icon() -> Option<dioxus::desktop::tao::window::Icon> {
     let icon_bytes = include_bytes!("../assets/logo.png");
     let reader = ImageReader::new(Cursor::new(icon_bytes))
         .with_guessed_format()
-        .expect("Failed to detect icon format");
-    let image = reader.decode().expect("Failed to decode icon");
+        .ok()?;
+    let image = reader.decode().ok()?;
     let rgba = image.into_rgba8();
     let (width, height) = rgba.dimensions();
-    dioxus::desktop::tao::window::Icon::from_rgba(rgba.into_raw(), width, height)
-        .expect("Failed to create icon")
+    dioxus::desktop::tao::window::Icon::from_rgba(rgba.into_raw(), width, height).ok()
 }
 
 #[cfg(target_os = "windows")]
-fn load_tray_icon() -> dioxus::desktop::trayicon::Icon {
+fn load_tray_icon() -> Option<dioxus::desktop::trayicon::Icon> {
     let icon_bytes = include_bytes!("../assets/logo.png");
     let reader = ImageReader::new(Cursor::new(icon_bytes))
         .with_guessed_format()
-        .expect("Failed to detect icon format");
-    let image = reader.decode().expect("Failed to decode icon");
+        .ok()?;
+    let image = reader.decode().ok()?;
     let rgba = image.into_rgba8();
     let (width, height) = rgba.dimensions();
-    dioxus::desktop::trayicon::Icon::from_rgba(rgba.into_raw(), width, height)
-        .expect("Failed to create tray icon")
+    dioxus::desktop::trayicon::Icon::from_rgba(rgba.into_raw(), width, height).ok()
 }
 
 /// Command-line flag that the elevated subprocess receives.
@@ -438,12 +436,24 @@ fn main() {
         "connected-desktop-app".to_string()
     };
 
-    let _instance = single_instance::SingleInstance::new(&instance_name).unwrap();
-    if !_instance.is_single() {
-        eprintln!("Another instance is already running. Waking it up...");
-        ipc::send_wakeup_signal();
-        std::process::exit(0);
-    }
+    let instance_result = single_instance::SingleInstance::new(&instance_name);
+
+    let _instance = match instance_result {
+        Ok(instance) => {
+            if !instance.is_single() {
+                eprintln!("Another instance is already running. Waking it up...");
+                ipc::send_wakeup_signal();
+                std::process::exit(0);
+            }
+            Some(instance)
+        }
+        Err(e) => {
+            eprintln!("Warning: Failed to acquire single instance lock: {}", e);
+            eprintln!("Multiple instances may run. Proceeding anyway...");
+            // Best-effort: continue without single-instance protection
+            None
+        }
+    };
 
     // Explicitly select the Rustls crypto provider to avoid runtime ambiguity.
     if let Err(err) = rustls::crypto::ring::default_provider().install_default() {
@@ -473,7 +483,7 @@ fn main() {
             .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
             .with_decorations(decorations)
             .with_transparent(transparent)
-            .with_window_icon(Some(load_icon())),
+            .with_window_icon(load_icon()),
     );
 
     // Set up menu bar on macOS
@@ -730,7 +740,7 @@ fn App() -> Element {
             menu.append_items(&[&show, &hide, &PredefinedMenuItem::separator(), &quit])
                 .expect("Failed to build tray menu");
 
-            dioxus::desktop::trayicon::init_tray_icon(menu, Some(load_tray_icon()));
+            dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
 
             (show.id().clone(), hide.id().clone(), quit.id().clone())
         });
@@ -861,17 +871,21 @@ fn App() -> Element {
                     ..
                 } => {
                     // Use progress percentage for hash to detect changes
-                    let percent = if *total_bytes > 0 {
-                        *bytes_processed * 100 / *total_bytes
+                    // Use tenths of a percent for smoother updates
+                    let percent_x10 = if *total_bytes > 0 {
+                        (*bytes_processed).saturating_mul(1000) / *total_bytes
                     } else {
                         0
                     };
-                    1000 + percent
+                    10000 + percent_x10
                 }
                 TransferStatus::Starting { .. } => 1,
-                TransferStatus::InProgress { percent, .. } => 2 + (*percent as u64),
-                TransferStatus::Completed { .. } => 100,
-                TransferStatus::Failed { .. } => 101,
+                TransferStatus::InProgress { percent, .. } => {
+                    // Multiply by 10 to get tenths of a percent for finer granularity
+                    2 + ((*percent * 10.0) as u64)
+                }
+                TransferStatus::Completed { .. } => 1000,
+                TransferStatus::Failed { .. } => 1001,
             };
             if new_status_hash != last_transfer_status_hash {
                 last_transfer_status_hash = new_status_hash;

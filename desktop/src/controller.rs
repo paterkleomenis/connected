@@ -759,11 +759,30 @@ fn spawn_event_loop(
                                             };
                                             use windows::Win32::System::Com::{
                                                 CLSCTX_ALL, CoCreateInstance, CoInitialize,
+                                                CoUninitialize,
                                             };
 
+                                            // SAFETY: We initialize COM on this thread and ensure
+                                            // it's uninitialized via RAII guard when the function exits.
+                                            // All COM interface calls are within this unsafe block
+                                            // and their validity is guaranteed by the Windows API.
                                             unsafe {
-                                                // Initialize COM for this thread
-                                                let _ = CoInitialize(None);
+                                                let hr = CoInitialize(None);
+                                                if hr.is_err() && hr.0 != -2147417850 {
+                                                    // S_FALSE (already initialized) is OK
+                                                    return Err(hr.into());
+                                                }
+
+                                                // Ensure COM is uninitialized on exit
+                                                struct ComGuard;
+                                                impl Drop for ComGuard {
+                                                    fn drop(&mut self) {
+                                                        unsafe {
+                                                            CoUninitialize();
+                                                        }
+                                                    }
+                                                }
+                                                let _guard = ComGuard;
 
                                                 // Get the default audio endpoint
                                                 let enumerator =

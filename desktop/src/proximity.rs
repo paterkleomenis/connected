@@ -81,7 +81,9 @@ async fn run_ble_scan(client: Arc<ConnectedClient>, mut shutdown_rx: watch::Rece
         Ok(stream) => stream,
         Err(e) => {
             warn!("BLE event stream failed: {}", e);
-            let _ = adapter.stop_scan().await;
+            if let Err(e) = adapter.stop_scan().await {
+                warn!("Failed to stop BLE scan: {}", e);
+            }
             return;
         }
     };
@@ -102,7 +104,9 @@ async fn run_ble_scan(client: Arc<ConnectedClient>, mut shutdown_rx: watch::Rece
         }
     }
 
-    let _ = adapter.stop_scan().await;
+    if let Err(e) = adapter.stop_scan().await {
+        warn!("Failed to stop BLE scan gracefully: {}", e);
+    }
     info!("BLE proximity scan stopped");
 }
 

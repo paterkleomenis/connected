@@ -462,9 +462,9 @@ pub fn set_transfer_status(status: TransferStatus) {
     *get_transfer_status().lock_or_recover() = status;
 
     if should_auto_reset {
-        std::thread::spawn(|| {
-            // Reset to Idle after 5 seconds
-            std::thread::sleep(std::time::Duration::from_secs(5));
+        // Use tokio timer instead of std::thread for better resource management
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let mut guard = get_transfer_status().lock_or_recover();
             // Only reset if still in Completed or Failed state (not if a new transfer started)
             if matches!(
@@ -787,4 +787,35 @@ pub fn get_download_directory_setting() -> Option<String> {
 
 pub fn set_download_directory_setting(path: Option<String>) {
     update_setting(|s| s.download_directory = path);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lock_or_recover_basic() {
+        let m = Mutex::new(10);
+        {
+            let mut guard = m.lock_or_recover();
+            *guard += 5;
+        }
+        assert_eq!(*m.lock().unwrap(), 15);
+    }
+
+    #[test]
+    fn test_settings_toggles() {
+        // Assume default state
+        let init_clip = get_clipboard_sync_enabled();
+        set_clipboard_sync_enabled(!init_clip);
+        assert_eq!(get_clipboard_sync_enabled(), !init_clip);
+
+        let init_media = get_media_enabled_setting();
+        set_media_enabled_setting(!init_media);
+        assert_eq!(get_media_enabled_setting(), !init_media);
+
+        let init_notif = get_notifications_enabled_setting();
+        set_notifications_enabled_setting(!init_notif);
+        assert_eq!(get_notifications_enabled_setting(), !init_notif);
+    }
 }

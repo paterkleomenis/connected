@@ -56,17 +56,21 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
 
     private fun skipFully(input: InputStream, bytes: Long): Boolean {
         var remaining = bytes
+        // Use a small buffer for skipping instead of single-byte reads
+        val skipBuffer = ByteArray(8192) // 8KB buffer for skipping
         while (remaining > 0) {
-            val skipped = input.skip(remaining)
+            val toSkip = minOf(remaining, skipBuffer.size.toLong())
+            val skipped = input.skip(toSkip)
             if (skipped > 0) {
                 remaining -= skipped
                 continue
             }
-            val read = input.read()
+            // Fallback: read into buffer instead of single byte
+            val read = input.read(skipBuffer, 0, minOf(remaining, skipBuffer.size.toLong()).toInt())
             if (read == -1) {
                 return false
             }
-            remaining -= 1
+            remaining -= read
         }
         return true
     }
@@ -110,10 +114,12 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
             return try {
                 file.inputStream().use { input ->
                     if (!skipFully(input, offset.toLong())) return ByteArray(0)
-                    val buffer = ByteArray(size.toInt())
+                    // Limit read size to prevent OOM (max 4MB per request)
+                    val maxReadSize = minOf(size.toLong(), 4 * 1024 * 1024L)
+                    val buffer = ByteArray(maxReadSize.toInt())
                     val read = input.read(buffer)
                     if (read == -1) ByteArray(0)
-                    else if (read < size.toInt()) buffer.copyOf(read) else buffer
+                    else if (read < maxReadSize) buffer.copyOf(read) else buffer
                 }
             } catch (e: Exception) {
                 throw FilesystemException.Generic("Read failed: ${e.message}")
@@ -127,10 +133,12 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
 
             return inputStream.use { input ->
                 if (!skipFully(input, offset.toLong())) return ByteArray(0)
-                val buffer = ByteArray(size.toInt())
+                // Limit read size to prevent OOM (max 4MB per request)
+                val maxReadSize = minOf(size.toLong(), 4 * 1024 * 1024L)
+                val buffer = ByteArray(maxReadSize.toInt())
                 val read = input.read(buffer)
                 if (read == -1) ByteArray(0)
-                else if (read < size.toInt()) buffer.copyOf(read) else buffer
+                else if (read < maxReadSize) buffer.copyOf(read) else buffer
             }
         }
     }

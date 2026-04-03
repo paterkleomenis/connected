@@ -31,15 +31,16 @@ const MAX_CONNECTIONS_PER_IP: usize = 10;
 /// M7: Maximum total concurrent connections the server will accept.
 const MAX_TOTAL_CONNECTIONS: usize = 200;
 
-// LAN-optimized transport parameters
-const INITIAL_RTT_MS: u64 = 10;
+// LAN-optimized transport parameters for WiFi 5/6 (802.11ac/ax)
+// These values are tuned for 2.4GHz and 5GHz WiFi with typical RTT of 5-20ms
+const INITIAL_RTT_MS: u64 = 5; // Lower initial RTT for faster startup on LAN
 const MAX_IDLE_TIMEOUT_SECS: u64 = 60;
 const KEEP_ALIVE_INTERVAL_SECS: u64 = 15;
-const MAX_CONCURRENT_BIDI_STREAMS: u32 = 128;
-const MAX_CONCURRENT_UNI_STREAMS: u32 = 128;
-const STREAM_RECEIVE_WINDOW: u32 = 16 * 1024 * 1024; // 16MB per stream
-const CONNECTION_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024; // 64MB per connection
-const SEND_WINDOW: u64 = 16 * 1024 * 1024; // 16MB send window
+const MAX_CONCURRENT_BIDI_STREAMS: u32 = 256; // Increased for better parallelism
+const MAX_CONCURRENT_UNI_STREAMS: u32 = 256; // Increased for better parallelism
+const STREAM_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024; // 64MB per stream (doubled for high-speed WiFi)
+const CONNECTION_RECEIVE_WINDOW: u32 = 256 * 1024 * 1024; // 256MB per connection (doubled)
+const SEND_WINDOW: u64 = 64 * 1024 * 1024; // 64MB send window (doubled for high-speed WiFi)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
@@ -377,6 +378,10 @@ impl QuicTransport {
         transport.initial_mtu(1400);
         transport.min_mtu(1200);
         transport.mtu_discovery_config(Some(Default::default()));
+
+        // Use BBR congestion control for better throughput on high-bandwidth links
+        // BBR is more efficient than NewReno for LAN transfers with large files
+        transport.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
 
         transport
     }

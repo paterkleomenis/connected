@@ -815,8 +815,10 @@ impl DiscoveryService {
         };
 
         // Notify about removed device if we replaced one
-        if let Some(old_id) = old_device_to_remove {
-            let _ = event_tx.send(DiscoveryEvent::DeviceLost(old_id));
+        if let Some(old_id) = old_device_to_remove
+            && let Err(e) = event_tx.send(DiscoveryEvent::DeviceLost(old_id))
+        {
+            tracing::warn!("Event dropped: {:?}", e);
         }
 
         if let Some(event) = event {
@@ -868,7 +870,9 @@ impl DiscoveryService {
             if let DiscoveryEvent::DeviceLost(_) = &event {
                 info!("Device left: ({})", device_id);
             }
-            let _ = event_tx.send(event);
+            if let Err(e) = event_tx.send(event) {
+                tracing::warn!("Event dropped: {:?}", e);
+            }
         }
     }
 

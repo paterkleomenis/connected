@@ -1173,6 +1173,8 @@ fun SettingsScreen(
 
         // Run in Background Section
         item {
+            var isStoppingService by remember { mutableStateOf(false) }
+
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                 modifier = Modifier.fillMaxWidth()
@@ -1198,15 +1200,32 @@ fun SettingsScreen(
                             )
                         }
                         Switch(
-                            checked = isBackgroundServiceRunning,
+                            checked = isBackgroundServiceRunning && !isStoppingService,
+                            enabled = !isStoppingService,
                             onCheckedChange = { enabled ->
-                                val intent = Intent(context, ConnectedService::class.java)
-                                if (enabled) {
-                                    context.startForegroundService(intent)
-                                } else {
-                                    context.stopService(intent)
+                                try {
+                                    if (enabled) {
+                                        val intent = Intent(context, ConnectedService::class.java)
+                                        context.startForegroundService(intent)
+                                        isBackgroundServiceRunning = true
+                                    } else {
+                                        // Set stopping state to prevent UI crashes
+                                        isStoppingService = true
+                                        val intent = Intent(context, ConnectedService::class.java)
+                                        context.stopService(intent)
+                                        // Update state after a short delay to allow service to stop
+                                        kotlinx.coroutines.GlobalScope.launch {
+                                            kotlinx.coroutines.delay(500)
+                                            isBackgroundServiceRunning = false
+                                            isStoppingService = false
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("MainActivity", "Error toggling service: ${e.message}", e)
+                                    isStoppingService = false
+                                    // Revert state on error
+                                    isBackgroundServiceRunning = ConnectedService.isRunning
                                 }
-                                isBackgroundServiceRunning = enabled
                             }
                         )
                     }

@@ -160,6 +160,11 @@ class ConnectedApp(private val context: Context) {
     // Stores pending file transfers with timestamp for cleanup: deviceId -> (timestamp, queue of file paths)
     private val pendingFileTransfersAwaitingIp =
         ConcurrentHashMap<String, Pair<Long, ConcurrentLinkedQueue<String>>>()
+
+    // Tracks temp files that need to be cleaned up after async transfers complete
+    // Maps file path -> File object for cleanup
+    private val pendingTempFilesForCleanup = ConcurrentHashMap<String, File>()
+
     val transferStatus = mutableStateOf("Idle")
     val compressionProgress = mutableStateOf<CompressionProgress?>(null)
     val browserDownloadProgress = mutableStateOf<BrowserDownloadProgress?>(null)
@@ -618,6 +623,12 @@ class ConnectedApp(private val context: Context) {
             transferStatus.value = "Completed: $filename"
             moveToDownloads(filename)
             showCompletionNotification(filename)
+
+            // Clean up any pending temp files
+            cleanupAllPendingTempFiles()
+            cleanupStreamingTempDirectory()
+            cleanupOrphanedCacheZipFiles()
+
             scope.launch {
                 delay(2000)
                 if (transferStatus.value.startsWith("Completed: $filename")) {
@@ -629,6 +640,11 @@ class ConnectedApp(private val context: Context) {
         override fun onTransferFailed(errorMsg: String) {
             transferStatus.value = "Failed: $errorMsg"
             showErrorNotification(errorMsg)
+
+            // Clean up any pending temp files on failure too
+            cleanupAllPendingTempFiles()
+            cleanupStreamingTempDirectory()
+            cleanupOrphanedCacheZipFiles()
         }
 
         override fun onTransferCancelled() {
@@ -636,6 +652,10 @@ class ConnectedApp(private val context: Context) {
             val notificationManager =
                 context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
             notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
+
+            // Clean up any pending temp files on cancellation
+            cleanupAllPendingTempFiles()
+            cleanupStreamingTempDirectory()
         }
 
         override fun onCompressionProgress(
@@ -693,6 +713,111 @@ class ConnectedApp(private val context: Context) {
                 }
             }
         }
+    }
+
+    /**
+     * Cleans up all pending temp files that were copied from content URIs
+     * This is called after transfer completes/fails to free up cache space
+     */
+    private fun cleanupAllPendingTempFiles() {
+        if (pendingTempFilesForCleanup.isEmpty()) return
+
+        val filesToCleanup = pendingTempFilesForCleanup.entries.toList()
+        var cleanedCount = 0
+        for ((path, file) in filesToCleanup) {
+            try {
+                if (file.exists()) {
+                    file.delete()
+                    cleanedCount++
+                    Log.d("ConnectedApp", "Cleaned up temp file: ${file.name}")
+                }
+                pendingTempFilesForCleanup.remove(path)
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to cleanup temp file: $path", e)
+            }
+        }
+        if (cleanedCount > 0) {
+            Log.d("ConnectedApp", "Cleaned up $cleanedCount pending temp files")
+        }
+    }
+
+    /**
+     * Aggressively cleans up the streaming_temp directory
+     * This catches orphaned files that weren't tracked (e.g., from crashes mid-copy)
+     * Returns the number of files cleaned up
+     */
+    private fun cleanupStreamingTempDirectory(): Int {
+        val tempDir = File(context.filesDir, "streaming_temp")
+        if (!tempDir.exists()) return 0
+
+        var cleanedCount = 0
+        var totalBytesFreed = 0L
+
+        try {
+            tempDir.listFiles()?.forEach { file ->
+                try {
+                    val size = file.length()
+                    if (file.delete()) {
+                        cleanedCount++
+                        totalBytesFreed += size
+                        Log.d("ConnectedApp", "Deleted orphaned temp file: ${file.name} (${size / (1024 * 1024)}MB)")
+                    } else {
+                        Log.w("ConnectedApp", "Failed to delete temp file: ${file.name}")
+                    }
+                } catch (e: Exception) {
+                    Log.w("ConnectedApp", "Error cleaning temp file: ${file.name}", e)
+                }
+            }
+
+            // Remove the directory if empty
+            if (tempDir.listFiles()?.isEmpty() == true) {
+                tempDir.delete()
+            }
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to cleanup streaming_temp directory", e)
+        }
+
+        if (cleanedCount > 0) {
+            Log.d("ConnectedApp", "Freed ${totalBytesFreed / (1024 * 1024)}MB by cleaning $cleanedCount temp files")
+        }
+        return cleanedCount
+    }
+
+    /**
+     * Cleans up orphaned ZIP files in cacheDir from failed folder transfers
+     * These are files matching "connected-*.zip" or "*.zip" patterns that weren't tracked
+     */
+    private fun cleanupOrphanedCacheZipFiles(): Int {
+        val cacheDir = context.cacheDir
+        if (!cacheDir.exists()) return 0
+
+        var cleanedCount = 0
+        var totalBytesFreed = 0L
+
+        try {
+            // Clean up any ZIP files that weren't properly tracked
+            cacheDir.listFiles { _, name ->
+                name.endsWith(".zip") && (name.startsWith("connected-") || name.contains("folder") || name.contains("Folder"))
+            }?.forEach { file ->
+                try {
+                    val size = file.length()
+                    if (file.delete()) {
+                        cleanedCount++
+                        totalBytesFreed += size
+                        Log.d("ConnectedApp", "Deleted orphaned cache ZIP: ${file.name} (${size / (1024 * 1024)}MB)")
+                    }
+                } catch (e: Exception) {
+                    Log.w("ConnectedApp", "Failed to delete orphaned cache file: ${file.name}", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to cleanup orphaned cache files", e)
+        }
+
+        if (cleanedCount > 0) {
+            Log.d("ConnectedApp", "Freed ${totalBytesFreed / (1024 * 1024)}MB by cleaning $cleanedCount orphaned cache files")
+        }
+        return cleanedCount
     }
 
     private fun copyToClipboard(text: String) {
@@ -861,6 +986,22 @@ class ConnectedApp(private val context: Context) {
 
             startProximityManager()
 
+            // Clean up any orphaned temp files from previous crashes/force-stops
+            // This runs early to free disk space immediately on app start
+            scope.launch {
+                try {
+                    cleanupAllPendingTempFiles()
+                    val orphanedCount = cleanupStreamingTempDirectory()
+                    val cacheCleaned = cleanupOrphanedCacheZipFiles()
+                    val totalCleaned = orphanedCount + cacheCleaned
+                    if (totalCleaned > 0) {
+                        Log.d("ConnectedApp", "Cleaned up $totalCleaned orphaned temp files on startup")
+                    }
+                } catch (e: Exception) {
+                    Log.w("ConnectedApp", "Failed to cleanup orphaned temp files on startup", e)
+                }
+            }
+
             // Stamp the debounce clock BEFORE registering the receiver so that
             // the sticky WIFI_STATE_CHANGED_ACTION broadcast (Android delivers it
             // immediately with the current state) doesn't trigger a spurious
@@ -903,6 +1044,12 @@ class ConnectedApp(private val context: Context) {
         } catch (e: Exception) {
             Log.w("ConnectedApp", "Error cancelling scope: ${e.message}")
         }
+
+        // Clean up ALL pending temp files before anything else
+        // This prevents 30GB+ accumulation from aborted transfers
+        cleanupAllPendingTempFiles()
+        cleanupStreamingTempDirectory()
+        cleanupOrphanedCacheZipFiles()
 
         // Unregister broadcast receiver
         try {
@@ -1017,8 +1164,9 @@ class ConnectedApp(private val context: Context) {
             .setOnlyAlertOnce(true)
 
         if (total > 0) {
-            builder.setProgress(total.toInt(), current.toInt(), false)
-            val percent = (current * 100 / total).toInt()
+            val safeCurrent = current.coerceIn(0L, total)
+            val percent = ((safeCurrent * 100L) / total).coerceIn(0L, 100L).toInt()
+            builder.setProgress(100, percent, false)
             builder.setContentText("$percent%")
         } else {
             builder.setProgress(0, 0, true)
@@ -1316,14 +1464,15 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    fun getRealPathFromUri(contentUri: String): String? {
+    fun getRealPathFromUri(contentUri: String, progressCallback: ((Long, Long) -> Unit)? = null): String? {
         try {
             val uri = contentUri.toUri()
             if (uri.scheme == "file") {
                 return uri.path
             }
             if (uri.scheme == "content") {
-                // Try direct filesystem path when available, otherwise materialize to cache
+                // For content URIs, try to get direct path first
+                Log.d("ConnectedApp", "Processing content URI: $contentUri")
                 context.contentResolver.query(uri, null, null, null, null)?.use {
                     val nameIndex =
                         it.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DATA)
@@ -1331,22 +1480,79 @@ class ConnectedApp(private val context: Context) {
                         it.moveToFirst()
                         val dataPath = it.getString(nameIndex)
                         if (!dataPath.isNullOrBlank()) {
+                            Log.d("ConnectedApp", "Found direct path: $dataPath")
                             return dataPath
                         }
                     }
                 }
+
+                // For large files, use app's private storage directory instead of cache
+                // This avoids cache space limitations and allows files of any size
                 val displayName = queryDisplayName(uri)
-                val baseName = displayName ?: uri.lastPathSegment ?: "shared_${UUID.randomUUID()}"
-                val safeName = baseName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                val baseName = displayName ?: uri.lastPathSegment
+                val safeName = if (baseName.isNullOrBlank()) {
+                    "shared_file_${UUID.randomUUID().toString().take(8)}"
+                } else {
+                    baseName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                }
+
+                Log.d("ConnectedApp", "Copying to app storage: $safeName")
+
+                // Use app's private files directory instead of cache for large files
+                // This directory has no size limits (bounded only by device storage)
+                val targetDir = File(context.filesDir, "incoming_files")
+                if (!targetDir.exists()) {
+                    if (!targetDir.mkdirs()) {
+                        Log.e("ConnectedApp", "Failed to create target directory: ${targetDir.absolutePath}")
+                        return null
+                    }
+                }
+
                 val tempFile =
-                    File(context.cacheDir, "shared-${UUID.randomUUID()}-$safeName")
-                val input = context.contentResolver.openInputStream(uri) ?: return null
+                    File(targetDir, "$safeName-${UUID.randomUUID().toString().take(8)}")
+                val input = context.contentResolver.openInputStream(uri)
+                if (input == null) {
+                    Log.e("ConnectedApp", "Failed to open input stream for URI: $contentUri")
+                    return null
+                }
+
+                // Get file size for progress tracking if available
+                val fileSize = try {
+                    context.contentResolver.query(uri, null, null, null, null)?.use {
+                        val sizeIndex = it.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (sizeIndex >= 0) {
+                            it.moveToFirst()
+                            it.getLong(sizeIndex)
+                        } else -1
+                    } ?: -1L
+                } catch (_: Exception) {
+                    -1L
+                }
+
+                // Use a 2MB buffer for very fast copying (minimizes I/O operations)
+                var totalCopied = 0L
+                var lastProgressUpdate = 0L
                 input.use { stream ->
-                    tempFile.outputStream().use { output -> stream.copyTo(output) }
+                    tempFile.outputStream().use { output ->
+                        val buffer = ByteArray(2 * 1024 * 1024) // 2MB buffer for maximum throughput
+                        var bytesRead: Int
+                        while (stream.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            totalCopied += bytesRead
+
+                            // Update progress every 500ms
+                            val now = System.currentTimeMillis()
+                            if (progressCallback != null && fileSize > 0 && now - lastProgressUpdate >= 500) {
+                                progressCallback(totalCopied, fileSize)
+                                lastProgressUpdate = now
+                            }
+                        }
+                    }
                 }
                 return tempFile.absolutePath
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Error getting real path from URI", e)
         }
         return null
     }
@@ -1446,75 +1652,176 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    // Missing method: sendFileToDevice
-    fun sendFileToDevice(device: DiscoveredDevice, fileUri: String) {
-        val path = getRealPathFromUri(fileUri)
-        if (path == null) {
-            runOnMainThread {
-                android.widget.Toast.makeText(
-                    context,
-                    "Unsupported or missing file",
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
-            }
-            return
+    // Optimized: Stream directly from content URI without copying to storage first
+    // This eliminates the preparation phase for large files
+    fun sendFileFromUri(device: DiscoveredDevice, fileUri: String) {
+        runOnMainThread {
+            transferStatus.value = "Preparing file..."
         }
-        val file = File(path)
-        if (!file.exists() || file.isDirectory) {
-            runOnMainThread {
-                android.widget.Toast.makeText(
-                    context,
-                    "Unsupported or missing file",
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
-            }
-            return
-        }
-        if (isSyntheticIp(device.ip)) {
-            val now = System.currentTimeMillis()
-            // Update timestamp when adding to existing queue to prevent premature cleanup
-            val entry = pendingFileTransfersAwaitingIp.compute(device.id) { _, existing ->
-                if (existing != null) {
-                    // Update timestamp and reuse existing queue
-                    now to existing.second
-                } else {
-                    // Create new entry
-                    now to ConcurrentLinkedQueue()
-                }
-            }!!
-            entry.second.add(file.absolutePath)
-            if (hasProximityPermissions()) {
-                try {
-                    proximityManager?.requestConnect(device.id)
-                } catch (e: SecurityException) {
-                    Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
-                }
-            }
-            runOnMainThread {
-                android.widget.Toast
-                    .makeText(
-                        context,
-                        "Waiting for Wi-Fi Direct connection...",
-                        android.widget.Toast.LENGTH_SHORT
-                    )
-                    .show()
-            }
-            return
-        }
+
         scope.launch(Dispatchers.IO) {
             try {
-                sendFile(device.ip, device.port, file.absolutePath)
-            } catch (e: Exception) {
-                Log.e("ConnectedApp", "Send file failed", e)
+                val uri = fileUri.toUri()
+
+                // Get file metadata first
+                val (fileName, fileSize) = try {
+                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        cursor.moveToFirst()
+                        val name = if (nameIdx >= 0) cursor.getString(nameIdx) else "unknown_file"
+                        val size = if (sizeIdx >= 0) cursor.getLong(sizeIdx) else 0L
+                        name to size
+                    } ?: ("unknown_file" to 0L)
+                } catch (e: Exception) {
+                    Log.e("ConnectedApp", "Failed to get file metadata", e)
+                    "unknown_file" to 0L
+                }
+
+                Log.d("ConnectedApp", "Streaming file: $fileName, size: $fileSize bytes")
+
+                if (fileSize == 0L) {
+                    runOnMainThread {
+                        transferStatus.value = "Idle"
+                        android.widget.Toast.makeText(
+                            context,
+                            "Cannot determine file size",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    return@launch
+                }
+
+                // Validate file size
+                val maxFileSize = 100L * 1024 * 1024 * 1024 // 100GB
+                if (fileSize > maxFileSize) {
+                    runOnMainThread {
+                        transferStatus.value = "Idle"
+                        android.widget.Toast.makeText(
+                            context,
+                            "File too large: ${fileSize / (1024 * 1024 * 1024)}GB exceeds 100GB limit",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                    return@launch
+                }
+
+                // Try to resolve the real file path to avoid unnecessary temp copy
+                val realPath = PathResolver.resolveRealPath(context, uri)
+                val canUseDirectPath = realPath != null && PathResolver.isFileAccessible(realPath!!)
+
+                val filePathToSend: String
+                val isTempFile: Boolean
+
+                if (canUseDirectPath) {
+                    // Direct path - no temp copy needed!
+                    Log.d("ConnectedApp", "Using direct file path: $realPath (no temp copy)")
+                    filePathToSend = realPath!!
+                    isTempFile = false
+                    runOnMainThread {
+                        transferStatus.value = "Sending: $fileName (${fileSize / (1024 * 1024)}MB)"
+                    }
+                } else {
+                    // Must copy to temp file (cloud storage, inaccessible path, etc.)
+                    Log.d("ConnectedApp", "Cannot resolve direct path, copying to temp file")
+                    runOnMainThread {
+                        transferStatus.value = "Preparing: $fileName (copying to temp)"
+                    }
+
+                    val targetDir = File(context.filesDir, "streaming_temp")
+                    if (!targetDir.exists()) targetDir.mkdirs()
+
+                    val tempFile = File(targetDir, "$fileName-${System.currentTimeMillis()}")
+                    pendingTempFilesForCleanup[tempFile.absolutePath] = tempFile
+
+                    // Copy file with progress tracking
+                    val input = context.contentResolver.openInputStream(uri)
+                    if (input == null) {
+                        Log.e("ConnectedApp", "Failed to open input stream")
+                        runOnMainThread {
+                            transferStatus.value = "Idle"
+                            android.widget.Toast.makeText(
+                                context,
+                                "Cannot read file",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        return@launch
+                    }
+
+                    // Use 4MB buffer for faster copying
+                    var totalCopied = 0L
+                    var lastProgressUpdate = 0L
+                    input.use { stream ->
+                        tempFile.outputStream().use { output ->
+                            val buffer = ByteArray(4 * 1024 * 1024) // 4MB buffer
+                            var bytesRead: Int
+                            while (stream.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
+                                totalCopied += bytesRead
+
+                                val now = System.currentTimeMillis()
+                                if (now - lastProgressUpdate >= 300) {
+                                    val percent = (totalCopied * 100 / fileSize).toInt()
+                                    runOnMainThread {
+                                        transferStatus.value = "Preparing: $percent%"
+                                    }
+                                    lastProgressUpdate = now
+                                }
+                            }
+                        }
+                    }
+
+                    Log.d("ConnectedApp", "File copied to temp: ${tempFile.absolutePath}")
+                    filePathToSend = tempFile.absolutePath
+                    isTempFile = true
+                }
+
+                // Now send the file
+                if (isSyntheticIp(device.ip)) {
+                    val (_, queue) = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
+                        System.currentTimeMillis() to ConcurrentLinkedQueue()
+                    }
+                    queue.add(filePathToSend)
+
+                    if (hasProximityPermissions()) {
+                        try {
+                            proximityManager?.requestConnect(device.id)
+                        } catch (e: SecurityException) {
+                            Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
+                        }
+                    }
+
+                    runOnMainThread {
+                        transferStatus.value = "Queued: $fileName (waiting for connection)"
+                    }
+                    return@launch
+                }
+
                 runOnMainThread {
+                    transferStatus.value = "Starting transfer: $fileName..."
+                }
+
+                sendFile(device.ip, device.port, filePathToSend)
+
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to stream file from URI", e)
+                runOnMainThread {
+                    transferStatus.value = "Idle"
                     android.widget.Toast.makeText(
                         context,
-                        "Failed to send file",
-                        android.widget.Toast.LENGTH_SHORT
+                        "Failed to send file: ${e.message}",
+                        android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
             }
         }
+    }
+
+    // Missing method: sendFileToDevice
+    fun sendFileToDevice(device: DiscoveredDevice, fileUri: String) {
+        // Use the optimized streaming method
+        sendFileFromUri(device, fileUri)
     }
 
     // Missing Media Session methods
@@ -2321,6 +2628,7 @@ class ConnectedApp(private val context: Context) {
 
                 val folderName = docFile.name ?: "folder"
 
+                // Use cacheDir but with proper cleanup on failure
                 val zipFile = File(context.cacheDir, "$folderName.zip")
 
                 try {
@@ -2350,8 +2658,17 @@ class ConnectedApp(private val context: Context) {
                         return@launch
                     }
 
-                    ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
-                        zipRecursiveWithProgress(docFile, folderName, zos, totalFiles, totalBytes)
+                    // Create ZIP with proper cleanup on failure
+                    try {
+                        ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                            zipRecursiveWithProgress(docFile, folderName, zos, totalFiles, totalBytes)
+                        }
+                    } catch (e: Exception) {
+                        // Clean up partial ZIP file on failure
+                        if (zipFile.exists()) {
+                            zipFile.delete()
+                        }
+                        throw e
                     }
 
                     // Clear compression progress
@@ -2359,7 +2676,22 @@ class ConnectedApp(private val context: Context) {
                         compressionProgress.value = null
                     }
 
+                    // Validate ZIP file size
+                    val zipSize = zipFile.length()
+                    val maxFileSize = 100L * 1024 * 1024 * 1024 // 100GB
+                    if (zipSize > maxFileSize) {
+                        runOnMainThread {
+                            android.widget.Toast.makeText(
+                                context,
+                                "Folder too large: ${zipSize / (1024 * 1024 * 1024)}GB exceeds 100GB limit",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        zipFile.delete()
+                        return@launch
+                    }
 
+                    Log.d("ConnectedApp", "Sending folder ZIP: ${zipFile.name}, size: ${zipSize / (1024 * 1024)}MB")
 
                     if (isSyntheticIp(device.ip)) {
 
@@ -2399,9 +2731,9 @@ class ConnectedApp(private val context: Context) {
                         }
 
                     } else {
-
+                        // Track temp file for cleanup after async transfer completes
+                        pendingTempFilesForCleanup[zipFile.absolutePath] = zipFile
                         sendFile(device.ip, device.port, zipFile.absolutePath)
-
                     }
 
                 } catch (e: Exception) {

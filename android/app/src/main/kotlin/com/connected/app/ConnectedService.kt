@@ -44,9 +44,24 @@ class ConnectedService : Service() {
     }
 
     override fun onDestroy() {
-        Log.d("ConnectedService", "Destroying service")
+        Log.d("ConnectedService", "Destroying service - starting async cleanup")
         isRunning = false
-        connectedApp.cleanup()
+
+        // Stop foreground notification immediately
+        stopForeground(STOP_FOREGROUND_REMOVE)
+
+        // Run cleanup in a background thread to prevent UI freeze
+        // The shutdown process can take 2-3 seconds, so we don't block the main thread
+        Thread {
+            try {
+                connectedApp.cleanup()
+                Log.d("ConnectedService", "Cleanup completed successfully")
+            } catch (e: Exception) {
+                Log.e("ConnectedService", "Error during cleanup: ${e.message}", e)
+            }
+        }.start()
+
+        // Call super.onDestroy immediately so the service can stop
         super.onDestroy()
     }
 
@@ -78,7 +93,7 @@ class ConnectedService : Service() {
         val builder = NotificationCompat.Builder(this, channelId)
             .setContentTitle("Connected")
             .setContentText("Click to share clipboard")
-            .setSmallIcon(R.drawable.ic_notification_logo)
+            .setSmallIcon(R.drawable.ic_android)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
