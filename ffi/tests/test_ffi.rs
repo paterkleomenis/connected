@@ -1,5 +1,4 @@
-﻿use connected_core::{DeviceType, Device};
-use std::net::IpAddr;
+use connected_core::{Device, DeviceType};
 
 #[test]
 fn test_core_device_basic() {
