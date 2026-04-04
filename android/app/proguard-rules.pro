@@ -83,3 +83,8 @@
 -keep class android.media.session.** { *; }
 -keep class android.support.v4.media.** { *; }
 -keep class androidx.media.** { *; }
+
+# Ignore missing desktop Java classes referenced by JNA
+# These classes don't exist on Android and JNA handles them gracefully
+-dontwarn java.awt.**
+-dontwarn javax.swing.**

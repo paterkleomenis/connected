@@ -239,7 +239,6 @@ class ConnectedApp(private val context: Context) {
 
     private var selectedDeviceForFile: DiscoveredDevice? = null
     private lateinit var downloadDir: File
-    private var pendingUpdateInstall: File? = null
 
     /** User-configured download directory URI (SAF). When set, received files are saved here
      *  instead of the public Downloads folder. */
@@ -3066,111 +3065,6 @@ class ConnectedApp(private val context: Context) {
                 val intent = Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(intent)
-            }
-        }
-    }
-
-    suspend fun checkForUpdates(): UpdateInfo? {
-        return try {
-            RustlsPlatformVerifier.initIfNeeded(context)
-            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            val currentVersion = packageInfo.versionName ?: "0.0.0"
-            checkForUpdates(currentVersion, "android")
-        } catch (e: Exception) {
-            Log.e("ConnectedApp", "Failed to check for updates", e)
-            null
-        }
-    }
-
-    fun downloadUpdate(url: String, onProgress: (Int) -> Unit, onComplete: (File?) -> Unit) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val request = java.net.URL(url)
-                val connection = request.openConnection() as java.net.HttpURLConnection
-                connection.instanceFollowRedirects = true
-                connection.setRequestProperty("User-Agent", "Connected-App")
-                connection.connect()
-
-                val fileLength = connection.contentLength
-                val input = java.io.BufferedInputStream(connection.inputStream)
-                // Use internal cache so FileProvider paths are stable and we don't depend on
-                // external storage availability.
-                val outputFile = File(context.cacheDir, "connected-update.apk")
-                val output = FileOutputStream(outputFile)
-
-                val data = ByteArray(1024)
-                var total: Long = 0
-                var count: Int
-                while (input.read(data).also { count = it } != -1) {
-                    total += count.toLong()
-                    if (fileLength > 0) {
-                        val progress = (total * 100 / fileLength).toInt()
-                        runOnMainThread { onProgress(progress) }
-                    }
-                    output.write(data, 0, count)
-                }
-
-                output.flush()
-                output.close()
-                input.close()
-
-                runOnMainThread { onComplete(outputFile) }
-            } catch (e: Exception) {
-                Log.e("ConnectedApp", "Update download failed", e)
-                runOnMainThread { onComplete(null) }
-            }
-        }
-    }
-
-    fun resumePendingUpdateInstallIfAllowed() {
-        val pendingFile = pendingUpdateInstall ?: return
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O ||
-            context.packageManager.canRequestPackageInstalls()
-        ) {
-            pendingUpdateInstall = null
-            installApkInternal(pendingFile)
-        }
-    }
-
-    fun installApk(file: File) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
-            !context.packageManager.canRequestPackageInstalls()
-        ) {
-            pendingUpdateInstall = file
-            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                data = Uri.parse("package:${context.packageName}")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-            runOnMainThread {
-                android.widget.Toast.makeText(
-                    context,
-                    "Allow this app to install updates, then return to finish install.",
-                    android.widget.Toast.LENGTH_LONG
-                ).show()
-            }
-            return
-        }
-        installApkInternal(file)
-    }
-
-    private fun installApkInternal(file: File) {
-        try {
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.provider",
-                file
-            )
-            val intent = Intent(Intent.ACTION_VIEW)
-            intent.setDataAndType(uri, "application/vnd.android.package-archive")
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-        } catch (e: Exception) {
-            Log.e("ConnectedApp", "Install APK failed", e)
-            runOnMainThread {
-                android.widget.Toast.makeText(context, "Install failed: ${e.message}", android.widget.Toast.LENGTH_LONG)
-                    .show()
             }
         }
     }

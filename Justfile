@@ -176,6 +176,19 @@ build-android-release:
 install-android:
     cd android && ./gradlew installDebug
 
+# Android Play Store release
+[doc("Build Android release for Play Store (APK + AAB)")]
+build-android-playstore:
+    cd android && ./build_release.sh
+
+[doc("Generate only the Android App Bundle (AAB)")]
+build-android-bundle:
+    cd android && ./gradlew bundleRelease
+
+[doc("Lint check Android release build")]
+lint-android:
+    cd android && ./gradlew lintRelease
+
 # Release preparation
 [doc("Prepare for release (version bump, changelog)")]
 prepare-release VERSION:

@@ -92,6 +92,7 @@ configure<ApplicationExtension> {
     lint {
         disable += "MutableCollectionMutableState"
         disable += "AutoboxingStateCreation"
+        baseline = file("lint-baseline.xml")
     }
 
     packaging {
