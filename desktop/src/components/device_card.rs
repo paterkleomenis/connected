@@ -1,4 +1,4 @@
-use crate::components::icon::{get_device_icon_type, Icon, IconType};
+use crate::components::icon::{Icon, IconType, get_device_icon_type};
 use crate::state::DeviceInfo;
 use dioxus::prelude::*;
 
