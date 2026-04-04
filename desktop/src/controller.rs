@@ -4,8 +4,9 @@ use crate::proximity;
 use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
     SavedDeviceInfo, TransferStatus, add_file_transfer_request, add_notification,
-    get_auto_sync_messages, get_clipboard_sync_enabled, get_current_media,
-    get_current_remote_files, get_current_remote_path, get_device_name_setting, get_devices_store,
+    get_active_incoming_transfer_id, get_active_outgoing_transfer_id, get_auto_sync_messages,
+    get_clipboard_sync_enabled, get_current_media, get_current_remote_files,
+    get_current_remote_path, get_device_name_setting, get_devices_store,
     get_download_directory_setting, get_last_clipboard, get_last_remote_clipboard_content,
     get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
     get_pairing_requests, get_pending_pairings, get_phone_call_log, get_phone_conversations,
@@ -13,10 +14,10 @@ use crate::state::{
     get_saved_devices_setting, get_transfer_status, get_update_info, mark_calls_synced,
     mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
     remove_file_transfer_request, save_device_to_settings, set_active_call,
-    set_device_name_setting, set_discovery_active, set_download_directory_setting,
-    set_last_remote_clipboard_content, set_pairing_mode_state, set_phone_call_log,
-    set_phone_contacts, set_phone_conversations, set_phone_messages, set_sdk_initialized,
-    set_transfer_status,
+    set_active_incoming_transfer_id, set_active_outgoing_transfer_id, set_device_name_setting,
+    set_discovery_active, set_download_directory_setting, set_last_remote_clipboard_content,
+    set_pairing_mode_state, set_phone_call_log, set_phone_contacts, set_phone_conversations,
+    set_phone_messages, set_sdk_initialized, set_transfer_status,
 };
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -131,6 +132,7 @@ pub enum AppAction {
     RejectFileTransfer {
         transfer_id: String,
     },
+    CancelFileTransfer,
     ListRemoteFiles {
         ip: String,
         port: u16,
@@ -357,10 +359,12 @@ fn spawn_event_loop(
                 ConnectedEvent::TransferStarting {
                     filename,
                     direction,
+                    id,
                     ..
                 } => {
                     use connected_core::events::TransferDirection;
                     if direction == TransferDirection::Incoming {
+                        set_active_incoming_transfer_id(Some(id.clone()));
                         *get_transfer_status().lock_or_recover() = TransferStatus::Starting {
                             filename: filename.clone(),
                         };
@@ -373,6 +377,8 @@ fn spawn_event_loop(
                         *get_transfer_status().lock_or_recover() = TransferStatus::Starting {
                             filename: filename.clone(),
                         };
+                        // Set the active outgoing transfer ID for cancellation
+                        // The ID was already set when send_file was called, so no action needed here
                     }
                 }
                 ConnectedEvent::TransferProgress {
@@ -395,17 +401,29 @@ fn spawn_event_loop(
                         *status = TransferStatus::InProgress { filename, percent };
                     }
                 }
-                ConnectedEvent::TransferCompleted { filename, .. } => {
+                ConnectedEvent::TransferCompleted { filename, id, .. } => {
+                    set_active_outgoing_transfer_id(None);
+                    set_active_incoming_transfer_id(None);
                     set_transfer_status(TransferStatus::Completed {
                         filename: filename.clone(),
                     });
                     add_notification("Transfer Complete", &format!("{} finished", filename), "");
                 }
-                ConnectedEvent::TransferFailed { error, .. } => {
-                    set_transfer_status(TransferStatus::Failed {
-                        error: error.clone(),
-                    });
-                    add_notification("Transfer Failed", &error, "");
+                ConnectedEvent::TransferFailed { error, id, .. } => {
+                    // Check if this was a cancellation
+                    let is_cancelled = error == "Cancelled" || error == "Cancelled by receiver";
+                    set_active_outgoing_transfer_id(None);
+                    set_active_incoming_transfer_id(None);
+                    if is_cancelled {
+                        set_transfer_status(TransferStatus::Cancelled {
+                            filename: String::from("File transfer"),
+                        });
+                    } else {
+                        set_transfer_status(TransferStatus::Failed {
+                            error: error.clone(),
+                        });
+                        add_notification("Transfer Failed", &error, "");
+                    }
                 }
                 ConnectedEvent::ClipboardReceived {
                     content,
@@ -1193,7 +1211,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     let c = c.clone();
                     tokio::spawn(async move {
                         if let Ok(ip_addr) = ip.parse() {
-                            let _ = c.send_file(ip_addr, port, PathBuf::from(path)).await;
+                            match c.send_file(ip_addr, port, PathBuf::from(path)).await {
+                                Ok(transfer_id) => {
+                                    set_active_outgoing_transfer_id(Some(transfer_id));
+                                }
+                                Err(e) => {
+                                    error!("Failed to start file transfer: {}", e);
+                                }
+                            }
                         }
                     });
                 }
@@ -1422,6 +1447,46 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         }
                         _ => {
                             add_notification("Transfer Rejected", "File transfer declined", "");
+                        }
+                    }
+                }
+            }
+            AppAction::CancelFileTransfer => {
+                if let Some(c) = &client {
+                    // Try to cancel outgoing transfer first
+                    let outgoing_id = get_active_outgoing_transfer_id().lock_or_recover().clone();
+                    if let Some(id) = outgoing_id {
+                        match c.cancel_file_transfer(&id) {
+                            Ok(()) => {
+                                add_notification(
+                                    "Transfer Cancelled",
+                                    "Outgoing file transfer has been cancelled",
+                                    "",
+                                );
+                                set_active_outgoing_transfer_id(None);
+                                continue;
+                            }
+                            Err(e) => {
+                                warn!("Failed to cancel outgoing file transfer: {}", e);
+                            }
+                        }
+                    }
+
+                    // Try to cancel incoming transfer
+                    let incoming_id = get_active_incoming_transfer_id().lock_or_recover().clone();
+                    if let Some(id) = incoming_id {
+                        match c.cancel_incoming_file_transfer(&id) {
+                            Ok(()) => {
+                                add_notification(
+                                    "Transfer Cancelled",
+                                    "Incoming file transfer has been cancelled",
+                                    "",
+                                );
+                                set_active_incoming_transfer_id(None);
+                            }
+                            Err(e) => {
+                                warn!("Failed to cancel incoming file transfer: {}", e);
+                            }
                         }
                     }
                 }

@@ -886,6 +886,7 @@ fn App() -> Element {
                 }
                 TransferStatus::Completed { .. } => 1000,
                 TransferStatus::Failed { .. } => 1001,
+                TransferStatus::Cancelled { .. } => 1002,
             };
             if new_status_hash != last_transfer_status_hash {
                 last_transfer_status_hash = new_status_hash;
@@ -1471,6 +1472,14 @@ fn App() -> Element {
                                                                 }
                                                             }
                                                         }
+                                                        button {
+                                                            class: "cancel-button",
+                                                            onclick: move |_| {
+                                                                action_tx.send(AppAction::CancelFileTransfer);
+                                                            },
+                                                            Icon { icon: IconType::Close, size: 16, color: "var(--error)".to_string() }
+                                                            span { " Cancel Compression" }
+                                                        }
                                                     }
                                                 }
                                             },
@@ -1482,6 +1491,14 @@ fn App() -> Element {
                                                         Icon { icon: IconType::Sync, size: 48, color: "var(--accent)".to_string() }
                                                     }
                                                     p { "Starting transfer: {filename}" }
+                                                    button {
+                                                        class: "cancel-button",
+                                                        onclick: move |_| {
+                                                            action_tx.send(AppAction::CancelFileTransfer);
+                                                        },
+                                                        Icon { icon: IconType::Close, size: 16, color: "var(--error)".to_string() }
+                                                        span { " Cancel Transfer" }
+                                                    }
                                                 }
                                             },
                                             TransferStatus::InProgress { filename, percent } => rsx! {
@@ -1497,6 +1514,14 @@ fn App() -> Element {
                                                             class: "progress-fill",
                                                             style: "width: {percent}%",
                                                         }
+                                                    }
+                                                    button {
+                                                        class: "cancel-button",
+                                                        onclick: move |_| {
+                                                            action_tx.send(AppAction::CancelFileTransfer);
+                                                        },
+                                                        Icon { icon: IconType::Close, size: 16, color: "var(--error)".to_string() }
+                                                        span { " Cancel Transfer" }
                                                     }
                                                 }
                                             },
@@ -1518,6 +1543,16 @@ fn App() -> Element {
                                                         Icon { icon: IconType::Error, size: 48, color: "var(--error)".to_string() }
                                                     }
                                                     p { "Transfer failed: {error}" }
+                                                }
+                                            },
+                                            TransferStatus::Cancelled { filename } => rsx! {
+                                                div {
+                                                    class: "transfer-cancelled",
+                                                    div {
+                                                        class: "transfer-icon",
+                                                        Icon { icon: IconType::Close, size: 48, color: "var(--warning)".to_string() }
+                                                    }
+                                                    p { "Transfer cancelled: {filename}" }
                                                 }
                                             },
                                         }

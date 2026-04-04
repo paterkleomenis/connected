@@ -300,6 +300,9 @@ pub enum TransferStatus {
     Failed {
         error: String,
     },
+    Cancelled {
+        filename: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -334,6 +337,10 @@ pub struct FileTransferRequest {
 
 static DEVICES: OnceLock<Arc<Mutex<HashMap<String, DeviceInfo>>>> = OnceLock::new();
 static TRANSFER_STATUS: OnceLock<Arc<Mutex<TransferStatus>>> = OnceLock::new();
+/// Track the current active outgoing file transfer ID (for cancellation).
+static ACTIVE_OUTGOING_TRANSFER_ID: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
+/// Track the current active incoming file transfer ID (for cancellation).
+static ACTIVE_INCOMING_TRANSFER_ID: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
 static NOTIFICATIONS: OnceLock<Arc<Mutex<Vec<Notification>>>> = OnceLock::new();
 static NOTIFICATION_COUNTER: OnceLock<Arc<Mutex<u64>>> = OnceLock::new();
 static LAST_CLIPBOARD: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
@@ -451,12 +458,30 @@ pub fn get_transfer_status() -> &'static Arc<Mutex<TransferStatus>> {
     TRANSFER_STATUS.get_or_init(|| Arc::new(Mutex::new(TransferStatus::Idle)))
 }
 
+pub fn get_active_outgoing_transfer_id() -> &'static Arc<Mutex<Option<String>>> {
+    ACTIVE_OUTGOING_TRANSFER_ID.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+pub fn set_active_outgoing_transfer_id(id: Option<String>) {
+    *get_active_outgoing_transfer_id().lock_or_recover() = id;
+}
+
+pub fn get_active_incoming_transfer_id() -> &'static Arc<Mutex<Option<String>>> {
+    ACTIVE_INCOMING_TRANSFER_ID.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+pub fn set_active_incoming_transfer_id(id: Option<String>) {
+    *get_active_incoming_transfer_id().lock_or_recover() = id;
+}
+
 /// Set transfer status with auto-reset after completion or failure.
-/// After Completed or Failed status, automatically resets to Idle after a delay.
+/// After Completed, Failed, or Cancelled status, automatically resets to Idle after a delay.
 pub fn set_transfer_status(status: TransferStatus) {
     let should_auto_reset = matches!(
         status,
-        TransferStatus::Completed { .. } | TransferStatus::Failed { .. }
+        TransferStatus::Completed { .. }
+            | TransferStatus::Failed { .. }
+            | TransferStatus::Cancelled { .. }
     );
 
     *get_transfer_status().lock_or_recover() = status;
@@ -466,10 +491,12 @@ pub fn set_transfer_status(status: TransferStatus) {
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let mut guard = get_transfer_status().lock_or_recover();
-            // Only reset if still in Completed or Failed state (not if a new transfer started)
+            // Only reset if still in Completed, Failed, or Cancelled state (not if a new transfer started)
             if matches!(
                 *guard,
-                TransferStatus::Completed { .. } | TransferStatus::Failed { .. }
+                TransferStatus::Completed { .. }
+                    | TransferStatus::Failed { .. }
+                    | TransferStatus::Cancelled { .. }
             ) {
                 *guard = TransferStatus::Idle;
             }

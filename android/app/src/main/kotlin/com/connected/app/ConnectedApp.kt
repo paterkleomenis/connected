@@ -71,6 +71,7 @@ import uniffi.connected_ffi.sendClipboard
 import uniffi.connected_ffi.sendContacts
 import uniffi.connected_ffi.sendConversations
 import uniffi.connected_ffi.sendFile
+import uniffi.connected_ffi.cancelFileTransfer
 import uniffi.connected_ffi.sendMediaCommand
 import uniffi.connected_ffi.sendMediaState
 import uniffi.connected_ffi.sendMessages
@@ -166,6 +167,10 @@ class ConnectedApp(private val context: Context) {
     private val pendingTempFilesForCleanup = ConcurrentHashMap<String, File>()
 
     val transferStatus = mutableStateOf("Idle")
+    var activeTransferId: String? = null
+        private set
+    var activeIncomingTransferId: String? = null
+        private set
     val compressionProgress = mutableStateOf<CompressionProgress?>(null)
     val browserDownloadProgress = mutableStateOf<BrowserDownloadProgress?>(null)
 
@@ -605,10 +610,12 @@ class ConnectedApp(private val context: Context) {
         override fun onTransferRequest(transferId: String, filename: String, fileSize: ULong, fromDevice: String) {
             val request = TransferRequest(transferId, filename, fileSize, fromDevice)
             transferRequest.value = request
+            activeIncomingTransferId = transferId
             showTransferNotification(request)
         }
 
-        override fun onTransferStarting(filename: String, totalSize: ULong) {
+        override fun onTransferStarting(transferId: String, filename: String, totalSize: ULong) {
+            activeIncomingTransferId = transferId
             transferStatus.value = "Starting transfer: $filename"
             showProgressNotification(filename, 0, totalSize.toLong())
         }
@@ -621,6 +628,8 @@ class ConnectedApp(private val context: Context) {
 
         override fun onTransferCompleted(filename: String, totalSize: ULong) {
             transferStatus.value = "Completed: $filename"
+            activeTransferId = null
+            activeIncomingTransferId = null
             moveToDownloads(filename)
             showCompletionNotification(filename)
 
@@ -639,6 +648,8 @@ class ConnectedApp(private val context: Context) {
 
         override fun onTransferFailed(errorMsg: String) {
             transferStatus.value = "Failed: $errorMsg"
+            activeTransferId = null
+            activeIncomingTransferId = null
             showErrorNotification(errorMsg)
 
             // Clean up any pending temp files on failure too
@@ -649,6 +660,8 @@ class ConnectedApp(private val context: Context) {
 
         override fun onTransferCancelled() {
             transferStatus.value = "Cancelled"
+            activeTransferId = null
+            activeIncomingTransferId = null
             val notificationManager =
                 context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
             notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
@@ -815,7 +828,10 @@ class ConnectedApp(private val context: Context) {
         }
 
         if (cleanedCount > 0) {
-            Log.d("ConnectedApp", "Freed ${totalBytesFreed / (1024 * 1024)}MB by cleaning $cleanedCount orphaned cache files")
+            Log.d(
+                "ConnectedApp",
+                "Freed ${totalBytesFreed / (1024 * 1024)}MB by cleaning $cleanedCount orphaned cache files"
+            )
         }
         return cleanedCount
     }
@@ -1802,7 +1818,8 @@ class ConnectedApp(private val context: Context) {
                     transferStatus.value = "Starting transfer: $fileName..."
                 }
 
-                sendFile(device.ip, device.port, filePathToSend)
+                val transferId = sendFile(device.ip, device.port, filePathToSend)
+                activeTransferId = transferId
 
             } catch (e: Exception) {
                 Log.e("ConnectedApp", "Failed to stream file from URI", e)
@@ -1822,6 +1839,38 @@ class ConnectedApp(private val context: Context) {
     fun sendFileToDevice(device: DiscoveredDevice, fileUri: String) {
         // Use the optimized streaming method
         sendFileFromUri(device, fileUri)
+    }
+
+    /**
+     * Cancel the currently active file transfer (outgoing or incoming).
+     * This sends a cancellation signal to the Rust core, which will
+     * stop the transfer and clean up any temporary files.
+     */
+    fun cancelFileTransfer() {
+        // Try outgoing first
+        activeTransferId?.let { transferId ->
+            try {
+                uniffi.connected_ffi.cancelFileTransfer(transferId)
+                Log.d("ConnectedApp", "Cancelled outgoing file transfer: $transferId")
+                activeTransferId = null
+                transferStatus.value = "Idle"
+                return
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to cancel outgoing transfer, trying incoming", e)
+            }
+        }
+
+        // Try incoming
+        activeIncomingTransferId?.let { transferId ->
+            try {
+                uniffi.connected_ffi.cancelIncomingFileTransfer(transferId)
+                Log.d("ConnectedApp", "Cancelled incoming file transfer: $transferId")
+                activeIncomingTransferId = null
+                transferStatus.value = "Idle"
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to cancel incoming file transfer", e)
+            }
+        }
     }
 
     // Missing Media Session methods
@@ -2733,7 +2782,8 @@ class ConnectedApp(private val context: Context) {
                     } else {
                         // Track temp file for cleanup after async transfer completes
                         pendingTempFilesForCleanup[zipFile.absolutePath] = zipFile
-                        sendFile(device.ip, device.port, zipFile.absolutePath)
+                        val transferId = sendFile(device.ip, device.port, zipFile.absolutePath)
+                        activeTransferId = transferId
                     }
 
                 } catch (e: Exception) {

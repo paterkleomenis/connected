@@ -641,6 +641,8 @@ pub enum ConnectedFfiError {
     NotInitialized,
     #[error("Invalid argument: {msg}")]
     InvalidArgument { msg: String },
+    #[error("Internal error: {msg}")]
+    Internal { msg: String },
 }
 
 impl From<ConnectedError> for ConnectedFfiError {
@@ -671,7 +673,7 @@ pub trait FileTransferCallback: Send + Sync {
         file_size: u64,
         from_device: String,
     );
-    fn on_transfer_starting(&self, filename: String, total_size: u64);
+    fn on_transfer_starting(&self, transfer_id: String, filename: String, total_size: u64);
     fn on_transfer_progress(&self, bytes_transferred: u64, total_size: u64);
     fn on_transfer_completed(&self, filename: String, total_size: u64);
     fn on_transfer_failed(&self, error_msg: String);
@@ -943,9 +945,9 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                         total_size,
                         ..
                     } => {
-                        get_transfer_sizes().write().insert(id, total_size);
+                        get_transfer_sizes().write().insert(id.clone(), total_size);
                         if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                            cb.on_transfer_starting(filename, total_size);
+                            cb.on_transfer_starting(id, filename, total_size);
                         }
                     }
                     ConnectedEvent::TransferProgress {
@@ -1274,7 +1276,7 @@ pub fn send_file(
     target_ip: String,
     target_port: u16,
     file_path: String,
-) -> Result<(), ConnectedFfiError> {
+) -> Result<String, ConnectedFfiError> {
     let client = get_client()?;
     let ip: std::net::IpAddr =
         target_ip
@@ -1290,13 +1292,36 @@ pub fn send_file(
         });
     }
 
-    get_runtime().spawn(async move {
-        if let Err(e) = client.send_file(ip, target_port, path).await {
-            error!("Failed to start file transfer: {}", e);
-        }
-    });
+    let transfer_id = get_runtime().block_on(async {
+        client
+            .send_file(ip, target_port, path)
+            .await
+            .map_err(|e| ConnectedFfiError::Internal {
+                msg: format!("Failed to start file transfer: {}", e),
+            })
+    })?;
 
-    Ok(())
+    Ok(transfer_id)
+}
+
+#[uniffi::export]
+pub fn cancel_file_transfer(transfer_id: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    client
+        .cancel_file_transfer(&transfer_id)
+        .map_err(|e| ConnectedFfiError::Internal {
+            msg: format!("Failed to cancel file transfer: {}", e),
+        })
+}
+
+#[uniffi::export]
+pub fn cancel_incoming_file_transfer(transfer_id: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    client
+        .cancel_incoming_file_transfer(&transfer_id)
+        .map_err(|e| ConnectedFfiError::Internal {
+            msg: format!("Failed to cancel incoming file transfer: {}", e),
+        })
 }
 
 #[uniffi::export]

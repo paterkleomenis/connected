@@ -11,6 +11,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,7 @@ use tracing::{debug, error, info, warn};
 
 type PendingTransferSender = oneshot::Sender<bool>;
 type PendingHandshakeMap = HashMap<IpAddr, (Instant, Option<String>)>;
+type CancelFlag = Arc<AtomicBool>;
 
 /// Capacity of the broadcast channel used for `ConnectedEvent`s.
 ///
@@ -56,6 +58,12 @@ pub struct ConnectedClient {
     download_dir: Arc<RwLock<PathBuf>>,
     pairing_mode_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     pending_transfers: Arc<RwLock<HashMap<String, PendingTransferSender>>>,
+    /// Track active outgoing file transfers and their cancel flags.
+    /// Keyed by transfer_id, stores the cancel atomic flag and temp file path (if any).
+    active_outgoing_transfers: Arc<RwLock<HashMap<String, (CancelFlag, Option<PathBuf>)>>>,
+    /// Track active incoming file transfers and their cancel flags.
+    /// Keyed by transfer_id, stores the cancel atomic flag.
+    active_incoming_transfers: Arc<RwLock<HashMap<String, CancelFlag>>>,
     /// Track IPs we've sent handshakes to (with timestamp and expected peer fingerprint),
     /// so we can auto-trust their acks even if pairing mode times out.
     /// The Option<String> stores the peer's TLS fingerprint once known, to prevent
@@ -235,6 +243,8 @@ impl ConnectedClient {
             download_dir,
             pairing_mode_handle: Arc::new(RwLock::new(None)),
             pending_transfers: Arc::new(RwLock::new(HashMap::new())),
+            active_outgoing_transfers: Arc::new(RwLock::new(HashMap::new())),
+            active_incoming_transfers: Arc::new(RwLock::new(HashMap::new())),
             pending_handshakes: Arc::new(RwLock::new(HashMap::new())),
             fs_provider: Arc::new(RwLock::new(None)),
             fs_stream_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FS_STREAMS)),
@@ -1699,7 +1709,7 @@ impl ConnectedClient {
         target_ip: IpAddr,
         target_port: u16,
         file_path: PathBuf,
-    ) -> Result<()> {
+    ) -> Result<String> {
         if !file_path.exists() {
             return Err(ConnectedError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -1717,12 +1727,29 @@ impl ConnectedClient {
         let transfer_id = uuid::Uuid::new_v4().to_string();
         let peer_name = target_ip.to_string(); // In real app, look up name from discovery
 
+        // Create cancel flag for this transfer
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        // Track temp file path for cleanup (if sending a folder)
+        let temp_file_path: Option<PathBuf> = if file_path.is_dir() {
+            // We can't know the exact temp ZIP path here, it will be tracked in the task
+            None
+        } else {
+            None
+        };
+
+        self.active_outgoing_transfers
+            .write()
+            .insert(transfer_id.clone(), (cancel_flag.clone(), temp_file_path));
+
+        let active_transfers = self.active_outgoing_transfers.clone();
+        let tid_for_cleanup = transfer_id.clone();
+
         tokio::spawn(async move {
             let (progress_tx, progress_rx) = mpsc::unbounded_channel();
             let mut progress_rx = progress_rx;
 
             // Bridge internal progress to public event bus
-            let tid = transfer_id.clone();
+            let tid = tid_for_cleanup.clone();
             let p_peer = peer_name.clone();
             let p_tx = event_tx.clone();
 
@@ -1788,15 +1815,58 @@ impl ConnectedClient {
             });
 
             let file_transfer = FileTransfer::new(connection);
-            if let Err(e) = file_transfer.send_file(&file_path, Some(progress_tx)).await {
+            let result = file_transfer
+                .send_file(&file_path, Some(progress_tx), Some(cancel_flag))
+                .await;
+
+            // Clean up the transfer from active transfers
+            active_transfers.write().remove(&tid_for_cleanup);
+
+            if let Err(e) = result {
                 let _ = event_tx.send(ConnectedEvent::TransferFailed {
-                    id: transfer_id,
+                    id: tid_for_cleanup,
                     error: e.to_string(),
                 });
             }
         });
 
-        Ok(())
+        Ok(transfer_id)
+    }
+
+    /// Cancel an active outgoing file transfer by its transfer_id.
+    /// This sets the cancellation flag, which will be checked by the transfer task,
+    /// causing it to stop and clean up any temporary files.
+    pub fn cancel_file_transfer(&self, transfer_id: &str) -> Result<()> {
+        let mut transfers = self.active_outgoing_transfers.write();
+        if let Some((cancel_flag, _temp_path)) = transfers.remove(transfer_id) {
+            // Set the cancellation flag (ignore error if already dropped)
+            cancel_flag.store(true, Ordering::Relaxed);
+            info!("Cancelled file transfer: {}", transfer_id);
+            Ok(())
+        } else {
+            Err(ConnectedError::InitializationError(format!(
+                "No active file transfer with id: {}",
+                transfer_id
+            )))
+        }
+    }
+
+    /// Cancel an active incoming file transfer by its transfer_id.
+    /// This sets the cancellation flag, which will send a Cancel message to the sender
+    /// and clean up the partial file.
+    pub fn cancel_incoming_file_transfer(&self, transfer_id: &str) -> Result<()> {
+        let mut transfers = self.active_incoming_transfers.write();
+        if let Some(cancel_flag) = transfers.remove(transfer_id) {
+            // Set the cancellation flag (ignore error if already dropped)
+            cancel_flag.store(true, Ordering::Relaxed);
+            info!("Cancelled incoming file transfer: {}", transfer_id);
+            Ok(())
+        } else {
+            Err(ConnectedError::InitializationError(format!(
+                "No active incoming file transfer with id: {}",
+                transfer_id
+            )))
+        }
     }
 
     /// Invalidate cached connection for a device by looking up its IP from discovered devices
@@ -2767,6 +2837,7 @@ impl ConnectedClient {
         let key_store_files = self.key_store.clone();
 
         let pending_transfers = self.pending_transfers.clone();
+        let active_incoming_transfers = self.active_incoming_transfers.clone();
         tokio::spawn(async move {
             let key_store = key_store_files;
             while let Some((fingerprint, send, recv)) = file_rx.recv().await {
@@ -2790,6 +2861,7 @@ impl ConnectedClient {
                     .get_peer_name(&fingerprint)
                     .unwrap_or_else(|| "Unknown device".to_string());
 
+                let active_incoming = active_incoming_transfers.clone();
                 tokio::spawn(async move {
                     let transfer_id = uuid::Uuid::new_v4().to_string();
                     let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
@@ -2889,6 +2961,12 @@ impl ConnectedClient {
                         None
                     };
 
+                    // Create cancel flag for incoming transfer
+                    let cancel_flag = Arc::new(AtomicBool::new(false));
+                    active_incoming
+                        .write()
+                        .insert(transfer_id.clone(), cancel_flag.clone());
+
                     // Handle incoming file with auto-accept preference
                     let result = FileTransfer::handle_incoming(
                         send,
@@ -2897,9 +2975,12 @@ impl ConnectedClient {
                         Some(progress_tx),
                         should_auto_accept,
                         accept_rx,
+                        Some(cancel_flag),
                     )
                     .await;
 
+                    // Clean up the cancel flag
+                    active_incoming.write().remove(&transfer_id);
                     // H3: Always clean up the pending transfer entry regardless of
                     // success/failure/timeout to prevent stale entries from accumulating.
                     pending.write().remove(&transfer_id);
