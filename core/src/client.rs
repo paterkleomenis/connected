@@ -21,6 +21,7 @@ use tracing::{debug, error, info, warn};
 type PendingTransferSender = oneshot::Sender<bool>;
 type PendingHandshakeMap = HashMap<IpAddr, (Instant, Option<String>)>;
 type CancelFlag = Arc<AtomicBool>;
+type OutgoingTransferEntry = (CancelFlag, Option<PathBuf>);
 
 /// Capacity of the broadcast channel used for `ConnectedEvent`s.
 ///
@@ -60,7 +61,7 @@ pub struct ConnectedClient {
     pending_transfers: Arc<RwLock<HashMap<String, PendingTransferSender>>>,
     /// Track active outgoing file transfers and their cancel flags.
     /// Keyed by transfer_id, stores the cancel atomic flag and temp file path (if any).
-    active_outgoing_transfers: Arc<RwLock<HashMap<String, (CancelFlag, Option<PathBuf>)>>>,
+    active_outgoing_transfers: Arc<RwLock<HashMap<String, OutgoingTransferEntry>>>,
     /// Track active incoming file transfers and their cancel flags.
     /// Keyed by transfer_id, stores the cancel atomic flag.
     active_incoming_transfers: Arc<RwLock<HashMap<String, CancelFlag>>>,

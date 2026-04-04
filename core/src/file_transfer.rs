@@ -283,16 +283,16 @@ impl FileTransfer {
         );
 
         // Check for cancellation before starting
-        if let Some(ref cancel_flag) = cancel_flag {
-            if cancel_flag.load(Ordering::Relaxed) {
-                if is_temp_file {
-                    let _ = tokio::fs::remove_file(&path).await;
-                }
-                if let Some(ref tx) = progress_tx {
-                    let _ = tx.send(TransferProgress::Cancelled);
-                }
-                return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
+        if let Some(ref cancel_flag) = cancel_flag
+            && cancel_flag.load(Ordering::Relaxed)
+        {
+            if is_temp_file {
+                let _ = tokio::fs::remove_file(&path).await;
             }
+            if let Some(ref tx) = progress_tx {
+                let _ = tx.send(TransferProgress::Cancelled);
+            }
+            return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
         }
 
         // Notify progress
@@ -390,16 +390,16 @@ impl FileTransfer {
 
         while remaining > 0 {
             // Check for cancellation
-            if let Some(ref cancel_flag) = cancel_flag {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    if is_temp_file {
-                        let _ = tokio::fs::remove_file(&path).await;
-                    }
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Cancelled);
-                    }
-                    return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
+            if let Some(ref cancel_flag) = cancel_flag
+                && cancel_flag.load(Ordering::Relaxed)
+            {
+                if is_temp_file {
+                    let _ = tokio::fs::remove_file(&path).await;
                 }
+                if let Some(ref tx) = progress_tx {
+                    let _ = tx.send(TransferProgress::Cancelled);
+                }
+                return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
             }
 
             // Clear buffer for reuse
@@ -747,18 +747,18 @@ impl FileTransfer {
         let mut remaining = file_size;
         while remaining > 0 {
             // Check for cancellation
-            if let Some(ref cancel_flag) = cancel_flag {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    // Send Cancel message to sender
-                    let _ = send_message(&mut send, &FileTransferMessage::Cancel).await;
-                    let _ = tokio::fs::remove_file(&save_path).await;
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Cancelled);
-                    }
-                    return Err(ConnectedError::TransferFailed(
-                        "Cancelled by receiver".to_string(),
-                    ));
+            if let Some(ref cancel_flag) = cancel_flag
+                && cancel_flag.load(Ordering::Relaxed)
+            {
+                // Send Cancel message to sender
+                let _ = send_message(&mut send, &FileTransferMessage::Cancel).await;
+                let _ = tokio::fs::remove_file(&save_path).await;
+                if let Some(ref tx) = progress_tx {
+                    let _ = tx.send(TransferProgress::Cancelled);
                 }
+                return Err(ConnectedError::TransferFailed(
+                    "Cancelled by receiver".to_string(),
+                ));
             }
 
             let max_len = std::cmp::min(remaining, BUFFER_SIZE as u64) as usize;

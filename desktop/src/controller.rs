@@ -401,7 +401,9 @@ fn spawn_event_loop(
                         *status = TransferStatus::InProgress { filename, percent };
                     }
                 }
-                ConnectedEvent::TransferCompleted { filename, id, .. } => {
+                ConnectedEvent::TransferCompleted {
+                    filename, id: _, ..
+                } => {
                     set_active_outgoing_transfer_id(None);
                     set_active_incoming_transfer_id(None);
                     set_transfer_status(TransferStatus::Completed {
@@ -409,7 +411,7 @@ fn spawn_event_loop(
                     });
                     add_notification("Transfer Complete", &format!("{} finished", filename), "");
                 }
-                ConnectedEvent::TransferFailed { error, id, .. } => {
+                ConnectedEvent::TransferFailed { error, id: _, .. } => {
                     // Check if this was a cancellation
                     let is_cancelled = error == "Cancelled" || error == "Cancelled by receiver";
                     set_active_outgoing_transfer_id(None);
