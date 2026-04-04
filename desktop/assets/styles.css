@@ -195,6 +195,28 @@ body {
     margin-bottom: var(--space-2);
 }
 
+.app-icon-surface {
+    --icon-chip-size: 36px;
+    --icon-chip-radius: calc(var(--icon-chip-size) * 0.28);
+    --icon-chip-border: max(1px, calc(var(--icon-chip-size) * 0.03));
+    width: var(--icon-chip-size);
+    height: var(--icon-chip-size);
+    border-radius: var(--icon-chip-radius);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: var(--icon-chip-border) solid rgba(255, 255, 255, 0.24);
+    background: rgba(255, 255, 255, 0.07);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.12) inset,
+        0 8px 22px rgba(0, 0, 0, 0.35);
+    flex-shrink: 0;
+}
+
+.sidebar-logo {
+    --icon-chip-size: 36px;
+}
+
 .sidebar-header::before {
     content: "";
     display: none;
@@ -234,6 +256,13 @@ body {
     transition: var(--transition-normal);
     margin-bottom: var(--space-2);
     -webkit-app-region: no-drag;
+}
+
+.local-device-logo {
+    --icon-chip-size: 28px;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.12) inset,
+        0 5px 14px rgba(0, 0, 0, 0.28);
 }
 
 .local-device:hover {
@@ -700,20 +729,20 @@ body {
 
 /* Device Card Icon */
 .device-card-icon {
-    background: transparent;
-    border-radius: var(--radius-lg);
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    --icon-chip-size: 52px;
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.1) inset,
+        0 8px 20px rgba(0, 0, 0, 0.28);
     font-size: 32px;
-    flex-shrink: 0;
     position: relative;
     transition: var(--transition-normal);
 }
 
 .device-card:hover .device-card-icon {
     transform: scale(1.05);
-    background: transparent;
+    background: rgba(255, 255, 255, 0.1);
 }
 
 .untrusted-badge {

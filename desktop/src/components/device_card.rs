@@ -1,4 +1,4 @@
-use crate::components::icon::{Icon, IconType, get_device_icon_type};
+use crate::components::icon::{get_device_icon_type, Icon, IconType};
 use crate::state::DeviceInfo;
 use dioxus::prelude::*;
 
@@ -34,8 +34,8 @@ pub fn DeviceCard(
             },
 
             div {
-                class: "device-card-icon",
-                Icon { icon: device_icon.clone(), size: 28, color: "var(--text-primary)".to_string() }
+                class: "app-icon-surface device-card-icon",
+                Icon { icon: device_icon.clone(), size: 24, color: "var(--text-primary)".to_string() }
                 if !device.is_trusted {
                     span {
                         class: "untrusted-badge",

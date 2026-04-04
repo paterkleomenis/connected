@@ -84,67 +84,30 @@ mod tray {
         }
 
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-            // Generate the Connected logo icon
-            let width = 64i32;
-            let height = 64i32;
-            let mut argb = Vec::with_capacity((width * height * 4) as usize);
+            let mut icons = Vec::new();
 
-            for y in 0..height {
-                for x in 0..width {
-                    let scale = 64.0 / 116.0;
-                    let cx = 58.0 * scale;
-                    let cy = 58.0 * scale;
-                    let dot_radius = 9.0 * scale;
-                    let arc_radius = 38.0 * scale;
-                    let stroke_width = 16.0 * scale;
-                    let half_stroke = stroke_width / 2.0;
-
-                    let px = x as f32;
-                    let py = y as f32;
-
-                    let dist = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
-
-                    let mut alpha: u8 = 0;
-
-                    // Dot
-                    if dist <= dot_radius {
-                        alpha = 255;
-                    } else if dist <= dot_radius + 1.0 {
-                        alpha = (255.0 * (1.0 - (dist - dot_radius))) as u8;
-                    }
-
-                    // Arc
-                    if alpha == 0 {
-                        let dist_from_arc = (dist - arc_radius).abs();
-
-                        if dist_from_arc <= half_stroke + 1.0 {
-                            let angle = (py - cy).atan2(px - cx);
-                            let gap_start = 0.608;
-                            let gap_end = 2.533;
-
-                            if !(angle > gap_start && angle < gap_end) {
-                                if dist_from_arc <= half_stroke {
-                                    alpha = 255;
-                                } else {
-                                    alpha = (255.0 * (1.0 - (dist_from_arc - half_stroke))) as u8;
-                                }
-                            }
-                        }
-                    }
-
-                    // ARGB format (big-endian: A, R, G, B)
-                    argb.push(alpha);
-                    argb.push(255); // R (white)
-                    argb.push(255); // G (white)
-                    argb.push(255); // B (white)
+            for size in [22u32, 32, 64] {
+                let rgba = super::render_connected_tray_icon_rgba(size);
+                let mut argb = Vec::with_capacity((size * size * 4) as usize);
+                for px in rgba.chunks_exact(4) {
+                    let r = px[0];
+                    let g = px[1];
+                    let b = px[2];
+                    let a = px[3];
+                    argb.push(a);
+                    argb.push(r);
+                    argb.push(g);
+                    argb.push(b);
                 }
+
+                icons.push(ksni::Icon {
+                    width: size as i32,
+                    height: size as i32,
+                    data: argb,
+                });
             }
 
-            vec![ksni::Icon {
-                width,
-                height,
-                data: argb,
-            }]
+            icons
         }
 
         fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
@@ -196,16 +159,131 @@ fn load_icon() -> Option<dioxus::desktop::tao::window::Icon> {
     dioxus::desktop::tao::window::Icon::from_rgba(rgba.into_raw(), width, height).ok()
 }
 
+fn sdf_rounded_rect(px: f32, py: f32, cx: f32, cy: f32, half_w: f32, half_h: f32, r: f32) -> f32 {
+    let qx = (px - cx).abs() - (half_w - r);
+    let qy = (py - cy).abs() - (half_h - r);
+    let ox = qx.max(0.0);
+    let oy = qy.max(0.0);
+    (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - r
+}
+
+fn sdf_to_alpha(distance: f32, aa: f32) -> f32 {
+    ((aa - distance) / aa).clamp(0.0, 1.0)
+}
+
+fn blend_rgba(dst: [f32; 4], src: [f32; 4]) -> [f32; 4] {
+    let src_a = src[3];
+    let dst_a = dst[3];
+    let out_a = src_a + dst_a * (1.0 - src_a);
+
+    if out_a <= f32::EPSILON {
+        return [0.0, 0.0, 0.0, 0.0];
+    }
+
+    let out_r = (src[0] * src_a + dst[0] * dst_a * (1.0 - src_a)) / out_a;
+    let out_g = (src[1] * src_a + dst[1] * dst_a * (1.0 - src_a)) / out_a;
+    let out_b = (src[2] * src_a + dst[2] * dst_a * (1.0 - src_a)) / out_a;
+
+    [out_r, out_g, out_b, out_a]
+}
+
+fn render_connected_tray_icon_rgba(size: u32) -> Vec<u8> {
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    let s = size as f32;
+
+    let padding = (s * 0.12).max(1.5);
+    let chip_side = (s - 2.0 * padding).max(1.0);
+    let chip_center = s * 0.5;
+    let chip_half = chip_side * 0.5;
+    let chip_radius = (chip_side * 0.28).min(chip_half - 0.5).max(2.2);
+
+    let border_width = (s * 0.06).max(1.0);
+    let inner_half = (chip_half - border_width).max(0.5);
+    let inner_radius = (chip_radius - border_width).max(1.0);
+
+    let aa = 1.0;
+    let samples = [(0.25f32, 0.25f32), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
+
+    for y in 0..size {
+        for x in 0..size {
+            let mut pixel = [0.0f32; 4];
+
+            for (sx, sy) in samples {
+                let px = x as f32 + sx;
+                let py = y as f32 + sy;
+
+                let outer_d = sdf_rounded_rect(
+                    px,
+                    py,
+                    chip_center,
+                    chip_center,
+                    chip_half,
+                    chip_half,
+                    chip_radius,
+                );
+                let outer_cov = sdf_to_alpha(outer_d, aa);
+
+                let inner_d = sdf_rounded_rect(
+                    px,
+                    py,
+                    chip_center,
+                    chip_center,
+                    inner_half,
+                    inner_half,
+                    inner_radius,
+                );
+                let inner_cov = sdf_to_alpha(inner_d, aa);
+
+                let border_cov = (outer_cov - inner_cov).clamp(0.0, 1.0);
+
+                let mut sample_px = [0.0f32, 0.0, 0.0, 0.0];
+                // Dark chip fill
+                sample_px = blend_rgba(sample_px, [0.06, 0.06, 0.06, inner_cov * 0.92]);
+                // Light border
+                sample_px = blend_rgba(sample_px, [1.0, 1.0, 1.0, border_cov * 0.5]);
+
+                // Logo geometry (based on IconType::Logo viewBox 116x116)
+                let ux = ((px - padding) / chip_side) * 116.0;
+                let uy = ((py - padding) / chip_side) * 116.0;
+                let dx = ux - 58.0;
+                let dy = uy - 58.0;
+                let dist = (dx * dx + dy * dy).sqrt();
+
+                let dot_cov = sdf_to_alpha(dist - 9.0, 1.15);
+                let mut arc_cov = 0.0;
+                let angle = dy.atan2(dx);
+                let gap_start = 0.608;
+                let gap_end = 2.533;
+                if !(angle > gap_start && angle < gap_end) {
+                    arc_cov = sdf_to_alpha((dist - 38.0).abs() - 8.0, 1.2);
+                }
+                let logo_cov = dot_cov.max(arc_cov) * inner_cov;
+
+                sample_px = blend_rgba(sample_px, [1.0, 1.0, 1.0, logo_cov]);
+
+                pixel[0] += sample_px[0];
+                pixel[1] += sample_px[1];
+                pixel[2] += sample_px[2];
+                pixel[3] += sample_px[3];
+            }
+
+            let inv = 1.0 / samples.len() as f32;
+            let i = ((y * size + x) * 4) as usize;
+            rgba[i] = (pixel[0] * inv * 255.0).round() as u8;
+            rgba[i + 1] = (pixel[1] * inv * 255.0).round() as u8;
+            rgba[i + 2] = (pixel[2] * inv * 255.0).round() as u8;
+            rgba[i + 3] = (pixel[3] * inv * 255.0).round() as u8;
+        }
+    }
+
+    rgba
+}
+
 #[cfg(target_os = "windows")]
 fn load_tray_icon() -> Option<dioxus::desktop::trayicon::Icon> {
-    let icon_bytes = include_bytes!("../assets/logo.png");
-    let reader = ImageReader::new(Cursor::new(icon_bytes))
-        .with_guessed_format()
-        .ok()?;
-    let image = reader.decode().ok()?;
-    let rgba = image.into_rgba8();
-    let (width, height) = rgba.dimensions();
-    dioxus::desktop::trayicon::Icon::from_rgba(rgba.into_raw(), width, height).ok()
+    let size = 64;
+    let rgba = render_connected_tray_icon_rgba(size);
+    dioxus::desktop::trayicon::Icon::from_rgba(rgba, size, size).ok()
 }
 
 /// Command-line flag that the elevated subprocess receives.
@@ -1039,13 +1117,20 @@ fn App() -> Element {
                 // Logo/Header
                 div {
                     class: "sidebar-header",
-                    Icon { icon: IconType::Logo, size: 36, color: "white".to_string() }
+                    div {
+                        class: "app-icon-surface sidebar-logo",
+                        Icon { icon: IconType::Logo, size: 24, color: "white".to_string() }
+                    }
                     h1 { "Connected" }
                 }
 
                 // Local device info
                 div {
                     class: "local-device",
+                    div {
+                        class: "app-icon-surface local-device-logo",
+                        Icon { icon: IconType::Logo, size: 18, color: "white".to_string() }
+                    }
                     div {
                         class: "local-device-info",
                         span { class: "local-device-name", "{local_device_name}" }
