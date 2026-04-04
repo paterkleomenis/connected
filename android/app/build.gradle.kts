@@ -67,7 +67,7 @@ configure<ApplicationExtension> {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             // Only use release signing config if keystore exists (CI) or env vars are set
             signingConfig = if (System.getenv("ANDROID_KEYSTORE_PASSWORD") != null) {
                 signingConfigs.getByName("release")
