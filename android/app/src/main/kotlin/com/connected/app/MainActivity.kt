@@ -993,6 +993,7 @@ fun SettingsScreen(
     // Telephony permissions
     var hasTelephonyPermissions by remember { mutableStateOf(false) }
     var permissionsRequested by remember { mutableStateOf(false) }
+    var pendingFullAccess by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -1012,6 +1013,12 @@ fun SettingsScreen(
                         connectedApp.telephonyProvider.hasCallLogPermission() &&
                         connectedApp.telephonyProvider.hasPhonePermission() &&
                         connectedApp.telephonyProvider.hasAnswerPhoneCallsPermission()
+
+                // Check pending full access
+                if (pendingFullAccess && connectedApp.isFullAccessGranted()) {
+                    pendingFullAccess = false
+                    connectedApp.setFullAccess()
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -1058,6 +1065,36 @@ fun SettingsScreen(
     }
 
     var showRenameDialog by remember { mutableStateOf(false) }
+    var showTelephonyDisclosureDialog by remember { mutableStateOf(false) }
+
+    if (showTelephonyDisclosureDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showTelephonyDisclosureDialog = false
+            },
+            title = { Text("Permission Required") },
+            text = {
+                Text("Connected needs access to your SMS and Call Logs to sync them with your desktop PC. We do not use this data for any other purpose.")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showTelephonyDisclosureDialog = false
+                    telephonyPermissionLauncher.launch(
+                        connectedApp.telephonyProvider.getRequiredPermissions()
+                    )
+                }) {
+                    Text("Grant")
+                }
+            },
+            dismissButton = {
+                Button(onClick = {
+                    showTelephonyDisclosureDialog = false
+                }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     if (showRenameDialog) {
         var newName by remember { mutableStateOf(connectedApp.getDeviceName()) }
@@ -1369,9 +1406,7 @@ fun SettingsScreen(
                             checked = connectedApp.isTelephonyEnabled.value,
                             onCheckedChange = { enabled ->
                                 if (enabled && !hasTelephonyPermissions) {
-                                    telephonyPermissionLauncher.launch(
-                                        connectedApp.telephonyProvider.getRequiredPermissions()
-                                    )
+                                    showTelephonyDisclosureDialog = true
                                 } else {
                                     connectedApp.toggleTelephony()
                                 }
@@ -1412,9 +1447,7 @@ fun SettingsScreen(
                                 if (shouldOpenSettings()) {
                                     openAppPermissionSettings()
                                 } else {
-                                    telephonyPermissionLauncher.launch(
-                                        connectedApp.telephonyProvider.getRequiredPermissions()
-                                    )
+                                    showTelephonyDisclosureDialog = true
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(
@@ -1493,6 +1526,7 @@ fun SettingsScreen(
                                 if (connectedApp.isFullAccessGranted()) {
                                     connectedApp.setFullAccess()
                                 } else {
+                                    pendingFullAccess = true
                                     connectedApp.requestFullAccessPermission()
                                 }
                             },
