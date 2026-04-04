@@ -976,6 +976,7 @@ fun SettingsScreen(
     downloadDirPickerLauncher: ActivityResultLauncher<Uri?>? = null
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var isNotificationAccessGranted by remember { mutableStateOf(false) }
     var isBackgroundServiceRunning by remember {
@@ -1273,7 +1274,7 @@ fun SettingsScreen(
                                         val intent = Intent(context, ConnectedService::class.java)
                                         context.stopService(intent)
                                         // Update state after a short delay to allow service to stop
-                                        kotlinx.coroutines.GlobalScope.launch {
+                                        scope.launch {
                                             kotlinx.coroutines.delay(500)
                                             isBackgroundServiceRunning = false
                                             isStoppingService = false
