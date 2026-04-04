@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connected - Fast device sync</title>
+  <meta name="description" content="Connected is a local-first app for fast file transfer, clipboard sync, calls, and media control across Linux, macOS, Windows, and Android.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    :root {
+      --bg: #060606;
+      --bg-soft: #101010;
+      --text: #f5f5f5;
+      --muted: #b3b3b3;
+      --line: #2a2a2a;
+      --card: #0b0b0b;
+      --accent: #ffffff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Space Grotesk", sans-serif;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      min-height: 100vh;
+      background-image:
+        radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.09), transparent 35%),
+        radial-gradient(circle at 88% 100%, rgba(255, 255, 255, 0.06), transparent 32%),
+        linear-gradient(180deg, #070707, #040404 60%);
+    }
+
+    .shell {
+      width: min(1100px, calc(100% - 2.5rem));
+      margin: 0 auto;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(7px);
+      background: rgba(8, 8, 8, 0.72);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.95rem 0;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6rem;
+      letter-spacing: 0.26em;
+      font-weight: 700;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+    }
+
+    .brand img {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      object-fit: cover;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55) inset;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 0.85rem;
+      align-items: center;
+    }
+
+    .nav-links a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text);
+      text-decoration: none;
+      border: 1px solid var(--line);
+      padding: 0.48rem 0.86rem;
+      border-radius: 999px;
+      font-size: 0.86rem;
+      line-height: 1;
+      transition: border-color 0.2s ease, background-color 0.2s ease;
+    }
+
+    .nav-links a:hover {
+      border-color: #767676;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .hero {
+      padding: 5.6rem 0 3.2rem;
+    }
+
+    .eyebrow {
+      font-family: "IBM Plex Mono", monospace;
+      color: var(--muted);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-size: 0.73rem;
+      margin-bottom: 0.95rem;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 6vw, 4.2rem);
+      line-height: 1.02;
+      max-width: 13ch;
+    }
+
+    .hero p {
+      max-width: 62ch;
+      color: #cdcdcd;
+      font-size: clamp(1rem, 2vw, 1.16rem);
+      margin: 1.2rem 0 0;
+    }
+
+    .cta-row {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-top: 2rem;
+    }
+
+    .btn,
+    .btn-outline {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      border-radius: 999px;
+      padding: 0.72rem 1.1rem;
+      font-weight: 500;
+      border: 1px solid #444;
+      line-height: 1;
+      cursor: pointer;
+      transition: transform 0.18s ease, opacity 0.18s ease;
+    }
+
+    .btn {
+      color: #070707;
+      background: var(--accent);
+      border-color: transparent;
+    }
+
+    .btn-outline {
+      color: var(--text);
+      border-color: #444;
+      background: transparent;
+    }
+
+    .btn:hover,
+    .btn-outline:hover {
+      transform: translateY(-1px);
+      opacity: 0.92;
+    }
+
+    .section {
+      padding: 2rem 0 0.4rem;
+      scroll-margin-top: 5.2rem;
+    }
+
+    h2 {
+      font-size: clamp(1.35rem, 3.5vw, 2rem);
+      margin: 0 0 0.9rem;
+    }
+
+    .section-copy {
+      color: var(--muted);
+      max-width: 70ch;
+      margin: 0;
+    }
+
+    .download-grid,
+    .feature-grid {
+      display: grid;
+      gap: 0.85rem;
+      margin-top: 1.1rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .card {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 1rem;
+    }
+
+    .download-grid .card {
+      display: flex;
+      flex-direction: column;
+      min-height: 188px;
+    }
+
+    .card h3 {
+      margin: 0;
+      font-size: 1.02rem;
+    }
+
+    .card p {
+      margin: 0.5rem 0 0;
+      color: var(--muted);
+      font-size: 0.93rem;
+      line-height: 1.45;
+    }
+
+    .download-grid .card p {
+      margin-bottom: 1rem;
+    }
+
+    .card .btn,
+    .card .btn-outline {
+      margin-top: 0.85rem;
+      width: 100%;
+      font-size: 0.92rem;
+      padding: 0.64rem 0.88rem;
+    }
+
+    .download-grid .card .btn {
+      margin-top: auto;
+    }
+
+    code {
+      background: #111;
+      border: 1px solid #2f2f2f;
+      border-radius: 8px;
+      padding: 0.15rem 0.42rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.84rem;
+      color: #e5e5e5;
+      word-break: break-all;
+    }
+
+    .footer {
+      padding: 2.5rem 0;
+      color: #9c9c9c;
+      font-size: 0.87rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      margin-top: 2.4rem;
+    }
+
+    @media (max-width: 700px) {
+      .topbar-inner {
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 0.65rem;
+      }
+
+      .hero {
+        padding-top: 4.25rem;
+      }
+
+      .nav-links {
+        width: 100%;
+        display: grid;
+        gap: 0.5rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .nav-links a {
+        width: 100%;
+        text-align: center;
+      }
+
+      .cta-row .btn,
+      .cta-row .btn-outline {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body x-data="siteData()">
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <div class="brand">
+        <img src="logo.png" alt="Connected logo">
+        <span>Connected</span>
+      </div>
+      <nav class="nav-links">
+        <a href="#downloads">Downloads</a>
+        <a href="#features">Features</a>
+        <a href="privacy-policy.html">Privacy</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="hero">
+      <p class="eyebrow">Offline-first ecosystem</p>
+      <h1>Fast sync across all your devices.</h1>
+      <p>
+        Connected bridges Android, Linux, macOS, and Windows with local-network discovery,
+        QUIC-powered transfers, secure clipboard sync, and phone link features that stay under your control.
+      </p>
+      <div class="cta-row">
+        <a class="btn" href="#downloads">Get Connected</a>
+        <a class="btn-outline" href="privacy-policy.html">Read Privacy Policy</a>
+      </div>
+    </section>
+
+    <section id="downloads" class="section">
+      <h2>Download</h2>
+      <p class="section-copy">
+        Pick your platform. Desktop builds link to the latest GitHub release, and Android opens the Play Store listing.
+      </p>
+      <div class="download-grid">
+        <template x-for="item in downloads" :key="item.name">
+          <article class="card">
+            <h3 x-text="item.name"></h3>
+            <p x-text="item.description"></p>
+            <a class="btn" :href="item.href" target="_blank" rel="noopener noreferrer" x-text="item.cta"></a>
+          </article>
+        </template>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <h2>Why Connected</h2>
+      <p class="section-copy">
+        Built in Rust and tuned for speed. No cloud middle layer, no vendor lock-in, just your devices working together.
+      </p>
+      <div class="feature-grid">
+        <template x-for="feature in features" :key="feature.title">
+          <article class="card">
+            <h3 x-text="feature.title"></h3>
+            <p x-text="feature.copy"></p>
+          </article>
+        </template>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="shell footer">
+    Connected - local-first file transfer and device sync.
+  </footer>
+
+  <script>
+    function siteData() {
+      return {
+        downloads: [
+          {
+            name: "Linux",
+            description: "Native desktop build for Linux.",
+            href: "https://github.com/paterkleomenis/connected/releases/latest",
+            cta: "Download for Linux"
+          },
+          {
+            name: "macOS",
+            description: "Native desktop build for Mac.",
+            href: "https://github.com/paterkleomenis/connected/releases/latest",
+            cta: "Download for macOS"
+          },
+          {
+            name: "Windows",
+            description: "Native desktop build for Windows.",
+            href: "https://github.com/paterkleomenis/connected/releases/latest",
+            cta: "Download for Windows"
+          },
+          {
+            name: "Android / Play Store",
+            description: "Install Connected from Google Play.",
+            href: "https://play.google.com/store/apps/details?id=com.connected.app",
+            cta: "Open Play Store"
+          }
+        ],
+        features: [
+          {
+            title: "True offline mode",
+            copy: "Runs on local links with Wi-Fi Direct and local network discovery."
+          },
+          {
+            title: "QUIC speed",
+            copy: "Low-latency, high-throughput transfers powered by modern protocol design."
+          },
+          {
+            title: "End-to-end encryption",
+            copy: "Your transfers stay encrypted in transit between your own paired devices."
+          },
+          {
+            title: "Cross-platform",
+            copy: "One ecosystem for Android, Linux, macOS, and Windows."
+          }
+        ]
+      };
+    }
+  </script>
+</body>
+</html>
