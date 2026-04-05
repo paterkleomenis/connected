@@ -183,7 +183,7 @@
         </receiver>
 
         <activity
-            android:name=".MainActivity"
+            android:name="com.connected.app.sync.MainActivity"
             android:exported="true"
             android:theme="@style/Theme.Connected"
         >

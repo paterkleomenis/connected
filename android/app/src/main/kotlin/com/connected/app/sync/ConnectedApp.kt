@@ -1723,7 +1723,7 @@ class ConnectedApp(private val context: Context) {
 
                 // Try to resolve the real file path to avoid unnecessary temp copy
                 val realPath = PathResolver.resolveRealPath(context, uri)
-                val canUseDirectPath = realPath != null && PathResolver.isFileAccessible(realPath!!)
+                val canUseDirectPath = realPath?.let { PathResolver.isFileAccessible(it) } == true
 
                 val filePathToSend: String
                 val isTempFile: Boolean
@@ -1731,7 +1731,7 @@ class ConnectedApp(private val context: Context) {
                 if (canUseDirectPath) {
                     // Direct path - no temp copy needed!
                     Log.d("ConnectedApp", "Using direct file path: $realPath (no temp copy)")
-                    filePathToSend = realPath!!
+                    filePathToSend = realPath
                     isTempFile = false
                     runOnMainThread {
                         transferStatus.value = "Sending: $fileName (${fileSize / (1024 * 1024)}MB)"
