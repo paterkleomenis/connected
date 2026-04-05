@@ -943,31 +943,102 @@ fn sanitize_filename(filename: &str) -> String {
     // `.ssh`) that could silently overwrite important dot-files on Unix.
     let sanitized = sanitized.trim_start_matches('.').to_string();
 
-    // Strip UUID suffix that Android adds to temp files (e.g., "file.pdf-abc123ef")
-    // Pattern: filename.ext-<8 hex chars> or filename-<8 hex chars>
-    let sanitized = {
-        // Try to remove UUID suffix added by Android temp files
-        if let Some(pos) = sanitized.rfind('-') {
-            let potential_uuid = &sanitized[pos + 1..];
-            if potential_uuid.len() == 8 && potential_uuid.chars().all(|c| c.is_ascii_hexdigit()) {
-                // Check if there's actual filename before the dash
-                let base_name = &sanitized[..pos];
-                if !base_name.is_empty() {
-                    base_name.to_string()
-                } else {
-                    sanitized
-                }
-            } else {
-                sanitized
-            }
-        } else {
-            sanitized
-        }
-    };
+    // Normalize common temporary-name artifacts added by mobile providers.
+    // Examples:
+    // - "file.pdf-abc123ef" (Android temp UUID suffix)
+    // - "file.pdf-1712487000123" (timestamp suffix)
+    // - "1712487000123_file.pdf" (timestamp prefix)
+    let sanitized = strip_temp_prefix(&strip_temp_suffix(&sanitized));
 
     if sanitized.is_empty() {
         "unnamed".to_string()
     } else {
         sanitized
+    }
+}
+
+fn strip_temp_suffix(filename: &str) -> String {
+    let Some((base, suffix)) = filename.rsplit_once('-') else {
+        return filename.to_string();
+    };
+
+    if base.is_empty() {
+        return filename.to_string();
+    }
+
+    // Existing Android behavior: 8 hex chars appended after '-'.
+    let is_hex_uuid_fragment =
+        suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_hexdigit());
+
+    // iOS/URI providers often append a unix timestamp (seconds or millis).
+    // Only strip this variant when the base keeps a plausible extension.
+    let is_timestamp_fragment = (10..=17).contains(&suffix.len())
+        && suffix.chars().all(|c| c.is_ascii_digit())
+        && has_plausible_extension(base);
+
+    if is_hex_uuid_fragment || is_timestamp_fragment {
+        base.to_string()
+    } else {
+        filename.to_string()
+    }
+}
+
+fn strip_temp_prefix(filename: &str) -> String {
+    let Some(pos) = filename.find(|c| ['-', '_'].contains(&c)) else {
+        return filename.to_string();
+    };
+
+    let prefix = &filename[..pos];
+    let rest = &filename[pos + 1..];
+
+    let is_timestamp_prefix = (10..=17).contains(&prefix.len())
+        && prefix.chars().all(|c| c.is_ascii_digit())
+        && !rest.is_empty()
+        && has_plausible_extension(rest);
+
+    if is_timestamp_prefix {
+        rest.to_string()
+    } else {
+        filename.to_string()
+    }
+}
+
+fn has_plausible_extension(filename: &str) -> bool {
+    Path::new(filename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            !ext.is_empty() && ext.len() <= 10 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_filename;
+
+    #[test]
+    fn strips_android_uuid_suffix() {
+        assert_eq!(sanitize_filename("file.pdf-abc123ef"), "file.pdf");
+    }
+
+    #[test]
+    fn strips_timestamp_suffix_after_extension() {
+        assert_eq!(
+            sanitize_filename("report.pdf-1712487000123"),
+            "report.pdf"
+        );
+    }
+
+    #[test]
+    fn strips_timestamp_prefix_before_filename() {
+        assert_eq!(
+            sanitize_filename("1712487000123_report.pdf"),
+            "report.pdf"
+        );
+    }
+
+    #[test]
+    fn preserves_legitimate_numeric_filename_parts() {
+        assert_eq!(sanitize_filename("invoice-2024.pdf"), "invoice-2024.pdf");
     }
 }
