@@ -7,24 +7,24 @@
 -keep class * extends android.service.notification.NotificationListenerService {
     *;
 }
--keep class com.connected.app.MediaObserverService { *; }
+-keep class com.connected.app.sync.MediaObserverService { *; }
 
 # Keep BroadcastReceivers
 -keep class * extends android.content.BroadcastReceiver {
     *;
 }
--keep class com.connected.app.TransferActionReceiver { *; }
--keep class com.connected.app.MediaControlReceiver { *; }
+-keep class com.connected.app.sync.TransferActionReceiver { *; }
+-keep class com.connected.app.sync.MediaControlReceiver { *; }
 
 # Keep TelephonyProvider for permission handling
--keep class com.connected.app.TelephonyProvider { *; }
+-keep class com.connected.app.sync.TelephonyProvider { *; }
 
 # Keep Services
--keep class com.connected.app.ConnectedService { *; }
+-keep class com.connected.app.sync.ConnectedService { *; }
 
 # Keep Activities
--keep class com.connected.app.MainActivity { *; }
--keep class com.connected.app.ClipboardHelperActivity { *; }
+-keep class com.connected.app.sync.MainActivity { *; }
+-keep class com.connected.app.sync.ClipboardHelperActivity { *; }
 
 # JNA for UniFFI bindings
 -keep class com.sun.jna.** { *; }

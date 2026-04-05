@@ -157,13 +157,13 @@
         >
             <intent-filter>
                 <action
-                    android:name="com.connected.app.ACTION_ACCEPT_TRANSFER"
+                    android:name="com.connected.app.sync.ACTION_ACCEPT_TRANSFER"
                 />
                 <action
-                    android:name="com.connected.app.ACTION_REJECT_TRANSFER"
+                    android:name="com.connected.app.sync.ACTION_REJECT_TRANSFER"
                 />
                 <action
-                    android:name="com.connected.app.ACTION_SHARE_CLIPBOARD"
+                    android:name="com.connected.app.sync.ACTION_SHARE_CLIPBOARD"
                 />
             </intent-filter>
         </receiver>
@@ -171,11 +171,13 @@
         <receiver android:name=".MediaControlReceiver" android:exported="false">
             <intent-filter>
                 <action
-                    android:name="com.connected.app.ACTION_MEDIA_PLAY_PAUSE"
+                    android:name="com.connected.app.sync.ACTION_MEDIA_PLAY_PAUSE"
                 />
-                <action android:name="com.connected.app.ACTION_MEDIA_NEXT" />
                 <action
-                    android:name="com.connected.app.ACTION_MEDIA_PREVIOUS"
+                    android:name="com.connected.app.sync.ACTION_MEDIA_NEXT"
+                />
+                <action
+                    android:name="com.connected.app.sync.ACTION_MEDIA_PREVIOUS"
                 />
             </intent-filter>
         </receiver>

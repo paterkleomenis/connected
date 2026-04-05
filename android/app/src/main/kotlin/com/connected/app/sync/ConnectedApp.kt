@@ -1,4 +1,4 @@
-package com.connected.app
+package com.connected.app.sync
 
 import android.Manifest
 import android.content.Context
@@ -1133,7 +1133,7 @@ class ConnectedApp(private val context: Context) {
         notificationManager.createNotificationChannel(channel)
 
         val acceptIntent = Intent(context, TransferActionReceiver::class.java).apply {
-            action = "com.connected.app.ACTION_ACCEPT_TRANSFER"
+            action = "com.connected.app.sync.ACTION_ACCEPT_TRANSFER"
             putExtra("transferId", request.id)
         }
         val acceptPendingIntent = android.app.PendingIntent.getBroadcast(
@@ -1144,7 +1144,7 @@ class ConnectedApp(private val context: Context) {
         )
 
         val rejectIntent = Intent(context, TransferActionReceiver::class.java).apply {
-            action = "com.connected.app.ACTION_REJECT_TRANSFER"
+            action = "com.connected.app.sync.ACTION_REJECT_TRANSFER"
             putExtra("transferId", request.id)
         }
         val rejectPendingIntent = android.app.PendingIntent.getBroadcast(

@@ -1,4 +1,4 @@
-package com.connected.app
+package com.connected.app.sync
 
 import android.app.Activity
 import android.content.ClipboardManager

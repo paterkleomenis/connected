@@ -1,4 +1,4 @@
-package com.connected.app
+package com.connected.app.sync
 
 import android.Manifest
 import android.annotation.SuppressLint

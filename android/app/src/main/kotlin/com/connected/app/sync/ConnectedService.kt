@@ -1,0 +1,115 @@
+package com.connected.app.sync
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Intent
+import android.os.IBinder
+import android.util.Log
+import androidx.core.app.NotificationCompat
+
+class ConnectedService : Service() {
+    companion object {
+        @Volatile
+        var isRunning = false
+            private set
+    }
+
+    lateinit var connectedApp: ConnectedApp
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        Log.d("ConnectedService", "Creating service")
+        isRunning = true
+
+        // Initialize the app logic with Application Context via Singleton
+        connectedApp = ConnectedApp.getInstance(applicationContext)
+        // We generally expect the app to be initialized, but if the service starts fresh (e.g. boot),
+        // we must ensure it's initialized. initialize() should be idempotent-ish.
+        connectedApp.initialize()
+
+        startForegroundService()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d("ConnectedService", "Service started")
+        // If the system kills the service, recreate it
+        return START_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? {
+        return null
+    }
+
+    override fun onDestroy() {
+        Log.d("ConnectedService", "Destroying service - starting async cleanup")
+        isRunning = false
+
+        // Stop foreground notification immediately
+        stopForeground(STOP_FOREGROUND_REMOVE)
+
+        // Run cleanup in a background thread to prevent UI freeze
+        // The shutdown process can take 2-3 seconds, so we don't block the main thread
+        Thread {
+            try {
+                connectedApp.cleanup()
+                Log.d("ConnectedService", "Cleanup completed successfully")
+            } catch (e: Exception) {
+                Log.e("ConnectedService", "Error during cleanup: ${e.message}", e)
+            }
+        }.start()
+
+        // Call super.onDestroy immediately so the service can stop
+        super.onDestroy()
+    }
+
+    private fun startForegroundService() {
+        val channelId = "connected_service_channel"
+        val channelName = "Connected Background Service"
+
+        val channel = NotificationChannel(
+            channelId,
+            channelName,
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            setShowBadge(false)
+        }
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(channel)
+
+        val shareIntent = Intent(this, ClipboardHelperActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val sharePendingIntent = android.app.PendingIntent.getActivity(
+            this,
+            0,
+            shareIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Connected")
+            .setContentText("Click to share clipboard")
+            .setSmallIcon(R.drawable.ic_android)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setShowWhen(false)
+            .setContentIntent(sharePendingIntent)
+            .setColorized(true)
+            .setColor(0xFFFFFFFF.toInt()) // white
+            .setOngoing(true)
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        }
+
+        val notification = builder.build()
+
+        // ID must be non-zero
+        startForeground(1, notification)
+    }
+}

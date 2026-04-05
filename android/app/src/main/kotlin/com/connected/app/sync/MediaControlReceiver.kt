@@ -1,4 +1,4 @@
-package com.connected.app
+package com.connected.app.sync
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -8,9 +8,9 @@ import uniffi.connected_ffi.MediaCommand
 
 class MediaControlReceiver : BroadcastReceiver() {
     companion object {
-        const val ACTION_PLAY_PAUSE = "com.connected.app.ACTION_MEDIA_PLAY_PAUSE"
-        const val ACTION_NEXT = "com.connected.app.ACTION_MEDIA_NEXT"
-        const val ACTION_PREVIOUS = "com.connected.app.ACTION_MEDIA_PREVIOUS"
+        const val ACTION_PLAY_PAUSE = "com.connected.app.sync.ACTION_MEDIA_PLAY_PAUSE"
+        const val ACTION_NEXT = "com.connected.app.sync.ACTION_MEDIA_NEXT"
+        const val ACTION_PREVIOUS = "com.connected.app.sync.ACTION_MEDIA_PREVIOUS"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
