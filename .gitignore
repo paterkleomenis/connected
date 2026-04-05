@@ -67,3 +67,4 @@ GEMINI.md
 .gradle
 .qwen
 PLAY_STORE_GUIDE.md
+android/app/release.keystore
