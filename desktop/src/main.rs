@@ -710,6 +710,16 @@ fn App() -> Element {
         })
     });
 
+    let local_device_icon = if cfg!(target_os = "linux") {
+        IconType::Linux
+    } else if cfg!(target_os = "windows") {
+        IconType::Windows
+    } else if cfg!(target_os = "macos") {
+        IconType::Macos
+    } else {
+        IconType::Desktop
+    };
+
     // The Controller
     let action_tx =
         use_coroutine(
@@ -1129,7 +1139,7 @@ fn App() -> Element {
                     class: "local-device",
                     div {
                         class: "app-icon-surface local-device-logo",
-                        Icon { icon: IconType::Logo, size: 18, color: "white".to_string() }
+                        Icon { icon: local_device_icon.clone(), size: 18, color: "white".to_string() }
                     }
                     div {
                         class: "local-device-info",

@@ -30,7 +30,7 @@ impl std::str::FromStr for DeviceType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "android" => Ok(DeviceType::Android),
+            "android" | "mobile" | "phone" => Ok(DeviceType::Android),
             "linux" => Ok(DeviceType::Linux),
             "windows" => Ok(DeviceType::Windows),
             "macos" => Ok(DeviceType::MacOS),

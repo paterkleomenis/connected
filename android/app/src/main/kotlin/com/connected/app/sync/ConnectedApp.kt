@@ -976,7 +976,7 @@ class ConnectedApp(private val context: Context) {
             val storagePath = context.getExternalFilesDir(null)?.absolutePath ?: ""
 
             try {
-                initialize(getDeviceName(), "Mobile", 0u.toUShort(), storagePath)
+                initialize(getDeviceName(), "android", 0u.toUShort(), storagePath)
             } catch (e: Exception) {
                 Log.w("ConnectedApp", "Core might be already initialized: ${e.message}")
             }

@@ -1,4 +1,4 @@
-use crate::components::icon::{Icon, IconType, get_device_icon_type};
+use crate::components::icon::{get_device_icon_type, Icon, IconType};
 use crate::state::DeviceInfo;
 use dioxus::prelude::*;
 
@@ -10,7 +10,13 @@ pub fn DeviceCard(
     on_pair: EventHandler<DeviceInfo>,
     on_send_file: EventHandler<DeviceInfo>,
 ) -> Element {
-    let device_icon = get_device_icon_type(&device.device_type);
+    let device_icon = if device.device_type.trim().is_empty()
+        || device.device_type.eq_ignore_ascii_case("unknown")
+    {
+        get_device_icon_type(&device.name)
+    } else {
+        get_device_icon_type(&device.device_type)
+    };
     let mut is_hovered = use_signal(|| false);
 
     let card_class = if is_selected {

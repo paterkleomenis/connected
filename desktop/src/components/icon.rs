@@ -260,20 +260,62 @@ fn get_svg_content(icon: &IconType) -> &'static str {
 }
 
 pub fn get_device_icon_type(device_type: &str) -> IconType {
-    match device_type.to_lowercase().as_str() {
-        "android" => IconType::Android,
-        "ios" | "iphone" => IconType::Ios,
-        "ipad" => IconType::Tablet,
-        "linux" => IconType::Linux,
-        "windows" => IconType::Windows,
-        "macos" | "mac" => IconType::Macos,
-        "tablet" => IconType::Tablet,
-        "desktop" => IconType::Desktop,
-        "laptop" => IconType::Laptop,
-        "tv" | "television" => IconType::Tv,
-        "watch" | "wearable" => IconType::Watch,
-        _ => IconType::DeviceUnknown,
+    let normalized = device_type.trim().to_lowercase();
+
+    if normalized.contains("android")
+        || normalized.contains("phone")
+        || normalized.contains("mobile")
+        || normalized.contains("pixel")
+        || normalized.contains("galaxy")
+    {
+        return IconType::Android;
     }
+
+    if normalized.contains("ios") || normalized.contains("iphone") {
+        return IconType::Ios;
+    }
+
+    if normalized.contains("ipad") || normalized.contains("tablet") {
+        return IconType::Tablet;
+    }
+
+    if normalized.contains("linux") {
+        return IconType::Linux;
+    }
+
+    if normalized.contains("windows") {
+        return IconType::Windows;
+    }
+
+    if normalized.contains("macos") || normalized.contains("mac") {
+        return IconType::Macos;
+    }
+
+    if normalized.contains("laptop") || normalized.contains("notebook") {
+        return IconType::Laptop;
+    }
+
+    if normalized.contains("desktop")
+        || normalized.contains("computer")
+        || normalized.contains("pc")
+    {
+        return IconType::Desktop;
+    }
+
+    if normalized.contains("tv") || normalized.contains("television") {
+        return IconType::Tv;
+    }
+
+    if normalized.contains("watch") || normalized.contains("wearable") {
+        return IconType::Watch;
+    }
+
+    if normalized == "unknown" || normalized.is_empty() {
+        return IconType::DeviceUnknown;
+    }
+
+    // Fallback so discovered devices usually have a visible icon.
+    IconType::Desktop
 }
 
 pub fn get_file_icon_type(filename: &str) -> IconType {
