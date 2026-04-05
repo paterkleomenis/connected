@@ -1,7 +1,7 @@
 # Play Store Permission Justification Document
 
 **App Name:** Connected  
-**Package:** com.connected.app  
+**Package:** com.connected.app.sync  
 **Version:** 2.8.2  
 **Date:** April 4, 2026
 
