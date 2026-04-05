@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Connected Privacy Policy</title>
+        <meta
+            name="description"
+            content="Privacy policy for the Connected Android app."
+        />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            :root {
+                --bg: #060606;
+                --text: #f4f4f4;
+                --muted: #b8b8b8;
+                --card: #0b0b0b;
+                --line: #2a2a2a;
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                margin: 0;
+                background:
+                    radial-gradient(
+                        circle at 95% -2%,
+                        rgba(255, 255, 255, 0.06),
+                        transparent 32%
+                    ),
+                    var(--bg);
+                color: var(--text);
+                font-family: "Space Grotesk", sans-serif;
+                line-height: 1.58;
+            }
+
+            .wrap {
+                width: min(860px, calc(100% - 2.4rem));
+                margin: 0 auto;
+                padding: 2.1rem 0 3rem;
+            }
+
+            .top {
+                border-bottom: 1px solid var(--line);
+                padding-bottom: 1rem;
+                margin-bottom: 1.5rem;
+            }
+
+            .brandline {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.65rem;
+                margin-bottom: 0.8rem;
+                letter-spacing: 0.16em;
+                text-transform: uppercase;
+                font-size: 0.75rem;
+                color: var(--muted);
+            }
+
+            .brandline img {
+                width: 26px;
+                height: 26px;
+                border-radius: 7px;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                object-fit: cover;
+            }
+
+            h1 {
+                margin: 0;
+                font-size: clamp(1.9rem, 4.5vw, 2.7rem);
+            }
+
+            h2 {
+                margin-top: 1.5rem;
+                margin-bottom: 0.55rem;
+                font-size: 1.25rem;
+            }
+
+            h3 {
+                margin-top: 1rem;
+                margin-bottom: 0.45rem;
+                font-size: 1.03rem;
+            }
+
+            p,
+            li {
+                color: #dddddd;
+            }
+
+            .muted {
+                color: var(--muted);
+            }
+
+            .card {
+                background: var(--card);
+                border: 1px solid var(--line);
+                border-radius: 14px;
+                padding: 1rem 1.1rem;
+                margin-top: 0.9rem;
+            }
+
+            a {
+                color: #ffffff;
+            }
+
+            code {
+                font-family: "IBM Plex Mono", monospace;
+                background: #121212;
+                border: 1px solid #2f2f2f;
+                border-radius: 8px;
+                padding: 0.14rem 0.38rem;
+            }
+
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 0.65rem;
+                font-size: 0.94rem;
+            }
+
+            th,
+            td {
+                border: 1px solid #2b2b2b;
+                padding: 0.55rem;
+                text-align: left;
+                vertical-align: top;
+            }
+
+            th {
+                background: #111;
+            }
+
+            .back {
+                display: inline-flex;
+                text-decoration: none;
+                margin-bottom: 0.9rem;
+                border: 1px solid var(--line);
+                border-radius: 999px;
+                padding: 0.42rem 0.78rem;
+            }
+        </style>
+    </head>
+    <body>
+        <main class="wrap">
+            <a class="back" href="index.html">Back to website</a>
+
+            <header class="top">
+                <div class="brandline">
+                    <img src="logo.png" alt="Connected logo" />
+                    <span>Connected</span>
+                </div>
+                <h1>Privacy Policy for Connected App</h1>
+                <p class="muted">
+                    <strong>Last updated:</strong> April 4, 2026
+                </p>
+            </header>
+
+            <section class="card">
+                <h2>Introduction</h2>
+                <p>
+                    This Privacy Policy describes how Connected ("we", "our", or
+                    "the app") collects, uses, and shares information when you
+                    use our application. We are committed to protecting your
+                    privacy and ensuring the security of your personal
+                    information.
+                </p>
+
+                <h2>Information We Collect</h2>
+                <h3>Information You Provide</h3>
+                <ul>
+                    <li>
+                        <strong>Device Information:</strong> The app connects to
+                        your other devices for file transfer and
+                        synchronization.
+                    </li>
+                    <li>
+                        <strong>Contacts:</strong> When using the Phone Link
+                        feature, we access your contacts to display caller
+                        information and enable SMS functionality.
+                    </li>
+                    <li>
+                        <strong>SMS Messages:</strong> We read, send, and
+                        receive SMS messages to enable messaging features
+                        between your linked devices.
+                    </li>
+                    <li>
+                        <strong>Call Logs:</strong> We access call history to
+                        synchronize call logs between your linked devices.
+                    </li>
+                </ul>
+
+                <h3>Information Automatically Collected</h3>
+                <ul>
+                    <li>
+                        <strong>Device Identifiers:</strong> Local network
+                        device identifiers for mDNS discovery and device
+                        pairing.
+                    </li>
+                    <li>
+                        <strong>Usage Data:</strong> Media playback information
+                        when using media sync features.
+                    </li>
+                    <li>
+                        <strong>Clipboard Data:</strong> Clipboard content when
+                        you use clipboard sync features.
+                    </li>
+                </ul>
+
+                <h3>Permissions We Request</h3>
+                <ul>
+                    <li>
+                        <strong>Network Access:</strong> For device discovery
+                        and communication on your local network
+                    </li>
+                    <li>
+                        <strong>Bluetooth:</strong> For proximity discovery and
+                        device pairing
+                    </li>
+                    <li>
+                        <strong>Location:</strong> Required by Android for
+                        Bluetooth scanning (we do not track or store your
+                        location)
+                    </li>
+                    <li>
+                        <strong>Storage:</strong> For reading and writing files
+                        during transfers
+                    </li>
+                    <li>
+                        <strong>Notifications:</strong> For media playback
+                        monitoring and sync notifications
+                    </li>
+                    <li>
+                        <strong>Phone:</strong> For call management and SMS
+                        features
+                    </li>
+                    <li>
+                        <strong>Contacts:</strong> For displaying contact
+                        information during calls and messaging
+                    </li>
+                </ul>
+
+                <h2>How We Use Your Information</h2>
+                <p>
+                    We use collected information only to provide app features
+                    and improve reliability:
+                </p>
+                <ul>
+                    <li>
+                        Enabling file transfer and synchronization between your
+                        devices
+                    </li>
+                    <li>
+                        Providing Phone Link functionality (calls, SMS, contact
+                        display)
+                    </li>
+                    <li>Clipboard synchronization between devices</li>
+                    <li>Media playback synchronization</li>
+                    <li>Device discovery and connection management</li>
+                    <li>Improving app performance and user experience</li>
+                </ul>
+
+                <h2>How We Share Your Information</h2>
+                <p>
+                    <strong
+                        >We do not sell, trade, or rent your personal
+                        information to third parties.</strong
+                    >
+                </p>
+                <p>Information is shared only in these cases:</p>
+                <ul>
+                    <li>
+                        <strong>Between Your Own Devices:</strong>
+                        Synchronization occurs only between devices you
+                        explicitly linked.
+                    </li>
+                    <li>
+                        <strong>Legal Requirements:</strong> If required by law
+                        or valid public authority request.
+                    </li>
+                    <li>
+                        <strong>Protection of Rights:</strong> To protect
+                        rights, property, or user safety.
+                    </li>
+                </ul>
+
+                <h2>Data Storage and Security</h2>
+                <ul>
+                    <li>
+                        <strong>Local Processing:</strong> Most data processing
+                        occurs locally on your devices.
+                    </li>
+                    <li>
+                        <strong>Encryption:</strong> Communications use QUIC
+                        transport encryption with rustls.
+                    </li>
+                    <li>
+                        <strong>No Cloud Storage:</strong> Personal data is not
+                        stored on remote servers by us.
+                    </li>
+                    <li>
+                        <strong>Device Security:</strong> Industry-standard
+                        security measures are implemented.
+                    </li>
+                </ul>
+
+                <h2>Your Rights and Choices</h2>
+                <ul>
+                    <li>
+                        <strong>Access:</strong> View data stored by the app on
+                        your device.
+                    </li>
+                    <li>
+                        <strong>Delete:</strong> Remove app data by clearing app
+                        storage in Android settings.
+                    </li>
+                    <li>
+                        <strong>Revoke Permissions:</strong> Disable permissions
+                        anytime via device settings.
+                    </li>
+                    <li>
+                        <strong>Unlink Devices:</strong> Remove linked devices
+                        in app connection settings.
+                    </li>
+                </ul>
+
+                <h2>Children's Privacy</h2>
+                <p>
+                    Our app does not knowingly collect personal information from
+                    children under 13. Parents and guardians are encouraged to
+                    monitor online activity.
+                </p>
+
+                <h2>Changes to This Privacy Policy</h2>
+                <p>
+                    We may update this Privacy Policy from time to time.
+                    Material changes will be announced in the app and by
+                    updating the "Last updated" date.
+                </p>
+
+                <h2>Contact Us</h2>
+                <p>If you have questions about this policy, contact us:</p>
+                <ul>
+                    <li><strong>Email:</strong> mclocinthegreat@gmail.com</li>
+                    <li>
+                        <strong>GitHub:</strong>
+                        <a href="https://github.com/paterkleomenis/connected"
+                            >https://github.com/paterkleomenis/connected</a
+                        >
+                    </li>
+                </ul>
+
+                <h2>App Permissions Explained</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Permission</th>
+                            <th>Purpose</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>INTERNET</code></td>
+                            <td>Network communication with linked devices</td>
+                        </tr>
+                        <tr>
+                            <td><code>ACCESS_NETWORK_STATE</code></td>
+                            <td>Check network connectivity status</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <code>BLUETOOTH_SCAN/ADVERTISE/CONNECT</code>
+                            </td>
+                            <td>Device discovery and pairing</td>
+                        </tr>
+                        <tr>
+                            <td><code>ACCESS_COARSE/FINE_LOCATION</code></td>
+                            <td>
+                                Required by Android for Bluetooth scanning on
+                                Android 12+
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><code>READ_CONTACTS</code></td>
+                            <td>
+                                Display contact names during calls and messaging
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><code>READ_SMS/SEND_SMS/RECEIVE_SMS</code></td>
+                            <td>SMS synchronization between devices</td>
+                        </tr>
+                        <tr>
+                            <td><code>READ_CALL_LOG/CALL_PHONE</code></td>
+                            <td>Call log sync and call management</td>
+                        </tr>
+                        <tr>
+                            <td><code>READ_MEDIA_IMAGES/VIDEO/AUDIO</code></td>
+                            <td>File transfer of media files</td>
+                        </tr>
+                        <tr>
+                            <td><code>MANAGE_EXTERNAL_STORAGE</code></td>
+                            <td>
+                                Full file access for comprehensive file
+                                transfers
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><code>POST_NOTIFICATIONS</code></td>
+                            <td>Display transfer and sync notifications</td>
+                        </tr>
+                        <tr>
+                            <td><code>FOREGROUND_SERVICE</code></td>
+                            <td>
+                                Maintain persistent connection between devices
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <code
+                                    >REQUEST_IGNORE_BATTERY_OPTIMIZATIONS</code
+                                >
+                            </td>
+                            <td>
+                                Prevent connection drops during background
+                                operation
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <p class="muted">
+                    This privacy policy is specific to the Android version of
+                    Connected.
+                </p>
+            </section>
+        </main>
+    </body>
+</html>
