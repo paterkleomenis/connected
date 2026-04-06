@@ -91,6 +91,15 @@ impl<T> LockOrRecover<T> for Mutex<T> {
 // Persistent Settings
 // ============================================================================
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeModeSetting {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -100,6 +109,7 @@ pub struct AppSettings {
     pub auto_sync_calls: bool,
     pub auto_sync_contacts: bool,
     pub notifications_enabled: bool,
+    pub theme_mode: ThemeModeSetting,
     pub device_name: Option<String>,
     pub saved_devices: HashMap<String, SavedDeviceInfo>,
     pub download_directory: Option<String>,
@@ -114,6 +124,7 @@ impl Default for AppSettings {
             auto_sync_calls: true,
             auto_sync_contacts: true,
             notifications_enabled: true,
+            theme_mode: ThemeModeSetting::System,
             device_name: None,
             saved_devices: HashMap::new(),
             download_directory: None,
@@ -795,6 +806,14 @@ pub fn get_notifications_enabled_setting() -> bool {
 
 pub fn set_notifications_enabled_setting(enabled: bool) {
     update_setting(|s| s.notifications_enabled = enabled);
+}
+
+pub fn get_theme_mode_setting() -> ThemeModeSetting {
+    get_app_settings().lock_or_recover().theme_mode.clone()
+}
+
+pub fn set_theme_mode_setting(mode: ThemeModeSetting) {
+    update_setting(|s| s.theme_mode = mode);
 }
 
 pub fn get_device_name_setting() -> Option<String> {

@@ -226,6 +226,7 @@ class ConnectedApp(private val context: Context) {
     // Clipboard Sync State
     val isClipboardSyncEnabled = mutableStateOf(false)
     val isMediaControlEnabled = mutableStateOf(false)
+    val themeMode = mutableStateOf(ThemeMode.SYSTEM)
     private var clipboardSyncJob: kotlinx.coroutines.Job? = null
 
     private val lastRemoteClipboard = AtomicReference("")
@@ -267,6 +268,7 @@ class ConnectedApp(private val context: Context) {
     private val _prefTelephonyEnabled = "telephony_enabled"
     private val _prefDeviceName = "device_name"
     private val _prefDownloadDir = "download_directory"
+    private val _prefThemeMode = "theme_mode"
 
     fun getCustomDownloadDir(): Uri? {
         val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
@@ -1032,6 +1034,7 @@ class ConnectedApp(private val context: Context) {
             getPersistedRootUri()?.let { registerFsProvider(it) }
 
             isMediaControlEnabled.value = prefs.getBoolean(_prefMediaControl, false)
+            themeMode.value = ThemeMode.fromStorageValue(prefs.getString(_prefThemeMode, null))
 
 
             // Start periodic cleanup of stale pending file transfers (5 minute timeout)
@@ -2294,6 +2297,13 @@ class ConnectedApp(private val context: Context) {
             currentMediaPlaying.value = false
             lastMediaSourceDevice = null
             lastBroadcastMediaState = null
+        }
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        themeMode.value = mode
+        context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE).edit {
+            putString(_prefThemeMode, mode.storageValue)
         }
     }
 

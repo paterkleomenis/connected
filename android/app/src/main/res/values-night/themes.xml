@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<resources>
+    <style name="Theme.Connected" parent="Theme.MaterialComponents.DayNight">
+        <item name="colorPrimary">#FFFFFFFF</item>
+        <item name="colorPrimaryVariant">#FF000000</item>
+        <item name="colorOnPrimary">#FF000000</item>
+        <item name="colorSecondary">#FF000000</item>
+        <item name="colorSecondaryVariant">#FF1C1C1E</item>
+        <item name="colorOnSecondary">#FFFFFFFF</item>
+        <item name="android:statusBarColor">#FF000000</item>
+        <item name="android:navigationBarColor">#FF000000</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

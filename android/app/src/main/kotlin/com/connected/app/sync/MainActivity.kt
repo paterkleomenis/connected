@@ -120,7 +120,7 @@ class MainActivity : ComponentActivity() {
         handleShareIntent(intent)
 
         setContent {
-            ConnectedTheme {
+            ConnectedTheme(themeMode = connectedApp.themeMode.value) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     if (connectedApp.isBrowsingRemote.value) {
                         RemoteFileBrowser(connectedApp)
@@ -1628,6 +1628,40 @@ fun SettingsScreen(
                             )
                         ) {
                             Text("Open App System Settings")
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Appearance", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Choose how Connected looks on this device",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ThemeMode.entries.forEach { mode ->
+                            val label = when (mode) {
+                                ThemeMode.SYSTEM -> "System default"
+                                ThemeMode.LIGHT -> "Light"
+                                ThemeMode.DARK -> "Dark"
+                            }
+
+                            FilterChip(
+                                selected = connectedApp.themeMode.value == mode,
+                                onClick = { connectedApp.setThemeMode(mode) },
+                                label = { Text(label) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
                     }
                 }

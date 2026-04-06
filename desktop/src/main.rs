@@ -13,8 +13,9 @@ mod utils;
 use state::{is_discovery_active, is_sdk_initialized};
 
 use state::{
-    get_clipboard_sync_enabled, get_device_name_setting, get_media_enabled_setting,
-    set_clipboard_sync_enabled, set_media_enabled_setting,
+    ThemeModeSetting, get_clipboard_sync_enabled, get_device_name_setting,
+    get_media_enabled_setting, get_theme_mode_setting, set_clipboard_sync_enabled,
+    set_media_enabled_setting, set_theme_mode_setting,
 };
 
 use components::{DeviceCard, FileBrowser, FileDialog, Icon, IconType};
@@ -701,6 +702,7 @@ fn App() -> Element {
     let mut auto_sync_calls = use_signal(get_auto_sync_calls);
     let mut auto_sync_contacts = use_signal(get_auto_sync_contacts);
     let mut notifications_enabled = use_signal(get_notifications_enabled_setting);
+    let mut theme_mode = use_signal(get_theme_mode_setting);
     let mut download_directory = use_signal(|| {
         get_download_directory_setting().unwrap_or_else(|| {
             dirs::download_dir()
@@ -1114,11 +1116,17 @@ fn App() -> Element {
         });
     };
 
+    let app_theme_class = match theme_mode.read().clone() {
+        ThemeModeSetting::System => "app-container theme-system",
+        ThemeModeSetting::Light => "app-container theme-light",
+        ThemeModeSetting::Dark => "app-container theme-dark",
+    };
+
     rsx! {
         style { {include_str!("../assets/styles.css")} }
 
         div {
-            class: "app-container",
+            class: "{app_theme_class}",
 
             // Sidebar
             aside {
@@ -1129,7 +1137,7 @@ fn App() -> Element {
                     class: "sidebar-header",
                     div {
                         class: "app-icon-surface sidebar-logo",
-                        Icon { icon: IconType::Logo, size: 24, color: "white".to_string() }
+                        Icon { icon: IconType::Logo, size: 24, color: "currentColor".to_string() }
                     }
                     h1 { "Connected" }
                 }
@@ -1139,7 +1147,7 @@ fn App() -> Element {
                     class: "local-device",
                     div {
                         class: "app-icon-surface local-device-logo",
-                        Icon { icon: local_device_icon.clone(), size: 18, color: "white".to_string() }
+                        Icon { icon: local_device_icon.clone(), size: 18, color: "currentColor".to_string() }
                     }
                     div {
                         class: "local-device-info",
@@ -2423,6 +2431,50 @@ fn App() -> Element {
                                 div { class: "info-label", "IP" }
                                 div { class: "info-value", "{local_device_ip}" }
                             }
+                        }
+
+                        div {
+                            class: "info-card",
+                            h3 {
+                                Icon { icon: IconType::NavSettings, size: 20, color: "currentColor".to_string() }
+                                " Appearance"
+                            }
+                            div {
+                                class: "info-grid",
+                                div { class: "info-label", "Theme" }
+                                div {
+                                    class: "info-value",
+                                    style: "display: flex; gap: 8px; flex-wrap: wrap;",
+                                    button {
+                                        class: if matches!(*theme_mode.read(), ThemeModeSetting::System) { "toggle-button active" } else { "toggle-button" },
+                                        onclick: move |_| {
+                                            let mode = ThemeModeSetting::System;
+                                            theme_mode.set(mode.clone());
+                                            set_theme_mode_setting(mode);
+                                        },
+                                        "System"
+                                    }
+                                    button {
+                                        class: if matches!(*theme_mode.read(), ThemeModeSetting::Light) { "toggle-button active" } else { "toggle-button" },
+                                        onclick: move |_| {
+                                            let mode = ThemeModeSetting::Light;
+                                            theme_mode.set(mode.clone());
+                                            set_theme_mode_setting(mode);
+                                        },
+                                        "Light"
+                                    }
+                                    button {
+                                        class: if matches!(*theme_mode.read(), ThemeModeSetting::Dark) { "toggle-button active" } else { "toggle-button" },
+                                        onclick: move |_| {
+                                            let mode = ThemeModeSetting::Dark;
+                                            theme_mode.set(mode.clone());
+                                            set_theme_mode_setting(mode);
+                                        },
+                                        "Dark"
+                                    }
+                                }
+                            }
+                            p { class: "settings-hint", "System follows your OS preference; Light and Dark are pinned." }
                         }
 
                         div {

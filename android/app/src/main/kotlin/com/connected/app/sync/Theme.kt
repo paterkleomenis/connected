@@ -11,6 +11,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+enum class ThemeMode(val storageValue: String) {
+    SYSTEM("system"),
+    LIGHT("light"),
+    DARK("dark");
+
+    companion object {
+        fun fromStorageValue(value: String?): ThemeMode {
+            return entries.firstOrNull { it.storageValue == value } ?: SYSTEM
+        }
+    }
+}
+
 private val ColorBgPrimary = Color(0xFF000000)
 private val ColorBgSecondary = Color(0xFF000000)
 private val ColorBgTertiary = Color(0xFF1C1C1E)
@@ -90,9 +102,16 @@ private val ConnectedLightColorScheme = lightColorScheme(
 
 @Composable
 fun ConnectedTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
     content: @Composable () -> Unit
 ) {
+    val systemDarkTheme = isSystemInDarkTheme()
+    val darkTheme = when (themeMode) {
+        ThemeMode.SYSTEM -> systemDarkTheme
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
+
     val colorScheme = if (darkTheme) ConnectedDarkColorScheme else ConnectedLightColorScheme
 
     val view = LocalView.current

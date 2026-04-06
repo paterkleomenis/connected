@@ -104,8 +104,8 @@
     --device-macos: #a2aaad;
 }
 
-/* Light Mode (Optional - activate by adding class="light-theme" to body) */
-.light-theme {
+/* Light Mode tokens for theme selector */
+.app-container.theme-light {
     --bg-primary: #f5f5f7;
     --bg-secondary: #ffffff;
     --bg-tertiary: #e8e8ed;
@@ -118,6 +118,13 @@
     --text-secondary: #6e6e73;
     --text-tertiary: #a1a1a6;
     --text-muted: #8e8e93;
+    --text-inverse: #ffffff;
+
+    --accent: #1d1d1f;
+    --accent-hover: #3a3a3c;
+    --accent-light: rgba(29, 29, 31, 0.12);
+    --accent-gradient: linear-gradient(135deg, #1d1d1f 0%, #4a4a4f 100%);
+    --border-focus: #1d1d1f;
 
     --border: rgba(0, 0, 0, 0.08);
     --border-strong: rgba(0, 0, 0, 0.12);
@@ -128,6 +135,41 @@
     --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
     --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06);
     --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+/* System mode follows OS color preference */
+@media (prefers-color-scheme: light) {
+    .app-container.theme-system {
+        --bg-primary: #f5f5f7;
+        --bg-secondary: #ffffff;
+        --bg-tertiary: #e8e8ed;
+        --bg-hover: #f0f0f2;
+        --bg-card: #ffffff;
+        --bg-sidebar: linear-gradient(180deg, #2c2c2e 0%, #1c1c1e 100%);
+        --bg-sidebar-solid: #2c2c2e;
+
+        --text-primary: #1d1d1f;
+        --text-secondary: #6e6e73;
+        --text-tertiary: #a1a1a6;
+        --text-muted: #8e8e93;
+        --text-inverse: #ffffff;
+
+        --accent: #1d1d1f;
+        --accent-hover: #3a3a3c;
+        --accent-light: rgba(29, 29, 31, 0.12);
+        --accent-gradient: linear-gradient(135deg, #1d1d1f 0%, #4a4a4f 100%);
+        --border-focus: #1d1d1f;
+
+        --border: rgba(0, 0, 0, 0.08);
+        --border-strong: rgba(0, 0, 0, 0.12);
+        --border-light: rgba(255, 255, 255, 0.1);
+
+        --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
+        --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+        --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+        --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06);
+        --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.1);
+    }
 }
 
 /* ============================================================================
@@ -211,6 +253,7 @@ body {
         0 1px 0 rgba(255, 255, 255, 0.12) inset,
         0 8px 22px rgba(0, 0, 0, 0.35);
     flex-shrink: 0;
+    color: var(--text-inverse);
 }
 
 .sidebar-logo {
@@ -234,14 +277,6 @@ body {
     font-weight: 700;
     color: var(--text-inverse);
     letter-spacing: -0.5px;
-    background: linear-gradient(
-        135deg,
-        #ffffff 0%,
-        rgba(255, 255, 255, 0.8) 100%
-    );
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
 }
 
 /* Local Device Card */
@@ -373,6 +408,13 @@ body {
 
 .nav-item.active {
     background: rgba(255, 255, 255, 0.12);
+    color: var(--text-inverse);
+}
+
+.app-container.theme-light .nav-item:hover,
+.app-container.theme-light .nav-item.active,
+.app-container.theme-system .nav-item:hover,
+.app-container.theme-system .nav-item.active {
     color: var(--text-inverse);
 }
 
@@ -1949,6 +1991,11 @@ input:focus + .slider {
     color: var(--text-inverse);
 }
 
+.app-container.theme-light .dialog-close:hover,
+.app-container.theme-system .dialog-close:hover {
+    color: #ffffff;
+}
+
 .dialog-content {
     padding: var(--space-5);
 }
@@ -2380,6 +2427,11 @@ input:focus + .slider {
     flex-shrink: 0;
 }
 
+.app-container.theme-light .unread-badge,
+.app-container.theme-system .unread-badge {
+    color: #ffffff;
+}
+
 /* ============================================================================
    Message Thread View
    ============================================================================ */
@@ -2754,6 +2806,11 @@ input:focus + .slider {
     background: var(--accent);
     color: var(--text-inverse);
     transform: scale(1.1);
+}
+
+.app-container.theme-light .contact-action:hover,
+.app-container.theme-system .contact-action:hover {
+    color: #ffffff;
 }
 
 /* ============================================================================
