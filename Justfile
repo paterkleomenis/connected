@@ -2,8 +2,9 @@
 # Install with: cargo install just
 # Usage: just <recipe>
 
-# Cross-platform shell: use cmd on Windows, bash elsewhere
-set shell := ["cmd", "/c"]
+# Cross-platform shell configuration
+set shell := ["bash", "-cu"]
+set windows-shell := ["cmd.exe", "/c"]
 
 set dotenv-load := true
 
@@ -86,8 +87,12 @@ ci:
     just pre-push
     cargo build --workspace --release
     cargo audit
-    @if exist scripts\check-versions.bat (scripts\check-versions.bat) else (echo ⚠️ check-versions.bat not found)
+    just check-versions
     @echo ✅ All CI checks passed
+
+[doc("Check version consistency scripts")]
+check-versions:
+    {{ if os_family() == "windows" { "if exist scripts\\check-versions.sh (where bash >nul 2>nul && bash scripts/check-versions.sh || echo ⚠️ bash not found, skipping check-versions) else (echo ⚠️ scripts/check-versions.sh not found)" } else { "if [ -f scripts/check-versions.sh ]; then bash scripts/check-versions.sh; else echo \"⚠️ scripts/check-versions.sh not found\"; fi" } }}
 
 # Windows-local CI helpers (PowerShell)
 [doc("Run Windows CI steps locally (PowerShell)")]
@@ -102,7 +107,7 @@ build-windows-msi:
 [doc("Clean build artifacts")]
 clean:
     cargo clean
-    @if exist target rd /s /q target
+    {{ if os_family() == "windows" { "if exist target rd /s /q target" } else { "rm -rf target" } }}
     @echo ✅ Clean complete
 
 # Update dependencies
@@ -124,8 +129,7 @@ build-android:
 # Build macOS App and DMG
 [doc("Build macOS .app bundle and DMG installer")]
 build-macos:
-    @echo ERROR: This command is only available on macOS/Linux
-    @exit /b 2
+    {{ if os_family() == "windows" { "echo ERROR: This command is only available on macOS/Linux && exit /b 2" } else { "echo \"ERROR: This command is only available on macOS/Linux\"; exit 2" } }}
 
 # Install pre-commit hooks
 [doc("Install pre-commit hooks")]
@@ -166,28 +170,28 @@ run-desktop-release:
 # Android-specific commands
 [doc("Build Android debug APK")]
 build-android-apk:
-    cd /d android && gradlew.bat assembleDebug
+    {{ if os_family() == "windows" { "cd /d android && gradlew.bat assembleDebug" } else { "cd android && ./gradlew assembleDebug" } }}
 
 [doc("Build Android release APK")]
 build-android-release:
-    cd /d android && gradlew.bat assembleRelease
+    {{ if os_family() == "windows" { "cd /d android && gradlew.bat assembleRelease" } else { "cd android && ./gradlew assembleRelease" } }}
 
 [doc("Install Android debug APK to connected device")]
 install-android:
-    cd /d android && gradlew.bat installDebug
+    {{ if os_family() == "windows" { "cd /d android && gradlew.bat installDebug" } else { "cd android && ./gradlew installDebug" } }}
 
 [doc("Generate only the Android App Bundle (AAB)")]
 build-android-bundle:
-    cd /d android && gradlew.bat bundleRelease
+    {{ if os_family() == "windows" { "cd /d android && gradlew.bat bundleRelease" } else { "cd android && ./gradlew bundleRelease" } }}
 
 [doc("Lint check Android release build")]
 lint-android:
-    cd /d android && gradlew.bat lintRelease
+    {{ if os_family() == "windows" { "cd /d android && gradlew.bat lintRelease" } else { "cd android && ./gradlew lintRelease" } }}
 
 # Android Play Store release
 [doc("Build Android release for Play Store (APK + AAB)")]
 build-android-playstore:
-    cd /d android && powershell -NoProfile -ExecutionPolicy Bypass -File build_release.ps1
+    {{ if os_family() == "windows" { "cd /d android && powershell -NoProfile -ExecutionPolicy Bypass -File build_release.ps1" } else { "cd android && bash ./build_release.sh" } }}
 
 # Release preparation
 [doc("Prepare for release (version bump, changelog)")]
