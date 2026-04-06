@@ -93,7 +93,7 @@ class ConnectedService : Service() {
         val builder = NotificationCompat.Builder(this, channelId)
             .setContentTitle("Connected")
             .setContentText("Click to share clipboard")
-            .setSmallIcon(R.drawable.ic_android)
+            .setSmallIcon(R.drawable.ic_notification_logo)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
