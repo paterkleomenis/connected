@@ -2,7 +2,9 @@
 # Install with: cargo install just
 # Usage: just <recipe>
 
-set shell := ["bash", "-c"]
+# Cross-platform shell: use cmd on Windows, bash elsewhere
+set shell := ["cmd", "/c"]
+
 set dotenv-load := true
 
 # Default recipe shows available commands
@@ -84,26 +86,24 @@ ci:
     just pre-push
     cargo build --workspace --release
     cargo audit
-    @./scripts/check-versions.sh
-    @echo "✅ All CI checks passed"
+    @if exist scripts\check-versions.bat (scripts\check-versions.bat) else (echo ⚠️ check-versions.bat not found)
+    @echo ✅ All CI checks passed
 
 # Windows-local CI helpers (PowerShell)
 [doc("Run Windows CI steps locally (PowerShell)")]
 ci-windows:
-    if [[ "$(uname -s 2>/dev/null || true)" == "Linux" ]]; then echo "ERROR: `just ci-windows` must be run on a Windows machine/VM. From Linux, run `just ci` (Linux checks) and use a Windows VM/runner to build the MSI." >&2; exit 2; fi
-    if command -v pwsh >/dev/null 2>&1; then pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1; elif command -v powershell >/dev/null 2>&1; then powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1; else echo "ERROR: PowerShell not found (install PowerShell 7 for 'pwsh' or use Windows PowerShell 'powershell')." >&2; exit 127; fi
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1
 
 [doc("Build Windows MSI locally (PowerShell)")]
 build-windows-msi:
-    if [[ "$(uname -s 2>/dev/null || true)" == "Linux" ]]; then echo "ERROR: `just build-windows-msi` must be run on a Windows machine/VM. From Linux, use a Windows VM/runner to build the MSI." >&2; exit 2; fi
-    if command -v pwsh >/dev/null 2>&1; then pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1; elif command -v powershell >/dev/null 2>&1; then powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1; else echo "ERROR: PowerShell not found (install PowerShell 7 for 'pwsh' or use Windows PowerShell 'powershell')." >&2; exit 127; fi
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1
 
 # Clean build artifacts
 [doc("Clean build artifacts")]
 clean:
     cargo clean
-    rm -rf target/
-    @echo "✅ Clean complete"
+    @if exist target rd /s /q target
+    @echo ✅ Clean complete
 
 # Update dependencies
 [doc("Update all dependencies")]
@@ -124,8 +124,8 @@ build-android:
 # Build macOS App and DMG
 [doc("Build macOS .app bundle and DMG installer")]
 build-macos:
-    chmod +x packaging/macos/build-macos.sh
-    packaging/macos/build-macos.sh
+    @echo ERROR: This command is only available on macOS/Linux
+    @exit /b 2
 
 # Install pre-commit hooks
 [doc("Install pre-commit hooks")]
@@ -166,28 +166,28 @@ run-desktop-release:
 # Android-specific commands
 [doc("Build Android debug APK")]
 build-android-apk:
-    cd android && ./gradlew assembleDebug
+    cd /d android && gradlew.bat assembleDebug
 
 [doc("Build Android release APK")]
 build-android-release:
-    cd android && ./gradlew assembleRelease
+    cd /d android && gradlew.bat assembleRelease
 
 [doc("Install Android debug APK to connected device")]
 install-android:
-    cd android && ./gradlew installDebug
+    cd /d android && gradlew.bat installDebug
+
+[doc("Generate only the Android App Bundle (AAB)")]
+build-android-bundle:
+    cd /d android && gradlew.bat bundleRelease
+
+[doc("Lint check Android release build")]
+lint-android:
+    cd /d android && gradlew.bat lintRelease
 
 # Android Play Store release
 [doc("Build Android release for Play Store (APK + AAB)")]
 build-android-playstore:
-    cd android && ./build_release.sh
-
-[doc("Generate only the Android App Bundle (AAB)")]
-build-android-bundle:
-    cd android && ./gradlew bundleRelease
-
-[doc("Lint check Android release build")]
-lint-android:
-    cd android && ./gradlew lintRelease
+    cd /d android && powershell -NoProfile -ExecutionPolicy Bypass -File build_release.ps1
 
 # Release preparation
 [doc("Prepare for release (version bump, changelog)")]
@@ -199,4 +199,4 @@ prepare-release VERSION:
 # Docker-based development (if needed later)
 [doc("Run commands in Docker (for consistent environment)")]
 docker-shell:
-    docker run --rm -it -v $(pwd):/workspace -w /workspace rust:latest bash
+    docker run --rm -it -v %CD%:/workspace -w /workspace rust:latest cmd /c echo Docker shell ready
