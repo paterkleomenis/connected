@@ -1317,12 +1317,17 @@ impl ConnectedClient {
                 device_name,
             })) => {
                 // Emit DeviceFound to refresh UI with trusted status
+                let resolved_type = self
+                    .discovery
+                    .get_device_by_id(&device_id)
+                    .map(|d| d.device_type)
+                    .unwrap_or(DeviceType::Unknown);
                 let device = Device::new(
                     device_id.clone(),
                     device_name.clone(),
                     addr.ip(),
                     addr.port(),
-                    DeviceType::Unknown,
+                    resolved_type,
                 );
                 let _ = self.event_tx.send(ConnectedEvent::DeviceFound(device));
 
@@ -1351,12 +1356,17 @@ impl ConnectedClient {
                     info!("Pairing completed with {} ({})", device_name, device_id);
 
                     // Notify UI
+                    let resolved_type = self
+                        .discovery
+                        .get_device_by_id(&device_id)
+                        .map(|d| d.device_type)
+                        .unwrap_or(DeviceType::Unknown);
                     let device = Device::new(
                         device_id,
                         device_name,
                         addr.ip(),
                         addr.port(),
-                        DeviceType::Unknown,
+                        resolved_type,
                     );
                     let _ = self.event_tx.send(ConnectedEvent::DeviceFound(device));
                 } else {
@@ -2335,12 +2345,16 @@ impl ConnectedClient {
                             }
 
                             // Emit DeviceFound to refresh UI
+                            let resolved_type = discovery
+                                .get_device_by_id(&device_id)
+                                .map(|dev| dev.device_type)
+                                .unwrap_or(DeviceType::Unknown);
                             let d = Device::new(
                                 device_id,
                                 device_name.clone(),
                                 addr.ip(),
                                 addr.port(),
-                                DeviceType::Unknown,
+                                resolved_type,
                             );
                             let _ = discovery
                                 .upsert_device_endpoint(d.clone(), DiscoverySource::Connected);
@@ -2392,12 +2406,16 @@ impl ConnectedClient {
                             }
 
                             // Emit DeviceFound to refresh UI with trusted status
+                            let resolved_type = discovery
+                                .get_device_by_id(&device_id)
+                                .map(|dev| dev.device_type)
+                                .unwrap_or(DeviceType::Unknown);
                             let device = Device::new(
                                 device_id.clone(),
                                 device_name.clone(),
                                 addr.ip(),
                                 addr.port(),
-                                DeviceType::Unknown,
+                                resolved_type,
                             );
                             let _ = event_tx.send(ConnectedEvent::DeviceFound(device));
 
@@ -2491,13 +2509,16 @@ impl ConnectedClient {
                                 }
 
                                 // Emit DeviceFound to refresh UI
-                                use crate::device::DeviceType;
+                                let resolved_type = discovery
+                                    .get_device_by_id(&remote_device_id)
+                                    .map(|dev| dev.device_type)
+                                    .unwrap_or(DeviceType::Unknown);
                                 let d = Device::new(
                                     remote_device_id,
                                     device_name,
                                     addr.ip(),
                                     addr.port(),
-                                    DeviceType::Unknown,
+                                    resolved_type,
                                 );
                                 // Update discovery with trusted connection info
                                 let _ = discovery
@@ -2518,13 +2539,16 @@ impl ConnectedClient {
                                 error!("Failed to update trusted peer info on Ack: {}", e);
                             }
 
-                            use crate::device::DeviceType;
+                            let resolved_type = discovery
+                                .get_device_by_id(&remote_device_id)
+                                .map(|dev| dev.device_type)
+                                .unwrap_or(DeviceType::Unknown);
                             let d = Device::new(
                                 remote_device_id,
                                 device_name,
                                 addr.ip(),
                                 addr.port(),
-                                DeviceType::Unknown,
+                                resolved_type,
                             );
                             // Update discovery with trusted connection info
                             let _ = discovery

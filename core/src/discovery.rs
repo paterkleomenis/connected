@@ -441,10 +441,9 @@ impl DiscoveryService {
             (Some(_), None) => Some(DiscoveryEvent::DeviceLost(device_id.to_string())),
             (Some(prev), Some(curr)) => {
                 let source_changed = prev_source != new_source;
-                let discovered_changed =
-                    new_source == Some(DiscoverySource::Discovered) && prev != curr;
+                let device_changed = prev != curr;
 
-                if source_changed || discovered_changed {
+                if source_changed || device_changed {
                     Some(DiscoveryEvent::DeviceFound(curr))
                 } else {
                     None
@@ -464,6 +463,26 @@ impl DiscoveryService {
         let prev_source = tracked.active_source();
         let prev_device = tracked.active_device();
 
+        // Preserve known device type across endpoint updates. Connection events often
+        // don't include platform info, so avoid downgrading Android/iOS/etc to Unknown.
+        let mut device = device;
+        if device.device_type == DeviceType::Unknown
+            && let Some(existing_type) = tracked
+                .connected
+                .as_ref()
+                .map(|endpoint| endpoint.device.device_type)
+                .filter(|dtype| *dtype != DeviceType::Unknown)
+                .or_else(|| {
+                    tracked
+                        .discovered
+                        .as_ref()
+                        .map(|endpoint| endpoint.device.device_type)
+                        .filter(|dtype| *dtype != DeviceType::Unknown)
+                })
+        {
+            device.device_type = existing_type;
+        }
+
         let endpoint = TrackedEndpoint {
             device: device.clone(),
             last_seen: Instant::now(),
@@ -471,31 +490,51 @@ impl DiscoveryService {
         };
 
         match source {
-            DiscoverySource::Connected => tracked.connected = Some(endpoint),
+            DiscoverySource::Connected => {
+                tracked.connected = Some(endpoint);
+
+                // Keep discovered metadata in sync if it was previously unknown.
+                if device.device_type != DeviceType::Unknown
+                    && let Some(discovered) = tracked.discovered.as_mut()
+                    && discovered.device.device_type == DeviceType::Unknown
+                {
+                    discovered.device.device_type = device.device_type;
+                }
+            }
             DiscoverySource::Discovered => {
                 // If we already have a discovered endpoint with a valid IP,
                 // and the new one has an unspecified IP (0.0.0.0),
                 // we should NOT overwrite the valid IP.
                 // This happens when Proximity (BLE) detects a device but hasn't resolved IP yet,
                 // while mDNS has already found the valid IP.
-                let should_update = if let Some(existing) = tracked.discovered.as_mut() {
+                if let Some(existing) = tracked.discovered.as_mut() {
                     let new_is_unspecified = device.ip == "0.0.0.0" || device.ip == "::";
                     let existing_is_valid =
                         existing.device.ip != "0.0.0.0" && existing.device.ip != "::";
 
                     if new_is_unspecified && existing_is_valid {
-                        // Just update last_seen to keep it alive, but don't overwrite device info
+                        // Just update last_seen to keep it alive, but don't overwrite valid IP.
                         existing.last_seen = Instant::now();
-                        false
+
+                        // Still accept better metadata from this signal.
+                        if existing.device.device_type == DeviceType::Unknown
+                            && device.device_type != DeviceType::Unknown
+                        {
+                            existing.device.device_type = device.device_type;
+                        }
                     } else {
-                        true
+                        *existing = endpoint;
                     }
                 } else {
-                    true
-                };
-
-                if should_update {
                     tracked.discovered = Some(endpoint);
+                }
+
+                // If an active connected endpoint has Unknown type, enrich it from discovery.
+                if device.device_type != DeviceType::Unknown
+                    && let Some(connected) = tracked.connected.as_mut()
+                    && connected.device.device_type == DeviceType::Unknown
+                {
+                    connected.device.device_type = device.device_type;
                 }
             }
         }
@@ -1007,5 +1046,136 @@ mod tests {
 
         let instance_name2 = DiscoveryService::create_instance_name(&device2);
         assert_eq!(instance_name2, "Test-Device--test-id-456");
+    }
+
+    #[test]
+    fn preserves_device_type_when_connected_update_is_unknown() {
+        use std::net::Ipv4Addr;
+
+        let mut devices = std::collections::HashMap::new();
+        let device_id = "dev-android".to_string();
+
+        let discovered = Device::new(
+            device_id.clone(),
+            "Pixel".to_string(),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+            44444,
+            DeviceType::Android,
+        );
+        DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            discovered,
+            DiscoverySource::Discovered,
+        );
+
+        let connected_unknown = Device::new(
+            device_id.clone(),
+            "Pixel".to_string(),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+            44444,
+            DeviceType::Unknown,
+        );
+
+        let event = DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            connected_unknown,
+            DiscoverySource::Connected,
+        );
+
+        match event {
+            Some(DiscoveryEvent::DeviceFound(device)) => {
+                assert_eq!(device.device_type, DeviceType::Android);
+            }
+            _ => panic!("expected DeviceFound event"),
+        }
+
+        let active = devices
+            .get(&device_id)
+            .and_then(TrackedDevice::active_device)
+            .expect("device should exist");
+        assert_eq!(active.device_type, DeviceType::Android);
+    }
+
+    #[test]
+    fn upgrades_connected_unknown_type_from_discovery_metadata() {
+        use std::net::Ipv4Addr;
+
+        let mut devices = std::collections::HashMap::new();
+        let device_id = "dev-upgrade".to_string();
+
+        let connected_unknown = Device::new(
+            device_id.clone(),
+            "Remote".to_string(),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+            44444,
+            DeviceType::Unknown,
+        );
+        DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            connected_unknown,
+            DiscoverySource::Connected,
+        );
+
+        let discovered_android = Device::new(
+            device_id.clone(),
+            "Remote".to_string(),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+            44444,
+            DeviceType::Android,
+        );
+        DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            discovered_android,
+            DiscoverySource::Discovered,
+        );
+
+        let active = devices
+            .get(&device_id)
+            .and_then(TrackedDevice::active_device)
+            .expect("device should exist");
+        assert_eq!(active.device_type, DeviceType::Android);
+    }
+
+    #[test]
+    fn keeps_valid_ip_on_unspecified_discovery_update_but_enriches_type() {
+        use std::net::Ipv4Addr;
+
+        let mut devices = std::collections::HashMap::new();
+        let device_id = "dev-ble".to_string();
+
+        let discovered_with_valid_ip = Device::new(
+            device_id.clone(),
+            "Phone".to_string(),
+            IpAddr::V4(Ipv4Addr::new(172, 16, 1, 4)),
+            44444,
+            DeviceType::Unknown,
+        );
+        DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            discovered_with_valid_ip,
+            DiscoverySource::Discovered,
+        );
+
+        let discovered_unspecified_with_type = Device::new(
+            device_id.clone(),
+            "Phone".to_string(),
+            IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+            44444,
+            DeviceType::Android,
+        );
+        DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            discovered_unspecified_with_type,
+            DiscoverySource::Discovered,
+        );
+
+        let tracked = devices.get(&device_id).expect("device should exist");
+        let discovered = tracked
+            .discovered
+            .as_ref()
+            .expect("discovered endpoint should exist");
+
+        assert_eq!(discovered.device.ip, "172.16.1.4");
+        assert_eq!(discovered.device.device_type, DeviceType::Android);
     }
 }

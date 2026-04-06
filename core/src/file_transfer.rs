@@ -967,8 +967,7 @@ fn strip_temp_suffix(filename: &str) -> String {
     }
 
     // Existing Android behavior: 8 hex chars appended after '-'.
-    let is_hex_uuid_fragment =
-        suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_hexdigit());
+    let is_hex_uuid_fragment = suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_hexdigit());
 
     // iOS/URI providers often append a unix timestamp (seconds or millis).
     // Only strip this variant when the base keeps a plausible extension.
@@ -1023,18 +1022,12 @@ mod tests {
 
     #[test]
     fn strips_timestamp_suffix_after_extension() {
-        assert_eq!(
-            sanitize_filename("report.pdf-1712487000123"),
-            "report.pdf"
-        );
+        assert_eq!(sanitize_filename("report.pdf-1712487000123"), "report.pdf");
     }
 
     #[test]
     fn strips_timestamp_prefix_before_filename() {
-        assert_eq!(
-            sanitize_filename("1712487000123_report.pdf"),
-            "report.pdf"
-        );
+        assert_eq!(sanitize_filename("1712487000123_report.pdf"), "report.pdf");
     }
 
     #[test]

@@ -493,20 +493,72 @@ fun formatFileSize(bytes: ULong): String {
     return String.format("%.1f GB", gb)
 }
 
-fun getDeviceIcon(type: String): Int {
-    return when (type.lowercase()) {
-        "android", "phone", "mobile" -> R.drawable.ic_android
-        "ios", "iphone" -> R.drawable.ic_ios
-        "macos", "mac" -> R.drawable.ic_macos
-        "windows", "pc" -> R.drawable.ic_windows
-        "linux" -> R.drawable.ic_linux
-        "tablet", "ipad" -> R.drawable.ic_tablet
-        "desktop" -> R.drawable.ic_desktop
-        "laptop" -> R.drawable.ic_laptop
-        "tv" -> R.drawable.ic_tv
-        "watch" -> R.drawable.ic_watch
-        else -> R.drawable.ic_device_unknown
+fun getDeviceIcon(type: String, name: String? = null): Int {
+    val normalizedType = type.trim().lowercase()
+    val normalized = if (
+        (normalizedType.isEmpty() || normalizedType == "unknown") &&
+        !name.isNullOrBlank()
+    ) {
+        name.trim().lowercase()
+    } else {
+        normalizedType
     }
+
+    if (
+        normalized.contains("android") ||
+        normalized.contains("phone") ||
+        normalized.contains("mobile") ||
+        normalized.contains("pixel") ||
+        normalized.contains("galaxy")
+    ) {
+        return R.drawable.ic_android
+    }
+
+    if (normalized.contains("ios") || normalized.contains("iphone")) {
+        return R.drawable.ic_ios
+    }
+
+    if (normalized.contains("ipad") || normalized.contains("tablet")) {
+        return R.drawable.ic_tablet
+    }
+
+    if (normalized.contains("linux")) {
+        return R.drawable.ic_linux
+    }
+
+    if (normalized.contains("windows")) {
+        return R.drawable.ic_windows
+    }
+
+    if (normalized.contains("macos") || normalized.contains("mac")) {
+        return R.drawable.ic_macos
+    }
+
+    if (normalized.contains("laptop") || normalized.contains("notebook")) {
+        return R.drawable.ic_laptop
+    }
+
+    if (
+        normalized.contains("desktop") ||
+        normalized.contains("computer") ||
+        normalized.contains("pc")
+    ) {
+        return R.drawable.ic_desktop
+    }
+
+    if (normalized.contains("tv") || normalized.contains("television")) {
+        return R.drawable.ic_tv
+    }
+
+    if (normalized.contains("watch") || normalized.contains("wearable")) {
+        return R.drawable.ic_watch
+    }
+
+    if (normalized == "unknown" || normalized.isEmpty()) {
+        return R.drawable.ic_device_unknown
+    }
+
+    return R.drawable.ic_desktop
 }
 
 enum class Screen {
@@ -608,7 +660,7 @@ fun MainAppNavigation(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
-                                            painterResource(getDeviceIcon(device.deviceType)),
+                                            painterResource(getDeviceIcon(device.deviceType, device.name)),
                                             contentDescription = null,
                                             modifier = Modifier.size(20.dp),
                                             tint = MaterialTheme.colorScheme.primary
@@ -1624,6 +1676,14 @@ fun DeviceItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        painter = painterResource(getDeviceIcon(device.deviceType, device.name)),
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+
                     Column(modifier = Modifier.clickable { showDetails = !showDetails }) {
                         Text(
                             text = device.name,
