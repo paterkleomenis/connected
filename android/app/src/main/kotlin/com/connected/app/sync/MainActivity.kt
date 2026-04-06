@@ -595,18 +595,21 @@ fun MainAppNavigation(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            ) {
                 NavigationBarItem(
                     icon = { Icon(painterResource(R.drawable.ic_nav_devices), contentDescription = "Devices") },
                     label = { Text("Devices") },
                     selected = currentScreen == Screen.Home,
                     onClick = { currentScreen = Screen.Home },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = androidx.compose.ui.graphics.Color.White,
-                        selectedTextColor = androidx.compose.ui.graphics.Color.White,
-                        indicatorColor = androidx.compose.ui.graphics.Color(0xFF333333),
-                        unselectedIconColor = androidx.compose.ui.graphics.Color.Gray,
-                        unselectedTextColor = androidx.compose.ui.graphics.Color.Gray
+                        selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 )
                 NavigationBarItem(
@@ -618,11 +621,11 @@ fun MainAppNavigation(
                         currentScreen = Screen.Settings
                     },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = androidx.compose.ui.graphics.Color.White,
-                        selectedTextColor = androidx.compose.ui.graphics.Color.White,
-                        indicatorColor = androidx.compose.ui.graphics.Color(0xFF333333),
-                        unselectedIconColor = androidx.compose.ui.graphics.Color.Gray,
-                        unselectedTextColor = androidx.compose.ui.graphics.Color.Gray
+                        selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 )
             }

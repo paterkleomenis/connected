@@ -11,53 +11,81 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-// Colors from desktop styles.css - Updated for High Contrast B&W
-val ColorBgPrimary = Color(0xFF000000)
-val ColorBgSecondary = Color(0xFF000000) // Secondary is now Black
-val ColorBgTertiary = Color(0xFF1c1c1e) // Slightly lighter for variants if needed
-val ColorAccent = Color(0xFFFFFFFF) // Primary is now White
-val ColorTextPrimary = Color(0xFFFFFFFF)
-val ColorTextSecondary = Color(0xFFFFFFFF) // Icons/Secondary text also White
-val ColorSuccess = Color(0xFF30d158)
-val ColorError = Color(0xFFff453a)
+private val ColorBgPrimary = Color(0xFF000000)
+private val ColorBgSecondary = Color(0xFF000000)
+private val ColorBgTertiary = Color(0xFF1C1C1E)
+private val ColorAccent = Color(0xFFFFFFFF)
+private val ColorLightText = Color(0xFF1D1D1F)
+private val ColorLightBackground = Color(0xFFF5F5F7)
+private val ColorLightSurface = Color(0xFFFFFFFF)
+private val ColorLightSurfaceVariant = Color(0xFFE8E8ED)
+private val ColorSuccess = Color(0xFF30D158)
+private val ColorError = Color(0xFFFF453A)
 
 private val ConnectedDarkColorScheme = darkColorScheme(
     primary = ColorAccent,
-    onPrimary = Color.Black, // Black text on White Primary
+    onPrimary = Color.Black,
     primaryContainer = Color(0xFF333333),
-    onPrimaryContainer = ColorTextPrimary,
+    onPrimaryContainer = Color.White,
 
     secondary = ColorBgSecondary,
-    onSecondary = ColorTextPrimary,
+    onSecondary = Color.White,
     secondaryContainer = Color(0xFF333333),
-    onSecondaryContainer = ColorTextPrimary,
+    onSecondaryContainer = Color.White,
 
     tertiary = ColorSuccess,
+    onTertiary = Color.Black,
+    tertiaryContainer = Color(0xFF1E5C35),
+    onTertiaryContainer = Color(0xFFB8F7CC),
 
     background = ColorBgPrimary,
-    onBackground = ColorTextPrimary,
+    onBackground = Color.White,
 
     surface = ColorBgSecondary,
-    onSurface = ColorTextPrimary,
+    onSurface = Color.White,
 
     surfaceVariant = ColorBgTertiary,
-    onSurfaceVariant = ColorTextSecondary,
+    onSurfaceVariant = Color(0xFFD1D1D6),
+    outline = Color(0xFF8E8E93),
+    outlineVariant = Color(0xFF3A3A3C),
 
     error = ColorError,
-    onError = Color.White
+    onError = Color.White,
+    errorContainer = Color(0xFF5A1A16),
+    onErrorContainer = Color(0xFFFFDAD6)
 )
 
-// We primarily support Dark Theme to match desktop default, but providing a light mapping if needed
-// For now, mapping light theme to be similar or just standard light
 private val ConnectedLightColorScheme = lightColorScheme(
-    primary = ColorAccent,
-    onPrimary = Color.Black,
-    background = Color(0xFFf5f5f7),
-    onBackground = Color(0xFF1d1d1f),
-    surface = Color(0xFFffffff),
-    onSurface = Color(0xFF1d1d1f),
-    surfaceVariant = Color(0xFFe8e8ed),
-    onSurfaceVariant = Color(0xFF6e6e73)
+    primary = Color.Black,
+    onPrimary = Color.White,
+    primaryContainer = ColorLightSurfaceVariant,
+    onPrimaryContainer = ColorLightText,
+
+    secondary = ColorLightText,
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFD9D9DE),
+    onSecondaryContainer = ColorLightText,
+
+    tertiary = ColorSuccess,
+    onTertiary = Color.Black,
+    tertiaryContainer = Color(0xFFB8F7CC),
+    onTertiaryContainer = Color(0xFF00210F),
+
+    background = ColorLightBackground,
+    onBackground = ColorLightText,
+
+    surface = ColorLightSurface,
+    onSurface = ColorLightText,
+
+    surfaceVariant = ColorLightSurfaceVariant,
+    onSurfaceVariant = Color(0xFF3D3D42),
+    outline = Color(0xFF737378),
+    outlineVariant = Color(0xFFC8C8CC),
+
+    error = ColorError,
+    onError = Color.White,
+    errorContainer = Color(0xFFF9DEDC),
+    onErrorContainer = Color(0xFF410E0B)
 )
 
 @Composable
@@ -65,12 +93,7 @@ fun ConnectedTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        // Force Dark Theme preference if user is in dark mode or if we want to enforce it
-        // The desktop app defaults to dark, so we prioritize it.
-        darkTheme -> ConnectedDarkColorScheme
-        else -> ConnectedLightColorScheme
-    }
+    val colorScheme = if (darkTheme) ConnectedDarkColorScheme else ConnectedLightColorScheme
 
     val view = LocalView.current
     if (!view.isInEditMode) {
@@ -83,7 +106,6 @@ fun ConnectedTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = MaterialTheme.typography,
         content = content
     )
 }
