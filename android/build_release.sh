@@ -7,6 +7,24 @@ set -e
 echo "🔨 Building Connected App for Play Store..."
 echo ""
 
+# Load .env file if it exists (for signing configuration)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
+
+if [ -f "$ENV_FILE" ]; then
+    echo "🔑 Loading signing configuration from .env..."
+    # Export variables from .env (skip comments and empty lines)
+    set -a
+    source "$ENV_FILE"
+    set +a
+    echo "✅ .env loaded"
+else
+    echo "⚠️  No .env file found at $ENV_FILE"
+    echo "   Signing with debug key (create .env from .env.example for release signing)"
+fi
+
+echo ""
+
 # Check if we're in the right directory
 if [ ! -f "gradlew" ]; then
     echo "❌ Error: Run this script from the android/ directory"
@@ -25,6 +43,14 @@ if [ -z "$ANDROID_NDK_HOME" ] && [ ! -f "local.properties" ]; then
 fi
 
 echo "✅ Prerequisites check passed"
+echo ""
+
+# Check signing configuration
+if [ -n "$ANDROID_KEYSTORE_PASSWORD" ]; then
+    echo "✅ Release signing configured"
+else
+    echo "⚠️  No release signing configured — will use DEBUG key"
+fi
 echo ""
 
 # Clean previous builds

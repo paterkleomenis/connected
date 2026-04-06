@@ -57,8 +57,8 @@ configure<ApplicationExtension> {
 
     signingConfigs {
         create("release") {
-            // The CI workflow will decode the base64 secret to this file path
-            storeFile = file("release.keystore")
+            val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH") ?: "release.keystore"
+            storeFile = file(keystorePath)
             storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
             keyAlias = System.getenv("ANDROID_KEY_ALIAS")
             keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
@@ -68,7 +68,7 @@ configure<ApplicationExtension> {
     buildTypes {
         release {
             isMinifyEnabled = true
-            // Only use release signing config if keystore exists (CI) or env vars are set
+            // Only use release signing config if keystore env vars are set
             signingConfig = if (System.getenv("ANDROID_KEYSTORE_PASSWORD") != null) {
                 signingConfigs.getByName("release")
             } else {
