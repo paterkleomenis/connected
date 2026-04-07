@@ -2345,15 +2345,27 @@ impl ConnectedClient {
                             }
 
                             // Emit DeviceFound to refresh UI
-                            let resolved_type = discovery
-                                .get_device_by_id(&device_id)
+                            let known_device = discovery.get_device_by_id(&device_id);
+                            let resolved_type = known_device
+                                .as_ref()
                                 .map(|dev| dev.device_type)
                                 .unwrap_or(DeviceType::Unknown);
+                            let resolved_port = known_device
+                                .as_ref()
+                                .map(|dev| dev.port)
+                                .filter(|port| *port != 0)
+                                .unwrap_or_else(|| {
+                                    if listening_port != 0 {
+                                        listening_port
+                                    } else {
+                                        addr.port()
+                                    }
+                                });
                             let d = Device::new(
                                 device_id,
                                 device_name.clone(),
                                 addr.ip(),
-                                addr.port(),
+                                resolved_port,
                                 resolved_type,
                             );
                             let _ = discovery
@@ -2406,15 +2418,27 @@ impl ConnectedClient {
                             }
 
                             // Emit DeviceFound to refresh UI with trusted status
-                            let resolved_type = discovery
-                                .get_device_by_id(&device_id)
+                            let known_device = discovery.get_device_by_id(&device_id);
+                            let resolved_type = known_device
+                                .as_ref()
                                 .map(|dev| dev.device_type)
                                 .unwrap_or(DeviceType::Unknown);
+                            let resolved_port = known_device
+                                .as_ref()
+                                .map(|dev| dev.port)
+                                .filter(|port| *port != 0)
+                                .unwrap_or_else(|| {
+                                    if listening_port != 0 {
+                                        listening_port
+                                    } else {
+                                        addr.port()
+                                    }
+                                });
                             let device = Device::new(
                                 device_id.clone(),
                                 device_name.clone(),
                                 addr.ip(),
-                                addr.port(),
+                                resolved_port,
                                 resolved_type,
                             );
                             let _ = event_tx.send(ConnectedEvent::DeviceFound(device));
@@ -2509,15 +2533,21 @@ impl ConnectedClient {
                                 }
 
                                 // Emit DeviceFound to refresh UI
-                                let resolved_type = discovery
-                                    .get_device_by_id(&remote_device_id)
+                                let known_device = discovery.get_device_by_id(&remote_device_id);
+                                let resolved_type = known_device
+                                    .as_ref()
                                     .map(|dev| dev.device_type)
                                     .unwrap_or(DeviceType::Unknown);
+                                let resolved_port = known_device
+                                    .as_ref()
+                                    .map(|dev| dev.port)
+                                    .filter(|port| *port != 0)
+                                    .unwrap_or(addr.port());
                                 let d = Device::new(
                                     remote_device_id,
                                     device_name,
                                     addr.ip(),
-                                    addr.port(),
+                                    resolved_port,
                                     resolved_type,
                                 );
                                 // Update discovery with trusted connection info
@@ -2539,15 +2569,21 @@ impl ConnectedClient {
                                 error!("Failed to update trusted peer info on Ack: {}", e);
                             }
 
-                            let resolved_type = discovery
-                                .get_device_by_id(&remote_device_id)
+                            let known_device = discovery.get_device_by_id(&remote_device_id);
+                            let resolved_type = known_device
+                                .as_ref()
                                 .map(|dev| dev.device_type)
                                 .unwrap_or(DeviceType::Unknown);
+                            let resolved_port = known_device
+                                .as_ref()
+                                .map(|dev| dev.port)
+                                .filter(|port| *port != 0)
+                                .unwrap_or(addr.port());
                             let d = Device::new(
                                 remote_device_id,
                                 device_name,
                                 addr.ip(),
-                                addr.port(),
+                                resolved_port,
                                 resolved_type,
                             );
                             // Update discovery with trusted connection info
