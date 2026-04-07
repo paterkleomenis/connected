@@ -406,25 +406,15 @@ if [ "$do_push" -eq 1 ]; then
     die "AUR directory is not a git repository: $AUR_DIR"
   fi
 
-  if git -C "$AUR_DIR" diff --quiet --exit-code; then
-    echo "No changes to commit."
-    exit 0
+  repo_root="$(git -C "$AUR_DIR" rev-parse --show-toplevel)"
+  if [ "$repo_root" = "$AUR_DIR" ]; then
+    aur_prefix="."
+  else
+    aur_prefix="${AUR_DIR#"${repo_root}/"}"
   fi
-
-  if [ -z "$commit_msg" ]; then
-    commit_msg="Update to v${version}"
-  fi
-
-  git -C "$AUR_DIR" add PKGBUILD .SRCINFO || true
-  if git -C "$AUR_DIR" diff --cached --quiet --exit-code; then
-    echo "No staged changes to commit."
-    exit 0
-  fi
-
-  git -C "$AUR_DIR" commit -m "$commit_msg"
 
   if [ -z "$push_remote" ]; then
-    if git -C "$AUR_DIR" remote | grep -qx "aur"; then
+    if git -C "$repo_root" remote | grep -qx "aur"; then
       push_remote="aur"
     else
       push_remote="origin"
@@ -432,9 +422,68 @@ if [ "$do_push" -eq 1 ]; then
   fi
 
   if [ -z "$push_branch" ]; then
-    push_branch="master"
+    remote_head_ref="$(git -C "$repo_root" symbolic-ref --quiet --short "refs/remotes/${push_remote}/HEAD" 2>/dev/null || true)"
+    if [ -n "$remote_head_ref" ]; then
+      push_branch="${remote_head_ref#*/}"
+    else
+      push_branch="master"
+    fi
   fi
 
-  echo "Pushing to ${push_remote} ${push_branch}..."
-  git -C "$AUR_DIR" push "$push_remote" "$push_branch"
+  if git -C "$repo_root" diff --quiet -- "$AUR_DIR/PKGBUILD" "$AUR_DIR/.SRCINFO"; then
+    echo "No file changes to commit."
+  else
+    if [ -z "$commit_msg" ]; then
+      commit_msg="Update to v${version}"
+    fi
+
+    if [ "$aur_prefix" = "." ]; then
+      git -C "$repo_root" add PKGBUILD .SRCINFO || true
+    else
+      git -C "$repo_root" add "$aur_prefix/PKGBUILD" "$aur_prefix/.SRCINFO" || true
+    fi
+    if git -C "$repo_root" diff --cached --quiet --exit-code; then
+      echo "No staged changes to commit."
+    else
+      git -C "$repo_root" commit -m "$commit_msg"
+    fi
+  fi
+
+  if [ "$aur_prefix" = "." ]; then
+    echo "Pushing current HEAD to ${push_remote} ${push_branch}..."
+    git -C "$repo_root" push "$push_remote" "HEAD:${push_branch}"
+  else
+    remote_url="$(git -C "$repo_root" remote get-url "$push_remote" 2>/dev/null || true)"
+    [ -n "$remote_url" ] || die "could not resolve remote URL for ${push_remote}"
+
+    temp_aur_dir="$(mktemp -d)"
+    cleanup_temp_aur() {
+      rm -rf "$temp_aur_dir"
+    }
+    trap cleanup_temp_aur EXIT
+
+    ssh_control_path="${TMPDIR:-/tmp}/connected-aur-ssh-%r@%h:%p"
+    export GIT_SSH_COMMAND="ssh -o ControlMaster=auto -o ControlPersist=300 -o ControlPath=${ssh_control_path}"
+
+    echo "Cloning ${push_remote}/${push_branch} into temporary repo..."
+    git clone --branch "$push_branch" --single-branch "$remote_url" "$temp_aur_dir"
+
+    cp "$AUR_DIR/PKGBUILD" "$temp_aur_dir/PKGBUILD"
+    if [ -f "$AUR_DIR/.SRCINFO" ]; then
+      cp "$AUR_DIR/.SRCINFO" "$temp_aur_dir/.SRCINFO"
+    fi
+
+    git -C "$temp_aur_dir" add PKGBUILD .SRCINFO 2>/dev/null || git -C "$temp_aur_dir" add PKGBUILD
+
+    if git -C "$temp_aur_dir" diff --cached --quiet --exit-code; then
+      echo "AUR remote already matches local packaging files."
+    else
+      if [ -z "$commit_msg" ]; then
+        commit_msg="Update to v${version}"
+      fi
+      git -C "$temp_aur_dir" commit -m "$commit_msg"
+      echo "Pushing commit to ${push_remote} ${push_branch}..."
+      git -C "$temp_aur_dir" push origin "$push_branch"
+    fi
+  fi
 fi
