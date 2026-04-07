@@ -468,9 +468,30 @@ if [ "$do_push" -eq 1 ]; then
     echo "Cloning ${push_remote}/${push_branch} into temporary repo..."
     git clone --branch "$push_branch" --single-branch "$remote_url" "$temp_aur_dir"
 
+    remote_pkgver="$(grep '^pkgver=' "$temp_aur_dir/PKGBUILD" | cut -d= -f2 || true)"
+    remote_pkgrel="$(grep '^pkgrel=' "$temp_aur_dir/PKGBUILD" | cut -d= -f2 || true)"
+
     cp "$AUR_DIR/PKGBUILD" "$temp_aur_dir/PKGBUILD"
     if [ -f "$AUR_DIR/.SRCINFO" ]; then
       cp "$AUR_DIR/.SRCINFO" "$temp_aur_dir/.SRCINFO"
+    fi
+
+    local_pkgver="$(grep '^pkgver=' "$temp_aur_dir/PKGBUILD" | cut -d= -f2 || true)"
+    local_pkgrel="$(grep '^pkgrel=' "$temp_aur_dir/PKGBUILD" | cut -d= -f2 || true)"
+
+    if [ -n "$remote_pkgver" ] && [ -n "$remote_pkgrel" ] && [ -n "$local_pkgver" ] && [ -n "$local_pkgrel" ] && \
+       [ "$local_pkgver" = "$remote_pkgver" ] && \
+       [[ "$remote_pkgrel" =~ ^[0-9]+$ ]] && \
+       [[ "$local_pkgrel" =~ ^[0-9]+$ ]] && \
+       [ "$local_pkgrel" -le "$remote_pkgrel" ]; then
+      new_pkgrel=$((remote_pkgrel + 1))
+      echo "Remote pkgrel is ${remote_pkgrel}; bumping to ${new_pkgrel} for same pkgver ${local_pkgver}."
+      sed -i "s/^pkgrel=.*/pkgrel=${new_pkgrel}/" "$temp_aur_dir/PKGBUILD"
+      if command -v makepkg >/dev/null 2>&1; then
+        (cd "$temp_aur_dir" && makepkg --printsrcinfo > .SRCINFO)
+      else
+        die "makepkg is required to regenerate .SRCINFO after pkgrel bump"
+      fi
     fi
 
     git -C "$temp_aur_dir" add PKGBUILD .SRCINFO 2>/dev/null || git -C "$temp_aur_dir" add PKGBUILD
