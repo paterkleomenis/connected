@@ -15,6 +15,7 @@ if [ -f "$ENV_FILE" ]; then
     echo "🔑 Loading signing configuration from .env..."
     # Export variables from .env (skip comments and empty lines)
     set -a
+    # shellcheck source=/dev/null
     source "$ENV_FILE"
     set +a
     echo "✅ .env loaded"
@@ -80,7 +81,7 @@ if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
     echo ""
 
     # Show file size
-    APK_SIZE=$(ls -lh app/build/outputs/apk/release/app-release.apk | awk '{print $5}')
+    APK_SIZE=$(find app/build/outputs/apk/release -name "app-release.apk" -exec ls -lh {} \; | awk '{print $5}')
     echo "📦 APK Size: $APK_SIZE"
     echo ""
 
@@ -92,7 +93,7 @@ if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
         echo "✅ Release AAB built successfully!"
         echo "📁 Location: app/build/outputs/bundle/release/app-release.aab"
 
-        AAB_SIZE=$(ls -lh app/build/outputs/bundle/release/app-release.aab | awk '{print $5}')
+        AAB_SIZE=$(find app/build/outputs/bundle/release -name "app-release.aab" -exec ls -lh {} \; | awk '{print $5}')
         echo "📦 AAB Size: $AAB_SIZE"
     else
         echo "❌ AAB build failed"
