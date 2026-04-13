@@ -24,6 +24,7 @@ ignore = [
   "RUSTSEC-2024-0412",
   "RUSTSEC-2024-0418",
   "RUSTSEC-2024-0411",
+  "RUSTSEC-2024-0414", # gdkx11-sys - GTK3 bindings, used by tao/dioxus-desktop
   "RUSTSEC-2024-0415",
   "RUSTSEC-2024-0420",
   "RUSTSEC-2024-0419",
@@ -74,9 +75,6 @@ highlight = "all"
 
 # Allow specific duplicate versions that are hard to resolve
 skip = [
-  # Image processing
-  { name = "zune-core" },
-  { name = "zune-jpeg" },
   # proc-macro crates
   { name = "proc-macro-crate" },
 ]
