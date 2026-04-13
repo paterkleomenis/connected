@@ -64,31 +64,28 @@ test-coverage:
 [doc("Audit dependencies for security vulnerabilities")]
 audit:
     cargo audit
+    cargo deny check
+    @echo "✅ Security audit passed"
 
 
-# Pre-commit check (fast - runs on every commit)
-[doc("Pre-commit checks (fast)")]
+# Pre-commit check
+[doc("Pre-commit checks")]
 pre-commit:
-    cargo fmt -- --check
-    cargo clippy --workspace -- -D warnings
-    typos
+    pre-commit run --all-files --show-diff-on-failure
     @echo "✅ Pre-commit checks passed"
 
-# Pre-push check (slower - runs before push)
-[doc("Pre-push checks (includes tests)")]
-pre-push:
-    just pre-commit
-    cargo test --workspace
-    @echo "✅ Pre-push checks passed"
-
-# Full CI simulation (slowest)
+# Full CI simulation (matches GitHub Actions CI)
 [doc("Full CI simulation (slow)")]
 ci:
-    just pre-push
-    cargo build --workspace --release
-    cargo audit
+    @echo "=== Pre-commit Hooks & Code Quality ==="
+    just pre-commit
+    @echo "=== Security Audit ==="
+    just audit
+    @echo "=== Build ==="
+    just build
+    @echo "=== Version Checks ==="
     just check-versions
-    @echo ✅ All CI checks passed
+    @echo "✅ All CI checks passed"
 
 [doc("Check version consistency scripts")]
 check-versions:
