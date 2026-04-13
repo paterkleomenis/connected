@@ -122,9 +122,9 @@ jobs:
           path: ~/.dotnet/tools
           key: wix-${{ hashFiles('packaging/windows/installer.wxs') }}
 
-      - name: Install WiX 4
+      - name: Install WiX 5
         if: steps.wix-cache.outputs.cache-hit != 'true'
-        run: dotnet tool install --global wix
+        run: dotnet tool install --global wix --version 5.*
 
       - name: Create WiX Output Directory
         shell: pwsh
