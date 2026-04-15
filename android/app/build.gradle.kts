@@ -44,13 +44,13 @@ kotlin {
 
 configure<ApplicationExtension> {
     namespace = "com.connected.app.sync"
-    compileSdk = 36
+    compileSdk = 37
     ndkVersion = latestNdkVersion
 
     defaultConfig {
         applicationId = "com.connected.app.sync"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 49
         versionName = "2.9.3"
 
