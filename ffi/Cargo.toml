@@ -25,7 +25,7 @@ tokio = { workspace = true }
 android_logger = "0.15"
 jni = "0.22"
 log = "0.4"
-rustls-platform-verifier = "0.6"
+rustls-platform-verifier = "0.7"
 tracing-log = "0.2"
 
 [build-dependencies]
