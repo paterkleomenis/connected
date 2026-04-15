@@ -14,10 +14,17 @@ plugins {
 }
 
 fun rustlsPlatformVerifierRepo(settingsDir: File): File {
+    val cargoExecutable: String = run {
+        val os = System.getProperty("os.name").lowercase()
+        val isWindows = os.contains("win")
+        val cargoName = if (isWindows) "cargo.exe" else "cargo"
+        val homeCargo = File(System.getProperty("user.home"), ".cargo/bin/$cargoName")
+        if (homeCargo.exists()) homeCargo.absolutePath else cargoName
+    }
     val metadata = providers.exec {
         workingDir = settingsDir.parentFile
         commandLine(
-            "cargo",
+            cargoExecutable,
             "metadata",
             "--format-version",
             "1",
@@ -39,7 +46,9 @@ fun rustlsPlatformVerifierRepo(settingsDir: File): File {
 }
 
 dependencyResolutionManagement {
+    @Suppress("UnstableApiUsage")
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    @Suppress("UnstableApiUsage")
     repositories {
         google()
         mavenCentral()

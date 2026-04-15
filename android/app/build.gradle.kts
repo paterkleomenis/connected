@@ -1,10 +1,20 @@
 import com.android.build.api.dsl.ApplicationExtension
 import org.gradle.api.JavaVersion
 import java.util.Properties
+import java.io.File
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// Helper to find cargo
+val cargoExecutable: String = run {
+    val os = System.getProperty("os.name").lowercase()
+    val isWindows = os.contains("win")
+    val cargoName = if (isWindows) "cargo.exe" else "cargo"
+    val homeCargo = File(System.getProperty("user.home"), ".cargo/bin/$cargoName")
+    if (homeCargo.exists()) homeCargo.absolutePath else cargoName
 }
 
 // Helper to find SDK and NDK
@@ -153,7 +163,7 @@ dependencies {
 tasks.register<Exec>("buildRustDebug") {
     workingDir = file("${project.rootDir}/../ffi")
     environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
-    commandLine("cargo", "ndk",
+    commandLine(cargoExecutable, "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
         "-t", "x86_64",
@@ -166,7 +176,7 @@ tasks.register<Exec>("buildRustDebug") {
 tasks.register<Exec>("buildRustRelease") {
     workingDir = file("${project.rootDir}/../ffi")
     environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
-    commandLine("cargo", "ndk",
+    commandLine(cargoExecutable, "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
         "-t", "x86_64",
@@ -182,7 +192,7 @@ tasks.register<Exec>("buildRustRelease") {
 tasks.register<Exec>("generateBindings") {
     workingDir = file("${project.rootDir}/..")
     // Use the x86_64 debug lib for generation speed/convenience during debug builds
-    commandLine("cargo", "run", "--release",
+    commandLine(cargoExecutable, "run", "--release",
         "-p", "connected-ffi",
         "--bin", "uniffi-bindgen",
         "--",
@@ -200,7 +210,7 @@ tasks.register<Exec>("generateBindings") {
 tasks.register<Exec>("generateBindingsRelease") {
     workingDir = file("${project.rootDir}/..")
     // Use the aarch64 release lib for generation
-    commandLine("cargo", "run", "--release",
+    commandLine(cargoExecutable, "run", "--release",
         "-p", "connected-ffi",
         "--bin", "uniffi-bindgen",
         "--",
