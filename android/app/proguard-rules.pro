@@ -47,7 +47,7 @@
 
 # Keep classes that are accessed via reflection for permissions
 -keepclassmembers class * {
-    @android.annotation.RequiresPermission *;
+    @androidx.annotation.RequiresPermission *;
 }
 
 # Keep ComponentName for NotificationListenerService registration check
