@@ -1078,7 +1078,11 @@ fn spawn_event_loop(
                                 add_notification("Phone", user_msg, "");
                             } else {
                                 let err_text = error.unwrap_or_else(|| "Unknown error".to_string());
-                                add_notification("Phone", &format!("Send failed: {}", err_text), "");
+                                add_notification(
+                                    "Phone",
+                                    &format!("Send failed: {}", err_text),
+                                    "",
+                                );
                             }
                         }
                         TelephonyMessage::CallLogResponse { entries } => {
