@@ -335,10 +335,6 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x android/gradlew
 
-      - name: Replace package name for dev build
-        run: |
-          find android -type f \( -name "*.kt" -o -name "*.kts" -o -name "*.xml" -o -name "*.java" -o -name "*.pro" \) -exec sed -i 's/com\.connected\.app\.sync/com.connected.app.sync.dev/g' {} +
-
       - name: Build with Gradle
         working-directory: android
         run: ./gradlew assembleDebug
