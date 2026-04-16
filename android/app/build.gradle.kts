@@ -87,6 +87,12 @@ configure<ApplicationExtension> {
         }
     }
     buildTypes {
+        getByName("debug") {
+            // Allow debug/dev install side-by-side with production app.
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+        }
+
         release {
             isMinifyEnabled = true
             // Use release signing if credentials are found in .env or environment
@@ -103,9 +109,6 @@ configure<ApplicationExtension> {
                 "proguard-rules.pro"
             )
         }
-
-        // Optional: Uncomment the line below to use release signing for debug builds too
-        // getByName("debug") { signingConfig = signingConfigs.getByName("release") }
     }
 
     compileOptions {
@@ -241,10 +244,10 @@ tasks.register<Exec>("generateBindingsRelease") {
 }
 
 afterEvaluate {
-    tasks.named("preDebugBuild").configure {
+    tasks.matching { it.name == "preDebugBuild" }.configureEach {
         dependsOn("generateBindings")
     }
-    tasks.named("preReleaseBuild").configure {
+    tasks.matching { it.name == "preReleaseBuild" }.configureEach {
         dependsOn("generateBindingsRelease")
     }
 }
