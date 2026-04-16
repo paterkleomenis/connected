@@ -1515,27 +1515,6 @@ fun SettingsScreen(
                         }
                     }
 
-                    if (connectedApp.isTelephonyEnabled.value && !isNotificationAccessGranted) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            "RCS preview requires Notification Access (Google Messages).",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                openNotificationListenerSettings(context)
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Enable Notification Access")
-                        }
-                    }
                 }
             }
         }
@@ -1604,7 +1583,7 @@ fun SettingsScreen(
         }
 
         // Troubleshooting Section
-        if (!isNotificationAccessGranted) {
+        if (connectedApp.isMediaControlEnabled.value && !isNotificationAccessGranted) {
             item {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),

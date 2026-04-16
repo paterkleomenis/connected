@@ -4,7 +4,7 @@ use crate::error::{ConnectedError, Result};
 use crate::events::{ConnectedEvent, TransferDirection};
 use crate::file_transfer::{FileTransfer, TransferProgress};
 use crate::security::KeyStore;
-use crate::transport::{Message, QuicTransport, UnpairReason};
+use crate::transport::{MAX_MESSAGE_SIZE, Message, QuicTransport, UnpairReason};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -1182,7 +1182,7 @@ impl ConnectedClient {
                 let mut len_buf = [0u8; 4];
                 recv.read_exact(&mut len_buf).await?;
                 let msg_len = u32::from_be_bytes(len_buf) as usize;
-                if msg_len > 64 * 1024 {
+                if msg_len > MAX_MESSAGE_SIZE {
                     return Err(ConnectedError::Protocol("Message too large".to_string()));
                 }
                 let mut data = vec![0u8; msg_len];

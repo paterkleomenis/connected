@@ -25,7 +25,7 @@ use controller::{AppAction, app_controller};
 use dioxus::prelude::*;
 
 use state::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::debug;
 use utils::{get_hostname, get_system_clipboard};
@@ -148,6 +148,115 @@ mod tray {
 
 use image::ImageReader;
 use std::io::Cursor;
+
+#[derive(Clone, Debug, PartialEq)]
+struct MmsInlineImage {
+    data_url: String,
+    base64_data: String,
+    content_type: String,
+    filename: Option<String>,
+}
+
+fn attachment_preview_image(
+    attachments: &[connected_core::telephony::MmsAttachment],
+) -> Option<MmsInlineImage> {
+    attachments.iter().find_map(|attachment| {
+        if !attachment.content_type.starts_with("image/") {
+            return None;
+        }
+
+        let data = attachment.data.as_ref()?;
+        if data.is_empty() {
+            return None;
+        }
+
+        Some(MmsInlineImage {
+            data_url: format!("data:{};base64,{}", attachment.content_type, data),
+            base64_data: data.clone(),
+            content_type: attachment.content_type.clone(),
+            filename: attachment.filename.clone(),
+        })
+    })
+}
+
+fn suggested_mms_image_filename(image: &MmsInlineImage) -> String {
+    let fallback_extension = mime_guess::get_mime_extensions_str(&image.content_type)
+        .and_then(|extensions| extensions.first().copied())
+        .unwrap_or("jpg");
+
+    if let Some(raw_name) = image.filename.as_deref() {
+        let trimmed = raw_name.trim();
+        if !trimmed.is_empty() {
+            let leaf_name = Path::new(trimmed)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(trimmed);
+            let safe_name = connected_core::file_transfer::sanitize_filename(leaf_name);
+            if !safe_name.is_empty() && safe_name != "unnamed" {
+                if Path::new(&safe_name).extension().is_some() {
+                    return safe_name;
+                }
+                return format!("{safe_name}.{fallback_extension}");
+            }
+        }
+    }
+
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("mms-image-{suffix}.{fallback_extension}")
+}
+
+fn save_mms_image_to_downloads(
+    image: &MmsInlineImage,
+    configured_download_directory: &str,
+) -> Result<PathBuf, String> {
+    use base64::Engine as _;
+
+    let image_bytes = base64::engine::general_purpose::STANDARD
+        .decode(image.base64_data.as_bytes())
+        .map_err(|err| format!("Invalid image payload: {err}"))?;
+
+    let target_dir = if configured_download_directory.trim().is_empty() {
+        dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
+    } else {
+        PathBuf::from(configured_download_directory)
+    };
+
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|err| format!("Could not prepare download directory: {err}"))?;
+
+    let preferred_name = suggested_mms_image_filename(image);
+    let preferred_path = Path::new(&preferred_name);
+    let stem = preferred_path
+        .file_stem()
+        .and_then(|part| part.to_str())
+        .unwrap_or("mms-image")
+        .to_string();
+    let extension = preferred_path
+        .extension()
+        .and_then(|part| part.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    let mut candidate = target_dir.join(&preferred_name);
+    let mut counter = 1u32;
+    while candidate.exists() {
+        let suffix = if extension.is_empty() {
+            String::new()
+        } else {
+            format!(".{extension}")
+        };
+        candidate = target_dir.join(format!("{stem}-{counter}{suffix}"));
+        counter += 1;
+    }
+
+    std::fs::write(&candidate, image_bytes)
+        .map_err(|err| format!("Could not write image file: {err}"))?;
+
+    Ok(candidate)
+}
 
 fn load_icon() -> Option<dioxus::desktop::tao::window::Icon> {
     let icon_bytes = include_bytes!("../assets/logo.png");
@@ -703,6 +812,7 @@ fn App() -> Element {
     let mut auto_sync_contacts = use_signal(get_auto_sync_contacts);
     let mut notifications_enabled = use_signal(get_notifications_enabled_setting);
     let mut theme_mode = use_signal(get_theme_mode_setting);
+    let mut open_mms_image = use_signal(|| None::<MmsInlineImage>);
     let mut download_directory = use_signal(|| {
         get_download_directory_setting().unwrap_or_else(|| {
             dirs::download_dir()
@@ -1963,6 +2073,7 @@ fn App() -> Element {
                                                                                 let is_outgoing = msg.is_outgoing;
                                                                                 let body = msg.body.clone();
                                                                                 let time_str = format_timestamp(msg.timestamp);
+                                                                                let preview_image = attachment_preview_image(&msg.attachments);
                                                                                 let status_icon = match msg.status {
                                                                                     connected_core::telephony::SmsStatus::Pending => Some(IconType::Searching),
                                                                                     connected_core::telephony::SmsStatus::Sent => Some(IconType::Check),
@@ -1973,7 +2084,25 @@ fn App() -> Element {
                                                                                 rsx! {
                                                                                     div {
                                                                                         class: if is_outgoing { "message-bubble outgoing" } else { "message-bubble incoming" },
-                                                                                        div { class: "message-body", "{body}" }
+                                                                                        if !body.is_empty() {
+                                                                                            div { class: "message-body", "{body}" }
+                                                                                        }
+                                                                                        if let Some(image) = preview_image {
+                                                                                            div {
+                                                                                                class: "message-image-wrap",
+                                                                                                img {
+                                                                                                    class: "message-image",
+                                                                                                    src: "{image.data_url}",
+                                                                                                    alt: "MMS image attachment",
+                                                                                                    onclick: {
+                                                                                                        let image = image.clone();
+                                                                                                        move |_| {
+                                                                                                            open_mms_image.set(Some(image.clone()));
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            }
+                                                                                        }
                                                                                         div {
                                                                                             class: "message-meta",
                                                                                             span { class: "message-time", "{time_str}" }
@@ -2695,6 +2824,64 @@ fn App() -> Element {
                                 class: "notification-content",
                                 span { class: "notification-title", "{notification.title}" }
                                 span { class: "notification-message", "{notification.message}" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // MMS Image Viewer Modal
+            if let Some(image) = open_mms_image.read().clone() {
+                div {
+                    class: "modal-overlay mms-image-modal-overlay",
+                    onclick: move |_| open_mms_image.set(None),
+
+                    div {
+                        class: "modal-content mms-image-modal-content",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "mms-image-modal-body",
+                            img {
+                                class: "mms-image-modal-full",
+                                src: "{image.data_url}",
+                                alt: "MMS image preview"
+                            }
+                        }
+
+                        div {
+                            class: "modal-actions mms-image-modal-actions",
+                            button {
+                                class: "primary-button",
+                                onclick: {
+                                    let image = image.clone();
+                                    let configured_dir = download_directory.read().clone();
+                                    move |_| {
+                                        match save_mms_image_to_downloads(&image, &configured_dir) {
+                                            Ok(path) => {
+                                                add_notification(
+                                                    "Phone",
+                                                    &format!("Downloaded image to {}", path.display()),
+                                                    "",
+                                                );
+                                            }
+                                            Err(err) => {
+                                                add_notification(
+                                                    "Download Failed",
+                                                    &err,
+                                                    "",
+                                                );
+                                            }
+                                        }
+                                    }
+                                },
+                                Icon { icon: IconType::Download, size: 14, color: "currentColor".to_string() }
+                                span { "Download" }
+                            }
+                            button {
+                                class: "secondary-button",
+                                onclick: move |_| open_mms_image.set(None),
+                                "Close"
                             }
                         }
                     }

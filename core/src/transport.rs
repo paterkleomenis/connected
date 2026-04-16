@@ -21,10 +21,9 @@ use tracing::{debug, error, info, warn};
 const ALPN_PROTOCOL: &[u8] = b"connected/1";
 const PING_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-// 4 MB — telephony messages (contacts with photos, conversations, call logs)
-// routinely exceed 64 KB. The previous 64 KB limit caused silent drops of
-// valid telephony data. QUIC flow-control still bounds memory usage per stream.
-const MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
+// Allows large RCS/MMS payloads (photos/videos) to pass through the telephony
+// channel without being dropped by the transport size gate.
+pub const MAX_MESSAGE_SIZE: usize = 105 * 1024 * 1024;
 
 /// M7: Maximum concurrent connections allowed from a single IP address.
 const MAX_CONNECTIONS_PER_IP: usize = 10;

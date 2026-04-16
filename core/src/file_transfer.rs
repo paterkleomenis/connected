@@ -922,7 +922,7 @@ pub(crate) async fn recv_message_with_limit<T: for<'de> Deserialize<'de>>(
     Ok(message)
 }
 
-fn sanitize_filename(filename: &str) -> String {
+pub fn sanitize_filename(filename: &str) -> String {
     let name = Path::new(filename)
         .file_name()
         .and_then(|n| n.to_str())

@@ -2558,6 +2558,55 @@ input:focus + .slider {
     margin-bottom: var(--space-1);
 }
 
+.message-image-wrap {
+    margin-bottom: var(--space-1);
+}
+
+.message-image {
+    display: block;
+    width: 100%;
+    max-width: min(300px, 70vw);
+    max-height: 320px;
+    border-radius: var(--radius-lg);
+    object-fit: cover;
+    background: var(--bg-secondary);
+    cursor: zoom-in;
+}
+
+.mms-image-modal-overlay {
+    z-index: 2200;
+}
+
+.mms-image-modal-content {
+    width: min(92vw, 960px);
+    max-width: min(92vw, 960px);
+    max-height: min(90vh, 900px);
+    display: flex;
+    flex-direction: column;
+}
+
+.mms-image-modal-body {
+    padding: var(--space-5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 260px;
+}
+
+.mms-image-modal-full {
+    max-width: 100%;
+    max-height: min(72vh, 760px);
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: var(--radius-lg);
+    background: var(--bg-secondary);
+}
+
+.mms-image-modal-actions {
+    border-top: 1px solid var(--border);
+}
+
 .message-meta {
     display: flex;
     justify-content: flex-end;

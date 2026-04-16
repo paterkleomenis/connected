@@ -38,7 +38,6 @@ import uniffi.connected_ffi.MediaCommand
 import uniffi.connected_ffi.MediaControlCallback
 import uniffi.connected_ffi.MediaState
 import uniffi.connected_ffi.PairingCallback
-import uniffi.connected_ffi.SmsStatus
 import uniffi.connected_ffi.TelephonyCallback
 import uniffi.connected_ffi.UnpairCallback
 import uniffi.connected_ffi.UpdateInfo
@@ -2047,36 +2046,6 @@ class ConnectedApp(private val context: Context) {
                         notifyNewSms(device.ip, device.port, message)
                     } catch (_: Exception) {
                     }
-                }
-            }
-        }
-    }
-
-    fun relayRcsNotification(title: String, body: String, timestampMs: Long) {
-        if (!isTelephonyEnabled.value) {
-            return
-        }
-        val threadId = "rcs:${title.trim()}"
-        val messageId = "rcs:${timestampMs}:${body.hashCode()}"
-        val msg = FfiSmsMessage(
-            id = messageId,
-            threadId = threadId,
-            address = title,
-            contactName = title,
-            body = body,
-            timestamp = timestampMs.toULong(),
-            isOutgoing = false,
-            isRead = false,
-            status = SmsStatus.RECEIVED,
-            attachments = emptyList()
-        )
-
-        // Broadcast to connected devices if trusted
-        devices.forEach { device ->
-            if (isDeviceTrusted(device)) {
-                try {
-                    notifyNewSms(device.ip, device.port, msg)
-                } catch (_: Exception) {
                 }
             }
         }
