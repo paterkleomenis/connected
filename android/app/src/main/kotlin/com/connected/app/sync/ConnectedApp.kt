@@ -79,6 +79,7 @@ import uniffi.connected_ffi.sendTrustConfirmation
 import uniffi.connected_ffi.setPairingMode
 import uniffi.connected_ffi.shutdown
 import uniffi.connected_ffi.refreshDiscovery
+import uniffi.connected_ffi.renameLocalDevice
 import uniffi.connected_ffi.startDiscovery
 import uniffi.connected_ffi.trustDevice
 import uniffi.connected_ffi.unpairDeviceById
@@ -433,9 +434,22 @@ class ConnectedApp(private val context: Context) {
     fun renameDevice(newName: String) {
         val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
         prefs.edit { putString(_prefDeviceName, newName) }
-        cleanup()
-        initialize()
-        android.widget.Toast.makeText(context, "Device renamed to $newName", android.widget.Toast.LENGTH_SHORT).show()
+
+        try {
+            renameLocalDevice(newName)
+            android.widget.Toast.makeText(
+                context,
+                "Device renamed to $newName",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        } catch (e: Exception) {
+            Log.e("ConnectedApp", "Failed to apply runtime device rename", e)
+            android.widget.Toast.makeText(
+                context,
+                "Device renamed locally. Restart app if other devices still show the old name.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     // Renamed wrappers to avoid conflict with imported FFI functions

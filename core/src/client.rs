@@ -52,6 +52,7 @@ const MAX_CONCURRENT_FS_STREAMS: usize = 16;
 
 pub struct ConnectedClient {
     local_device: Device,
+    local_name: Arc<RwLock<String>>,
     discovery: Arc<DiscoveryService>,
     transport: Arc<QuicTransport>,
     event_tx: broadcast::Sender<ConnectedEvent>,
@@ -225,6 +226,7 @@ impl ConnectedClient {
 
         // 2. Initialize Device Info
         let local_device = Device::new(device_id, device_name, local_ip, actual_port, device_type);
+        let local_name = Arc::new(RwLock::new(local_device.name.clone()));
 
         // 3. Initialize Discovery (mDNS)
         let discovery = DiscoveryService::new(local_device.clone()).map_err(|e| {
@@ -237,6 +239,7 @@ impl ConnectedClient {
 
         let client = Arc::new(Self {
             local_device,
+            local_name,
             discovery: Arc::new(discovery),
             transport: Arc::new(transport),
             event_tx,
@@ -270,8 +273,10 @@ impl ConnectedClient {
         self.event_tx.subscribe()
     }
 
-    pub fn local_device(&self) -> &Device {
-        &self.local_device
+    pub fn local_device(&self) -> Device {
+        let mut device = self.local_device.clone();
+        device.name = self.local_name.read().clone();
+        device
     }
 
     pub fn get_discovered_devices(&self) -> Vec<Device> {
@@ -285,6 +290,30 @@ impl ConnectedClient {
     /// Lightweight discovery refresh: clears the stale device list and
     /// re-announces ourselves on mDNS so that nearby peers re-discover us
     /// (and the running browse loop re-discovers them).
+    pub fn rename_local_device(&self, new_name: String) -> Result<()> {
+        let trimmed_name = new_name.trim();
+        if trimmed_name.is_empty() {
+            return Err(ConnectedError::InitializationError(
+                "Device name cannot be empty".to_string(),
+            ));
+        }
+
+        let updated_name = trimmed_name.to_string();
+        let current_name = self.local_name.read().clone();
+        if current_name == updated_name {
+            return Ok(());
+        }
+
+        *self.local_name.write() = updated_name.clone();
+        self.discovery.update_local_name(updated_name.clone())?;
+
+        info!(
+            "Updated local device name from '{}' to '{}'",
+            current_name, updated_name
+        );
+        Ok(())
+    }
+
     /// Update the directory where incoming file transfers are saved.
     pub fn set_download_dir(&self, path: PathBuf) -> Result<()> {
         if !path.exists() {
@@ -303,6 +332,7 @@ impl ConnectedClient {
     pub fn refresh_discovery(&self) {
         info!("Refreshing discovery — clearing stale devices and re-announcing");
         self.discovery.clear_discovered_devices();
+
         if let Err(e) = self.discovery.announce() {
             warn!("Failed to re-announce during discovery refresh: {}", e);
         }
@@ -1155,7 +1185,7 @@ impl ConnectedClient {
 
         let msg = Message::Handshake {
             device_id: self.local_device.id.clone(),
-            device_name: self.local_device.name.clone(),
+            device_name: self.local_name.read().clone(),
             listening_port: self.local_device.port,
         };
 
@@ -1407,7 +1437,7 @@ impl ConnectedClient {
 
         let msg = Message::HandshakeAck {
             device_id: self.local_device.id.clone(),
-            device_name: self.local_device.name.clone(),
+            device_name: self.local_name.read().clone(),
         };
 
         let data = serde_json::to_vec(&msg)
@@ -2237,7 +2267,7 @@ impl ConnectedClient {
         let event_tx = self.event_tx.clone();
         let key_store_control = self.key_store.clone();
         let local_id = self.local_device.id.clone();
-        let local_name = self.local_device.name.clone();
+        let local_name = self.local_name.clone();
         let pending_handshakes = self.pending_handshakes.clone();
         let discovery = self.discovery.clone();
         let transport = self.transport.clone();
@@ -2253,14 +2283,14 @@ impl ConnectedClient {
                         listening_port,
                     } => {
                         let mut send_stream = send_stream;
-                        let (resolved_name, resolved_type) = discovery
+                        let resolved_type = discovery
                             .get_device_by_id(&device_id)
-                            .map(|d| (d.name, d.device_type))
-                            .unwrap_or_else(|| (device_name.clone(), DeviceType::Unknown));
+                            .map(|d| d.device_type)
+                            .unwrap_or(DeviceType::Unknown);
 
                         let device = Device::new(
                             device_id.clone(),
-                            resolved_name,
+                            device_name.clone(),
                             addr.ip(),
                             listening_port,
                             resolved_type,
@@ -2375,7 +2405,7 @@ impl ConnectedClient {
                             if let Some(mut send) = send_stream.take() {
                                 let msg = Message::HandshakeAck {
                                     device_id: local_id.clone(),
-                                    device_name: local_name.clone(),
+                                    device_name: local_name.read().clone(),
                                 };
                                 if let Ok(data) = serde_json::to_vec(&msg) {
                                     let len_bytes = (data.len() as u32).to_be_bytes();
@@ -2441,6 +2471,8 @@ impl ConnectedClient {
                                 resolved_port,
                                 resolved_type,
                             );
+                            let _ = discovery
+                                .upsert_device_endpoint(device.clone(), DiscoverySource::Connected);
                             let _ = event_tx.send(ConnectedEvent::DeviceFound(device));
 
                             // ALSO emit PairingRequest even if trusted.
@@ -2462,7 +2494,7 @@ impl ConnectedClient {
                             if let Some(mut send) = send_stream.take() {
                                 let msg = Message::HandshakeAck {
                                     device_id: local_id.clone(),
-                                    device_name: local_name.clone(),
+                                    device_name: local_name.read().clone(),
                                 };
                                 if let Ok(data) = serde_json::to_vec(&msg) {
                                     let len_bytes = (data.len() as u32).to_be_bytes();

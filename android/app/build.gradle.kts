@@ -65,21 +65,35 @@ configure<ApplicationExtension> {
         }
     }
 
-    signingConfigs {
-        create("release") {
-            val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH") ?: "release.keystore"
-            storeFile = file(keystorePath)
-            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-            keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
-        }
+    // Load properties from .env file for Android Studio compatibility
+    val envFile = project.rootProject.file(".env")
+    val env = Properties()
+    if (envFile.exists()) {
+        envFile.inputStream().use { env.load(it) }
     }
 
+    signingConfigs {
+        create("release") {
+            val keystorePath = env.getProperty("ANDROID_KEYSTORE_PATH")
+                ?: System.getenv("ANDROID_KEYSTORE_PATH")
+                ?: "release.keystore"
+            storeFile = file(keystorePath)
+            storePassword = env.getProperty("ANDROID_KEYSTORE_PASSWORD")
+                ?: System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = env.getProperty("ANDROID_KEY_ALIAS")
+                ?: System.getenv("ANDROID_KEY_ALIAS")
+            keyPassword = env.getProperty("ANDROID_KEY_PASSWORD")
+                ?: System.getenv("ANDROID_KEY_PASSWORD")
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = true
-            // Only use release signing config if keystore env vars are set
-            signingConfig = if (System.getenv("ANDROID_KEYSTORE_PASSWORD") != null) {
+            // Use release signing if credentials are found in .env or environment
+            val hasSigning = env.getProperty("ANDROID_KEYSTORE_PASSWORD") != null
+                || System.getenv("ANDROID_KEYSTORE_PASSWORD") != null
+
+            signingConfig = if (hasSigning) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")
@@ -89,6 +103,9 @@ configure<ApplicationExtension> {
                 "proguard-rules.pro"
             )
         }
+
+        // Optional: Uncomment the line below to use release signing for debug builds too
+        // getByName("debug") { signingConfig = signingConfigs.getByName("release") }
     }
 
     compileOptions {

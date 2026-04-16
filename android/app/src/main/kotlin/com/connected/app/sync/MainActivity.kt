@@ -1172,8 +1172,9 @@ fun SettingsScreen(
             },
             confirmButton = {
                 Button(onClick = {
-                    if (newName.isNotBlank()) {
-                        connectedApp.renameDevice(newName)
+                    val trimmedName = newName.trim()
+                    if (trimmedName.isNotBlank()) {
+                        connectedApp.renameDevice(trimmedName)
                         @Suppress("AssignedValueIsNeverRead")
                         showRenameDialog = false
                     }
