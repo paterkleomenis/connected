@@ -1274,7 +1274,9 @@ mod tests {
             .connected
             .as_ref()
             .expect("connected endpoint should still exist");
-        let active = tracked.active_device().expect("active endpoint should exist");
+        let active = tracked
+            .active_device()
+            .expect("active endpoint should exist");
 
         assert_eq!(connected.device.name, "Office Workstation");
         assert_eq!(active.name, "Office Workstation");

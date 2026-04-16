@@ -1173,6 +1173,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 let name = get_device_name_setting().unwrap_or_else(get_hostname);
                 client = start_core(name).await;
                 if let Some(c) = &client {
+                    if let Some(handle) = clipboard_monitor.take() {
+                        handle.abort();
+                    }
                     clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
                 }
                 // Apply saved download directory to core
@@ -2058,7 +2061,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
             AppAction::RefreshDiscovery => {
-                info!("Refreshed discovery due to adapter state change - performing lightweight refresh");
+                info!(
+                    "Refreshed discovery due to adapter state change - performing lightweight refresh"
+                );
                 if let Some(c) = &client {
                     stop_proximity();
                     start_proximity(c.clone());
@@ -2323,5 +2328,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
         }
+    }
+
+    if let Some(handle) = clipboard_monitor {
+        handle.abort();
     }
 }
