@@ -71,7 +71,7 @@ audit:
 # Pre-commit check
 [doc("Pre-commit checks")]
 pre-commit:
-    pre-commit run --all-files --show-diff-on-failure
+    python -m pre_commit run --all-files --show-diff-on-failure
     @echo "✅ Pre-commit checks passed"
 
 # Full CI simulation (matches GitHub Actions CI)
@@ -131,14 +131,14 @@ build-macos:
 # Install pre-commit hooks
 [doc("Install pre-commit hooks")]
 install-hooks:
-    pre-commit install
-    pre-commit install --hook-type commit-msg
+    python -m pre_commit install
+    python -m pre_commit install --hook-type commit-msg
     @echo "✅ Hooks installed"
 
 # Run pre-commit on all files
 [doc("Run hooks on all files")]
 run-hooks:
-    pre-commit run --all-files
+    python -m pre_commit run --all-files
 
 # Watch for changes and run checks
 [doc("Watch for changes and run checks")]

@@ -1194,6 +1194,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 let name = get_device_name_setting().unwrap_or_else(get_hostname);
                 client = start_core(name).await;
                 if let Some(c) = &client {
+                    if let Some(handle) = clipboard_monitor.take() {
+                        handle.abort();
+                    }
                     clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
                 }
                 // Apply saved download directory to core
@@ -1208,17 +1211,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
             AppAction::RenameDevice { new_name } => {
-                if let Some(task) = clipboard_monitor.take() {
-                    task.abort();
-                }
-                if let Some(c) = client.take() {
-                    stop_proximity();
-                    c.shutdown().await;
-                }
                 set_device_name_setting(new_name.clone());
-                client = start_core(new_name).await;
-                if let Some(c) = &client {
-                    clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
+                if let Some(c) = &client
+                    && let Err(e) = c.rename_local_device(new_name)
+                {
+                    error!("Failed to rename local device: {}", e);
                 }
             }
             AppAction::SendFile { ip, port, path } => {
@@ -2085,22 +2082,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
             AppAction::RefreshDiscovery => {
-                info!("Refreshed discovery due to adapter state change - Restarting Core");
-                if let Some(task) = clipboard_monitor.take() {
-                    task.abort();
-                }
-                if let Some(c) = client.take() {
+                info!(
+                    "Refreshed discovery due to adapter state change - performing lightweight refresh"
+                );
+                if let Some(c) = &client {
                     stop_proximity();
-                    c.shutdown().await;
-                }
+                    start_proximity(c.clone());
+                    c.refresh_discovery();
 
-                let name = get_device_name_setting().unwrap_or_else(get_hostname);
-                client = start_core(name).await;
-                if let Some(c) = &client {
-                    clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
-                }
-
-                if let Some(c) = &client {
                     let saved = get_saved_devices_setting();
                     for (device_id, info) in saved {
                         if info.ip == "0.0.0.0" {
@@ -2360,5 +2349,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
         }
+    }
+
+    if let Some(handle) = clipboard_monitor {
+        handle.abort();
     }
 }

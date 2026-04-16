@@ -1131,6 +1131,7 @@ fun SettingsScreen(
 
     var showRenameDialog by remember { mutableStateOf(false) }
     var showTelephonyDisclosureDialog by remember { mutableStateOf(false) }
+    var deviceName by remember { mutableStateOf(connectedApp.getDeviceName()) }
 
     if (showTelephonyDisclosureDialog) {
         AlertDialog(
@@ -1162,7 +1163,7 @@ fun SettingsScreen(
     }
 
     if (showRenameDialog) {
-        var newName by remember { mutableStateOf(connectedApp.getDeviceName()) }
+        var newName by remember { mutableStateOf(deviceName) }
         AlertDialog(
             onDismissRequest = {
                 @Suppress("AssignedValueIsNeverRead")
@@ -1182,8 +1183,10 @@ fun SettingsScreen(
             },
             confirmButton = {
                 Button(onClick = {
-                    if (newName.isNotBlank()) {
-                        connectedApp.renameDevice(newName)
+                    val trimmedName = newName.trim()
+                    if (trimmedName.isNotBlank()) {
+                        connectedApp.renameDevice(trimmedName)
+                        deviceName = trimmedName
                         @Suppress("AssignedValueIsNeverRead")
                         showRenameDialog = false
                     }
@@ -1234,7 +1237,7 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            connectedApp.getDeviceName(),
+                            deviceName,
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.padding(start = 4.dp)
                         )

@@ -61,10 +61,11 @@ impl TrackedDevice {
 pub struct DiscoveryService {
     daemon: ServiceDaemon,
     local_device: Device,
+    local_name: Arc<RwLock<String>>,
     discovered_devices: Arc<RwLock<HashMap<String, TrackedDevice>>>,
     running: Arc<AtomicBool>,
     announced: Arc<AtomicBool>,
-    service_fullname: String,
+    service_fullname: Arc<RwLock<String>>,
     thread_handles: RwLock<Vec<JoinHandle<()>>>,
 }
 
@@ -90,11 +91,12 @@ impl DiscoveryService {
 
         Ok(Self {
             daemon,
+            local_name: Arc::new(RwLock::new(local_device.name.clone())),
             local_device,
             discovered_devices: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(AtomicBool::new(false)),
             announced: Arc::new(AtomicBool::new(false)),
-            service_fullname,
+            service_fullname: Arc::new(RwLock::new(service_fullname)),
             thread_handles: RwLock::new(Vec::new()),
         })
     }
@@ -197,9 +199,19 @@ impl DiscoveryService {
     }
 
     fn create_instance_name(device: &Device) -> String {
+        Self::create_instance_name_with_name(device, &device.name)
+    }
+
+    fn create_instance_name_with_name(device: &Device, name: &str) -> String {
         // Use a format that's easy to parse: name--uuid (double dash as separator)
         // This avoids issues with single underscores in device names
-        format!("{}--{}", device.name.replace("--", "-"), device.id)
+        format!("{}--{}", name.replace("--", "-"), device.id)
+    }
+
+    fn local_device_snapshot(&self) -> Device {
+        let mut device = self.local_device.clone();
+        device.name = self.local_name.read().clone();
+        device
     }
 
     fn parse_instance_name(instance: &str) -> Option<(String, String)> {
@@ -215,23 +227,20 @@ impl DiscoveryService {
     }
 
     pub fn announce(&self) -> Result<()> {
-        let instance_name = Self::create_instance_name(&self.local_device);
+        let device = self.local_device_snapshot();
+        let instance_name = Self::create_instance_name(&device);
 
         // Properties for service discovery
         let mut properties = HashMap::new();
-        properties.insert("id".to_string(), self.local_device.id.clone());
-        properties.insert("name".to_string(), self.local_device.name.clone());
-        properties.insert(
-            "type".to_string(),
-            self.local_device.device_type.as_str().to_string(),
-        );
+        properties.insert("id".to_string(), device.id.clone());
+        properties.insert("name".to_string(), device.name.clone());
+        properties.insert("type".to_string(), device.device_type.as_str().to_string());
         properties.insert("version".to_string(), PROTOCOL_VERSION.to_string());
 
-        let ip: IpAddr = self
-            .local_device
+        let ip: IpAddr = device
             .ip
             .parse()
-            .map_err(|_| ConnectedError::InvalidAddress(self.local_device.ip.clone()))?;
+            .map_err(|_| ConnectedError::InvalidAddress(device.ip.clone()))?;
 
         if ip.is_unspecified() {
             warn!("Local IP unspecified; skipping mDNS announce");
@@ -239,11 +248,11 @@ impl DiscoveryService {
         }
 
         // Create the hostname - use a unique name for this device
-        let hostname = format!("{}.local.", self.local_device.id);
+        let hostname = format!("{}.local.", device.id);
 
         debug!(
             "Creating mDNS service: type={}, instance={}, hostname={}, ip={}, port={}",
-            SERVICE_TYPE, instance_name, hostname, ip, self.local_device.port
+            SERVICE_TYPE, instance_name, hostname, ip, device.port
         );
 
         let service_info = ServiceInfo::new(
@@ -251,7 +260,7 @@ impl DiscoveryService {
             &instance_name,
             &hostname,
             ip,
-            self.local_device.port,
+            device.port,
             properties.clone(),
         )?
         .enable_addr_auto();
@@ -260,15 +269,12 @@ impl DiscoveryService {
 
         // Register (will update if already registered)
         self.daemon.register(service_info)?;
+        *self.service_fullname.write() = format!("{}.{}", instance_name, SERVICE_TYPE);
         self.announced.store(true, Ordering::SeqCst);
 
         info!(
             "Announced device '{}' (id={}) on mDNS at {}:{} [service_type={}]",
-            self.local_device.name,
-            self.local_device.id,
-            self.local_device.ip,
-            self.local_device.port,
-            SERVICE_TYPE
+            device.name, device.id, device.ip, device.port, SERVICE_TYPE
         );
 
         Ok(())
@@ -322,6 +328,7 @@ impl DiscoveryService {
         // Periodic re-announcement thread for visibility
         let daemon = self.daemon.clone();
         let local_device = self.local_device.clone();
+        let local_name = self.local_name.clone();
         let running_announce = self.running.clone();
         let announced = self.announced.clone();
 
@@ -333,7 +340,9 @@ impl DiscoveryService {
 
                 while running_announce.load(Ordering::SeqCst) {
                     if announced.load(Ordering::SeqCst) {
-                        match Self::do_announce(&daemon, &local_device) {
+                        let mut device = local_device.clone();
+                        device.name = local_name.read().clone();
+                        match Self::do_announce(&daemon, &device) {
                             Err(e) => {
                                 debug!("Re-announcement failed: {}", e);
                             }
@@ -420,6 +429,28 @@ impl DiscoveryService {
         Ok(())
     }
 
+    pub fn update_local_name(&self, new_name: String) -> Result<()> {
+        let current_name = self.local_name.read().clone();
+        if current_name == new_name {
+            return Ok(());
+        }
+
+        let old_fullname = self.service_fullname.read().clone();
+        *self.local_name.write() = new_name;
+
+        if self.announced.load(Ordering::SeqCst) {
+            if let Err(e) = self.daemon.unregister(&old_fullname) {
+                debug!(
+                    "Failed to unregister previous mDNS service '{}': {}",
+                    old_fullname, e
+                );
+            }
+            self.announce()?;
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn upsert_device_endpoint(
         &self,
         device: Device,
@@ -493,12 +524,18 @@ impl DiscoveryService {
             DiscoverySource::Connected => {
                 tracked.connected = Some(endpoint);
 
-                // Keep discovered metadata in sync if it was previously unknown.
-                if device.device_type != DeviceType::Unknown
-                    && let Some(discovered) = tracked.discovered.as_mut()
-                    && discovered.device.device_type == DeviceType::Unknown
-                {
-                    discovered.device.device_type = device.device_type;
+                // Keep discovered metadata in sync so source failover does not
+                // regress visible device info.
+                if let Some(discovered) = tracked.discovered.as_mut() {
+                    if discovered.device.name != device.name {
+                        discovered.device.name = device.name.clone();
+                    }
+
+                    if device.device_type != DeviceType::Unknown
+                        && discovered.device.device_type == DeviceType::Unknown
+                    {
+                        discovered.device.device_type = device.device_type;
+                    }
                 }
             }
             DiscoverySource::Discovered => {
@@ -517,6 +554,10 @@ impl DiscoveryService {
                         existing.last_seen = Instant::now();
 
                         // Still accept better metadata from this signal.
+                        if existing.device.name != device.name {
+                            existing.device.name = device.name.clone();
+                        }
+
                         if existing.device.device_type == DeviceType::Unknown
                             && device.device_type != DeviceType::Unknown
                         {
@@ -529,12 +570,19 @@ impl DiscoveryService {
                     tracked.discovered = Some(endpoint);
                 }
 
-                // If an active connected endpoint has Unknown type, enrich it from discovery.
-                if device.device_type != DeviceType::Unknown
-                    && let Some(connected) = tracked.connected.as_mut()
-                    && connected.device.device_type == DeviceType::Unknown
-                {
-                    connected.device.device_type = device.device_type;
+                // Keep active connected metadata in sync with discovery.
+                // This allows peer renames to propagate immediately even while
+                // the connection stays up.
+                if let Some(connected) = tracked.connected.as_mut() {
+                    if connected.device.name != device.name {
+                        connected.device.name = device.name.clone();
+                    }
+
+                    if device.device_type != DeviceType::Unknown
+                        && connected.device.device_type == DeviceType::Unknown
+                    {
+                        connected.device.device_type = device.device_type;
+                    }
                 }
             }
         }
@@ -926,7 +974,8 @@ impl DiscoveryService {
         }
 
         // Unregister our service
-        if let Err(e) = self.daemon.unregister(&self.service_fullname) {
+        let service_fullname = self.service_fullname.read().clone();
+        if let Err(e) = self.daemon.unregister(&service_fullname) {
             debug!("Failed to unregister mDNS service: {}", e);
         }
 
@@ -1177,5 +1226,59 @@ mod tests {
 
         assert_eq!(discovered.device.ip, "172.16.1.4");
         assert_eq!(discovered.device.device_type, DeviceType::Android);
+    }
+
+    #[test]
+    fn updates_connected_name_from_discovery_metadata() {
+        use std::net::Ipv4Addr;
+
+        let mut devices = std::collections::HashMap::new();
+        let device_id = "dev-rename".to_string();
+
+        let connected_old = Device::new(
+            device_id.clone(),
+            "Office PC".to_string(),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 77)),
+            44444,
+            DeviceType::Windows,
+        );
+        DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            connected_old,
+            DiscoverySource::Connected,
+        );
+
+        let discovered_new = Device::new(
+            device_id.clone(),
+            "Office Workstation".to_string(),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 77)),
+            44444,
+            DeviceType::Windows,
+        );
+
+        let event = DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            discovered_new,
+            DiscoverySource::Discovered,
+        );
+
+        match event {
+            Some(DiscoveryEvent::DeviceFound(device)) => {
+                assert_eq!(device.name, "Office Workstation");
+            }
+            _ => panic!("expected DeviceFound event"),
+        }
+
+        let tracked = devices.get(&device_id).expect("device should exist");
+        let connected = tracked
+            .connected
+            .as_ref()
+            .expect("connected endpoint should still exist");
+        let active = tracked
+            .active_device()
+            .expect("active endpoint should exist");
+
+        assert_eq!(connected.device.name, "Office Workstation");
+        assert_eq!(active.name, "Office Workstation");
     }
 }
