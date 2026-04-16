@@ -1064,6 +1064,23 @@ fn spawn_event_loop(
                                 });
                             }
                         }
+                        TelephonyMessage::SmsSendResult {
+                            success,
+                            message_id,
+                            error,
+                        } => {
+                            if success {
+                                let user_msg = if message_id.as_deref() == Some("composer_opened") {
+                                    "Opened messaging app on phone. Tap Send there to deliver."
+                                } else {
+                                    "Message sent from phone."
+                                };
+                                add_notification("Phone", user_msg, "");
+                            } else {
+                                let err_text = error.unwrap_or_else(|| "Unknown error".to_string());
+                                add_notification("Phone", &format!("Send failed: {}", err_text), "");
+                            }
+                        }
                         TelephonyMessage::CallLogResponse { entries } => {
                             set_phone_call_log(entries);
                             mark_calls_synced();
@@ -2004,7 +2021,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     info!("SMS send request sent to {}:{}", ip, port);
                                     add_notification(
                                         "Phone",
-                                        &format!("Sending SMS to {}...", to),
+                                        &format!("Send request sent to phone for {}", to),
                                         "",
                                     );
                                 }
