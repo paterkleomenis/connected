@@ -1072,11 +1072,10 @@ fn App() -> Element {
                 } => {
                     // Use progress percentage for hash to detect changes
                     // Use tenths of a percent for smoother updates
-                    let percent_x10 = if *total_bytes > 0 {
-                        (*bytes_processed).saturating_mul(1000) / *total_bytes
-                    } else {
-                        0
-                    };
+                    let percent_x10 = (*bytes_processed)
+                        .saturating_mul(1000)
+                        .checked_div(*total_bytes)
+                        .unwrap_or(0);
                     10000 + percent_x10
                 }
                 TransferStatus::Starting { .. } => 1,
@@ -1114,7 +1113,7 @@ fn App() -> Element {
 
                 let reqs_map = get_file_transfer_requests().lock_or_recover();
                 let mut reqs: Vec<FileTransferRequest> = reqs_map.values().cloned().collect();
-                reqs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                reqs.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
                 file_transfer_requests.set(reqs);
             }
 
@@ -1610,11 +1609,7 @@ fn App() -> Element {
                                                 } else {
                                                     0.0
                                                 };
-                                                let eta_secs = if *speed_bytes_per_sec > 0 {
-                                                    (*total_bytes - *bytes_processed) / *speed_bytes_per_sec
-                                                } else {
-                                                    0
-                                                };
+                                                let eta_secs = (*total_bytes - *bytes_processed).checked_div(*speed_bytes_per_sec).unwrap_or(0);
                                                 let eta_str = if eta_secs >= 3600 {
                                                     format!("{}:{:02}:{:02}", eta_secs / 3600, (eta_secs % 3600) / 60, eta_secs % 60)
                                                 } else if eta_secs >= 60 {
