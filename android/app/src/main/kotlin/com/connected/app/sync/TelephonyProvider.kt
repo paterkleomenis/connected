@@ -7,7 +7,6 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.ComponentName
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -940,49 +939,6 @@ class TelephonyProvider(private val context: Context) {
     }
 
     fun sendSms(to: String, body: String): Result<String> {
-        val composerResult = openMessageComposer(to, body)
-        if (composerResult.isSuccess) {
-            return composerResult
-        }
-
-        return sendSmsDirect(to, body)
-    }
-
-    private fun openMessageComposer(to: String, body: String): Result<String> {
-        return try {
-            val intent = Intent(Intent.ACTION_SENDTO, "smsto:${Uri.encode(to)}".toUri()).apply {
-                putExtra("sms_body", body)
-                putExtra(Intent.EXTRA_TEXT, body)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-
-                val defaultSmsPackage = Telephony.Sms.getDefaultSmsPackage(context)
-                if (!defaultSmsPackage.isNullOrBlank()) {
-                    `package` = defaultSmsPackage
-                }
-            }
-
-            if (intent.resolveActivity(context.packageManager) == null) {
-                return Result.failure(IllegalStateException("No messaging app available"))
-            }
-
-            context.startActivity(intent)
-
-            val prefs = context.getSharedPreferences("ConnectedPrefs", Context.MODE_PRIVATE)
-            val autoSendEnabled = prefs.getBoolean("telephony_auto_send_accessibility", false)
-            if (autoSendEnabled && RcsAutoSendAccessibilityService.isServiceEnabled(context)) {
-                RcsAutoSendAccessibilityService.queueAutoSend(
-                    context = context,
-                    preferredPackage = intent.`package`
-                )
-            }
-
-            Result.success("composer_opened")
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    private fun sendSmsDirect(to: String, body: String): Result<String> {
         return try {
             if (!hasSmsPermission()) {
                 return Result.failure(SecurityException("SMS permission not granted"))

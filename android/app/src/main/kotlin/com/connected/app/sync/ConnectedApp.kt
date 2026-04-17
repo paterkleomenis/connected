@@ -226,7 +226,6 @@ class ConnectedApp(private val context: Context) {
     // Clipboard Sync State
     val isClipboardSyncEnabled = mutableStateOf(false)
     val isMediaControlEnabled = mutableStateOf(false)
-    val isRcsAutoSendEnabled = mutableStateOf(false)
     val themeMode = mutableStateOf(ThemeMode.SYSTEM)
     private var clipboardSyncJob: kotlinx.coroutines.Job? = null
 
@@ -267,7 +266,6 @@ class ConnectedApp(private val context: Context) {
     private val _prefRootUri = "root_uri"
     private val _prefMediaControl = "media_control"
     private val _prefTelephonyEnabled = "telephony_enabled"
-    private val _prefRcsAutoSendEnabled = "telephony_auto_send_accessibility"
     private val _prefDeviceName = "device_name"
     private val _prefDownloadDir = "download_directory"
     private val _prefThemeMode = "theme_mode"
@@ -1015,8 +1013,6 @@ class ConnectedApp(private val context: Context) {
                 telephonyProvider.registerReceivers()
                 registerTelephonyCallback(telephonyCallback)
             }
-
-            isRcsAutoSendEnabled.value = prefs.getBoolean(_prefRcsAutoSendEnabled, false)
 
             startProximityManager()
 
@@ -2131,24 +2127,16 @@ class ConnectedApp(private val context: Context) {
             val result = telephonyProvider.sendSms(to, body)
             val success = result.isSuccess
             val error = result.exceptionOrNull()?.message
-            val messageId = result.getOrNull()
             try {
-                sendSmsSendResult(fromIp, fromPort, success, messageId, error)
+                sendSmsSendResult(fromIp, fromPort, success, null, error)
             } catch (_: Exception) {
             }
         }
 
         override fun onSmsSendResult(success: Boolean, messageId: String?, error: String?) {
             runOnMainThread {
-                if (success) {
-                    val toastText = if (messageId == "composer_opened") {
-                        "Opened phone messaging app"
-                    } else {
-                        "SMS Sent"
-                    }
-                    android.widget.Toast.makeText(context, toastText, android.widget.Toast.LENGTH_SHORT)
-                        .show()
-                }
+                if (success) android.widget.Toast.makeText(context, "SMS Sent", android.widget.Toast.LENGTH_SHORT)
+                    .show()
                 else android.widget.Toast.makeText(context, "SMS Failed: $error", android.widget.Toast.LENGTH_LONG)
                     .show()
             }
@@ -2293,15 +2281,6 @@ class ConnectedApp(private val context: Context) {
             lastMediaSourceDevice = null
             lastBroadcastMediaState = null
         }
-    }
-
-    fun toggleRcsAutoSend(): Boolean {
-        val newState = !isRcsAutoSendEnabled.value
-        isRcsAutoSendEnabled.value = newState
-        context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE).edit {
-            putBoolean(_prefRcsAutoSendEnabled, newState)
-        }
-        return newState
     }
 
     fun setThemeMode(mode: ThemeMode) {
