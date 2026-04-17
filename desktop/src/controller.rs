@@ -949,7 +949,7 @@ fn spawn_event_loop(
                                     convo.last_message = Some(latest.body.clone());
                                     convo.last_timestamp = latest.timestamp;
                                 }
-                                convos.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
+                                convos.sort_by_key(|b| std::cmp::Reverse(b.last_timestamp));
                             }
                             set_phone_messages(thread_id, messages);
                             // Silent load - no notification needed
@@ -1038,7 +1038,7 @@ fn spawn_event_loop(
                                     convos.push(new_convo);
                                 }
                                 // Sort by timestamp descending
-                                convos.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
+                                convos.sort_by_key(|b| std::cmp::Reverse(b.last_timestamp));
                             }
 
                             *get_phone_data_update().lock_or_recover() = std::time::Instant::now();
