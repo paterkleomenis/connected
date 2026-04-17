@@ -1049,6 +1049,7 @@ fun SettingsScreen(
     var hasTelephonyPermissions by remember { mutableStateOf(false) }
     var permissionsRequested by remember { mutableStateOf(false) }
     var pendingFullAccess by remember { mutableStateOf(false) }
+    var isRcsAutoSendServiceEnabled by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -1068,6 +1069,8 @@ fun SettingsScreen(
                         connectedApp.telephonyProvider.hasCallLogPermission() &&
                         connectedApp.telephonyProvider.hasPhonePermission() &&
                         connectedApp.telephonyProvider.hasAnswerPhoneCallsPermission()
+
+                isRcsAutoSendServiceEnabled = RcsAutoSendAccessibilityService.isServiceEnabled(context)
 
                 // Check pending full access
                 if (pendingFullAccess && connectedApp.isFullAccessGranted()) {
@@ -1104,6 +1107,13 @@ fun SettingsScreen(
     fun openAppPermissionSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
             data = Uri.fromParts("package", context.packageName, null)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    }
+
+    fun openAccessibilitySettings() {
+        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
@@ -1516,6 +1526,60 @@ fun SettingsScreen(
                         ) {
                             Text(if (shouldOpenSettings()) "Open App Settings" else "Grant Permissions")
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Auto-Send (Experimental)",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                "Uses Accessibility to tap Send in your messaging app after desktop opens composer.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = connectedApp.isRcsAutoSendEnabled.value,
+                            onCheckedChange = { connectedApp.toggleRcsAutoSend() }
+                        )
+                    }
+
+                    if (connectedApp.isRcsAutoSendEnabled.value && !isRcsAutoSendServiceEnabled) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            "Enable Connected Auto-Send service in Accessibility settings.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = { openAccessibilitySettings() },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        ) {
+                            Text("Open Accessibility Settings")
+                        }
+                    }
+
+                    if (connectedApp.isRcsAutoSendEnabled.value && isRcsAutoSendServiceEnabled) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Accessibility service is enabled.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
 
                 }

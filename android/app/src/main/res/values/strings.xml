@@ -12,4 +12,5 @@
     <string name="initializing">Initializing…</string>
     <string name="error_init_failed">Failed to initialize: %1$s</string>
     <string name="permission_required">Network permission required</string>
+    <string name="rcs_auto_send_accessibility_description">Allows Connected to tap Send automatically in your messaging app after desktop triggers compose.</string>
 </resources>
