@@ -158,9 +158,7 @@ fn is_arch_like() -> bool {
             .to_lowercase();
 
         match key {
-            "ID" | "id"
-                if value == "arch" || value == "archlinux" =>
-            {
+            "ID" | "id" if value == "arch" || value == "archlinux" => {
                 return true;
             }
             "ID_LIKE" | "id_like" => {
