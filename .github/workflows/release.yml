@@ -48,6 +48,10 @@ jobs:
   build-windows:
     name: Build Windows
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
     steps:
       - uses: actions/checkout@v6
 
@@ -81,16 +85,48 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
+          targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "windows-build"
+          shared-key: "windows-build-${{ matrix.target }}"
+
+      - name: Configure ARM64 Windows C toolchain
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (!(Test-Path $vswhere)) { throw "vswhere.exe not found" }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath
+          if (-not $vsPath) {
+            throw "Visual Studio LLVM component (clang-cl) is not installed on this runner"
+          }
+
+          $clangDir = Join-Path $vsPath "VC\Tools\Llvm\x64\bin"
+          $clang = Join-Path $clangDir "clang-cl.exe"
+          if (!(Test-Path $clang)) { throw "clang-cl.exe not found at $clang" }
+
+          $llvmLib = Join-Path $clangDir "llvm-lib.exe"
+          if (!(Test-Path $llvmLib)) { throw "llvm-lib.exe not found at $llvmLib" }
+
+          "$clangDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "CC_aarch64_pc_windows_msvc=$clang" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CXX_aarch64_pc_windows_msvc=$clang" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "AR_aarch64_pc_windows_msvc=$llvmLib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=link.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build Release
-        run: cargo build --release --verbose
+        shell: pwsh
+        run: |
+          if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc") {
+            cargo build --release --verbose
+          } else {
+            cargo build --target ${{ matrix.target }} --release --verbose
+          }
 
       - name: Verify built EXE version
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
@@ -103,6 +139,7 @@ jobs:
           }
 
       - name: Ensure WebView2Loader.dll present (MSI)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
           $dll = "target\\release\\WebView2Loader.dll"
@@ -116,6 +153,7 @@ jobs:
           Write-Host "WebView2Loader.dll ready at $dll"
 
       - name: Cache WiX
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: actions/cache@v5
         id: wix-cache
         with:
@@ -123,20 +161,32 @@ jobs:
           key: wix-${{ hashFiles('packaging/windows/installer.wxs') }}
 
       - name: Install WiX 5
-        if: steps.wix-cache.outputs.cache-hit != 'true'
+        if: matrix.target == 'x86_64-pc-windows-msvc' && steps.wix-cache.outputs.cache-hit != 'true'
         run: dotnet tool install --global wix --version 5.*
 
       - name: Create WiX Output Directory
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: mkdir target/wix -Force
 
       - name: Package MSI
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         run: wix build packaging/windows/installer.wxs -o target/wix/connected-desktop.msi
 
-      - name: Upload Windows Artifact
+      - name: Upload Windows x64 Artifact
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: actions/upload-artifact@v7
         with:
           path: target/wix/connected-desktop.msi
+          name: connected-desktop-windows-x64.msi
+          archive: false
+
+      - name: Upload Windows ARM64 Artifact
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/aarch64-pc-windows-msvc/release/connected-desktop.exe
+          name: connected-desktop-windows-arm64.exe
           archive: false
 
   # -------------------------------------------------------------------------
@@ -258,7 +308,8 @@ jobs:
           prerelease: false
           files: |
             connected-desktop
-            connected-desktop.msi
+            connected-desktop-windows-x64.msi
+            connected-desktop-windows-arm64.exe
             connected-android.apk
             connected-desktop.dmg
         env:
