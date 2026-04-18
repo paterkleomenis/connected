@@ -109,12 +109,12 @@ if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE:-}" ]] && [[ -n "${APPLE_DEVELOPER_ID
     security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN_PATH"
 
     # Find the Developer ID certificate
-    CERT_NAME=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application:" | head -1 | sed 's/.*"/"/' | sed 's/".*/"/')
+    CERT_NAME=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application:" | head -1 | awk -F'"' '{print $2}')
 
     if [[ -n "$CERT_NAME" ]]; then
         # Sign the app
         codesign --force --deep --sign "$CERT_NAME" --timestamp --options runtime "$BUILD_DIR/Connected.app"
-        echo "✅ Code signed with Developer ID: $CERT_NAME"
+        echo "✅ Code signed successfully"
     else
         echo "⚠️  Developer ID certificate not found, falling back to ad-hoc signing"
         codesign --force --deep --sign - "$BUILD_DIR/Connected.app"
