@@ -43,10 +43,10 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 2: Build Windows Desktop
+  # Job 2: Build Windows MSIX per architecture
   # -------------------------------------------------------------------------
   build-windows:
-    name: Build Windows
+    name: Build Windows MSIX
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -66,20 +66,6 @@ jobs:
           if ($cargo -ne $ver) {
             throw "Tag version ($ver) does not match Cargo.toml workspace version ($cargo)."
           }
-
-      - name: Verify installer.wxs matches Cargo version
-        shell: pwsh
-        run: |
-          $cargoMatch = (Get-Content Cargo.toml | Select-String -Pattern '^\s*version\s*=\s*"([^"]+)"' -AllMatches | Select-Object -Last 1)
-          if ($null -eq $cargoMatch) { throw "Could not find workspace version in Cargo.toml" }
-          $cargoVer = $cargoMatch.Matches[0].Groups[1].Value
-          $wxsMatch = (Get-Content packaging/windows/installer.wxs | Select-String -Pattern "^\s*Version=['`"`]([^'`"`]+)['`"`]")
-          if ($null -eq $wxsMatch) { throw "Could not find Version in installer.wxs" }
-          $wxsVer = $wxsMatch.Matches[0].Groups[1].Value
-          if ($wxsVer -ne $cargoVer) {
-            throw "installer.wxs Version ($wxsVer) does not match Cargo.toml workspace version ($cargoVer)."
-          }
-          Write-Host "✅ installer.wxs version ($wxsVer) matches Cargo.toml ($cargoVer)"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -125,82 +111,84 @@ jobs:
             cargo build --target ${{ matrix.target }} --release --verbose
           }
 
-      - name: Verify built EXE version
+      - name: Build Windows x64 MSIX
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}"
-          $ver = $tag.TrimStart("v")
-          $exe = "target\\release\\connected-desktop.exe"
-          if (!(Test-Path $exe)) { throw "Missing $exe" }
-          $fileVer = (Get-Item $exe).VersionInfo.FileVersion
-          if (-not $fileVer.StartsWith($ver)) {
-            throw "Built EXE FileVersion ($fileVer) does not match tag ($ver)."
-          }
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1 -Arch x64 -Profile release
 
-      - name: Ensure WebView2Loader.dll present (MSI)
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+      - name: Build Windows ARM64 MSIX
+        if: matrix.target == 'aarch64-pc-windows-msvc'
         shell: pwsh
-        run: |
-          $dll = "target\\release\\WebView2Loader.dll"
-          if (!(Test-Path $dll)) {
-            $src = Get-ChildItem -Path "target\\release\\build" -Recurse -Filter "WebView2Loader.dll" |
-              Where-Object { $_.FullName -match "\\\\out\\\\x64\\\\WebView2Loader\\.dll$" } |
-              Select-Object -First 1
-            if ($null -eq $src) { throw "WebView2Loader.dll not found under target\\release\\build\\**\\out\\x64\\WebView2Loader.dll" }
-            Copy-Item $src.FullName $dll -Force
-          }
-          Write-Host "WebView2Loader.dll ready at $dll"
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1 -Arch arm64 -Profile release
 
-      - name: Cache WiX
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        uses: actions/cache@v5
-        id: wix-cache
-        with:
-          path: ~/.dotnet/tools
-          key: wix-${{ hashFiles('packaging/windows/installer.wxs') }}
-
-      - name: Install WiX 5
-        if: matrix.target == 'x86_64-pc-windows-msvc' && steps.wix-cache.outputs.cache-hit != 'true'
-        run: dotnet tool install --global wix --version 5.*
-
-      - name: Create WiX Output Directory
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: pwsh
-        run: mkdir target/wix -Force
-
-      - name: Package MSI
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: wix build packaging/windows/installer.wxs -o target/wix/connected-desktop.msi
-
-      - name: Upload Windows x64 Artifact
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: pwsh
-        run: Copy-Item target/wix/connected-desktop.msi connected-desktop-windows-x64.msi -Force
-
-      - name: Upload Windows x64 Asset File
+      - name: Upload Windows x64 MSIX
         if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: actions/upload-artifact@v7
         with:
-          path: connected-desktop-windows-x64.msi
-          name: connected-desktop-windows-x64.msi
+          path: target/msix/x64/connected-desktop-windows-x64.msix
+          name: connected-desktop-windows-x64.msix
           archive: false
 
-      - name: Upload Windows ARM64 Artifact
-        if: matrix.target == 'aarch64-pc-windows-msvc'
-        shell: pwsh
-        run: Copy-Item target/aarch64-pc-windows-msvc/release/connected-desktop.exe connected-desktop-windows-arm64.exe -Force
-
-      - name: Upload Windows ARM64 Asset File
+      - name: Upload Windows ARM64 MSIX
         if: matrix.target == 'aarch64-pc-windows-msvc'
         uses: actions/upload-artifact@v7
         with:
-          path: connected-desktop-windows-arm64.exe
-          name: connected-desktop-windows-arm64.exe
+          path: target/msix/arm64/connected-desktop-windows-arm64.msix
+          name: connected-desktop-windows-arm64.msix
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 3: Build macOS Desktop
+  # Job 3: Bundle Windows MSIX (x64 + ARM64)
+  # -------------------------------------------------------------------------
+  bundle-windows-msix:
+    name: Bundle Windows MSIX
+    needs: [build-windows]
+    runs-on: windows-latest
+    steps:
+      - name: Download Windows x64 MSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: connected-desktop-windows-x64.msix
+          path: bundle-input
+
+      - name: Download Windows ARM64 MSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: connected-desktop-windows-arm64.msix
+          path: bundle-input
+
+      - name: Build MSIX Bundle
+        shell: pwsh
+        run: |
+          $inDir = "bundle-input"
+          $x64 = Join-Path $inDir "connected-desktop-windows-x64.msix"
+          $arm64 = Join-Path $inDir "connected-desktop-windows-arm64.msix"
+          if (!(Test-Path $x64)) { throw "Missing x64 MSIX: $x64" }
+          if (!(Test-Path $arm64)) { throw "Missing ARM64 MSIX: $arm64" }
+
+          $outDir = "target\msix"
+          New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+          $bundlePath = Join-Path $outDir "connected-desktop-windows.msixbundle"
+
+          $sdkRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+          if (!(Test-Path $sdkRoot)) { throw "Windows SDK tools not found at $sdkRoot" }
+          $makeAppx = Get-ChildItem -Path $sdkRoot -Recurse -Filter makeappx.exe |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $makeAppx) { throw "makeappx.exe not found" }
+
+          & $makeAppx.FullName bundle /d $inDir /p $bundlePath /o
+          if ($LASTEXITCODE -ne 0) { throw "makeappx bundle failed with exit code $LASTEXITCODE" }
+
+      - name: Upload Windows MSIX Bundle
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/msix/connected-desktop-windows.msixbundle
+          name: connected-desktop-windows.msixbundle
+          archive: false
+
+  # -------------------------------------------------------------------------
+  # Job 4: Build macOS Desktop
   # -------------------------------------------------------------------------
   build-macos:
     name: Build macOS
@@ -241,7 +229,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 4: Build Android APK
+  # Job 5: Build Android APK
   # -------------------------------------------------------------------------
   build-android:
     name: Build Android
@@ -297,11 +285,11 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 5: Create Release
+  # Job 6: Create Release
   # -------------------------------------------------------------------------
   create-release:
     name: Create GitHub Release
-    needs: [build-linux, build-windows, build-macos, build-android]
+    needs: [build-linux, bundle-windows-msix, build-macos, build-android]
     runs-on: ubuntu-latest
     steps:
       - name: Download All Artifacts
@@ -318,8 +306,7 @@ jobs:
           prerelease: false
           files: |
             connected-desktop
-            connected-desktop-windows-x64.msi
-            connected-desktop-windows-arm64.exe
+            connected-desktop-windows.msixbundle
             connected-android.apk
             connected-desktop.dmg
         env:

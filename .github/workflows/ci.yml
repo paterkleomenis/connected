@@ -302,6 +302,32 @@ jobs:
           name: connected-desktop-windows-arm64.exe
           archive: false
 
+      - name: Build Windows x64 MSIX
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1 -Arch x64 -Profile debug
+
+      - name: Build Windows ARM64 MSIX
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1 -Arch arm64 -Profile debug
+
+      - name: Upload Windows x64 MSIX
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/msix/x64/connected-desktop-windows-x64.msix
+          name: connected-desktop-windows-x64.msix
+          archive: false
+
+      - name: Upload Windows ARM64 MSIX
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/msix/arm64/connected-desktop-windows-arm64.msix
+          name: connected-desktop-windows-arm64.msix
+          archive: false
+
   # -------------------------------------------------------------------------
   # Job 6: macOS Build
   # -------------------------------------------------------------------------

@@ -100,6 +100,10 @@ ci-windows:
 build-windows-msi:
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1
 
+[doc("Build Windows MSIX locally (PowerShell)")]
+build-windows-msix ARCH="x64" PROFILE="release":
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1 -Arch {{ARCH}} -Profile {{PROFILE}}
+
 # Clean build artifacts
 [doc("Clean build artifacts")]
 clean:
