@@ -289,6 +289,11 @@ impl From<Device> for DeviceInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransferStatus {
     Idle,
+    Pending {
+        transfer_id: String,
+        filename: String,
+        from_device: String,
+    },
     Compressing {
         filename: String,
         current_file: String,
@@ -600,6 +605,192 @@ pub fn add_notification(title: &str, message: &str, icon: &'static str) {
                 }
             });
         }
+    }
+
+    let mut counter = get_notification_counter().lock_or_recover();
+    *counter += 1;
+    let id = *counter;
+    drop(counter);
+
+    let notification = Notification {
+        id,
+        title: title.to_string(),
+        message: message.to_string(),
+        icon,
+        timestamp: std::time::Instant::now(),
+    };
+
+    let mut notifications = get_notifications().lock_or_recover();
+    notifications.push(notification);
+    // Keep only last 5 notifications
+    if notifications.len() > 5 {
+        notifications.remove(0);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_file_with_system(path: &std::path::Path) {
+    if let Err(e) = std::process::Command::new("xdg-open").arg(path).spawn() {
+        tracing::warn!("Failed to open received file {}: {}", path.display(), e);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn open_file_with_system(path: &std::path::Path) {
+    if let Err(e) = std::process::Command::new("cmd")
+        .args(["/C", "start", "", path.to_string_lossy().as_ref()])
+        .spawn()
+    {
+        tracing::warn!("Failed to open received file {}: {}", path.display(), e);
+    }
+}
+
+pub fn add_open_file_notification(
+    title: &str,
+    message: &str,
+    icon: &'static str,
+    file_path: &std::path::Path,
+) {
+    if (cfg!(target_os = "linux") || cfg!(target_os = "windows"))
+        && !get_notifications_enabled_setting()
+    {
+        return;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if get_notifications_enabled_setting() {
+            let summary = title.to_string();
+            let body = format!("{} {}", icon, message);
+            let path = file_path.to_path_buf();
+            std::thread::spawn(move || {
+                match notify_rust::Notification::new()
+                    .summary(&summary)
+                    .body(&body)
+                    .action("default", "Open file")
+                    .show()
+                {
+                    Ok(handle) => {
+                        handle.wait_for_action(|action| {
+                            if action == "default" {
+                                open_file_with_system(&path);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to show system notification: {}", e);
+                    }
+                }
+            });
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if get_notifications_enabled_setting() {
+            let summary = title.to_string();
+            let body = format!("{} {}", icon, message);
+            let path = file_path.to_path_buf();
+            std::thread::spawn(move || {
+                use tauri_winrt_notification::Toast;
+
+                let toast = Toast::new(Toast::POWERSHELL_APP_ID)
+                    .title(&summary)
+                    .text1(&body)
+                    .add_button("Open", "open")
+                    .on_activated(move |action| {
+                        let should_open =
+                            matches!(action.as_deref(), Some("open") | Some("") | None);
+
+                        if should_open {
+                            open_file_with_system(&path);
+                        }
+                        Ok(())
+                    });
+
+                if let Err(e) = toast.show() {
+                    tracing::warn!("Failed to show system notification: {}", e);
+                }
+
+                // Keep callback alive for user interaction with this toast.
+                std::thread::sleep(std::time::Duration::from_secs(30));
+            });
+        }
+    }
+
+    let mut counter = get_notification_counter().lock_or_recover();
+    *counter += 1;
+    let id = *counter;
+    drop(counter);
+
+    let notification = Notification {
+        id,
+        title: title.to_string(),
+        message: message.to_string(),
+        icon,
+        timestamp: std::time::Instant::now(),
+    };
+
+    let mut notifications = get_notifications().lock_or_recover();
+    notifications.push(notification);
+    if notifications.len() > 5 {
+        notifications.remove(0);
+    }
+}
+
+pub fn add_actionable_notification(title: &str, message: &str, icon: &'static str) {
+    if (cfg!(target_os = "linux") || cfg!(target_os = "windows"))
+        && !get_notifications_enabled_setting()
+    {
+        return;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if get_notifications_enabled_setting() {
+            let summary = title.to_string();
+            let body = format!("{} {}", icon, message);
+            std::thread::spawn(move || {
+                match notify_rust::Notification::new()
+                    .summary(&summary)
+                    .body(&body)
+                    .action("default", "Open Connected")
+                    .show()
+                {
+                    Ok(handle) => {
+                        handle.wait_for_action(|action| {
+                            if action == "default" {
+                                crate::ipc::send_wakeup_signal();
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to show system notification: {}", e);
+                    }
+                }
+            });
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if get_notifications_enabled_setting() {
+            let summary = title.to_string();
+            let body = format!("{} {}", icon, message);
+            std::thread::spawn(move || {
+                if let Err(e) = notify_rust::Notification::new()
+                    .summary(&summary)
+                    .body(&body)
+                    .show()
+                {
+                    tracing::warn!("Failed to show system notification: {}", e);
+                }
+            });
+        }
+
+        // notify-rust does not provide click callbacks on Windows.
+        // For actionable requests, immediately show the app so approval is one step.
+        crate::ipc::send_wakeup_signal();
     }
 
     let mut counter = get_notification_counter().lock_or_recover();

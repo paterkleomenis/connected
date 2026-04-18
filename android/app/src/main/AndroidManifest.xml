@@ -163,6 +163,12 @@
                     android:name="com.connected.app.sync.ACTION_REJECT_TRANSFER"
                 />
                 <action
+                    android:name="com.connected.app.sync.ACTION_ACCEPT_PAIRING"
+                />
+                <action
+                    android:name="com.connected.app.sync.ACTION_REJECT_PAIRING"
+                />
+                <action
                     android:name="com.connected.app.sync.ACTION_SHARE_CLIPBOARD"
                 />
             </intent-filter>

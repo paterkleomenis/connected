@@ -7,25 +7,46 @@ import android.util.Log
 
 class TransferActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val transferId = intent.getStringExtra("transferId")
         val app = ConnectedApp.getInstance(context)
 
+        fun transferRequestFromIntent(source: Intent): ConnectedApp.TransferRequest? {
+            val transferId = source.getStringExtra(ConnectedApp.EXTRA_TRANSFER_ID) ?: return null
+            val filename = source.getStringExtra(ConnectedApp.EXTRA_FILENAME).orEmpty()
+            val fileSize = source.getLongExtra(ConnectedApp.EXTRA_FILE_SIZE, 0L).coerceAtLeast(0L).toULong()
+            val fromDevice = source.getStringExtra(ConnectedApp.EXTRA_FROM_DEVICE).orEmpty()
+            return ConnectedApp.TransferRequest(transferId, filename, fileSize, fromDevice)
+        }
+
+        fun pairingRequestFromIntent(source: Intent): ConnectedApp.PairingRequest? {
+            val deviceName = source.getStringExtra(ConnectedApp.EXTRA_DEVICE_NAME) ?: return null
+            val fingerprint = source.getStringExtra(ConnectedApp.EXTRA_FINGERPRINT) ?: return null
+            val deviceId = source.getStringExtra(ConnectedApp.EXTRA_DEVICE_ID) ?: return null
+            return ConnectedApp.PairingRequest(deviceName, fingerprint, deviceId)
+        }
+
         when (intent.action) {
-            "com.connected.app.sync.ACTION_ACCEPT_TRANSFER" -> {
-                if (transferId == null) return
-                Log.d("TransferActionReceiver", "Accepting transfer $transferId")
-                // We need to reconstruct the request object or find it
-                // Ideally ConnectedApp stores the pending request.
-                // For now, we'll create a dummy object with the ID to pass to acceptTransfer
-                val request = ConnectedApp.TransferRequest(transferId, "", 0u, "")
+            ConnectedApp.ACTION_ACCEPT_TRANSFER -> {
+                val request = transferRequestFromIntent(intent) ?: return
+                Log.d("TransferActionReceiver", "Accepting transfer ${request.id}")
                 app.acceptTransfer(request)
             }
 
-            "com.connected.app.sync.ACTION_REJECT_TRANSFER" -> {
-                if (transferId == null) return
-                Log.d("TransferActionReceiver", "Rejecting transfer $transferId")
-                val request = ConnectedApp.TransferRequest(transferId, "", 0u, "")
+            ConnectedApp.ACTION_REJECT_TRANSFER -> {
+                val request = transferRequestFromIntent(intent) ?: return
+                Log.d("TransferActionReceiver", "Rejecting transfer ${request.id}")
                 app.rejectTransfer(request)
+            }
+
+            ConnectedApp.ACTION_ACCEPT_PAIRING -> {
+                val request = pairingRequestFromIntent(intent) ?: return
+                Log.d("TransferActionReceiver", "Trusting pairing for ${request.deviceId}")
+                app.trustDevice(request)
+            }
+
+            ConnectedApp.ACTION_REJECT_PAIRING -> {
+                val request = pairingRequestFromIntent(intent) ?: return
+                Log.d("TransferActionReceiver", "Rejecting pairing for ${request.deviceId}")
+                app.rejectDevice(request)
             }
 
             "com.connected.app.sync.ACTION_SHARE_CLIPBOARD" -> {

@@ -52,6 +52,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -103,6 +104,7 @@ class MainActivity : ComponentActivity() {
 
         // Initialize singleton with Application Context
         connectedApp = ConnectedApp.getInstance(applicationContext)
+        handleNotificationIntent(intent)
 
         // If service is running, it has already initialized the app logic.
         if (!ConnectedService.isRunning) {
@@ -141,6 +143,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleNotificationIntent(intent)
         handleShareIntent(intent)
     }
 
@@ -241,6 +244,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        if (intent == null) return
+        when (intent.action) {
+            ConnectedApp.ACTION_OPEN_TRANSFER_REQUEST -> connectedApp.openTransferRequestFromIntent(intent)
+            ConnectedApp.ACTION_OPEN_PAIRING_REQUEST -> connectedApp.openPairingRequestFromIntent(intent)
+            ConnectedApp.ACTION_OPEN_COMPLETED_FILE -> connectedApp.openCompletedFileFromIntent(intent)
+        }
+        intent.action = null
     }
 }
 
@@ -779,10 +792,20 @@ fun HomeScreen(
     var pullOffset by remember { mutableStateOf(0f) }
     val refreshThreshold = 160f
 
+    fun triggerRefresh() {
+        if (isRefreshing) return
+        isRefreshing = true
+        pullOffset = 0f
+        scope.launch {
+            connectedApp.refreshDeviceDiscovery()
+            kotlinx.coroutines.delay(1200)
+            isRefreshing = false
+        }
+    }
+
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                // When scrolling back up while pulled down, consume the scroll to reduce pullOffset
                 if (pullOffset > 0f && available.y < 0f) {
                     val consumed = available.y.coerceAtLeast(-pullOffset)
                     pullOffset += consumed
@@ -796,12 +819,30 @@ fun HomeScreen(
                 available: Offset,
                 source: NestedScrollSource
             ): Offset {
-                // When at top of list and user pulls down, accumulate offset
                 if (available.y > 0f && source == NestedScrollSource.UserInput) {
                     pullOffset = (pullOffset + available.y * 0.5f).coerceAtMost(refreshThreshold * 1.5f)
                     return Offset(0f, available.y)
                 }
                 return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (!isRefreshing && pullOffset > 0f) {
+                    if (pullOffset >= refreshThreshold) {
+                        triggerRefresh()
+                    } else {
+                        pullOffset = 0f
+                    }
+                    return available
+                }
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (!isRefreshing && pullOffset > 0f) {
+                    pullOffset = 0f
+                }
+                return Velocity.Zero
             }
         }
     }
@@ -838,10 +879,10 @@ fun HomeScreen(
                 .nestedScroll(nestedScrollConnection)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Pull-to-refresh indicator
                 if (pullOffset > 0f || isRefreshing) {
                     Box(
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
                             .height((pullOffset / refreshThreshold * 56f).coerceAtMost(56f).dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -854,22 +895,6 @@ fun HomeScreen(
                                 modifier = Modifier.size(24.dp)
                             )
                         }
-                    }
-                }
-
-                // Release detection
-                LaunchedEffect(pullOffset) {
-                    if (pullOffset <= 0f && !isRefreshing) return@LaunchedEffect
-                    // Use a small delay to detect when the user lifts their finger
-                    kotlinx.coroutines.delay(100)
-                    if (pullOffset >= refreshThreshold && !isRefreshing) {
-                        isRefreshing = true
-                        pullOffset = 0f
-                        connectedApp.refreshDeviceDiscovery()
-                        kotlinx.coroutines.delay(1500)
-                        isRefreshing = false
-                    } else if (!isRefreshing) {
-                        pullOffset = 0f
                     }
                 }
 

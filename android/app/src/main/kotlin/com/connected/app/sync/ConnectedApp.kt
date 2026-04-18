@@ -2,6 +2,7 @@ package com.connected.app.sync
 
 import android.Manifest
 import android.content.Context
+import android.content.ClipData
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
@@ -14,6 +15,7 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
+import androidx.core.content.FileProvider
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -135,6 +137,25 @@ class ConnectedApp(private val context: Context) {
         private const val NOTIFICATION_ID_PROGRESS = 1002
         private const val NOTIFICATION_ID_COMPLETE = 1003
         private const val MEDIA_NOTIFICATION_ID = 1004
+        private const val NOTIFICATION_ID_PAIRING = 1005
+
+        const val ACTION_ACCEPT_TRANSFER = "com.connected.app.sync.ACTION_ACCEPT_TRANSFER"
+        const val ACTION_REJECT_TRANSFER = "com.connected.app.sync.ACTION_REJECT_TRANSFER"
+        const val ACTION_ACCEPT_PAIRING = "com.connected.app.sync.ACTION_ACCEPT_PAIRING"
+        const val ACTION_REJECT_PAIRING = "com.connected.app.sync.ACTION_REJECT_PAIRING"
+        const val ACTION_OPEN_TRANSFER_REQUEST = "com.connected.app.sync.ACTION_OPEN_TRANSFER_REQUEST"
+        const val ACTION_OPEN_PAIRING_REQUEST = "com.connected.app.sync.ACTION_OPEN_PAIRING_REQUEST"
+        const val ACTION_OPEN_COMPLETED_FILE = "com.connected.app.sync.ACTION_OPEN_COMPLETED_FILE"
+
+        const val EXTRA_TRANSFER_ID = "transferId"
+        const val EXTRA_FILENAME = "filename"
+        const val EXTRA_FILE_SIZE = "fileSize"
+        const val EXTRA_FROM_DEVICE = "fromDevice"
+        const val EXTRA_DEVICE_NAME = "deviceName"
+        const val EXTRA_FINGERPRINT = "fingerprint"
+        const val EXTRA_DEVICE_ID = "deviceId"
+        const val EXTRA_COMPLETED_FILE_URI = "completedFileUri"
+        const val EXTRA_COMPLETED_FILE_MIME = "completedFileMime"
 
         @Volatile
         @android.annotation.SuppressLint("StaticFieldLeak")
@@ -644,8 +665,10 @@ class ConnectedApp(private val context: Context) {
             transferStatus.value = "Completed: $filename"
             activeTransferId = null
             activeIncomingTransferId = null
-            moveToDownloads(filename)
-            showCompletionNotification(filename)
+            val savedUri = moveToDownloads(filename)
+            val openUri = resolveOpenUriForCompletedTransfer(savedUri, filename)
+            Log.d("ConnectedApp", "Completed transfer URI for $filename: $openUri")
+            showCompletionNotification(filename, openUri?.toString(), getMimeType(filename))
 
             // Clean up any pending temp files
             cleanupAllPendingTempFiles()
@@ -704,6 +727,24 @@ class ConnectedApp(private val context: Context) {
                 speedBytesPerSec = speedBytesPerSec.toLong()
             )
             transferStatus.value = "Compressing: $percent% ($currentFile)"
+        }
+    }
+
+    private fun resolveOpenUriForCompletedTransfer(savedUri: Uri?, filename: String): Uri? {
+        if (savedUri != null) {
+            return savedUri
+        }
+
+        val fallbackFile = File(downloadDir, filename)
+        if (!fallbackFile.exists()) {
+            return null
+        }
+
+        return try {
+            FileProvider.getUriForFile(context, "${context.packageName}.provider", fallbackFile)
+        } catch (e: Exception) {
+            Log.w("ConnectedApp", "Failed to create fallback URI for completed file", e)
+            null
         }
     }
 
@@ -936,7 +977,11 @@ class ConnectedApp(private val context: Context) {
                 Log.d("ConnectedApp", "Auto-trusting pending device: $deviceName ($deviceId)")
                 trustDevice(PairingRequest(deviceName, fingerprint, deviceId))
             } else {
-                pairingRequest.value = PairingRequest(deviceName, fingerprint, deviceId)
+                val request = PairingRequest(deviceName, fingerprint, deviceId)
+                pairingRequest.value = request
+                if (!isAppInForeground.get()) {
+                    showPairingNotification(request)
+                }
             }
         }
 
@@ -948,6 +993,7 @@ class ConnectedApp(private val context: Context) {
             runOnMainThread {
                 pendingPairing.remove(deviceId)
                 pendingPairingAwaitingIp.remove(deviceId)
+                dismissPairingNotification()
                 android.widget.Toast.makeText(
                     context,
                     "Pairing rejected by $deviceName",
@@ -1137,6 +1183,42 @@ class ConnectedApp(private val context: Context) {
         android.os.Handler(android.os.Looper.getMainLooper()).post(action)
     }
 
+    private fun transferRequestFromIntent(intent: Intent): TransferRequest? {
+        val transferId = intent.getStringExtra(EXTRA_TRANSFER_ID) ?: return null
+        val filename = intent.getStringExtra(EXTRA_FILENAME).orEmpty()
+        val fileSize = intent.getLongExtra(EXTRA_FILE_SIZE, 0L).coerceAtLeast(0L).toULong()
+        val fromDevice = intent.getStringExtra(EXTRA_FROM_DEVICE).orEmpty()
+        return TransferRequest(transferId, filename, fileSize, fromDevice)
+    }
+
+    private fun pairingRequestFromIntent(intent: Intent): PairingRequest? {
+        val deviceName = intent.getStringExtra(EXTRA_DEVICE_NAME) ?: return null
+        val fingerprint = intent.getStringExtra(EXTRA_FINGERPRINT) ?: return null
+        val deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return null
+        return PairingRequest(deviceName, fingerprint, deviceId)
+    }
+
+    fun openTransferRequestFromIntent(intent: Intent) {
+        transferRequestFromIntent(intent)?.let {
+            transferRequest.value = it
+            dismissTransferNotification()
+        }
+    }
+
+    fun openPairingRequestFromIntent(intent: Intent) {
+        pairingRequestFromIntent(intent)?.let {
+            pairingRequest.value = it
+            dismissPairingNotification()
+        }
+    }
+
+    fun openCompletedFileFromIntent(intent: Intent) {
+        val uriString = intent.getStringExtra(EXTRA_COMPLETED_FILE_URI) ?: return
+        val mimeType = intent.getStringExtra(EXTRA_COMPLETED_FILE_MIME)
+        Log.d("ConnectedApp", "Opening completed file from notification: uri=$uriString mime=$mimeType")
+        openCompletedFile(uriString, mimeType)
+    }
+
     private fun showTransferNotification(request: TransferRequest) {
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
@@ -1149,8 +1231,11 @@ class ConnectedApp(private val context: Context) {
         notificationManager.createNotificationChannel(channel)
 
         val acceptIntent = Intent(context, TransferActionReceiver::class.java).apply {
-            action = "com.connected.app.sync.ACTION_ACCEPT_TRANSFER"
-            putExtra("transferId", request.id)
+            action = ACTION_ACCEPT_TRANSFER
+            putExtra(EXTRA_TRANSFER_ID, request.id)
+            putExtra(EXTRA_FILENAME, request.filename)
+            putExtra(EXTRA_FILE_SIZE, request.fileSize.toLong())
+            putExtra(EXTRA_FROM_DEVICE, request.fromDevice)
         }
         val acceptPendingIntent = android.app.PendingIntent.getBroadcast(
             context,
@@ -1160,8 +1245,11 @@ class ConnectedApp(private val context: Context) {
         )
 
         val rejectIntent = Intent(context, TransferActionReceiver::class.java).apply {
-            action = "com.connected.app.sync.ACTION_REJECT_TRANSFER"
-            putExtra("transferId", request.id)
+            action = ACTION_REJECT_TRANSFER
+            putExtra(EXTRA_TRANSFER_ID, request.id)
+            putExtra(EXTRA_FILENAME, request.filename)
+            putExtra(EXTRA_FILE_SIZE, request.fileSize.toLong())
+            putExtra(EXTRA_FROM_DEVICE, request.fromDevice)
         }
         val rejectPendingIntent = android.app.PendingIntent.getBroadcast(
             context,
@@ -1170,17 +1258,98 @@ class ConnectedApp(private val context: Context) {
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
         )
 
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_OPEN_TRANSFER_REQUEST
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_TRANSFER_ID, request.id)
+            putExtra(EXTRA_FILENAME, request.filename)
+            putExtra(EXTRA_FILE_SIZE, request.fileSize.toLong())
+            putExtra(EXTRA_FROM_DEVICE, request.fromDevice)
+        }
+        val openPendingIntent = android.app.PendingIntent.getActivity(
+            context,
+            request.id.hashCode() + 2,
+            openIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
         val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setContentTitle("Incoming File")
             .setContentText("${request.fromDevice} wants to send ${request.filename}")
             .setSmallIcon(R.drawable.ic_notification_logo)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(openPendingIntent)
             .addAction(android.R.drawable.ic_menu_add, "Accept", acceptPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Reject", rejectPendingIntent)
             .setAutoCancel(true)
             .build()
 
         notificationManager.notify(NOTIFICATION_ID_REQUEST, notification)
+    }
+
+    private fun showPairingNotification(request: PairingRequest) {
+        val notificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val channelId = "connected_pairing_channel"
+        val channel = android.app.NotificationChannel(
+            channelId,
+            "Pairing Requests",
+            android.app.NotificationManager.IMPORTANCE_HIGH
+        )
+        notificationManager.createNotificationChannel(channel)
+
+        val acceptIntent = Intent(context, TransferActionReceiver::class.java).apply {
+            action = ACTION_ACCEPT_PAIRING
+            putExtra(EXTRA_DEVICE_NAME, request.deviceName)
+            putExtra(EXTRA_FINGERPRINT, request.fingerprint)
+            putExtra(EXTRA_DEVICE_ID, request.deviceId)
+        }
+        val acceptPendingIntent = android.app.PendingIntent.getBroadcast(
+            context,
+            request.deviceId.hashCode(),
+            acceptIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val rejectIntent = Intent(context, TransferActionReceiver::class.java).apply {
+            action = ACTION_REJECT_PAIRING
+            putExtra(EXTRA_DEVICE_NAME, request.deviceName)
+            putExtra(EXTRA_FINGERPRINT, request.fingerprint)
+            putExtra(EXTRA_DEVICE_ID, request.deviceId)
+        }
+        val rejectPendingIntent = android.app.PendingIntent.getBroadcast(
+            context,
+            request.deviceId.hashCode() + 1,
+            rejectIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_OPEN_PAIRING_REQUEST
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_DEVICE_NAME, request.deviceName)
+            putExtra(EXTRA_FINGERPRINT, request.fingerprint)
+            putExtra(EXTRA_DEVICE_ID, request.deviceId)
+        }
+        val openPendingIntent = android.app.PendingIntent.getActivity(
+            context,
+            request.deviceId.hashCode() + 2,
+            openIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
+            .setContentTitle("Pairing Request")
+            .setContentText("${request.deviceName} wants to pair")
+            .setSmallIcon(R.drawable.ic_notification_logo)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(openPendingIntent)
+            .addAction(android.R.drawable.ic_menu_add, "Trust", acceptPendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Reject", rejectPendingIntent)
+            .setAutoCancel(true)
+            .build()
+
+        notificationManager.notify(NOTIFICATION_ID_PAIRING, notification)
     }
 
     private fun showProgressNotification(title: String, current: Long, total: Long) {
@@ -1205,19 +1374,94 @@ class ConnectedApp(private val context: Context) {
         notificationManager.notify(NOTIFICATION_ID_PROGRESS, builder.build())
     }
 
-    private fun showCompletionNotification(filename: String) {
+    private fun showCompletionNotification(filename: String, openUriString: String?, mimeType: String) {
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
         val channelId = "connected_transfer_channel"
-        val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
+        val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setContentTitle("Download Complete")
             .setContentText(filename)
             .setSmallIcon(R.drawable.ic_notification_logo)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
-            .build()
+
+        Log.d("ConnectedApp", "showCompletionNotification: filename=$filename openUri=$openUriString mime=$mimeType")
+
+        if (!openUriString.isNullOrBlank()) {
+            val openPendingIntent = createOpenFilePendingIntent(openUriString, mimeType)
+            if (openPendingIntent != null) {
+                builder.setContentIntent(openPendingIntent)
+                builder.addAction(android.R.drawable.ic_menu_view, "Open", openPendingIntent)
+            }
+        } else {
+            builder.setContentText("$filename (open in app)")
+        }
+
+        val notification = builder.build()
         notificationManager.notify(NOTIFICATION_ID_COMPLETE, notification)
+    }
+
+    private fun createOpenFilePendingIntent(openUriString: String, mimeType: String): android.app.PendingIntent? {
+        val uri = try {
+            Uri.parse(openUriString)
+        } catch (e: Exception) {
+            Log.w("ConnectedApp", "Invalid URI for completion notification", e)
+            return null
+        }
+
+        val resolvedMimeType = if (mimeType.isNotBlank()) {
+            mimeType
+        } else {
+            context.contentResolver.getType(uri) ?: "*/*"
+        }
+
+        val openIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, resolvedMimeType)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newUri(context.contentResolver, "received-file", uri)
+        }
+
+        return android.app.PendingIntent.getActivity(
+            context,
+            openUriString.hashCode(),
+            openIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun openCompletedFile(uriString: String, mimeType: String?) {
+        val uri = try {
+            Uri.parse(uriString)
+        } catch (e: Exception) {
+            Log.w("ConnectedApp", "Invalid URI for completed file", e)
+            runOnMainThread {
+                android.widget.Toast.makeText(context, "Cannot open file", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        val resolvedMimeType = if (!mimeType.isNullOrBlank()) {
+            mimeType
+        } else {
+            context.contentResolver.getType(uri) ?: "*/*"
+        }
+
+        val openIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, resolvedMimeType)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newUri(context.contentResolver, "received-file", uri)
+        }
+
+        try {
+            Log.d("ConnectedApp", "Launching ACTION_VIEW for uri=$uri mime=$resolvedMimeType")
+            context.startActivity(openIntent)
+        } catch (e: Exception) {
+            Log.w("ConnectedApp", "No app available to open completed file", e)
+            runOnMainThread {
+                android.widget.Toast.makeText(context, "No app can open this file", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun showErrorNotification(error: String) {
@@ -1279,6 +1523,8 @@ class ConnectedApp(private val context: Context) {
                     contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
                     resolver.update(itemUri, contentValues, null, null)
                 }
+                // Remove original temp file once persisted to destination.
+                sourceFile.delete()
                 runOnMainThread {
                     android.widget.Toast.makeText(
                         context,
@@ -2963,6 +3209,7 @@ class ConnectedApp(private val context: Context) {
                 Log.e("ConnectedApp", "Reject pairing failed", e)
             }
             pairingRequest.value = null
+            dismissPairingNotification()
         }
     }
 
@@ -2977,6 +3224,7 @@ class ConnectedApp(private val context: Context) {
                     sendTrustConfirmation(device.ip, device.port)
                 }
                 pairingRequest.value = null
+                dismissPairingNotification()
                 runOnMainThread {
                     locallyUnpairedDevices.remove(request.deviceId)
                     pendingPairing.remove(request.deviceId)
@@ -3023,6 +3271,12 @@ class ConnectedApp(private val context: Context) {
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         notificationManager.cancel(NOTIFICATION_ID_REQUEST)
+    }
+
+    fun dismissPairingNotification() {
+        val notificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        notificationManager.cancel(NOTIFICATION_ID_PAIRING)
     }
 
     // Permission Helpers

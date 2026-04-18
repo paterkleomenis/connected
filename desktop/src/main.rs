@@ -1065,6 +1065,7 @@ fn App() -> Element {
             let status = get_transfer_status().lock_or_recover().clone();
             let new_status_hash = match &status {
                 TransferStatus::Idle => 0,
+                TransferStatus::Pending { .. } => 3,
                 TransferStatus::Compressing {
                     bytes_processed,
                     total_bytes,
@@ -1593,6 +1594,17 @@ fn App() -> Element {
                                                         Icon { icon: IconType::Folder, size: 48, color: "var(--text-tertiary)".to_string() }
                                                     }
                                                     p { "No active transfers" }
+                                                }
+                                            },
+                                            TransferStatus::Pending { filename, from_device, .. } => rsx! {
+                                                div {
+                                                    class: "transfer-active",
+                                                    div {
+                                                        class: "transfer-icon spinning",
+                                                        Icon { icon: IconType::Searching, size: 48, color: "var(--accent)".to_string() }
+                                                    }
+                                                    p { "Pending incoming transfer from {from_device}" }
+                                                    p { class: "transfer-filename", "{filename}" }
                                                 }
                                             },
                                             TransferStatus::Compressing {

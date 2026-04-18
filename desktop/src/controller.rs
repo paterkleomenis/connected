@@ -3,16 +3,16 @@ use crate::mpris_server::{MprisUpdate, send_mpris_update};
 use crate::proximity;
 use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
-    SavedDeviceInfo, TransferStatus, add_file_transfer_request, add_notification,
-    get_active_incoming_transfer_id, get_active_outgoing_transfer_id, get_auto_sync_messages,
-    get_clipboard_sync_enabled, get_current_media, get_current_remote_files,
-    get_current_remote_path, get_device_name_setting, get_devices_store,
-    get_download_directory_setting, get_last_clipboard, get_last_remote_clipboard_content,
-    get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
-    get_pairing_requests, get_pending_pairings, get_phone_call_log, get_phone_conversations,
-    get_phone_data_update, get_phone_messages, get_preview_data, get_remote_files_update,
-    get_saved_devices_setting, get_transfer_status, get_update_info, mark_calls_synced,
-    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
+    SavedDeviceInfo, TransferStatus, add_actionable_notification, add_file_transfer_request,
+    add_notification, add_open_file_notification, get_active_incoming_transfer_id,
+    get_active_outgoing_transfer_id, get_auto_sync_messages, get_clipboard_sync_enabled,
+    get_current_media, get_current_remote_files, get_current_remote_path, get_device_name_setting,
+    get_devices_store, get_download_directory_setting, get_last_clipboard,
+    get_last_remote_clipboard_content, get_last_remote_media_device_id, get_last_remote_update,
+    get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_call_log,
+    get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
+    get_remote_files_update, get_saved_devices_setting, get_transfer_status, get_update_info,
+    mark_calls_synced, mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
     remove_file_transfer_request, save_device_to_settings, set_active_call,
     set_active_incoming_transfer_id, set_active_outgoing_transfer_id, set_device_name_setting,
     set_discovery_active, set_download_directory_setting, set_last_remote_clipboard_content,
@@ -333,9 +333,7 @@ fn spawn_event_loop(
                 }
                 ConnectedEvent::DeviceLost(id) => {
                     let mut store = get_devices_store().lock_or_recover();
-                    if let Some(d) = store.remove(&id) {
-                        add_notification("Device Lost", &format!("{} disconnected", d.name), "");
-                    }
+                    store.remove(&id);
                 }
                 ConnectedEvent::CompressionProgress {
                     filename,
@@ -401,15 +399,38 @@ fn spawn_event_loop(
                         *status = TransferStatus::InProgress { filename, percent };
                     }
                 }
-                ConnectedEvent::TransferCompleted {
-                    filename, id: _, ..
-                } => {
+                ConnectedEvent::TransferCompleted { filename, id, .. } => {
+                    let incoming_transfer_id =
+                        get_active_incoming_transfer_id().lock_or_recover().clone();
+                    let is_incoming_completion =
+                        incoming_transfer_id.as_deref() == Some(id.as_str());
+
                     set_active_outgoing_transfer_id(None);
                     set_active_incoming_transfer_id(None);
                     set_transfer_status(TransferStatus::Completed {
                         filename: filename.clone(),
                     });
-                    add_notification("Transfer Complete", &format!("{} finished", filename), "");
+
+                    if is_incoming_completion {
+                        let download_dir = get_download_directory_setting()
+                            .map(PathBuf::from)
+                            .or_else(dirs::download_dir)
+                            .unwrap_or_else(|| PathBuf::from("."));
+                        let received_path = download_dir.join(&filename);
+
+                        add_open_file_notification(
+                            "Transfer Complete",
+                            &format!("{} received. Click to open.", filename),
+                            "",
+                            &received_path,
+                        );
+                    } else {
+                        add_notification(
+                            "Transfer Complete",
+                            &format!("{} finished", filename),
+                            "",
+                        );
+                    }
                 }
                 ConnectedEvent::TransferFailed { error, id: _, .. } => {
                     // Check if this was a cancellation
@@ -472,7 +493,7 @@ fn spawn_event_loop(
                     // Deduplicate requests
                     let mut requests = get_pairing_requests().lock_or_recover();
                     if !requests.iter().any(|r| r.fingerprint == fingerprint) {
-                        add_notification(
+                        add_actionable_notification(
                             "Pairing Request",
                             &format!("{} wants to connect.", device_name),
                             "",
@@ -543,7 +564,13 @@ fn spawn_event_loop(
                     from_device,
                     from_fingerprint,
                 } => {
-                    add_notification(
+                    *get_transfer_status().lock_or_recover() = TransferStatus::Pending {
+                        transfer_id: id.clone(),
+                        filename: filename.clone(),
+                        from_device: from_device.clone(),
+                    };
+
+                    add_actionable_notification(
                         "File Transfer Request",
                         &format!(
                             "{} wants to send {} ({} bytes)",
@@ -1430,6 +1457,19 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if let Some(c) = &client {
                     // Remove from pending requests
                     remove_file_transfer_request(&transfer_id);
+
+                    let mut status = get_transfer_status().lock_or_recover();
+                    if let TransferStatus::Pending {
+                        transfer_id: pending_id,
+                        ..
+                    } = &*status
+                        && pending_id == &transfer_id
+                    {
+                        *status = TransferStatus::Starting {
+                            filename: String::from("Preparing transfer..."),
+                        };
+                    }
+
                     if let Err(e) = c.accept_file_transfer(&transfer_id) {
                         error!("Failed to accept file transfer: {}", e);
                         add_notification("Transfer Error", &e.to_string(), "");
@@ -1440,6 +1480,17 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if let Some(c) = &client {
                     // Remove from pending requests
                     remove_file_transfer_request(&transfer_id);
+
+                    let mut status = get_transfer_status().lock_or_recover();
+                    if let TransferStatus::Pending {
+                        transfer_id: pending_id,
+                        ..
+                    } = &*status
+                        && pending_id == &transfer_id
+                    {
+                        *status = TransferStatus::Idle;
+                    }
+
                     match c.reject_file_transfer(&transfer_id) {
                         Err(e) => {
                             error!("Failed to reject file transfer: {}", e);
