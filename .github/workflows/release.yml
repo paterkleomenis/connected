@@ -175,17 +175,27 @@ jobs:
 
       - name: Upload Windows x64 Artifact
         if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: Copy-Item target/wix/connected-desktop.msi connected-desktop-windows-x64.msi -Force
+
+      - name: Upload Windows x64 Asset File
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: actions/upload-artifact@v7
         with:
-          path: target/wix/connected-desktop.msi
+          path: connected-desktop-windows-x64.msi
           name: connected-desktop-windows-x64.msi
           archive: false
 
       - name: Upload Windows ARM64 Artifact
         if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: Copy-Item target/aarch64-pc-windows-msvc/release/connected-desktop.exe connected-desktop-windows-arm64.exe -Force
+
+      - name: Upload Windows ARM64 Asset File
+        if: matrix.target == 'aarch64-pc-windows-msvc'
         uses: actions/upload-artifact@v7
         with:
-          path: target/aarch64-pc-windows-msvc/release/connected-desktop.exe
+          path: connected-desktop-windows-arm64.exe
           name: connected-desktop-windows-arm64.exe
           archive: false
 
