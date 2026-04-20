@@ -17,6 +17,63 @@ Set-Location $repoRoot
 $target = if ($Arch -eq "arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
 $buildDirName = if ($Profile -eq "release") { "release" } else { "debug" }
 
+function Configure-Arm64WindowsToolchain {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (!(Test-Path $vswhere)) {
+        throw "vswhere.exe not found at $vswhere. Install Visual Studio Build Tools."
+    }
+
+    $vsPath = & $vswhere -latest -products * -property installationPath
+    if (-not $vsPath) {
+        throw "Visual Studio installation not found. Install Visual Studio Build Tools with C++ workloads."
+    }
+
+    $msvcToolsRoot = Join-Path $vsPath "VC\Tools\MSVC"
+    if (!(Test-Path $msvcToolsRoot)) {
+        throw "MSVC tools not found at $msvcToolsRoot. Install C++ build tools."
+    }
+
+    $msvcVersionDir = Get-ChildItem -Path $msvcToolsRoot -Directory |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if ($null -eq $msvcVersionDir) {
+        throw "Could not locate an MSVC version under $msvcToolsRoot"
+    }
+
+    $linker = Join-Path $msvcVersionDir.FullName "bin\Hostx64\arm64\link.exe"
+    if (!(Test-Path $linker)) {
+        throw "ARM64 linker not found at $linker. Install ARM64 MSVC tools component."
+    }
+
+    $clangDir = Join-Path $vsPath "VC\Tools\Llvm\x64\bin"
+    $clang = Join-Path $clangDir "clang-cl.exe"
+    $llvmLib = Join-Path $clangDir "llvm-lib.exe"
+
+    $msvcBinDir = Join-Path $msvcVersionDir.FullName "bin\Hostx64\arm64"
+    $clMsvc = Join-Path $msvcBinDir "cl.exe"
+    $libMsvc = Join-Path $msvcBinDir "lib.exe"
+
+    if ((Test-Path $clang) -and (Test-Path $llvmLib)) {
+        $env:PATH = "$clangDir;$msvcBinDir;$env:PATH"
+        $env:CC_aarch64_pc_windows_msvc = $clang
+        $env:CXX_aarch64_pc_windows_msvc = $clang
+        $env:AR_aarch64_pc_windows_msvc = $llvmLib
+        Write-Host "Configured ARM64 toolchain: clang-cl + link.exe"
+    }
+    elseif ((Test-Path $clMsvc) -and (Test-Path $libMsvc)) {
+        $env:PATH = "$msvcBinDir;$env:PATH"
+        $env:CC_aarch64_pc_windows_msvc = $clMsvc
+        $env:CXX_aarch64_pc_windows_msvc = $clMsvc
+        $env:AR_aarch64_pc_windows_msvc = $libMsvc
+        Write-Host "Configured ARM64 toolchain: cl.exe + link.exe"
+    }
+    else {
+        throw "ARM64 C/C++ compiler not found. Install ARM64 MSVC tools (and optionally Microsoft.VisualStudio.Component.VC.Llvm.Clang)."
+    }
+
+    $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER = $linker
+}
+
 $cargoVersionLine = (Get-Content "$repoRoot\Cargo.toml" | Select-String -Pattern '^\s*version\s*=\s*"([^"]+)"' -AllMatches | Select-Object -Last 1)
 if ($null -eq $cargoVersionLine) {
     throw "Could not determine workspace version from Cargo.toml"
@@ -35,6 +92,10 @@ function Convert-ToMsixVersion([string]$version) {
 }
 
 $packageVersion = Convert-ToMsixVersion $rawVersion
+
+if ($Arch -eq "arm64") {
+    Configure-Arm64WindowsToolchain
+}
 
 Write-Host "Building connected-desktop ($target, $buildDirName)..."
 if ($Profile -eq "release") {

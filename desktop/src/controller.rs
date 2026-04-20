@@ -11,7 +11,7 @@ use crate::state::{
     get_last_remote_clipboard_content, get_last_remote_media_device_id, get_last_remote_update,
     get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_call_log,
     get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_files_update, get_saved_devices_setting, get_transfer_status, get_update_info,
+    get_remote_files_update, get_saved_devices_setting, get_transfer_status,
     mark_calls_synced, mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
     remove_file_transfer_request, save_device_to_settings, set_active_call,
     set_active_incoming_transfer_id, set_active_outgoing_transfer_id, set_device_name_setting,
@@ -23,6 +23,7 @@ use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
 use connected_core::telephony::{CallLogEntry, CallType};
 use connected_core::transport::UnpairReason;
+#[cfg(not(target_os = "windows"))]
 use connected_core::update::UpdateChecker;
 use connected_core::{
     ConnectedClient, ConnectedEvent, DeviceType, MediaCommand, MediaControlMessage, MediaState,
@@ -2180,188 +2181,67 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
             AppAction::CheckForUpdates => {
-                tokio::spawn(async move {
-                    let platform = if cfg!(target_os = "linux") {
-                        "linux"
-                    } else if cfg!(target_os = "windows") {
-                        "windows"
-                    } else {
-                        "unknown"
-                    };
+                #[cfg(target_os = "windows")]
+                {
+                    add_notification(
+                        "Updates",
+                        "Windows updates are managed by Microsoft Store.",
+                        "",
+                    );
+                }
 
-                    let current_version = env!("CARGO_PKG_VERSION").to_string();
+                #[cfg(not(target_os = "windows"))]
+                {
+                    tokio::spawn(async move {
+                        let platform = if cfg!(target_os = "linux") {
+                            "linux"
+                        } else if cfg!(target_os = "windows") {
+                            "windows"
+                        } else {
+                            "unknown"
+                        };
 
-                    match UpdateChecker::check_for_updates(current_version, platform.to_string())
-                        .await
-                    {
-                        Ok(info) => {
-                            *get_update_info().lock_or_recover() = Some(info.clone());
-                            if info.has_update {
-                                add_notification(
-                                    "Update Available",
-                                    &format!("Version {} is available", info.latest_version),
-                                    "",
-                                );
-                            } else {
-                                // Only show "up to date" if explicitly requested (we might want to distinguish manual vs auto check)
-                                // For now, assume manual check if this action is called.
-                                add_notification("Updates", "You are up to date", "");
+                        let current_version = env!("CARGO_PKG_VERSION").to_string();
+
+                        match UpdateChecker::check_for_updates(current_version, platform.to_string())
+                            .await
+                        {
+                            Ok(info) => {
+                                *crate::state::get_update_info().lock_or_recover() =
+                                    Some(info.clone());
+                                if info.has_update {
+                                    add_notification(
+                                        "Update Available",
+                                        &format!("Version {} is available", info.latest_version),
+                                        "",
+                                    );
+                                } else {
+                                    add_notification("Updates", "You are up to date", "");
+                                }
+                            }
+                            Err(e) => {
+                                error!("Update check failed: {}", e);
+                                add_notification("Update Check Failed", &e.to_string(), "");
                             }
                         }
-                        Err(e) => {
-                            error!("Update check failed: {}", e);
-                            add_notification("Update Check Failed", &e.to_string(), "");
-                        }
-                    }
-                });
+                    });
+                }
             }
             AppAction::PerformUpdate => {
-                let info_opt = get_update_info().lock_or_recover().clone();
-                if let Some(info) = info_opt {
-                    if let Some(url) = info.download_url {
-                        #[cfg(target_os = "windows")]
-                        {
-                            let latest = info.latest_version.clone();
-                            tokio::spawn(async move {
-                                // Prefer a real installer flow on Windows rather than pushing the
-                                // user to the browser to download + run the MSI manually.
-                                if !url.to_lowercase().ends_with(".msi") {
-                                    info!("Update URL is not an MSI; opening in browser: {}", url);
-                                    let _ = std::process::Command::new("cmd")
-                                        .args(["/C", "start", "", &url])
-                                        .spawn();
-                                    return;
-                                }
+                #[cfg(target_os = "windows")]
+                {
+                    add_notification(
+                        "Updates",
+                        "Windows updates are managed by Microsoft Store.",
+                        "",
+                    );
+                }
 
-                                add_notification("Update", "Downloading installer...", "");
-
-                                // L1: Use a user-private temp directory instead of the shared
-                                // system temp to prevent local attackers from reading/replacing
-                                // the MSI before it is executed.
-                                let private_tmp = dirs::config_dir()
-                                    .map(|d| d.join("connected").join("tmp"))
-                                    .unwrap_or_else(std::env::temp_dir);
-                                let _ = std::fs::create_dir_all(&private_tmp);
-                                let dest = private_tmp.join(format!("connected-{}.msi", latest));
-
-                                match connected_core::download_to_file(&url, &dest).await {
-                                    Ok(()) => {
-                                        // C6: Basic integrity check — verify the downloaded file
-                                        // looks like a valid MSI (non-empty, correct magic bytes).
-                                        // A full fix requires pinning a SHA-256 hash in release
-                                        // metadata or verifying the Authenticode signature.
-                                        let integrity_ok = (|| -> std::io::Result<bool> {
-                                            let meta = std::fs::metadata(&dest)?;
-                                            if meta.len() < 8 {
-                                                return Ok(false);
-                                            }
-                                            // MSI files (OLE2 Compound Documents) start with
-                                            // the magic bytes D0 CF 11 E0 A1 B1 1A E1
-                                            let mut f = std::fs::File::open(&dest)?;
-                                            let mut magic = [0u8; 8];
-                                            use std::io::Read;
-                                            f.read_exact(&mut magic)?;
-                                            let expected: [u8; 8] =
-                                                [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-                                            Ok(magic == expected)
-                                        })(
-                                        );
-
-                                        match integrity_ok {
-                                            Ok(false) | Err(_) => {
-                                                error!(
-                                                    "Downloaded MSI failed integrity check — aborting update"
-                                                );
-                                                let _ = std::fs::remove_file(&dest);
-                                                add_notification(
-                                                    "Update Failed",
-                                                    "Downloaded installer failed integrity check. The file may be corrupted or tampered with.",
-                                                    "",
-                                                );
-                                                return;
-                                            }
-                                            _ => {
-                                                info!("MSI magic-byte integrity check passed");
-                                            }
-                                        }
-
-                                        let msi = dest.to_string_lossy().to_string();
-                                        info!("Launching MSI installer: {}", msi);
-
-                                        let system_root = std::env::var("SystemRoot")
-                                            .unwrap_or_else(|_| "C:\\Windows".to_string());
-                                        let powershell_exe = format!(
-                                            "{}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-                                            system_root
-                                        );
-                                        let status = tokio::task::spawn_blocking(move || {
-                                            let msi_escaped = msi.replace('\'', "''");
-                                            let ps_cmd = format!(
-                                                "Start-Process msiexec -Verb RunAs -ArgumentList @('/i','{}','/passive','/norestart')",
-                                                msi_escaped
-                                            );
-                                            std::process::Command::new(powershell_exe)
-                                                .args(["-NoProfile", "-Command", &ps_cmd])
-                                                .status()
-                                        })
-                                        .await;
-
-                                        match status {
-                                            Ok(Ok(status)) => {
-                                                if status.success() {
-                                                    // Exit immediately so the installer can replace files cleanly.
-                                                    std::process::exit(0);
-                                                } else {
-                                                    let code = status.code().unwrap_or(-1);
-                                                    error!(
-                                                        "Failed to launch installer (code {})",
-                                                        code
-                                                    );
-                                                    add_notification(
-                                                        "Update Failed",
-                                                        &format!(
-                                                            "Failed to start installer (code {}). Try running Connected as Administrator.",
-                                                            code
-                                                        ),
-                                                        "",
-                                                    );
-                                                }
-                                            }
-                                            Ok(Err(e)) => {
-                                                error!("Failed to run msiexec: {}", e);
-                                                add_notification(
-                                                    "Update Failed",
-                                                    &format!(
-                                                        "Failed to run installer: {}. Try running Connected as Administrator.",
-                                                        e
-                                                    ),
-                                                    "",
-                                                );
-                                            }
-                                            Err(e) => {
-                                                error!("Failed to wait for msiexec: {}", e);
-                                                add_notification(
-                                                    "Update Failed",
-                                                    &format!(
-                                                        "Failed to start installer: {}. Try running Connected as Administrator.",
-                                                        e
-                                                    ),
-                                                    "",
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to download update: {}", e);
-                                        add_notification(
-                                            "Update Failed",
-                                            &format!("Download failed: {}", e),
-                                            "",
-                                        );
-                                    }
-                                }
-                            });
-                        }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let info_opt = crate::state::get_update_info().lock_or_recover().clone();
+                    if let Some(info) = info_opt {
+                        if let Some(url) = info.download_url {
 
                         #[cfg(target_os = "linux")]
                         {
@@ -2373,8 +2253,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         {
                             info!("Opening update URL: {}", url);
                         }
-                    } else {
-                        add_notification("Update", "No download URL found", "");
+                        } else {
+                            add_notification("Update", "No download URL found", "");
+                        }
                     }
                 }
             }

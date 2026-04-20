@@ -2504,37 +2504,42 @@ fn App() -> Element {
                                 div { class: "info-label", "Current Version" }
                                 div { class: "info-value", "{env!(\"CARGO_PKG_VERSION\")}" }
 
-                                if let Some(info) = update_info.read().as_ref() {
+                                if cfg!(target_os = "windows") {
+                                    div { class: "info-label", "Updates" }
+                                    div { class: "info-value", "Managed by Microsoft Store" }
+                                } else if let Some(info) = update_info.read().as_ref() {
                                     div { class: "info-label", "Latest Version" }
                                     div { class: "info-value", "{info.latest_version}" }
 
                                     if info.has_update {
-                                         div { class: "info-label", "Status" }
-                                         div {
-                                             class: "info-value",
-                                             style: "color: var(--accent); font-weight: bold;",
-                                             "Update Available"
-                                         }
+                                        div { class: "info-label", "Status" }
+                                        div {
+                                            class: "info-value",
+                                            style: "color: var(--accent); font-weight: bold;",
+                                            "Update Available"
+                                        }
                                     }
                                 }
                             }
 
-                            div {
-                                class: "settings-actions",
-                                style: "margin-top: 15px; display: flex; gap: 10px;",
+                            if !cfg!(target_os = "windows") {
+                                div {
+                                    class: "settings-actions",
+                                    style: "margin-top: 15px; display: flex; gap: 10px;",
 
-                                button {
-                                    class: "secondary-button",
-                                    onclick: move |_| action_tx.send(AppAction::CheckForUpdates),
-                                    "Check for Updates"
-                                }
+                                    button {
+                                        class: "secondary-button",
+                                        onclick: move |_| action_tx.send(AppAction::CheckForUpdates),
+                                        "Check for Updates"
+                                    }
 
-                                if let Some(info) = update_info.read().as_ref() {
-                                    if info.has_update {
-                                         button {
-                                            class: "primary-button",
-                                            onclick: move |_| action_tx.send(AppAction::PerformUpdate),
-                                            "Update Now"
+                                    if let Some(info) = update_info.read().as_ref() {
+                                        if info.has_update {
+                                            button {
+                                                class: "primary-button",
+                                                onclick: move |_| action_tx.send(AppAction::PerformUpdate),
+                                                "Update Now"
+                                            }
                                         }
                                     }
                                 }
