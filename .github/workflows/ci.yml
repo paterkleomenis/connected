@@ -245,62 +245,10 @@ jobs:
             cargo build --target ${{ matrix.target }} --verbose
           }
 
-      - name: Prepare WiX installer
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+      - name: Clean up WebView2 Ghost Languages
         shell: pwsh
         run: |
-          (Get-Content packaging/windows/installer.wxs) -replace 'target\\release', 'target\debug' | Set-Content packaging/windows/installer.wxs
-
-      - name: Ensure WebView2Loader.dll present
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: pwsh
-        run: |
-          $dll = "target\\debug\\WebView2Loader.dll"
-          if (!(Test-Path $dll)) {
-            $src = Get-ChildItem -Path "target\\debug\\build" -Recurse -Filter "WebView2Loader.dll" |
-              Where-Object { $_.FullName -match "\\\\out\\\\x64\\\\WebView2Loader\\.dll$" } |
-              Select-Object -First 1
-            if ($null -eq $src) { throw "WebView2Loader.dll not found under target\\debug\\build\\**\\out\\x64\\WebView2Loader.dll" }
-            Copy-Item $src.FullName $dll -Force
-          }
-          Write-Host "WebView2Loader.dll ready at $dll"
-
-      - name: Cache WiX
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        uses: actions/cache@v5
-        id: wix-cache
-        with:
-          path: ~/.dotnet/tools
-          key: wix-${{ hashFiles('packaging/windows/installer.wxs') }}
-
-      - name: Install WiX 5
-        if: matrix.target == 'x86_64-pc-windows-msvc' && steps.wix-cache.outputs.cache-hit != 'true'
-        run: dotnet tool install --global wix --version 5.*
-
-      - name: Create WiX Output Directory
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: pwsh
-        run: mkdir target/wix -Force
-
-      - name: Package
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: wix build packaging/windows/installer.wxs -o target/wix/connected-desktop.msi
-
-      - name: Upload Windows x64 MSI
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        uses: actions/upload-artifact@v7
-        with:
-          path: target/wix/connected-desktop.msi
-          name: connected-desktop-windows-x64.msi
-          archive: false
-
-      - name: Upload Windows ARM64 EXE
-        if: matrix.target == 'aarch64-pc-windows-msvc'
-        uses: actions/upload-artifact@v7
-        with:
-          path: target/aarch64-pc-windows-msvc/debug/connected-desktop.exe
-          name: connected-desktop-windows-arm64.exe
-          archive: false
+          Get-ChildItem -Path target/ -Recurse -Directory | Where-Object { $_.Name -match '^[a-z]{2}(-[A-Za-z]+)?$' -and (Test-Path "$($_.FullName)\WebView2Loader.dll.mui" -or Test-Path "$($_.FullName)\Microsoft.Web.WebView2.Core.dll.mui") } | Remove-Item -Recurse -Force
 
       - name: Build Windows x64 MSIX
         if: matrix.target == 'x86_64-pc-windows-msvc'
@@ -329,7 +277,74 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 6: macOS Build
+  # Job 6: Bundle Windows MSIX and MSIXUPLOAD
+  # -------------------------------------------------------------------------
+  bundle-windows-msix:
+    name: Bundle Windows MSIX
+    runs-on: windows-latest
+    needs: [build-windows]
+    if: github.event_name != 'schedule'
+    steps:
+      - name: Download Windows x64 MSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: connected-desktop-windows-x64.msix
+          path: bundle-input
+
+      - name: Download Windows ARM64 MSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: connected-desktop-windows-arm64.msix
+          path: bundle-input
+
+      - name: Build MSIX Bundle and MSIXUPLOAD
+        shell: pwsh
+        run: |
+          $inDir = "bundle-input"
+          $x64 = Join-Path $inDir "connected-desktop-windows-x64.msix"
+          $arm64 = Join-Path $inDir "connected-desktop-windows-arm64.msix"
+          if (!(Test-Path $x64)) { throw "Missing x64 MSIX: $x64" }
+          if (!(Test-Path $arm64)) { throw "Missing ARM64 MSIX: $arm64" }
+
+          $outDir = "target\msix"
+          New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+          $bundlePath = Join-Path $outDir "connected-desktop-windows.msixbundle"
+
+          $sdkRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+          if (!(Test-Path $sdkRoot)) { throw "Windows SDK tools not found at $sdkRoot" }
+          $makeAppx = Get-ChildItem -Path $sdkRoot -Recurse -Filter makeappx.exe |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $makeAppx) { throw "makeappx.exe not found" }
+
+          & $makeAppx.FullName bundle /d $inDir /p $bundlePath /o
+          if ($LASTEXITCODE -ne 0) { throw "makeappx bundle failed with exit code $LASTEXITCODE" }
+
+          $uploadDir = Join-Path $outDir "upload"
+          if (Test-Path $uploadDir) { Remove-Item $uploadDir -Recurse -Force }
+          New-Item -ItemType Directory -Path $uploadDir -Force | Out-Null
+          Copy-Item $bundlePath (Join-Path $uploadDir "connected-desktop-windows.msixbundle") -Force
+
+          $msixUploadPath = Join-Path $outDir "connected-desktop-windows.msixupload"
+          if (Test-Path $msixUploadPath) { Remove-Item $msixUploadPath -Force }
+          Compress-Archive -Path (Join-Path $uploadDir "*") -DestinationPath $msixUploadPath -CompressionLevel Optimal
+
+      - name: Upload Windows MSIX Bundle
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/msix/connected-desktop-windows.msixbundle
+          name: connected-desktop-windows.msixbundle
+          archive: false
+
+      - name: Upload Windows MSIXUPLOAD
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/msix/connected-desktop-windows.msixupload
+          name: connected-desktop-windows.msixupload
+          archive: false
+
+  # -------------------------------------------------------------------------
+  # Job 7: macOS Build
   # -------------------------------------------------------------------------
   build-macos:
     name: macOS Build
@@ -375,7 +390,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 7: Build Android App
+  # Job 8: Build Android App
   # -------------------------------------------------------------------------
   build-android:
     name: Android Build
