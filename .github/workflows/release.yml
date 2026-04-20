@@ -327,6 +327,8 @@ jobs:
           prerelease: false
           files: |
             connected-desktop
+            connected-desktop-windows-x64.msix
+            connected-desktop-windows-arm64.msix
             connected-desktop-windows.msixbundle
             connected-desktop-windows.msixupload
             connected-android.apk
