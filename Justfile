@@ -67,7 +67,6 @@ audit:
     cargo deny check
     @echo "✅ Security audit passed"
 
-
 # Pre-commit check
 [doc("Pre-commit checks")]
 pre-commit:
@@ -102,6 +101,8 @@ build-windows-msi:
 
 [doc("Build Windows MSIX locally (PowerShell)")]
 build-windows-msix ARCH="x64" PROFILE="release":
+    cargo build --workspace --{{PROFILE}} --target {{ARCH}}-pc-windows-msvc
+    just clean-webview-locales PROFILE={{PROFILE}}
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1 -Arch {{ARCH}} -Profile {{PROFILE}}
 
 # Clean build artifacts
@@ -205,3 +206,12 @@ prepare-release VERSION:
 [doc("Run commands in Docker (for consistent environment)")]
 docker-shell:
     docker run --rm -it -v %CD%:/workspace -w /workspace rust:latest cmd /c echo Docker shell ready
+
+[doc("Cleans up WebView2 localized folders to prevent Microsoft Store ghost languages")]
+clean-webview-locales PROFILE="release":
+    @echo "Removing WebView2 ghost languages..."
+    {{ if os_family() == "windows" { \
+        "powershell -NoProfile -Command \"Get-ChildItem -Path target\\" + PROFILE + "\\ -Directory | Where-Object { $_.Name -match '^[a-z]{2}(-[A-Za-z]+)?$' } | Remove-Item -Recurse -Force\"" \
+    } else { \
+        "for dir in target/" + PROFILE + "/*/; do if [ -f \"$${dir}WebView2Loader.dll.mui\" ] || [ -f \"$${dir}Microsoft.Web.WebView2.Core.dll.mui\" ]; then echo \"Deleting $${dir}...\"; rm -rf \"$${dir}\"; fi; done" \
+    } }}
