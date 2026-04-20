@@ -11,8 +11,8 @@ use crate::state::{
     get_last_remote_clipboard_content, get_last_remote_media_device_id, get_last_remote_update,
     get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_call_log,
     get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_files_update, get_saved_devices_setting, get_transfer_status,
-    mark_calls_synced, mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
+    get_remote_files_update, get_saved_devices_setting, get_transfer_status, mark_calls_synced,
+    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
     remove_file_transfer_request, save_device_to_settings, set_active_call,
     set_active_incoming_transfer_id, set_active_outgoing_transfer_id, set_device_name_setting,
     set_discovery_active, set_download_directory_setting, set_last_remote_clipboard_content,
@@ -2203,8 +2203,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                         let current_version = env!("CARGO_PKG_VERSION").to_string();
 
-                        match UpdateChecker::check_for_updates(current_version, platform.to_string())
-                            .await
+                        match UpdateChecker::check_for_updates(
+                            current_version,
+                            platform.to_string(),
+                        )
+                        .await
                         {
                             Ok(info) => {
                                 *crate::state::get_update_info().lock_or_recover() =
@@ -2242,17 +2245,16 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     let info_opt = crate::state::get_update_info().lock_or_recover().clone();
                     if let Some(info) = info_opt {
                         if let Some(url) = info.download_url {
+                            #[cfg(target_os = "linux")]
+                            {
+                                info!("Opening update URL: {}", url);
+                                let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                            }
 
-                        #[cfg(target_os = "linux")]
-                        {
-                            info!("Opening update URL: {}", url);
-                            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-                        }
-
-                        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-                        {
-                            info!("Opening update URL: {}", url);
-                        }
+                            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+                            {
+                                info!("Opening update URL: {}", url);
+                            }
                         } else {
                             add_notification("Update", "No download URL found", "");
                         }
