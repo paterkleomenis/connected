@@ -143,7 +143,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 3: Bundle Windows MSIX and MSIXUPLOAD
+  # Job 3: Bundle Windows MSIX
   # -------------------------------------------------------------------------
   bundle-windows-msix:
     name: Bundle Windows MSIX
@@ -162,7 +162,7 @@ jobs:
           name: connected-desktop-windows-arm64.msix
           path: bundle-input
 
-      - name: Build MSIX Bundle and MSIXUPLOAD
+      - name: Build MSIX Bundle
         shell: pwsh
         run: |
           $inDir = "bundle-input"
@@ -185,27 +185,11 @@ jobs:
           & $makeAppx.FullName bundle /d $inDir /p $bundlePath /o
           if ($LASTEXITCODE -ne 0) { throw "makeappx bundle failed with exit code $LASTEXITCODE" }
 
-          $uploadDir = Join-Path $outDir "upload"
-          if (Test-Path $uploadDir) { Remove-Item $uploadDir -Recurse -Force }
-          New-Item -ItemType Directory -Path $uploadDir -Force | Out-Null
-          Copy-Item $bundlePath (Join-Path $uploadDir "connected-desktop-windows.msixbundle") -Force
-
-          $msixUploadPath = Join-Path $outDir "connected-desktop-windows.msixupload"
-          if (Test-Path $msixUploadPath) { Remove-Item $msixUploadPath -Force }
-          Compress-Archive -Path (Join-Path $uploadDir "*") -DestinationPath $msixUploadPath -CompressionLevel Optimal
-
       - name: Upload Windows MSIX Bundle
         uses: actions/upload-artifact@v7
         with:
           path: target/msix/connected-desktop-windows.msixbundle
           name: connected-desktop-windows.msixbundle
-          archive: false
-
-      - name: Upload Windows MSIXUPLOAD
-        uses: actions/upload-artifact@v7
-        with:
-          path: target/msix/connected-desktop-windows.msixupload
-          name: connected-desktop-windows.msixupload
           archive: false
 
   # -------------------------------------------------------------------------
@@ -330,7 +314,6 @@ jobs:
             connected-desktop-windows-x64.msix
             connected-desktop-windows-arm64.msix
             connected-desktop-windows.msixbundle
-            connected-desktop-windows.msixupload
             connected-android.apk
             connected-desktop.dmg
         env:
