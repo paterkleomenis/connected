@@ -4,6 +4,10 @@ param(
     [string]$Profile = "release",
 
     [Parameter(Mandatory = $false)]
+    [ValidateRange(-1, 65535)]
+    [int]$PackageBuild = -1,
+
+    [Parameter(Mandatory = $false)]
     [switch]$SkipBuild,
 
     [Parameter(Mandatory = $false)]
@@ -56,16 +60,22 @@ if (-not $X64Only -and -not (Test-Arm64ToolchainAvailable)) {
     $X64Only = $true
 }
 
+if ($PackageBuild -lt 0) {
+    $PackageBuild = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds() % 65535
+}
+
+Write-Host "Using MSIX package build number: $PackageBuild (version format x.y.$PackageBuild.0)"
+
 if (-not $SkipBuild) {
     Write-Host "Building x64 MSIX ($Profile)..."
-    & $buildMsixScript -Arch x64 -Profile $Profile
+    & $buildMsixScript -Arch x64 -Profile $Profile -PackageBuild $PackageBuild
     if ($LASTEXITCODE -ne 0) {
         throw "x64 MSIX build failed with exit code $LASTEXITCODE"
     }
 
     if (-not $X64Only) {
         Write-Host "Building ARM64 MSIX ($Profile)..."
-        & $buildMsixScript -Arch arm64 -Profile $Profile
+        & $buildMsixScript -Arch arm64 -Profile $Profile -PackageBuild $PackageBuild
         if ($LASTEXITCODE -ne 0) {
             throw "ARM64 MSIX build failed with exit code $LASTEXITCODE"
         }

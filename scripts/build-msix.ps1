@@ -5,7 +5,11 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateSet("debug", "release")]
-    [string]$Profile = "release"
+    [string]$Profile = "release",
+
+    [Parameter(Mandatory = $false)]
+    [ValidateRange(0, 65535)]
+    [int]$PackageBuild = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -80,18 +84,22 @@ if ($null -eq $cargoVersionLine) {
 }
 $rawVersion = $cargoVersionLine.Matches[0].Groups[1].Value
 
-function Convert-ToMsixVersion([string]$version) {
+function Convert-ToMsixVersion([string]$version, [int]$buildOverride) {
     if ($version -match '^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$') {
         $major = $matches[1]
         $minor = $matches[2]
         $patch = $matches[3]
-        $build = if ($matches[4]) { $matches[4] } else { "0" }
-        return "$major.$minor.$patch.$build"
+
+        # Microsoft Store requires the revision segment (4th) to be 0.
+        # To keep package full names unique for local re-submissions, use
+        # PackageBuild as the 3rd segment when provided.
+        $build = if ($buildOverride -ge 0) { "$buildOverride" } else { $patch }
+        return "$major.$minor.$build.0"
     }
     throw "Unsupported version format '$version'. Expected semantic version like 2.9.4"
 }
 
-$packageVersion = Convert-ToMsixVersion $rawVersion
+$packageVersion = Convert-ToMsixVersion $rawVersion $PackageBuild
 
 if ($Arch -eq "arm64") {
     Configure-Arm64WindowsToolchain
