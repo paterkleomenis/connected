@@ -105,23 +105,6 @@ class ConnectedApp(private val context: Context) {
                     Manifest.permission.NEARBY_WIFI_DEVICES
                 ) != PackageManager.PERMISSION_GRANTED
             ) return false
-        }
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.BLUETOOTH_SCAN
-                ) != PackageManager.PERMISSION_GRANTED
-            ) return false
-            if (ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.BLUETOOTH_ADVERTISE
-                ) != PackageManager.PERMISSION_GRANTED
-            ) return false
-            if (ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
-            ) return false
         } else {
             if (ContextCompat.checkSelfPermission(
                     context,
@@ -339,39 +322,6 @@ class ConnectedApp(private val context: Context) {
     private val networkStateReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED -> {
-                    val state = intent.getIntExtra(
-                        android.bluetooth.BluetoothAdapter.EXTRA_STATE,
-                        android.bluetooth.BluetoothAdapter.ERROR
-                    )
-                    when (state) {
-                        android.bluetooth.BluetoothAdapter.STATE_OFF -> {
-                            Log.d("ConnectedApp", "Bluetooth turned off - clearing device cache")
-                            // Do not stop manager; let it persist for Wi-Fi Direct
-                            runOnMainThread {
-                                devices.clear()
-                                trustedDevices.clear()
-                            }
-                        }
-
-                        android.bluetooth.BluetoothAdapter.STATE_ON -> {
-                            Log.d("ConnectedApp", "Bluetooth turned on - refreshing")
-                            scope.launch(Dispatchers.Main) {
-                                delay(1000)
-                                startProximityManager() // Ensures instance exists
-                                if (hasProximityPermissions()) {
-                                    try {
-                                        proximityManager?.start() // Triggers startBle() again
-                                    } catch (e: SecurityException) {
-                                        Log.w("ConnectedApp", "Failed to start proximity manager: permission denied", e)
-                                    }
-                                }
-                                beginDiscovery()
-                            }
-                        }
-                    }
-                }
-
                 android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION -> {
                     val state = intent.getIntExtra(
                         android.net.wifi.WifiManager.EXTRA_WIFI_STATE,
@@ -380,7 +330,7 @@ class ConnectedApp(private val context: Context) {
                     when (state) {
                         android.net.wifi.WifiManager.WIFI_STATE_DISABLED -> {
                             Log.d("ConnectedApp", "Wi-Fi turned off - clearing device cache")
-                            // Do not stop manager; let it persist for BLE
+                            // Keep manager instance; it resumes when Wi-Fi Direct returns
                             runOnMainThread {
                                 devices.clear()
                                 trustedDevices.clear()
@@ -501,9 +451,6 @@ class ConnectedApp(private val context: Context) {
                         ).show()
                     }
                 }
-            }
-            manager.hasIdeallyDiscoveredDevice = { deviceId ->
-                devices.any { it.id == deviceId && !isSyntheticIp(it.ip) }
             }
             if (hasProximityPermissions()) {
                 try {
@@ -1085,7 +1032,6 @@ class ConnectedApp(private val context: Context) {
             lastSdkRestart = System.currentTimeMillis()
 
             val filter = IntentFilter().apply {
-                addAction(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED)
                 addAction(android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION)
             }
             context.registerReceiver(networkStateReceiver, filter)
@@ -1138,7 +1084,7 @@ class ConnectedApp(private val context: Context) {
         // Stop clipboard sync job
         stopClipboardSync()
 
-        // Stop proximity manager (BLE + Wi-Fi Direct)
+        // Stop proximity manager (Wi-Fi Direct)
         stopProximityManager()
 
         // Clear thumbnail cache to free memory
@@ -1728,7 +1674,7 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    fun isSyntheticIp(ip: String) = ip == "0.0.0.0" || ip.startsWith("198.18.")
+    fun isSyntheticIp(ip: String) = ip == "0.0.0.0"
 
     fun getDevices() {
         try {

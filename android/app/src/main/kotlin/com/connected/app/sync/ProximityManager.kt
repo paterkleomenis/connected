@@ -2,17 +2,6 @@ package com.connected.app.sync
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
-import android.bluetooth.le.AdvertiseCallback
-import android.bluetooth.le.AdvertiseData
-import android.bluetooth.le.AdvertiseSettings
-import android.bluetooth.le.BluetoothLeAdvertiser
-import android.bluetooth.le.BluetoothLeScanner
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -23,10 +12,11 @@ import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pManager
 import android.net.wifi.WpsInfo
+import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo
+import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelUuid
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
@@ -37,97 +27,53 @@ import androidx.core.location.LocationManagerCompat
 import uniffi.connected_ffi.DiscoveredDevice
 import uniffi.connected_ffi.getLocalDevice
 import uniffi.connected_ffi.injectProximityDevice
-import java.net.InetAddress
 import java.nio.ByteBuffer
+import java.text.Normalizer
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.text.Normalizer
 
 class ProximityManager(private val context: Context) {
     companion object {
         private const val TAG = "ProximityManager"
-        private const val MANUFACTURER_ID = 0xFFFF
-        private const val PROTOCOL_VERSION = 3
+
+        // Wi-Fi Direct Bonjour/DNS-SD identity
+        private const val SERVICE_INSTANCE_PREFIX = "connected"
+        private const val SERVICE_TYPE = "_connected._udp"
+        private const val TXT_KEY_APP = "app"
+        private const val TXT_KEY_ID = "id"
+        private const val TXT_KEY_NAME = "name"
+        private const val TXT_KEY_TYPE = "type"
+        private const val TXT_KEY_PORT = "port"
+        private const val TXT_KEY_VERSION = "ver"
+        private const val TXT_KEY_PAIR = "pair"
+        private const val APP_ID = "connected"
+        private const val PROTOCOL_VERSION = 1
         private const val MIN_COMPATIBLE_VERSION = 1
-        private const val NAME_MAX_LEN = 20
+
         private const val UNKNOWN_IP = "0.0.0.0"
         private const val SYNTHETIC_IP_PREFIX = "198.18."
-        private const val CONNECT_COOLDOWN_MS = 15_000L
-        private const val DISCOVERY_COOLDOWN_MS = 15_000L
+
+        private const val DISCOVERY_COOLDOWN_MS = 4_000L
+        private const val SERVICE_DISCOVERY_COOLDOWN_MS = 4_000L
+        private const val DISCOVERY_LOOP_INTERVAL_MS = 7_500L
         private const val RETRY_DELAY_MS = 5_000L
         private const val CONNECT_RETRY_DELAY_MS = 2_000L
+        private const val CONNECT_COOLDOWN_MS = 15_000L
         private const val GROUP_CREATE_COOLDOWN_MS = 15_000L
         private const val GROUP_RECOVERY_DELAY_MS = 2_000L
+        private const val PEER_STALE_MS = 45_000L
+        private const val SERVICE_STALE_MS = 45_000L
+
         private const val PAIR_INTENT_TTL_MS = 30_000L
         private const val PAIR_INTENT_DEBOUNCE_MS = 10_000L
-        private val NAME_SERVICE_UUID =
-            ParcelUuid(UUID.fromString("0000FD00-0000-1000-8000-00805F9B34FB"))
     }
-
-    private val bluetoothManager =
-        context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-    private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-
-    private var advertiser: BluetoothLeAdvertiser? = null
-    private var scanner: BluetoothLeScanner? = null
-    private var advertiseCallback: AdvertiseCallback? = null
-    private var scanCallback: ScanCallback? = null
 
     private val wifiP2pManager =
         context.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager?
     private var p2pChannel: WifiP2pManager.Channel? = null
     private var p2pReceiver: BroadcastReceiver? = null
     private val handler = Handler(Looper.getMainLooper())
-
-    @SuppressLint("MissingPermission")
-    private val retryDiscoveryRunnable = Runnable { discoverPeers(force = true) }
-
-    @SuppressLint("MissingPermission")
-    private val retryConnectRunnable = Runnable { discoverPeers(force = true) }
-
-    @SuppressLint("MissingPermission")
-    private val retryGroupCreateRunnable = Runnable { createGroupIfNeeded(force = true) }
-
-    private val peersById = ConcurrentHashMap<String, ProximityPeer>()
-    private val p2pIpById = ConcurrentHashMap<String, String>()
-    private var lastAdvertisedSignature: String? = null
-
-    @Volatile
-    private var pendingPeerId: String? = null
-
-    @Volatile
-    private var pendingPeerName: String? = null
-
-    @Volatile
-    private var pendingPreferGroupOwner = false
-    private var lastConnectAttempt = 0L
-    private var lastDiscoveryAttempt = 0L
-    private var lastGroupCreateAttempt = 0L
-    private var localP2pDeviceName: String? = null
-    private var groupCreateRetryAttempts = 0
-
-    @Volatile
-    private var pairingActiveUntil = 0L
-
-    @Volatile
-    private var pairingTargetId: String? = null
-
-    @Volatile
-    private var p2pActionInFlight = false
-    private val lastPairIntentHandledAt = ConcurrentHashMap<String, Long>()
-    private val lastBleLogAt = ConcurrentHashMap<String, Long>()
-
-    @Volatile
-    private var p2pConnected = false
-
-    @Volatile
-    private var isGroupOwner = false
-
-    @Volatile
-    private var p2pEnabled = false
-
-    var onPairingIntent: ((String) -> Unit)? = null
-    var hasIdeallyDiscoveredDevice: ((String) -> Boolean)? = null
 
     data class ProximityPeer(
         val deviceId: String,
@@ -138,330 +84,143 @@ class ProximityManager(private val context: Context) {
         val ip: String? = null,
         val matchName: String = name,
         val pairingIntent: Boolean = false,
+        val deviceAddress: String? = null,
+        val lastSeenAtMs: Long = SystemClock.elapsedRealtime(),
     )
 
-    @RequiresPermission(
-        anyOf = [
-            // BLE
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_ADVERTISE,
-            // WiFi Direct
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        ]
+    private data class ServiceEntry(
+        val deviceAddress: String,
+        var deviceName: String? = null,
+        var instanceName: String? = null,
+        var txtRecord: Map<String, String>? = null,
+        var lastSeenAtMs: Long = SystemClock.elapsedRealtime(),
     )
-    fun start() {
-        startBle()
-        startWifiDirect()
-    }
 
-    @RequiresPermission(
-        anyOf = [
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_ADVERTISE
-        ]
-    )
-    fun stop() {
-        stopWifiDirect()
-        stopBle()
-    }
+    private val peersById = ConcurrentHashMap<String, ProximityPeer>()
+    private val serviceEntriesByAddress = ConcurrentHashMap<String, ServiceEntry>()
+    private val p2pDevicesByAddress = ConcurrentHashMap<String, WifiP2pDevice>()
+    private val p2pIpById = ConcurrentHashMap<String, String>()
+    private val lastPairIntentHandledAt = ConcurrentHashMap<String, Long>()
+    private val lastPeerLogAt = ConcurrentHashMap<String, Long>()
 
-    @RequiresPermission(
-        anyOf = [
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_ADVERTISE,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        ]
-    )
-    fun requestConnect(deviceId: String) {
-        val peer = peersById[deviceId]
-        if (peer == null) {
-            Log.d(TAG, "No proximity peer for device id $deviceId")
-            return
+    private var serviceRequest: WifiP2pDnsSdServiceRequest? = null
+    private var localServiceInfo: WifiP2pDnsSdServiceInfo? = null
+    private var lastAdvertisedSignature: String? = null
+
+    @Volatile
+    private var pendingPeerId: String? = null
+
+    @Volatile
+    private var pendingPeerName: String? = null
+
+    @Volatile
+    private var pendingPreferGroupOwner = false
+
+    @Volatile
+    private var pairingActiveUntil = 0L
+
+    @Volatile
+    private var pairingTargetId: String? = null
+
+    @Volatile
+    private var p2pActionInFlight = false
+
+    @Volatile
+    private var p2pConnected = false
+
+    @Volatile
+    private var isGroupOwner = false
+
+    @Volatile
+    private var p2pEnabled = true
+
+    private var lastConnectAttempt = 0L
+    private var lastDiscoveryAttempt = 0L
+    private var lastServiceDiscoveryAttempt = 0L
+    private var lastGroupCreateAttempt = 0L
+    private var localP2pDeviceName: String? = null
+    private var groupCreateRetryAttempts = 0
+
+    var onPairingIntent: ((String) -> Unit)? = null
+    var hasIdeallyDiscoveredDevice: ((String) -> Boolean)? = null
+
+    @SuppressLint("MissingPermission")
+    private val retryDiscoveryRunnable = Runnable { discoverNearby(force = true) }
+
+    @SuppressLint("MissingPermission")
+    private val retryConnectRunnable = Runnable { discoverNearby(force = true) }
+
+    @SuppressLint("MissingPermission")
+    private val retryGroupCreateRunnable = Runnable { createGroupIfNeeded(force = true) }
+
+    @SuppressLint("MissingPermission")
+    private val discoveryLoopRunnable = object : Runnable {
+        override fun run() {
+            refreshLocalService()
+            discoverNearby(force = true)
+            cleanupStaleState()
+            handler.postDelayed(this, DISCOVERY_LOOP_INTERVAL_MS)
         }
-        Log.d(TAG, "Proximity connect requested for ${peer.matchName} ($deviceId)")
-        pairingActiveUntil = SystemClock.elapsedRealtime() + PAIR_INTENT_TTL_MS
-        pairingTargetId = deviceId
-        pendingPeerId = deviceId
-        pendingPeerName = peer.matchName
-        pendingPreferGroupOwner = shouldBeGroupOwner(deviceId)
-        refreshAdvertising(force = true)
-        handler.postDelayed({ refreshAdvertising(force = true) }, PAIR_INTENT_TTL_MS + 100)
-        maybeConnectWifiDirect(peer, force = true)
-    }
-
-    @RequiresPermission(
-        anyOf = [
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_ADVERTISE,
-            Manifest.permission.BLUETOOTH_SCAN
-        ]
-    )
-    private fun startBle() {
-        stopBle()
-        val adapter = bluetoothAdapter
-        val enabled = try {
-            adapter?.isEnabled == true
-        } catch (e: SecurityException) {
-            Log.w(TAG, "Missing Bluetooth connect permission", e)
-            false
-        }
-        if (adapter == null || !enabled) {
-            Log.w(TAG, "Bluetooth unavailable or disabled")
-            return
-        }
-
-        advertiser = adapter.bluetoothLeAdvertiser
-        scanner = adapter.bluetoothLeScanner
-        if (advertiser == null || scanner == null) {
-            Log.w(TAG, "BLE advertiser or scanner not available; retrying...")
-            handler.postDelayed({ startBle() }, 2000)
-            return
-        }
-
-        refreshAdvertising()
-        startScanning()
-    }
-
-
-    @RequiresPermission(
-        anyOf = [
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_ADVERTISE,
-            Manifest.permission.BLUETOOTH_SCAN
-        ]
-    )
-    private fun stopBle() {
-        stopAdvertising()
-        stopScanning()
-    }
-
-    @RequiresPermission(
-        anyOf = [
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_ADVERTISE
-        ]
-    )
-    private fun refreshAdvertising(force: Boolean = false) {
-        if (!hasBleAdvertisePermission()) {
-            Log.w(TAG, "Missing BLE advertise permission")
-            return
-        }
-
-        val local = runCatching { getLocalDevice() }.getOrNull() ?: return
-        val pairingFlag = if (SystemClock.elapsedRealtime() < pairingActiveUntil) 1 else 0
-        val signature =
-            "${local.id}|${local.name}|${local.deviceType}|${local.port}|$pairingFlag"
-
-        if (!force && signature == lastAdvertisedSignature && advertiseCallback != null) {
-            return
-        }
-
-        stopAdvertising()
-
-        val payload = buildPayload(local)
-        val nameData = buildNameData(local)
-        val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
-            .setConnectable(false)
-            .build()
-
-        val data = AdvertiseData.Builder()
-            .addManufacturerData(MANUFACTURER_ID, payload)
-            .build()
-
-        val scanResponse = AdvertiseData.Builder()
-            .addServiceData(NAME_SERVICE_UUID, nameData)
-            .build()
-
-        advertiseCallback = object : AdvertiseCallback() {
-            override fun onStartFailure(errorCode: Int) {
-                Log.w(TAG, "BLE advertise failed: $errorCode")
-            }
-
-            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
-                Log.d(TAG, "BLE advertise started")
-            }
-        }
-
-        advertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
-        lastAdvertisedSignature = signature
-    }
-
-    @RequiresPermission(
-        anyOf = [
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_ADVERTISE
-        ]
-    )
-    private fun stopAdvertising() {
-        val callback = advertiseCallback
-        if (callback != null) {
-            try {
-                advertiser?.stopAdvertising(callback)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to stop advertising: ${e.message}")
-            }
-        }
-        advertiseCallback = null
-        lastAdvertisedSignature = null
-    }
-
-    @RequiresPermission(
-        anyOf = [
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_SCAN
-        ]
-    )
-    private fun startScanning() {
-        if (!hasBleScanPermission()) {
-            Log.w(TAG, "Missing BLE scan permission")
-            return
-        }
-
-        val filters = listOf(
-            ScanFilter.Builder()
-                .setManufacturerData(MANUFACTURER_ID, ByteArray(0))
-                .build()
-        )
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
-        scanCallback = object : ScanCallback() {
-            @RequiresPermission(
-                anyOf = [
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.NEARBY_WIFI_DEVICES,
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH
-                ]
-            )
-            override fun onScanResult(callbackType: Int, result: ScanResult) {
-                handleScanResult(result)
-            }
-
-            @SuppressLint("MissingPermission") // if it works, it works
-            override fun onBatchScanResults(results: MutableList<ScanResult>) {
-                results.forEach { handleScanResult(it) }
-            }
-
-            override fun onScanFailed(errorCode: Int) {
-                Log.w(TAG, "BLE scan failed: $errorCode")
-            }
-        }
-
-        scanner?.startScan(filters, settings, scanCallback)
-    }
-
-    @RequiresPermission(
-        anyOf = [
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_SCAN
-        ]
-    )
-    private fun stopScanning() {
-        val callback = scanCallback
-        if (callback != null) {
-            try {
-                scanner?.stopScan(callback)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to stop scanning: ${e.message}")
-            }
-        }
-        scanCallback = null
     }
 
     @RequiresPermission(
         anyOf = [
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.NEARBY_WIFI_DEVICES,
-            // Get name
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.BLUETOOTH
-        ]
+        ],
     )
-    private fun handleScanResult(result: ScanResult) {
-        val record = result.scanRecord ?: return
-        val payload = record.getManufacturerSpecificData(MANUFACTURER_ID) ?: return
-        val serviceNameData = record.getServiceData(NAME_SERVICE_UUID)
-        val serviceName = serviceNameData?.let { String(it, Charsets.UTF_8) }
-        val nameOverride = serviceName?.ifBlank { null }
-            ?: runCatching { record.deviceName ?: result.device.name }.getOrNull()
-        val peer = parsePayload(payload, nameOverride) ?: return
-
-        val localId = runCatching { getLocalDevice().id }.getOrNull()
-        if (peer.deviceId == localId) {
-            return
-        }
-
-        val now = SystemClock.elapsedRealtime()
-        val lastLog = lastBleLogAt[peer.deviceId] ?: 0L
-        if (now - lastLog > 2000L) {
-            Log.d(TAG, "BLE peer: ${peer.matchName} (id=${peer.deviceId})")
-            lastBleLogAt[peer.deviceId] = now
-        }
-        peersById[peer.deviceId] = peer
-
-        if (peer.pairingIntent) {
-            val now = SystemClock.elapsedRealtime()
-            val lastHandled = lastPairIntentHandledAt[peer.deviceId] ?: 0L
-            if (now - lastHandled < PAIR_INTENT_DEBOUNCE_MS) {
-                return
-            }
-            lastPairIntentHandledAt[peer.deviceId] = now
-            if (p2pActionInFlight) {
-                Log.d(TAG, "Pair intent ignored; Wi-Fi Direct action already in flight")
-                return
-            }
-            // Notify listener about the pairing intent so the app can prepare to handshake
-            handler.post { onPairingIntent?.invoke(peer.deviceId) }
-
-            pendingPeerId = peer.deviceId
-            pendingPeerName = peer.matchName
-            pendingPreferGroupOwner = shouldBeGroupOwner(peer.deviceId)
-            if (pendingPreferGroupOwner) {
-                Log.d(TAG, "Pair intent: auto group-owner for ${peer.matchName}")
-                createGroupIfNeeded(force = true)
-            } else {
-                Log.d(TAG, "Pair intent: auto connect for ${peer.matchName}")
-                maybeConnectWifiDirect(peer, force = true)
-            }
-        }
-
-        val p2pIpOverride = if (p2pConnected) p2pIpById[peer.deviceId] else null
-        val hasGoodIp = hasIdeallyDiscoveredDevice?.invoke(peer.deviceId) == true
-        val ipForInject = when {
-            isUsableIp(peer.ip) -> peer.ip!!
-            isUsableIp(p2pIpOverride) -> p2pIpOverride!!
-            hasGoodIp -> UNKNOWN_IP
-            p2pConnected && isGroupOwner -> UNKNOWN_IP
-            else -> syntheticIpForDevice(peer.deviceId)
-        }
-        try {
-            injectProximityDevice(
-                peer.deviceId,
-                peer.name,
-                peer.deviceType,
-                ipForInject,
-                peer.port.toUShort()
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to inject proximity device", e)
-        }
+    fun start() {
+        startWifiDirect()
     }
 
     @RequiresPermission(
         anyOf = [
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        ]
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ],
+    )
+    fun stop() {
+        stopWifiDirect()
+    }
+
+    @RequiresPermission(
+        anyOf = [
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ],
+    )
+    fun requestConnect(deviceId: String) {
+        val peer = peersById[deviceId]
+        if (peer == null) {
+            Log.d(TAG, "No proximity peer for device id $deviceId")
+            discoverNearby(force = true)
+            return
+        }
+
+        Log.d(TAG, "Proximity connect requested for ${peer.matchName} ($deviceId)")
+        pairingActiveUntil = SystemClock.elapsedRealtime() + PAIR_INTENT_TTL_MS
+        pairingTargetId = deviceId
+        pendingPeerId = deviceId
+        pendingPeerName = peer.matchName
+        pendingPreferGroupOwner = shouldBeGroupOwner(deviceId)
+
+        refreshLocalService(force = true)
+        handler.postDelayed({ refreshLocalService(force = true) }, PAIR_INTENT_TTL_MS + 100)
+
+        maybeConnectWifiDirect(peer, force = true)
+        discoverNearby(force = true)
+    }
+
+    @RequiresPermission(
+        anyOf = [
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ],
     )
     private fun startWifiDirect() {
         stopWifiDirect()
         if (wifiP2pManager == null) {
+            Log.w(TAG, "Wi-Fi Direct manager unavailable")
             return
         }
 
@@ -475,20 +234,22 @@ class ProximityManager(private val context: Context) {
         }
 
         p2pChannel = wifiP2pManager.initialize(context, context.mainLooper, null)
+        setupDnsSdListeners()
 
         val filter = IntentFilter().apply {
             addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)
             addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
             addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
             addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION)
+            addAction(WifiP2pManager.WIFI_P2P_DISCOVERY_CHANGED_ACTION)
         }
 
         p2pReceiver = object : BroadcastReceiver() {
             @RequiresPermission(
                 anyOf = [
                     Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.NEARBY_WIFI_DEVICES
-                ]
+                    Manifest.permission.NEARBY_WIFI_DEVICES,
+                ],
             )
             override fun onReceive(context: Context?, intent: Intent?) {
                 val action = intent?.action ?: return
@@ -496,12 +257,18 @@ class ProximityManager(private val context: Context) {
                     WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION -> {
                         val state = intent.getIntExtra(
                             WifiP2pManager.EXTRA_WIFI_STATE,
-                            WifiP2pManager.WIFI_P2P_STATE_DISABLED
+                            WifiP2pManager.WIFI_P2P_STATE_DISABLED,
                         )
                         p2pEnabled = state == WifiP2pManager.WIFI_P2P_STATE_ENABLED
-                        if (state == WifiP2pManager.WIFI_P2P_STATE_ENABLED) {
-                            discoverPeers()
+                        if (p2pEnabled) {
                             requestLocalDeviceInfo()
+                            refreshLocalService(force = true)
+                            refreshServiceRequest(force = true)
+                            discoverNearby(force = true)
+                        } else {
+                            p2pConnected = false
+                            isGroupOwner = false
+                            p2pIpById.clear()
                         }
                     }
 
@@ -518,65 +285,258 @@ class ProximityManager(private val context: Context) {
                         if (!name.isNullOrBlank()) {
                             localP2pDeviceName = name
                             Log.d(TAG, "Wi-Fi Direct local name: $name")
+                            refreshLocalService()
                         }
+                    }
+
+                    WifiP2pManager.WIFI_P2P_DISCOVERY_CHANGED_ACTION -> {
+                        discoverNearby(force = true)
                     }
                 }
             }
         }
 
         context.registerReceiver(p2pReceiver, filter)
-        // Rely on sticky broadcast for initial discovery
-        if (p2pEnabled) {
-            requestLocalDeviceInfo()
-        }
-    }
-
-    @RequiresPermission(
-        allOf = [
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        ]
-    )
-    private fun requestLocalDeviceInfo() {
-        val manager = wifiP2pManager ?: return
-        val channel = p2pChannel ?: return
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                manager.requestDeviceInfo(channel) { device ->
-                    if (device != null && !device.deviceName.isNullOrBlank()) {
-                        localP2pDeviceName = device.deviceName
-                        Log.d(TAG, "Wi-Fi Direct local name (request): ${device.deviceName}")
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "requestDeviceInfo failed: ${e.message}")
-        }
+        requestLocalDeviceInfo()
+        refreshLocalService(force = true)
+        refreshServiceRequest(force = true)
+        discoverNearby(force = true)
+        scheduleDiscoveryLoop()
     }
 
     private fun stopWifiDirect() {
+        handler.removeCallbacks(discoveryLoopRunnable)
+        handler.removeCallbacks(retryDiscoveryRunnable)
+        handler.removeCallbacks(retryConnectRunnable)
+        handler.removeCallbacks(retryGroupCreateRunnable)
+
+        val manager = wifiP2pManager
+        val channel = p2pChannel
+        if (manager != null && channel != null && hasP2pPermission()) {
+            runCatching {
+                manager.stopPeerDiscovery(channel, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {}
+                    override fun onFailure(reason: Int) {
+                        Log.d(TAG, "stopPeerDiscovery failed on stop: $reason")
+                    }
+                })
+            }
+
+            runCatching {
+                manager.clearServiceRequests(channel, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {}
+                    override fun onFailure(reason: Int) {
+                        Log.d(TAG, "clearServiceRequests failed on stop: $reason")
+                    }
+                })
+            }
+
+            runCatching {
+                manager.clearLocalServices(channel, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {}
+                    override fun onFailure(reason: Int) {
+                        Log.d(TAG, "clearLocalServices failed on stop: $reason")
+                    }
+                })
+            }
+        }
+
         p2pReceiver?.let { receiver ->
             runCatching { context.unregisterReceiver(receiver) }
         }
         p2pReceiver = null
         p2pChannel = null
+        serviceRequest = null
+        localServiceInfo = null
+        lastAdvertisedSignature = null
+
         p2pConnected = false
         isGroupOwner = false
+        p2pEnabled = true
+        p2pActionInFlight = false
+
+        pendingPeerId = null
+        pendingPeerName = null
         pendingPreferGroupOwner = false
-        p2pActionInFlight = false // Reset action flag to prevent stuck state on restart
+
+        pairingTargetId = null
+        pairingActiveUntil = 0L
+
+        peersById.clear()
         p2pIpById.clear()
-        handler.removeCallbacks(retryDiscoveryRunnable)
-        handler.removeCallbacks(retryConnectRunnable)
-        handler.removeCallbacks(retryGroupCreateRunnable)
+        p2pDevicesByAddress.clear()
+        serviceEntriesByAddress.clear()
+        lastPairIntentHandledAt.clear()
+        lastPeerLogAt.clear()
+    }
+
+    private fun scheduleDiscoveryLoop() {
+        handler.removeCallbacks(discoveryLoopRunnable)
+        handler.postDelayed(discoveryLoopRunnable, DISCOVERY_LOOP_INTERVAL_MS)
+    }
+
+    private fun setupDnsSdListeners() {
+        val manager = wifiP2pManager ?: return
+        val channel = p2pChannel ?: return
+
+        try {
+            manager.setDnsSdResponseListeners(
+                channel,
+                WifiP2pManager.DnsSdServiceResponseListener { instanceName, registrationType, srcDevice ->
+                    if (!registrationType.contains(SERVICE_TYPE)) {
+                        return@DnsSdServiceResponseListener
+                    }
+                    upsertServiceEntry(srcDevice, instanceName, null)
+                },
+                WifiP2pManager.DnsSdTxtRecordListener { fullDomainName, txtRecordMap, srcDevice ->
+                    if (!fullDomainName.contains(SERVICE_TYPE)) {
+                        return@DnsSdTxtRecordListener
+                    }
+                    upsertServiceEntry(srcDevice, null, txtRecordMap)
+                },
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to set DNS-SD listeners: ${e.message}")
+        }
+    }
+
+    private fun refreshLocalService(force: Boolean = false) {
+        val manager = wifiP2pManager ?: return
+        val channel = p2pChannel ?: return
+        if (!hasP2pPermission()) {
+            return
+        }
+
+        val local = runCatching { getLocalDevice() }.getOrNull() ?: return
+        val pairingFlag = if (SystemClock.elapsedRealtime() < pairingActiveUntil) 1 else 0
+        val matchName = getMatchName(local)
+        val signature =
+            "${local.id}|${local.name}|${local.deviceType}|${local.port}|$pairingFlag|$matchName"
+
+        if (!force && signature == lastAdvertisedSignature && localServiceInfo != null) {
+            return
+        }
+
+        val txtRecord = hashMapOf(
+            TXT_KEY_APP to APP_ID,
+            TXT_KEY_ID to local.id,
+            TXT_KEY_NAME to trimTxtValue(local.name, 48),
+            TXT_KEY_TYPE to normalizeDeviceType(local.deviceType),
+            TXT_KEY_PORT to local.port.toString(),
+            TXT_KEY_VERSION to PROTOCOL_VERSION.toString(),
+            TXT_KEY_PAIR to pairingFlag.toString(),
+        )
+
+        val instanceName = safeInstanceName(local.id)
+        val serviceInfo = WifiP2pDnsSdServiceInfo.newInstance(instanceName, SERVICE_TYPE, txtRecord)
+        clearAndAddLocalService(manager, channel, serviceInfo, signature)
+    }
+
+    private fun clearAndAddLocalService(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel,
+        serviceInfo: WifiP2pDnsSdServiceInfo,
+        signature: String,
+    ) {
+        try {
+            manager.clearLocalServices(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    addLocalService(manager, channel, serviceInfo, signature)
+                }
+
+                override fun onFailure(reason: Int) {
+                    Log.w(TAG, "clearLocalServices failed: $reason")
+                    addLocalService(manager, channel, serviceInfo, signature)
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "clearLocalServices threw: ${e.message}")
+            addLocalService(manager, channel, serviceInfo, signature)
+        }
+    }
+
+    private fun addLocalService(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel,
+        serviceInfo: WifiP2pDnsSdServiceInfo,
+        signature: String,
+    ) {
+        try {
+            manager.addLocalService(channel, serviceInfo, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    localServiceInfo = serviceInfo
+                    lastAdvertisedSignature = signature
+                    Log.d(TAG, "Wi-Fi Direct local DNS-SD service published")
+                }
+
+                override fun onFailure(reason: Int) {
+                    Log.w(TAG, "addLocalService failed: $reason")
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "addLocalService threw: ${e.message}")
+        }
+    }
+
+    private fun refreshServiceRequest(force: Boolean = false) {
+        val manager = wifiP2pManager ?: return
+        val channel = p2pChannel ?: return
+        if (!hasP2pPermission()) {
+            return
+        }
+
+        if (!force && serviceRequest != null) {
+            return
+        }
+
+        val request = WifiP2pDnsSdServiceRequest.newInstance()
+        serviceRequest = request
+
+        try {
+            manager.clearServiceRequests(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    addServiceRequest(manager, channel, request)
+                }
+
+                override fun onFailure(reason: Int) {
+                    Log.w(TAG, "clearServiceRequests failed: $reason")
+                    addServiceRequest(manager, channel, request)
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "clearServiceRequests threw: ${e.message}")
+            addServiceRequest(manager, channel, request)
+        }
+    }
+
+    private fun addServiceRequest(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel,
+        request: WifiP2pDnsSdServiceRequest,
+    ) {
+        try {
+            manager.addServiceRequest(channel, request, object : WifiP2pManager.ActionListener {
+                @SuppressLint("MissingPermission")
+                override fun onSuccess() {
+                    discoverServices(force = true)
+                }
+
+                override fun onFailure(reason: Int) {
+                    Log.w(TAG, "addServiceRequest failed: $reason")
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "addServiceRequest threw: ${e.message}")
+        }
     }
 
     @RequiresPermission(
         anyOf = [
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        ]
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ],
     )
-    private fun discoverPeers(force: Boolean = false) {
+    private fun discoverNearby(force: Boolean = false) {
         val manager = wifiP2pManager ?: return
         val channel = p2pChannel ?: return
         if (!hasP2pPermission()) {
@@ -594,17 +554,20 @@ class ProximityManager(private val context: Context) {
         }
         lastDiscoveryAttempt = now
 
+        refreshServiceRequest()
+
         try {
             manager.discoverPeers(channel, object : WifiP2pManager.ActionListener {
                 @SuppressLint("MissingPermission")
-                // permission already required above
                 override fun onSuccess() {
-                    Log.d(TAG, "Wi-Fi Direct peer discovery started")
-                    handler.postDelayed({ requestPeers() }, 1000L)
+                    handler.postDelayed({ requestPeers() }, 1_000L)
+                    discoverServices(force = true)
                 }
 
+                @SuppressLint("MissingPermission")
                 override fun onFailure(reason: Int) {
                     handleP2pFailure("peer discovery", reason)
+                    discoverServices(force = true)
                 }
             })
         } catch (e: Exception) {
@@ -613,10 +576,259 @@ class ProximityManager(private val context: Context) {
     }
 
     @RequiresPermission(
-        allOf = [
+        anyOf = [
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        ]
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ],
+    )
+    private fun discoverServices(force: Boolean = false) {
+        val manager = wifiP2pManager ?: return
+        val channel = p2pChannel ?: return
+        if (!hasP2pPermission()) {
+            return
+        }
+        if (!p2pEnabled) {
+            return
+        }
+        if (serviceRequest == null) {
+            refreshServiceRequest(force = true)
+        }
+
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastServiceDiscoveryAttempt < SERVICE_DISCOVERY_COOLDOWN_MS) {
+            return
+        }
+        lastServiceDiscoveryAttempt = now
+
+        try {
+            manager.discoverServices(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.d(TAG, "Wi-Fi Direct DNS-SD discovery started")
+                }
+
+                override fun onFailure(reason: Int) {
+                    handleP2pFailure("service discovery", reason)
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "discoverServices failed: ${e.message}")
+        }
+    }
+
+    private fun cleanupStaleState() {
+        val now = SystemClock.elapsedRealtime()
+
+        val staleServiceAddresses = mutableListOf<String>()
+        for ((deviceAddress, entry) in serviceEntriesByAddress) {
+            if (now - entry.lastSeenAtMs > SERVICE_STALE_MS) {
+                staleServiceAddresses.add(deviceAddress)
+            }
+        }
+        staleServiceAddresses.forEach { serviceEntriesByAddress.remove(it) }
+
+        val stalePeerIds = mutableListOf<String>()
+        for ((deviceId, peer) in peersById) {
+            if (now - peer.lastSeenAtMs > PEER_STALE_MS) {
+                stalePeerIds.add(deviceId)
+            }
+        }
+
+        for (deviceId in stalePeerIds) {
+            peersById.remove(deviceId)
+            p2pIpById.remove(deviceId)
+            lastPairIntentHandledAt.remove(deviceId)
+            lastPeerLogAt.remove(deviceId)
+            if (pendingPeerId == deviceId) {
+                pendingPeerId = null
+                pendingPeerName = null
+            }
+            if (pairingTargetId == deviceId) {
+                pairingTargetId = null
+            }
+        }
+    }
+
+    private fun upsertServiceEntry(
+        srcDevice: WifiP2pDevice?,
+        instanceName: String?,
+        txtRecordMap: Map<String, String>?,
+    ) {
+        val deviceAddress = srcDevice?.deviceAddress?.ifBlank { null } ?: return
+        val entry = serviceEntriesByAddress[deviceAddress] ?: ServiceEntry(deviceAddress)
+        entry.lastSeenAtMs = SystemClock.elapsedRealtime()
+
+        if (!srcDevice.deviceName.isNullOrBlank()) {
+            entry.deviceName = srcDevice.deviceName
+        }
+        if (!instanceName.isNullOrBlank()) {
+            entry.instanceName = instanceName
+        }
+        if (txtRecordMap != null && txtRecordMap.isNotEmpty()) {
+            entry.txtRecord = HashMap(txtRecordMap)
+        }
+
+        serviceEntriesByAddress[deviceAddress] = entry
+        processServiceEntry(entry)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun processServiceEntry(entry: ServiceEntry) {
+        val peer = parsePeerFromService(entry) ?: return
+        val localId = runCatching { getLocalDevice().id }.getOrNull()
+        if (peer.deviceId == localId) {
+            return
+        }
+
+        val now = SystemClock.elapsedRealtime()
+        val previous = peersById[peer.deviceId]
+        val mergedPeer = if (previous == null) {
+            peer.copy(lastSeenAtMs = now)
+        } else {
+            peer.copy(
+                ip = peer.ip ?: previous.ip,
+                matchName = if (peer.matchName.isBlank()) previous.matchName else peer.matchName,
+                deviceAddress = peer.deviceAddress ?: previous.deviceAddress,
+                lastSeenAtMs = now,
+            )
+        }
+
+        peersById[mergedPeer.deviceId] = mergedPeer
+
+        val lastLog = lastPeerLogAt[mergedPeer.deviceId] ?: 0L
+        if (now - lastLog > 2_000L) {
+            Log.d(TAG, "Nearby peer: ${mergedPeer.matchName} (id=${mergedPeer.deviceId})")
+            lastPeerLogAt[mergedPeer.deviceId] = now
+        }
+
+        if (mergedPeer.pairingIntent) {
+            handlePairIntent(mergedPeer)
+        }
+
+        injectPeer(mergedPeer)
+
+        val targetId = pendingPeerId ?: pairingTargetId
+        if (targetId == mergedPeer.deviceId) {
+            maybeConnectWifiDirect(mergedPeer, force = true)
+        }
+    }
+
+    private fun parsePeerFromService(entry: ServiceEntry): ProximityPeer? {
+        val txt = entry.txtRecord ?: return null
+
+        val app = txt[TXT_KEY_APP]
+        if (!app.isNullOrBlank() && !app.equals(APP_ID, ignoreCase = true)) {
+            return null
+        }
+
+        val deviceId = txt[TXT_KEY_ID]?.trim().orEmpty()
+        if (deviceId.isEmpty()) {
+            return null
+        }
+
+        val protocolVersion = txt[TXT_KEY_VERSION]?.toIntOrNull() ?: 1
+        if (protocolVersion < MIN_COMPATIBLE_VERSION) {
+            return null
+        }
+
+        val port = txt[TXT_KEY_PORT]?.toIntOrNull() ?: return null
+        if (port !in 1..65535) {
+            return null
+        }
+
+        val candidateName = txt[TXT_KEY_NAME]
+            ?.trim()
+            ?.ifBlank { null }
+            ?: entry.deviceName
+            ?.trim()
+            ?.ifBlank { null }
+            ?: entry.instanceName
+            ?.trim()
+            ?.ifBlank { null }
+            ?: "Unknown"
+
+        val pairingIntentRaw = txt[TXT_KEY_PAIR] == "1"
+        val pairingIntent = pairingIntentRaw && shouldAcceptPairIntent(deviceId)
+
+        return ProximityPeer(
+            deviceId = deviceId,
+            name = candidateName,
+            deviceType = normalizeDeviceType(txt[TXT_KEY_TYPE]),
+            port = port,
+            protocolVersion = protocolVersion,
+            ip = null,
+            matchName = candidateName,
+            pairingIntent = pairingIntent,
+            deviceAddress = entry.deviceAddress,
+        )
+    }
+
+    private fun normalizeDeviceType(raw: String?): String {
+        return when (raw?.lowercase(Locale.US)) {
+            "android" -> "android"
+            "linux" -> "linux"
+            "windows" -> "windows"
+            "macos" -> "macos"
+            else -> "unknown"
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun handlePairIntent(peer: ProximityPeer) {
+        val now = SystemClock.elapsedRealtime()
+        val lastHandled = lastPairIntentHandledAt[peer.deviceId] ?: 0L
+        if (now - lastHandled < PAIR_INTENT_DEBOUNCE_MS) {
+            return
+        }
+        lastPairIntentHandledAt[peer.deviceId] = now
+
+        if (p2pActionInFlight) {
+            Log.d(TAG, "Pair intent ignored; Wi-Fi Direct action already in flight")
+            return
+        }
+
+        handler.post { onPairingIntent?.invoke(peer.deviceId) }
+
+        pendingPeerId = peer.deviceId
+        pendingPeerName = peer.matchName
+        pendingPreferGroupOwner = shouldBeGroupOwner(peer.deviceId)
+        if (pendingPreferGroupOwner) {
+            Log.d(TAG, "Pair intent: auto group-owner for ${peer.matchName}")
+            createGroupIfNeeded(force = true)
+        } else {
+            Log.d(TAG, "Pair intent: auto connect for ${peer.matchName}")
+            maybeConnectWifiDirect(peer, force = true)
+        }
+    }
+
+    private fun injectPeer(peer: ProximityPeer) {
+        val p2pIpOverride = if (p2pConnected) p2pIpById[peer.deviceId] else null
+        val hasGoodIp = hasIdeallyDiscoveredDevice?.invoke(peer.deviceId) == true
+        val ipForInject = when {
+            isUsableIp(peer.ip) -> peer.ip!!
+            isUsableIp(p2pIpOverride) -> p2pIpOverride!!
+            hasGoodIp -> UNKNOWN_IP
+            p2pConnected && isGroupOwner -> UNKNOWN_IP
+            else -> syntheticIpForDevice(peer.deviceId)
+        }
+
+        try {
+            injectProximityDevice(
+                peer.deviceId,
+                peer.name,
+                peer.deviceType,
+                ipForInject,
+                peer.port.toUShort(),
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to inject proximity device", e)
+        }
+    }
+
+    @RequiresPermission(
+        anyOf = [
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ],
     )
     private fun requestPeers() {
         val manager = wifiP2pManager ?: return
@@ -632,58 +844,48 @@ class ProximityManager(private val context: Context) {
     }
 
     private fun handlePeerList(candidates: List<WifiP2pDevice>) {
+        p2pDevicesByAddress.clear()
+        candidates.forEach { candidate ->
+            val address = candidate.deviceAddress
+            if (!address.isNullOrBlank()) {
+                p2pDevicesByAddress[address] = candidate
+            }
+        }
+
         if (p2pConnected) {
             return
         }
+
         if (pendingPeerId == null && pairingTargetId != null) {
             pendingPeerId = pairingTargetId
             pendingPeerName = pendingPeerId?.let { peersById[it]?.matchName }
             pendingPreferGroupOwner = pendingPeerId?.let { shouldBeGroupOwner(it) } == true
-            Log.d(TAG, "Recovered pending target from pairing intent")
-        }
-        val hasPendingTarget = pendingPeerId != null || pairingTargetId != null
-        if (!hasPendingTarget) {
-            Log.d(TAG, "Wi-Fi Direct peers available but no pending target; skipping connect")
-            return
-        }
-        if (candidates.isEmpty()) {
-            return
         }
 
-        val targetName = pendingPeerName ?: pairingTargetId?.let { peersById[it]?.matchName }
-        val match = candidates.firstOrNull { candidate ->
-            namesMatch(targetName, candidate.deviceName)
-        }
-        val candidate = when {
-            match != null -> match
-            candidates.size == 1 -> candidates.first()
-            else -> null
+        val targetId = pendingPeerId ?: pairingTargetId ?: return
+        val targetPeer = peersById[targetId]
+        val targetName = pendingPeerName ?: targetPeer?.matchName
+
+        val byAddress = targetPeer?.deviceAddress?.let { p2pDevicesByAddress[it] }
+        val byName = if (byAddress == null) {
+            candidates.firstOrNull { namesMatch(targetName, it.deviceName) }
+        } else {
+            null
         }
 
-        Log.d(
-            TAG,
-            "Wi-Fi Direct peers: ${
-                candidates.joinToString { "${it.deviceName}(${it.deviceAddress})" }
-            }"
-        )
+        val candidate = byAddress ?: byName ?: if (candidates.size == 1) candidates.first() else null
+
         if (pendingPreferGroupOwner) {
             Log.d(TAG, "Acting as group owner; waiting for peer to connect")
             return
         }
+
         if (candidate == null) {
-            Log.d(
-                TAG,
-                "No Wi-Fi Direct peer matched '$targetName' (candidates=${candidates.size})"
-            )
+            Log.d(TAG, "No Wi-Fi Direct peer matched '$targetName' (candidates=${candidates.size})")
             scheduleDiscoveryRetry()
             return
         }
-        if (match == null && candidates.size == 1) {
-            Log.d(
-                TAG,
-                "No name match for '$targetName'; using sole Wi-Fi Direct peer ${candidate.deviceName}"
-            )
-        }
+
         connectToPeer(candidate)
     }
 
@@ -693,6 +895,7 @@ class ProximityManager(private val context: Context) {
         if (p2pActionInFlight) {
             return
         }
+
         val now = SystemClock.elapsedRealtime()
         if (now - lastConnectAttempt < CONNECT_COOLDOWN_MS) {
             Log.d(TAG, "Wi-Fi Direct connect cooldown active; skipping connect")
@@ -707,39 +910,37 @@ class ProximityManager(private val context: Context) {
             groupOwnerIntent = 0
         }
 
-        Log.d(TAG, "Wi-Fi Direct connect to ${device.deviceName} (${device.deviceAddress})")
+        val canConnect = ActivityCompat.checkSelfPermission(
+            context,
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ) == PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
 
-        val doConnect = {
-            if (ActivityCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.NEARBY_WIFI_DEVICES
-                ) == PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.ACCESS_FINE_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED
-            ) {
-                try {
-                    manager.connect(channel, config, object : WifiP2pManager.ActionListener {
-                        override fun onSuccess() {
-                            Log.d(TAG, "Wi-Fi Direct connect requested")
-                            p2pActionInFlight = false
-                        }
-
-                        override fun onFailure(reason: Int) {
-                            p2pActionInFlight = false
-                            handleP2pFailure("connect", reason)
-                        }
-                    })
-                } catch (e: Exception) {
-                    Log.w(TAG, "connect failed: ${e.message}")
-                    p2pActionInFlight = false
-                }
-            }
+        if (!canConnect) {
+            p2pActionInFlight = false
+            Log.w(TAG, "Cannot connect: missing Wi-Fi Direct permissions")
+            return
         }
 
-        // On many devices, calling stopPeerDiscovery manually causes race conditions/BUSY errors.
-        // The framework typically handles stopping discovery when connect is called.
-        doConnect()
+        Log.d(TAG, "Wi-Fi Direct connect to ${device.deviceName} (${device.deviceAddress})")
+        try {
+            manager.connect(channel, config, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.d(TAG, "Wi-Fi Direct connect requested")
+                    p2pActionInFlight = false
+                }
+
+                override fun onFailure(reason: Int) {
+                    p2pActionInFlight = false
+                    handleP2pFailure("connect", reason)
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "connect failed: ${e.message}")
+            p2pActionInFlight = false
+        }
     }
 
     private fun handleConnectionChanged() {
@@ -748,39 +949,23 @@ class ProximityManager(private val context: Context) {
         manager.requestConnectionInfo(channel) { info ->
             p2pConnected = info.groupFormed
             isGroupOwner = info.isGroupOwner
+
             if (info.groupFormed) {
-                if (ActivityCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.BLUETOOTH_ADVERTISE
-                    ) == PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.BLUETOOTH
-                    ) == PackageManager.PERMISSION_GRANTED
-                ) {
-                    refreshAdvertising()
-                }
+                refreshLocalService(force = true)
+
                 if (!info.isGroupOwner) {
                     val peerId = pendingPeerId
                     val peer = peerId?.let { peersById[it] }
                     val groupOwnerIp = info.groupOwnerAddress?.hostAddress
                     if (peer != null && !groupOwnerIp.isNullOrEmpty()) {
                         p2pIpById[peer.deviceId] = groupOwnerIp
-                        try {
-                            injectProximityDevice(
-                                peer.deviceId,
-                                peer.name,
-                                peer.deviceType,
-                                groupOwnerIp,
-                                peer.port.toUShort()
-                            )
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to update group owner endpoint", e)
-                        }
+                        injectPeer(peer.copy(ip = groupOwnerIp, lastSeenAtMs = SystemClock.elapsedRealtime()))
                     }
                 }
             } else {
                 p2pIpById.clear()
-                refreshAdvertising()
+                refreshLocalService(force = true)
+                discoverNearby(force = true)
             }
         }
     }
@@ -789,14 +974,14 @@ class ProximityManager(private val context: Context) {
     @RequiresPermission(
         anyOf = [
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        ]
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ],
     )
     private fun maybeConnectWifiDirect(peer: ProximityPeer, force: Boolean) {
         if (wifiP2pManager == null || !hasP2pPermission() || !p2pEnabled) {
             Log.d(
                 TAG,
-                "Wi-Fi Direct connect skipped (p2pManager=${wifiP2pManager != null}, connected=$p2pConnected, permission=${hasP2pPermission()}, enabled=$p2pEnabled)"
+                "Wi-Fi Direct connect skipped (manager=${wifiP2pManager != null}, connected=$p2pConnected, permission=${hasP2pPermission()}, enabled=$p2pEnabled)",
             )
             return
         }
@@ -813,14 +998,16 @@ class ProximityManager(private val context: Context) {
         pendingPeerId = peer.deviceId
         pendingPeerName = peer.matchName
         pendingPreferGroupOwner = shouldBeGroupOwner(peer.deviceId)
+
         if (p2pConnected) {
             Log.d(TAG, "Wi-Fi Direct already connected; skipping connect")
             return
         }
+
         if (pendingPreferGroupOwner) {
             createGroupIfNeeded(force)
         } else {
-            discoverPeers(force = force)
+            discoverNearby(force = force)
         }
     }
 
@@ -832,16 +1019,24 @@ class ProximityManager(private val context: Context) {
             else -> reason.toString()
         }
         Log.w(TAG, "Wi-Fi Direct $action failed: $reasonLabel")
-        if ((reason == WifiP2pManager.BUSY || reason == WifiP2pManager.ERROR) || (action == "connect" && pendingPeerId != null)) {
+
+        if (
+            reason == WifiP2pManager.BUSY ||
+            reason == WifiP2pManager.ERROR ||
+            (action == "connect" && pendingPeerId != null)
+        ) {
             scheduleDiscoveryRetry(force = true)
         }
+
         if (action == "connect" && pendingPeerId != null) {
             if (reason == WifiP2pManager.ERROR) {
                 recoverFromConnectError()
             }
             scheduleConnectRetry()
         }
-        if (action == "create group" &&
+
+        if (
+            action == "create group" &&
             (reason == WifiP2pManager.BUSY || reason == WifiP2pManager.ERROR)
         ) {
             recoverFromGroupError()
@@ -850,7 +1045,10 @@ class ProximityManager(private val context: Context) {
 
     private fun scheduleDiscoveryRetry(force: Boolean = false) {
         handler.removeCallbacks(retryDiscoveryRunnable)
-        handler.postDelayed(retryDiscoveryRunnable, if (force) CONNECT_RETRY_DELAY_MS else RETRY_DELAY_MS)
+        handler.postDelayed(
+            retryDiscoveryRunnable,
+            if (force) CONNECT_RETRY_DELAY_MS else RETRY_DELAY_MS,
+        )
     }
 
     private fun scheduleConnectRetry() {
@@ -916,8 +1114,8 @@ class ProximityManager(private val context: Context) {
     @RequiresPermission(
         anyOf = [
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        ]
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ],
     )
     private fun createGroupIfNeeded(force: Boolean) {
         val manager = wifiP2pManager ?: return
@@ -935,6 +1133,7 @@ class ProximityManager(private val context: Context) {
         }
         lastGroupCreateAttempt = now
         p2pActionInFlight = true
+
         try {
             manager.requestGroupInfo(channel) { group ->
                 if (group != null && group.isGroupOwner) {
@@ -949,17 +1148,12 @@ class ProximityManager(private val context: Context) {
                 val doCreate = {
                     try {
                         manager.createGroup(channel, object : WifiP2pManager.ActionListener {
-                            @RequiresPermission(
-                                anyOf = [
-                                    Manifest.permission.ACCESS_FINE_LOCATION,
-                                    Manifest.permission.NEARBY_WIFI_DEVICES
-                                ]
-                            )
+                            @SuppressLint("MissingPermission")
                             override fun onSuccess() {
                                 Log.d(TAG, "Wi-Fi Direct group creation requested")
                                 p2pActionInFlight = false
                                 groupCreateRetryAttempts = 0
-                                discoverPeers(force = true)
+                                discoverNearby(force = true)
                             }
 
                             override fun onFailure(reason: Int) {
@@ -994,7 +1188,6 @@ class ProximityManager(private val context: Context) {
                     })
                 } catch (e: Exception) {
                     Log.w(TAG, "stopPeerDiscovery failed: ${e.message}")
-                    // Try creating anyway if stop failed (e.g. not discovering)
                     doCreate()
                 }
             }
@@ -1004,176 +1197,41 @@ class ProximityManager(private val context: Context) {
         }
     }
 
-    private fun isLocationEnabled(): Boolean {
-        val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        return LocationManagerCompat.isLocationEnabled(manager)
-    }
-
-    private fun buildPayload(local: DiscoveredDevice): ByteArray {
-        val uuid = UUID.fromString(local.id)
-        val uuidBytes = ByteBuffer.allocate(16)
-            .putLong(uuid.mostSignificantBits)
-            .putLong(uuid.leastSignificantBits)
-            .array()
-
-        val flags =
-            ((PROTOCOL_VERSION and 0x0F) shl 4) or (deviceTypeCode(local.deviceType) and 0x0F)
-        val portBytes = ByteBuffer.allocate(2).putShort(local.port.toShort()).array()
-        val pairingFlag = if (SystemClock.elapsedRealtime() < pairingActiveUntil) 1 else 0
-
-        val p2pIp = getWifiP2pIpAddress()
-        val ipBytes = if (p2pIp != null) {
-            try {
-                InetAddress.getByName(p2pIp).address
-            } catch (_: Exception) {
-                ByteArray(0)
-            }
-        } else {
-            ByteArray(0)
-        }
-        val hasIp = ipBytes.size == 4
-
-        val payload = ByteArray(1 + 2 + 16 + 1 + if (hasIp) 4 else 0)
-        var offset = 0
-        payload[offset++] = flags.toByte()
-        payload[offset++] = portBytes[0]
-        payload[offset++] = portBytes[1]
-        System.arraycopy(uuidBytes, 0, payload, offset, uuidBytes.size)
-        offset += uuidBytes.size
-        payload[offset++] = pairingFlag.toByte()
-
-        if (hasIp) {
-            System.arraycopy(ipBytes, 0, payload, offset, 4)
-        }
-
-        return payload
-    }
-
-    private fun buildNameData(local: DiscoveredDevice): ByteArray {
-        val matchName = getMatchName(local)
-        return trimUtf8Bytes(matchName, NAME_MAX_LEN)
-    }
-
-    private fun parsePayload(data: ByteArray, nameOverride: String?): ProximityPeer? {
-        if (data.size < 1 + 2 + 16) {
-            return null
-        }
-
-        val now = SystemClock.elapsedRealtime()
-        if (pairingTargetId != null && now > pairingActiveUntil) {
-            pairingTargetId = null
-        }
-
-        val flags = data[0].toInt() and 0xFF
-        val protocol = (flags shr 4) and 0x0F
-        if (protocol < MIN_COMPATIBLE_VERSION) {
-            return null
-        }
-
-        val deviceTypeCode = flags and 0x0F
-        val port = ByteBuffer.wrap(data, 1, 2).short.toInt() and 0xFFFF
-        val uuidBytes = data.copyOfRange(3, 19)
-
-        val uuidBuffer = ByteBuffer.wrap(uuidBytes)
-        val uuid = UUID(uuidBuffer.long, uuidBuffer.long).toString()
-        val matchName = nameOverride?.ifBlank { null } ?: "Unknown"
-
-        val pairingIntent = if (protocol >= 3 && data.size >= 1 + 2 + 16 + 1) {
-            data[19].toInt() != 0
-        } else {
-            false
-        }
-        val acceptPairIntent = pairingIntent && shouldAcceptPairIntent(uuid)
-
-        // Extract IP if present in V3+
-        var ip: String? = null
-        if (protocol >= 3 && data.size >= 1 + 2 + 16 + 1 + 4) {
-            val ipBytes = data.copyOfRange(20, 24)
-            try {
-                ip = InetAddress.getByAddress(ipBytes).hostAddress
-            } catch (_: Exception) {
-            }
-        }
-
-        if (protocol >= 2) {
-            return ProximityPeer(
-                deviceId = uuid,
-                name = matchName,
-                deviceType = deviceTypeString(deviceTypeCode),
-                port = port,
-                protocolVersion = protocol,
-                ip = ip,
-                matchName = matchName,
-                pairingIntent = acceptPairIntent,
-            )
-        }
-
-        if (data.size < 1 + 2 + 16 + 1 + 4) {
-            return null
-        }
-        val nameLen = data[19].toInt() and 0xFF
-        val nameStart = 20
-        val nameEnd = nameStart + nameLen
-        if (nameEnd + 4 > data.size) {
-            return null
-        }
-
-        val legacyName = String(data, nameStart, nameLen, Charsets.UTF_8)
-        val ipBytes = data.copyOfRange(nameEnd, nameEnd + 4)
-        val legacyIp = InetAddress.getByAddress(ipBytes).hostAddress
-
-        @Suppress("KotlinConstantConditions")
-        return ProximityPeer(
-            deviceId = uuid,
-            name = legacyName.ifBlank { matchName },
-            deviceType = deviceTypeString(deviceTypeCode),
-            port = port,
-            protocolVersion = protocol,
-            ip = legacyIp,
-            matchName = matchName,
-            pairingIntent = acceptPairIntent,
-        )
-    }
-
-    private fun getWifiP2pIpAddress(): String? {
+    @RequiresPermission(
+        allOf = [
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ],
+    )
+    private fun requestLocalDeviceInfo() {
+        val manager = wifiP2pManager ?: return
+        val channel = p2pChannel ?: return
         try {
-            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val iface = interfaces.nextElement()
-                if (iface.name.contains("p2p") || iface.name.contains("tun")) {
-                    val addresses = iface.inetAddresses
-                    while (addresses.hasMoreElements()) {
-                        val addr = addresses.nextElement()
-                        if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
-                            return addr.hostAddress
-                        }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                manager.requestDeviceInfo(channel) { device ->
+                    if (device != null && !device.deviceName.isNullOrBlank()) {
+                        localP2pDeviceName = device.deviceName
+                        Log.d(TAG, "Wi-Fi Direct local name (request): ${device.deviceName}")
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get P2P IP", e)
-        }
-        return null
-    }
-
-    private fun deviceTypeCode(type: String): Int {
-        return when (type.lowercase()) {
-            "android" -> 1
-            "linux" -> 2
-            "windows" -> 3
-            "macos" -> 4
-            else -> 0
+            Log.w(TAG, "requestDeviceInfo failed: ${e.message}")
         }
     }
 
-    private fun deviceTypeString(code: Int): String {
-        return when (code) {
-            1 -> "android"
-            2 -> "linux"
-            3 -> "windows"
-            4 -> "macos"
-            else -> "unknown"
+    private fun trimTxtValue(value: String, maxLen: Int): String {
+        if (maxLen <= 0) {
+            return ""
         }
+        return value.take(maxLen)
+    }
+
+    private fun safeInstanceName(deviceId: String): String {
+        val seed = deviceId.take(8).lowercase(Locale.US)
+        val cleanedSeed = seed.replace(Regex("[^a-z0-9]"), "")
+        val suffix = cleanedSeed.ifEmpty { "device" }
+        return "$SERVICE_INSTANCE_PREFIX-$suffix"
     }
 
     private fun namesMatch(pending: String?, candidate: String?): Boolean {
@@ -1186,14 +1244,14 @@ class ProximityManager(private val context: Context) {
             return false
         }
         return normalizedCandidate.contains(normalizedPending) ||
-                normalizedPending.contains(normalizedCandidate)
+            normalizedPending.contains(normalizedCandidate)
     }
 
     private fun normalizeMatchName(name: String): String {
         val normalized = Normalizer.normalize(name, Normalizer.Form.NFKD)
         val noDiacritics = normalized.replace(Regex("\\p{M}+"), "")
         return noDiacritics
-            .lowercase()
+            .lowercase(Locale.US)
             .replace(Regex("[^\\p{L}\\p{N}]+"), "")
     }
 
@@ -1203,21 +1261,18 @@ class ProximityManager(private val context: Context) {
     }
 
     private fun shouldAcceptPairIntent(peerId: String): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (pairingTargetId != null && now > pairingActiveUntil) {
+            pairingTargetId = null
+        }
         val target = pairingTargetId ?: return true
         return target == peerId
     }
 
-    @SuppressLint("MissingPermission")
-    // getOrNull is called on bluetoothAdapter, so we can reason null
-    // will be returned if the permission is not granted
     private fun getMatchName(local: DiscoveredDevice): String {
         val p2pName = localP2pDeviceName
         if (!p2pName.isNullOrBlank()) {
             return p2pName
-        }
-        val adapterName = runCatching { bluetoothAdapter?.name }.getOrNull()
-        if (!adapterName.isNullOrBlank()) {
-            return adapterName
         }
         val deviceName = runCatching {
             Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
@@ -1228,29 +1283,11 @@ class ProximityManager(private val context: Context) {
         return local.name
     }
 
-    @Suppress("SameParameterValue")
-    private fun trimUtf8Bytes(input: String, maxBytes: Int): ByteArray {
-        if (maxBytes <= 0) {
-            return ByteArray(0)
-        }
-        var count = 0
-        val builder = StringBuilder()
-        for (ch in input) {
-            val bytes = ch.toString().toByteArray(Charsets.UTF_8)
-            if (count + bytes.size > maxBytes) {
-                break
-            }
-            builder.append(ch)
-            count += bytes.size
-        }
-        return builder.toString().toByteArray(Charsets.UTF_8)
-    }
-
     private fun readThisDeviceName(intent: Intent): String? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(
                 WifiP2pManager.EXTRA_WIFI_P2P_DEVICE,
-                WifiP2pDevice::class.java
+                WifiP2pDevice::class.java,
             )?.deviceName
         } else {
             @Suppress("DEPRECATION")
@@ -1281,42 +1318,22 @@ class ProximityManager(private val context: Context) {
         }
     }
 
-    private fun hasBleScanPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.BLUETOOTH_SCAN
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        }
-    }
-
-    private fun hasBleAdvertisePermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.BLUETOOTH_ADVERTISE
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true
-        }
-    }
-
     private fun hasP2pPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(
                 context,
-                Manifest.permission.NEARBY_WIFI_DEVICES
+                Manifest.permission.NEARBY_WIFI_DEVICES,
             ) == PackageManager.PERMISSION_GRANTED
         } else {
             ContextCompat.checkSelfPermission(
                 context,
-                Manifest.permission.ACCESS_FINE_LOCATION
+                Manifest.permission.ACCESS_FINE_LOCATION,
             ) == PackageManager.PERMISSION_GRANTED
         }
+    }
+
+    private fun isLocationEnabled(): Boolean {
+        val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        return LocationManagerCompat.isLocationEnabled(manager)
     }
 }

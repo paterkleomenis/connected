@@ -1980,19 +1980,20 @@ impl ConnectedClient {
             }
         };
 
-        // Remove from keystore immediately to prevent auto-trust/reconnect during the notification delay
-        self.key_store.write().remove_peer(fingerprint)?;
-
         if let Some((ip, _)) = target {
             self.pending_handshakes.write().remove(&ip);
         }
 
-        // Try to send notification
+        // Try to notify peer while it is still trusted locally, so opening the
+        // control stream is permitted even when pairing mode is disabled.
         if let Some((ip, port)) = target {
             let _ = self
                 .send_unpair_notification(ip, port, UnpairReason::Forgotten)
                 .await;
         }
+
+        // Remove local trust after best-effort remote notification.
+        self.key_store.write().remove_peer(fingerprint)?;
 
         // Invalidate cached connection
         self.invalidate_connection_by_device_id_with_reason(&device_id, b"forgotten");
@@ -2037,17 +2038,20 @@ impl ConnectedClient {
         };
 
         if let Some(fp) = fingerprint {
-            self.key_store.write().remove_peer(&fp)?;
             if let Some((ip, _)) = target {
                 self.pending_handshakes.write().remove(&ip);
             }
 
-            // Try to send notification
+            // Try to notify peer while it is still trusted locally, so opening
+            // the control stream is permitted even when pairing mode is disabled.
             if let Some((ip, port)) = target {
                 let _ = self
                     .send_unpair_notification(ip, port, UnpairReason::Forgotten)
                     .await;
             }
+
+            // Remove local trust after best-effort remote notification.
+            self.key_store.write().remove_peer(&fp)?;
 
             self.transport
                 .invalidate_connection_by_fingerprint_with_reason(&fp, b"forgotten");
