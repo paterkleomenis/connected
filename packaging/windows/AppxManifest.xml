@@ -1,15 +1,17 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8" ?>
 <Package
-  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
-  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
-  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap desktop rescap">
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap desktop rescap"
+>
   <Identity
-    Name="AlexVasa.Connected-Ecosystem"
-    Publisher="CN=C32AA8F3-53EB-4288-9121-B65C7EC007A6"
-    Version="__VERSION__"
-    ProcessorArchitecture="__ARCH__" />
+        Name="AlexVasa.Connected-Ecosystem"
+        Publisher="CN=C32AA8F3-53EB-4288-9121-B65C7EC007A6"
+        Version="__VERSION__"
+        ProcessorArchitecture="__ARCH__"
+    />
 
   <Properties>
     <DisplayName>Connected-Ecosystem</DisplayName>
@@ -18,7 +20,11 @@
   </Properties>
 
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.22631.0" />
+    <TargetDeviceFamily
+            Name="Windows.Desktop"
+            MinVersion="10.0.19041.0"
+            MaxVersionTested="10.0.22631.0"
+        />
   </Dependencies>
 
   <Resources>
@@ -26,17 +32,25 @@
   </Resources>
 
   <Applications>
-    <Application Id="Connected" Executable="connected-desktop.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application
+            Id="Connected"
+            Executable="connected-desktop.exe"
+            EntryPoint="Windows.FullTrustApplication"
+        >
       <uap:VisualElements
-        DisplayName="Connected-Ecosystem"
-        Description="Connected-Ecosystem"
-        BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png"
-        AppListEntry="default" />
+                DisplayName="Connected-Ecosystem"
+                Description="Connected-Ecosystem is a high-speed device bridge. Note: This application requires the .NET Desktop Runtime to function."
+                BackgroundColor="transparent"
+                Square150x150Logo="Assets\Square150x150Logo.png"
+                Square44x44Logo="Assets\Square44x44Logo.png"
+                AppListEntry="default"
+            />
 
       <Extensions>
-        <desktop:Extension Category="windows.fullTrustProcess" Executable="connected-desktop.exe" />
+        <desktop:Extension
+                    Category="windows.fullTrustProcess"
+                    Executable="connected-desktop.exe"
+                />
       </Extensions>
     </Application>
   </Applications>
