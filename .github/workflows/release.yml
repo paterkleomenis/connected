@@ -367,9 +367,6 @@ jobs:
             --clientId "${{ secrets.STORE_CLIENT_ID }}" `
             --clientSecret "${{ secrets.STORE_CLIENT_SECRET }}"
 
-          # Update the submission draft with the new package
-          msstore submission update "${{ secrets.STORE_APP_ID }}" `
+          # Upload the package and publish the submission in one step
+          msstore package publish "${{ secrets.STORE_APP_ID }}" `
             --packagePath "connected-desktop-windows.msixupload"
-
-          # Publish the submission
-          msstore submission publish "${{ secrets.STORE_APP_ID }}"
