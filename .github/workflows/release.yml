@@ -368,6 +368,6 @@ jobs:
 
           Get-ChildItem -Path . -Filter *.msixupload | Format-Table Name,Length
 
-          msstore publish . `
+          msstore publish "connected-desktop-windows.msixupload" `
             --appId "${{ secrets.STORE_APP_ID }}" `
-            --inputDirectory "."
+            --verbose"
