@@ -453,7 +453,11 @@ if [ "$do_push" -eq 1 ]; then
     echo "Pushing current HEAD to ${push_remote} ${push_branch}..."
     git -C "$repo_root" push "$push_remote" "HEAD:${push_branch}"
   else
-    remote_url="$(git -C "$repo_root" remote get-url "$push_remote" 2>/dev/null || true)"
+    if [[ "$push_remote" == *"://"* || "$push_remote" == *"@"* ]]; then
+      remote_url="$push_remote"
+    else
+      remote_url="$(git -C "$repo_root" remote get-url "$push_remote" 2>/dev/null || true)"
+    fi
     [ -n "$remote_url" ] || die "could not resolve remote URL for ${push_remote}"
 
     temp_aur_dir="$(mktemp -d)"
