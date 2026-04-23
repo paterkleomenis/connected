@@ -321,7 +321,7 @@ jobs:
         with:
           args: >
             bash -c "
-            pacman -Syu --noconfirm git base-devel curl sudo &&
+            pacman -Syu --noconfirm git base-devel curl sudo openssh &&
             useradd -m aur &&
             echo 'aur ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers &&
             su aur -c '
@@ -351,11 +351,15 @@ jobs:
           name: connected-desktop-windows.msixupload
           path: .
 
-      - name: Upload to Microsoft Store
-        uses: microsoft/store-release-action@v1
-        with:
-          tenant-id: ${{ secrets.STORE_TENANT_ID }}
-          client-id: ${{ secrets.STORE_CLIENT_ID }}
-          client-secret: ${{ secrets.STORE_CLIENT_SECRET }}
-          app-id: ${{ secrets.STORE_APP_ID }}
-          package-path: connected-desktop-windows.msixupload
+      - name: Setup MSStore CLI
+        uses: microsoft/setup-msstore-cli@v1
+
+      - name: Submit to Microsoft Store
+        shell: pwsh
+        run: |
+          msstore submission publish `
+            --tenant-id "${{ secrets.STORE_TENANT_ID }}" `
+            --client-id "${{ secrets.STORE_CLIENT_ID }}" `
+            --client-secret "${{ secrets.STORE_CLIENT_SECRET }}" `
+            --app-id "${{ secrets.STORE_APP_ID }}" `
+            --package-path "connected-desktop-windows.msixupload"
