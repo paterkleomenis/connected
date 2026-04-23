@@ -360,13 +360,12 @@ jobs:
         run: |
           msstore --version
 
-          # Set global configuration
           msstore reconfigure `
             --tenantId "${{ secrets.STORE_TENANT_ID }}" `
             --sellerId "${{ secrets.STORE_SELLER_ID }}" `
             --clientId "${{ secrets.STORE_CLIENT_ID }}" `
             --clientSecret "${{ secrets.STORE_CLIENT_SECRET }}"
 
-          # Upload the package and publish the submission in one step
-          msstore package publish "${{ secrets.STORE_APP_ID }}" `
-            --packagePath "connected-desktop-windows.msixupload"
+          msstore publish . `
+            --appId "${{ secrets.STORE_APP_ID }}" `
+            --inputFile "connected-desktop-windows.msixupload"
