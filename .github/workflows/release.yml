@@ -324,6 +324,7 @@ jobs:
             pacman -Syu --noconfirm git base-devel curl sudo openssh &&
             useradd -m aur &&
             echo 'aur ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers &&
+            chown -R aur:aur . &&
             su aur -c '
               mkdir -p ~/.ssh &&
               echo \"${{ secrets.AUR_SSH_PRIVATE_KEY }}\" > ~/.ssh/id_rsa &&
@@ -359,6 +360,7 @@ jobs:
         run: |
           msstore submission publish `
             --tenant-id "${{ secrets.STORE_TENANT_ID }}" `
+            --seller-id "${{ secrets.STORE_SELLER_ID }}" `
             --client-id "${{ secrets.STORE_CLIENT_ID }}" `
             --client-secret "${{ secrets.STORE_CLIENT_SECRET }}" `
             --app-id "${{ secrets.STORE_APP_ID }}" `
