@@ -358,11 +358,16 @@ jobs:
       - name: Submit to Microsoft Store
         shell: pwsh
         run: |
-          Write-Host "Verifying secrets..."
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.STORE_TENANT_ID }}")) { Write-Error "STORE_TENANT_ID is missing" }
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.STORE_SELLER_ID }}")) { Write-Error "STORE_SELLER_ID is missing" }
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.STORE_CLIENT_ID }}")) { Write-Error "STORE_CLIENT_ID is missing" }
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.STORE_CLIENT_SECRET }}")) { Write-Error "STORE_CLIENT_SECRET is missing" }
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.STORE_APP_ID }}")) { Write-Error "STORE_APP_ID is missing" }
+          msstore --version
 
-          msstore submission publish --tenant-id "${{ secrets.STORE_TENANT_ID }}" --seller-id "${{ secrets.STORE_SELLER_ID }}" --client-id "${{ secrets.STORE_CLIENT_ID }}" --client-secret "${{ secrets.STORE_CLIENT_SECRET }}" --app-id "${{ secrets.STORE_APP_ID }}" --package-path "connected-desktop-windows.msixupload"
+          # Set global configuration
+          msstore reconfigure `
+            --tenantId "${{ secrets.STORE_TENANT_ID }}" `
+            --sellerId "${{ secrets.STORE_SELLER_ID }}" `
+            --clientId "${{ secrets.STORE_CLIENT_ID }}" `
+            --clientSecret "${{ secrets.STORE_CLIENT_SECRET }}"
+
+          # Publish the submission
+          msstore submission publish `
+            --appId "${{ secrets.STORE_APP_ID }}" `
+            --packagePath "connected-desktop-windows.msixupload"
