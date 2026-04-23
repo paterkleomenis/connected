@@ -366,6 +366,8 @@ jobs:
             --clientId "${{ secrets.STORE_CLIENT_ID }}" `
             --clientSecret "${{ secrets.STORE_CLIENT_SECRET }}"
 
+          Get-ChildItem -Path . -Filter *.msixupload | Format-Table Name,Length
+
           msstore publish . `
             --appId "${{ secrets.STORE_APP_ID }}" `
-            --inputFile "connected-desktop-windows.msixupload"
+            --inputDirectory "."
