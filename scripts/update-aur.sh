@@ -245,9 +245,9 @@ while [ $# -gt 0 ]; do
       usage
       exit 0
       ;;
-    *)
+      *)
       if [ -z "$version" ]; then
-        version="$1"
+        version="${1#v}"
         shift
       else
         die "unexpected argument: $1"

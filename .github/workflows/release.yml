@@ -150,46 +150,30 @@ jobs:
     needs: [build-windows]
     runs-on: windows-latest
     steps:
+      - uses: actions/checkout@v6
+
       - name: Download Windows x64 MSIX
         uses: actions/download-artifact@v8
         with:
           name: connected-desktop-windows-x64.msix
-          path: bundle-input
+          path: target/msix/x64
 
       - name: Download Windows ARM64 MSIX
         uses: actions/download-artifact@v8
         with:
           name: connected-desktop-windows-arm64.msix
-          path: bundle-input
+          path: target/msix/arm64
 
-      - name: Build MSIX Bundle
+      - name: Build MSIXUPLOAD
         shell: pwsh
         run: |
-          $inDir = "bundle-input"
-          $x64 = Join-Path $inDir "connected-desktop-windows-x64.msix"
-          $arm64 = Join-Path $inDir "connected-desktop-windows-arm64.msix"
-          if (!(Test-Path $x64)) { throw "Missing x64 MSIX: $x64" }
-          if (!(Test-Path $arm64)) { throw "Missing ARM64 MSIX: $arm64" }
+          ./scripts/build-msixupload-local.ps1 -SkipBuild -OutputDir target/msix
 
-          $outDir = "target\msix"
-          New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-          $bundlePath = Join-Path $outDir "connected-desktop-windows.msixbundle"
-
-          $sdkRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
-          if (!(Test-Path $sdkRoot)) { throw "Windows SDK tools not found at $sdkRoot" }
-          $makeAppx = Get-ChildItem -Path $sdkRoot -Recurse -Filter makeappx.exe |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1
-          if ($null -eq $makeAppx) { throw "makeappx.exe not found" }
-
-          & $makeAppx.FullName bundle /d $inDir /p $bundlePath /o
-          if ($LASTEXITCODE -ne 0) { throw "makeappx bundle failed with exit code $LASTEXITCODE" }
-
-      - name: Upload Windows MSIX Bundle
+      - name: Upload Windows MSIXUPLOAD
         uses: actions/upload-artifact@v7
         with:
-          path: target/msix/connected-desktop-windows.msixbundle
-          name: connected-desktop-windows.msixbundle
+          path: target/msix/connected-desktop-windows.msixupload
+          name: connected-desktop-windows.msixupload
           archive: false
 
   # -------------------------------------------------------------------------
@@ -311,10 +295,67 @@ jobs:
           prerelease: false
           files: |
             connected-desktop
-            connected-desktop-windows-x64.msix
-            connected-desktop-windows-arm64.msix
-            connected-desktop-windows.msixbundle
+            target/msix/x64/connected-desktop-windows-x64.msix
+            target/msix/arm64/connected-desktop-windows-arm64.msix
+            target/msix/connected-desktop-windows.msixbundle
+            target/msix/connected-desktop-windows.msixupload
             connected-android.apk
             connected-desktop.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # -------------------------------------------------------------------------
+  # Job 7: Update AUR
+  # -------------------------------------------------------------------------
+  update-aur:
+    name: Update AUR
+    needs: [create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Update AUR package
+        uses: docker://archlinux:latest
+        with:
+          args: >
+            bash -c "
+            pacman -Syu --noconfirm git base-devel curl sudo &&
+            useradd -m aur &&
+            echo 'aur ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers &&
+            su aur -c '
+              mkdir -p ~/.ssh &&
+              echo \"${{ secrets.AUR_SSH_PRIVATE_KEY }}\" > ~/.ssh/id_rsa &&
+              chmod 600 ~/.ssh/id_rsa &&
+              ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts &&
+              git config --global user.name \"GitHub Actions\" &&
+              git config --global user.email \"actions@github.com\" &&
+              bash scripts/update-aur.sh ${{ github.ref_name }} --push --remote ssh://aur@aur.archlinux.org/connected-desktop-bin.git
+            '"
+
+  # -------------------------------------------------------------------------
+  # Job 8: Publish to Microsoft Store
+  # -------------------------------------------------------------------------
+  publish-microsoft-store:
+    name: Publish to Microsoft Store
+    needs: [bundle-windows-msix]
+    runs-on: windows-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download Windows MSIXUPLOAD
+        uses: actions/download-artifact@v8
+        with:
+          name: connected-desktop-windows.msixupload
+          path: .
+
+      - name: Upload to Microsoft Store
+        uses: microsoft/store-release-action@v1
+        with:
+          tenant-id: ${{ secrets.STORE_TENANT_ID }}
+          client-id: ${{ secrets.STORE_CLIENT_ID }}
+          client-secret: ${{ secrets.STORE_CLIENT_SECRET }}
+          app-id: ${{ secrets.STORE_APP_ID }}
+          package-path: connected-desktop-windows.msixupload
