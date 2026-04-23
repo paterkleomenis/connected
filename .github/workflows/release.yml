@@ -363,13 +363,10 @@ jobs:
           MSSTORE_CLIENT_ID: ${{ secrets.STORE_CLIENT_ID }}
           MSSTORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:MSSTORE_SELLER_ID)) {
-            throw "MSSTORE_SELLER_ID secret is missing or empty"
-          }
           msstore submission publish `
-            --tenant-id "$env:MSSTORE_TENANT_ID" `
-            --seller-id "$env:MSSTORE_SELLER_ID" `
-            --client-id "$env:MSSTORE_CLIENT_ID" `
-            --client-secret "$env:MSSTORE_CLIENT_SECRET" `
+            --tenantId "$env:MSSTORE_TENANT_ID" `
+            --sellerId "$env:MSSTORE_SELLER_ID" `
+            --clientId "$env:MSSTORE_CLIENT_ID" `
+            --clientSecret "$env:MSSTORE_CLIENT_SECRET" `
             --app-id "${{ secrets.STORE_APP_ID }}" `
             --package-path "connected-desktop-windows.msixupload"
