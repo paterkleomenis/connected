@@ -6,77 +6,351 @@ on:
       - "*"
 
 permissions:
-  contents: read
-  actions: read
+  contents: write
 
 jobs:
+  # -------------------------------------------------------------------------
+  # Job 1: Build Linux Desktop
+  # -------------------------------------------------------------------------
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "linux-build"
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config libdbus-1-dev libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - name: Build Release
+        run: cargo build --release --verbose
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/release/connected-desktop
+          archive: false
+
+  # -------------------------------------------------------------------------
+  # Job 2: Build Windows MSIX per architecture
+  # -------------------------------------------------------------------------
+  build-windows:
+    name: Build Windows MSIX
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify tag matches Cargo version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag.TrimStart("v")
+          $cargoMatch = (Get-Content Cargo.toml | Select-String -Pattern '^\s*version\s*=\s*"([^"]+)"' -AllMatches | Select-Object -Last 1)
+          if ($null -eq $cargoMatch) { throw "Could not find workspace version in Cargo.toml" }
+          $cargo = $cargoMatch.Matches[0].Groups[1].Value
+          if ($cargo -ne $ver) {
+            throw "Tag version ($ver) does not match Cargo.toml workspace version ($cargo)."
+          }
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "windows-build-${{ matrix.target }}"
+
+      - name: Configure ARM64 Windows C toolchain
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (!(Test-Path $vswhere)) { throw "vswhere.exe not found" }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath
+          if (-not $vsPath) {
+            throw "Visual Studio LLVM component (clang-cl) is not installed on this runner"
+          }
+
+          $clangDir = Join-Path $vsPath "VC\Tools\Llvm\x64\bin"
+          $clang = Join-Path $clangDir "clang-cl.exe"
+          if (!(Test-Path $clang)) { throw "clang-cl.exe not found at $clang" }
+
+          $llvmLib = Join-Path $clangDir "llvm-lib.exe"
+          if (!(Test-Path $llvmLib)) { throw "llvm-lib.exe not found at $llvmLib" }
+
+          "$clangDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "CC_aarch64_pc_windows_msvc=$clang" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CXX_aarch64_pc_windows_msvc=$clang" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "AR_aarch64_pc_windows_msvc=$llvmLib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=link.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc") {
+            cargo build --release --verbose
+          } else {
+            cargo build --target ${{ matrix.target }} --release --verbose
+          }
+
+      - name: Clean up WebView2 Ghost Languages
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path target/ -Recurse -Directory | Where-Object { $_.Name -match '^[a-z]{2}(-[A-Za-z]+)?$' -and (Test-Path "$($_.FullName)\WebView2Loader.dll.mui" -or Test-Path "$($_.FullName)\Microsoft.Web.WebView2.Core.dll.mui") } | Remove-Item -Recurse -Force
+
+      - name: Build Windows x64 MSIX
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1 -Arch x64 -Profile release
+
+      - name: Build Windows ARM64 MSIX
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msix.ps1 -Arch arm64 -Profile release
+
+      - name: Upload Windows x64 MSIX
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/msix/x64/connected-desktop-windows-x64.msix
+          name: connected-desktop-windows-x64.msix
+          archive: false
+
+      - name: Upload Windows ARM64 MSIX
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/msix/arm64/connected-desktop-windows-arm64.msix
+          name: connected-desktop-windows-arm64.msix
+          archive: false
+
+  # -------------------------------------------------------------------------
+  # Job 3: Bundle Windows MSIX
+  # -------------------------------------------------------------------------
+  bundle-windows-msix:
+    name: Bundle Windows MSIX
+    needs: [build-windows]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download Windows x64 MSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: connected-desktop-windows-x64.msix
+          path: target/msix/x64
+
+      - name: Download Windows ARM64 MSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: connected-desktop-windows-arm64.msix
+          path: target/msix/arm64
+
+      - name: Build MSIXUPLOAD
+        shell: pwsh
+        run: |
+          ./scripts/build-msixupload-local.ps1 -SkipBuild -OutputDir target/msix
+
+      - name: Upload Windows MSIXUPLOAD
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/msix/connected-desktop-windows.msixupload
+          name: connected-desktop-windows.msixupload
+          archive: false
+
+  # -------------------------------------------------------------------------
+  # Job 4: Build macOS Desktop
+  # -------------------------------------------------------------------------
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "macos-build"
+
+      - name: Build macOS App and DMG
+        run: |
+          chmod +x packaging/macos/build-macos.sh
+          packaging/macos/build-macos.sh --release
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
+          APPLE_DEVELOPER_ID_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}
+          APPLE_DEVELOPER_ID_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_ID_TEAM_ID }}
+
+      - name: Prepare macOS artifact
+        run: cp target/macos-build/Connected-*.dmg connected-desktop.dmg
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: connected-desktop.dmg
+          archive: false
+
+  # -------------------------------------------------------------------------
+  # Job 5: Build Android APK
+  # -------------------------------------------------------------------------
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: "25"
+          distribution: "temurin"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "android-build"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
+
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
+
+      - name: Build Release APK
+        working-directory: android
+        run: ./gradlew assembleRelease
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Prepare Android artifact
+        run: cp android/app/build/outputs/apk/release/app-release.apk connected-android.apk
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: connected-android.apk
+          archive: false
+
+  # -------------------------------------------------------------------------
+  # Job 6: Create Release
+  # -------------------------------------------------------------------------
+  create-release:
+    name: Create GitHub Release
+    needs: [build-linux, bundle-windows-msix, build-macos, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: Connected ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            connected-desktop
+            target/msix/x64/connected-desktop-windows-x64.msix
+            target/msix/arm64/connected-desktop-windows-arm64.msix
+            target/msix/connected-desktop-windows.msixbundle
+            target/msix/connected-desktop-windows.msixupload
+            connected-android.apk
+            connected-desktop.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # -------------------------------------------------------------------------
+  # Job 7: Update AUR
+  # -------------------------------------------------------------------------
+  update-aur:
+    name: Update AUR
+    needs: [create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Update AUR package
+        uses: docker://archlinux:latest
+        with:
+          args: >
+            bash -c "
+            pacman -Syu --noconfirm git base-devel curl sudo openssh &&
+            useradd -m aur &&
+            echo 'aur ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers &&
+            chown -R aur:aur . &&
+            su aur -c '
+              mkdir -p ~/.ssh &&
+              echo \"${{ secrets.AUR_SSH_PRIVATE_KEY }}\" > ~/.ssh/id_rsa &&
+              chmod 600 ~/.ssh/id_rsa &&
+              ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts &&
+              git config --global user.name \"GitHub Actions\" &&
+              git config --global user.email \"actions@github.com\" &&
+              bash scripts/update-aur.sh ${{ github.ref_name }} --push --remote ssh://aur@aur.archlinux.org/connected-desktop-bin.git
+            '"
+
+  # -------------------------------------------------------------------------
+  # Job 8: Publish to Microsoft Store
+  # -------------------------------------------------------------------------
   publish-microsoft-store:
     name: Publish to Microsoft Store
+    needs: [bundle-windows-msix]
     runs-on: windows-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Find previous release run with MSIXUPLOAD
-        id: find-msixupload
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const artifactName = "connected-desktop-windows.msixupload";
-            const workflowId = "release.yml";
-            const maxRunsToCheck = 20;
-            const { owner, repo } = context.repo;
-            const currentRunId = context.runId;
+      - uses: actions/checkout@v6
 
-            const { data } = await github.rest.actions.listWorkflowRuns({
-              owner,
-              repo,
-              workflow_id: workflowId,
-              event: "push",
-              status: "completed",
-              per_page: maxRunsToCheck,
-            });
-
-            for (const run of data.workflow_runs) {
-              if (run.id === currentRunId) {
-                continue;
-              }
-
-              const { data: artifactsData } = await github.rest.actions.listWorkflowRunArtifacts({
-                owner,
-                repo,
-                run_id: run.id,
-                per_page: 100,
-              });
-
-              const artifact = artifactsData.artifacts.find(
-                (candidate) => candidate.name === artifactName && !candidate.expired,
-              );
-
-              if (!artifact) {
-                continue;
-              }
-
-              core.info(`Using ${artifactName} from run ${run.id} (${run.html_url})`);
-              core.setOutput("run-id", String(run.id));
-              core.setOutput("artifact-name", artifactName);
-              core.setOutput("run-url", run.html_url);
-              return;
-            }
-
-            core.setFailed(`No ${artifactName} artifact found in the last ${maxRunsToCheck} completed ${workflowId} runs.`);
-
-      - name: Download Windows MSIXUPLOAD from previous run
+      - name: Download Windows MSIXUPLOAD
         uses: actions/download-artifact@v8
         with:
-          name: ${{ steps.find-msixupload.outputs.artifact-name }}
-          run-id: ${{ steps.find-msixupload.outputs.run-id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: connected-desktop-windows.msixupload
           path: .
-
-      - name: Show artifact source
-        shell: pwsh
-        run: |
-          Write-Host "Artifact source run: ${{ steps.find-msixupload.outputs.run-url }}"
-          Get-ChildItem -Path . -Filter *.msixupload | Format-Table Name, Length
 
       - name: Setup MSStore CLI
         uses: microsoft/setup-msstore-cli@v1
@@ -92,12 +366,7 @@ jobs:
             --clientId "${{ secrets.STORE_CLIENT_ID }}" `
             --clientSecret "${{ secrets.STORE_CLIENT_SECRET }}"
 
-          $package = Get-ChildItem -Path . -Filter *.msixupload | Select-Object -First 1
-          if ($null -eq $package) {
-            throw "No .msixupload package was downloaded."
-          }
-          Write-Host "Publishing package: $($package.FullName)"
+          Get-ChildItem -Path . -Filter *.msixupload | Format-Table Name,Length
 
-          msstore publish "$($package.FullName)" `
-            --appId "${{ secrets.STORE_APP_ID }}" `
-            --verbose
+          msstore publish "connected-desktop-windows.msixupload" `
+            --appId "${{ secrets.STORE_APP_ID }}"
