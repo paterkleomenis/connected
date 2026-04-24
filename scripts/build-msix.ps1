@@ -9,7 +9,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateRange(0, 65535)]
-    [int]$PackageBuild = 0
+    [int]$PackageBuild = -1
 )
 
 $ErrorActionPreference = "Stop"
