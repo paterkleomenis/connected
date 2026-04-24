@@ -407,8 +407,7 @@ fn spawn_event_loop(
                             filename: filename.clone(),
                             percent,
                         };
-                    } else if let Some((filename, last_percent)) = incoming_transfers.get_mut(&id)
-                    {
+                    } else if let Some((filename, last_percent)) = incoming_transfers.get_mut(&id) {
                         *last_percent = percent;
                         set_active_incoming_transfer_id(Some(id));
                         *get_transfer_status().lock_or_recover() = TransferStatus::InProgress {
@@ -460,7 +459,11 @@ fn spawn_event_loop(
                             };
                         }
 
-                        add_notification("Transfer Complete", &format!("{} finished", filename), "");
+                        add_notification(
+                            "Transfer Complete",
+                            &format!("{} finished", filename),
+                            "",
+                        );
 
                         continue;
                     }

@@ -1058,10 +1058,11 @@ impl ConnectedClient {
             .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
-        if send.write_all(&len_bytes).await.is_err()
-            || send.write_all(&data).await.is_err()
-        {
-            warn!("Failed to write handshake reject to {}:{}", target_ip, target_port);
+        if send.write_all(&len_bytes).await.is_err() || send.write_all(&data).await.is_err() {
+            warn!(
+                "Failed to write handshake reject to {}:{}",
+                target_ip, target_port
+            );
             return Ok(());
         }
         let _ = send.finish();
@@ -1493,9 +1494,7 @@ impl ConnectedClient {
             .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
-        if send.write_all(&len_bytes).await.is_err()
-            || send.write_all(&data).await.is_err()
-        {
+        if send.write_all(&len_bytes).await.is_err() || send.write_all(&data).await.is_err() {
             warn!(
                 "Failed to write unpair notification to {}:{}",
                 target_ip, target_port
@@ -2256,9 +2255,7 @@ impl ConnectedClient {
                 let cutoff = Instant::now().checked_sub(Duration::from_secs(300));
                 let mut hs = pending_handshakes_cleanup.write();
                 let before = hs.len();
-                hs.retain(|_, (ts, _)| {
-                    cutoff.is_none_or(|c| *ts > c)
-                });
+                hs.retain(|_, (ts, _)| cutoff.is_none_or(|c| *ts > c));
                 let removed = before - hs.len();
                 if removed > 0 {
                     debug!("Cleaned up {} stale pending handshakes", removed);
