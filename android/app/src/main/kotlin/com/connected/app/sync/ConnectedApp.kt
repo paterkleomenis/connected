@@ -175,8 +175,54 @@ class ConnectedApp(private val context: Context) {
         private set
     var activeIncomingTransferId: String? = null
         private set
+    private val transferTrackingLock = Any()
+    private val activeOutgoingTransferIds = linkedSetOf<String>()
+    private val activeIncomingTransferIds = linkedSetOf<String>()
     val compressionProgress = mutableStateOf<CompressionProgress?>(null)
     val browserDownloadProgress = mutableStateOf<BrowserDownloadProgress?>(null)
+
+    private fun registerOutgoingTransfer(transferId: String) {
+        synchronized(transferTrackingLock) {
+            activeOutgoingTransferIds.add(transferId)
+            activeTransferId = transferId
+        }
+    }
+
+    private fun registerIncomingTransfer(transferId: String) {
+        synchronized(transferTrackingLock) {
+            activeIncomingTransferIds.add(transferId)
+            activeIncomingTransferId = transferId
+        }
+    }
+
+    private fun hasAnyActiveTransfers(): Boolean {
+        synchronized(transferTrackingLock) {
+            return activeOutgoingTransferIds.isNotEmpty() || activeIncomingTransferIds.isNotEmpty()
+        }
+    }
+
+    private fun markOneTransferFinishedWithoutId() {
+        synchronized(transferTrackingLock) {
+            val incomingActive = activeIncomingTransferId
+            val outgoingActive = activeTransferId
+
+            when {
+                incomingActive != null && activeIncomingTransferIds.remove(incomingActive) -> Unit
+                outgoingActive != null && activeOutgoingTransferIds.remove(outgoingActive) -> Unit
+                activeIncomingTransferIds.isNotEmpty() -> {
+                    val firstIncoming = activeIncomingTransferIds.first()
+                    activeIncomingTransferIds.remove(firstIncoming)
+                }
+                activeOutgoingTransferIds.isNotEmpty() -> {
+                    val firstOutgoing = activeOutgoingTransferIds.first()
+                    activeOutgoingTransferIds.remove(firstOutgoing)
+                }
+            }
+
+            activeIncomingTransferId = activeIncomingTransferIds.lastOrNull()
+            activeTransferId = activeOutgoingTransferIds.lastOrNull()
+        }
+    }
 
     data class BrowserDownloadProgress(
         val currentFile: String,
@@ -592,12 +638,19 @@ class ConnectedApp(private val context: Context) {
         override fun onTransferRequest(transferId: String, filename: String, fileSize: ULong, fromDevice: String) {
             val request = TransferRequest(transferId, filename, fileSize, fromDevice)
             transferRequest.value = request
-            activeIncomingTransferId = transferId
+            registerIncomingTransfer(transferId)
             showTransferNotification(request)
         }
 
         override fun onTransferStarting(transferId: String, filename: String, totalSize: ULong) {
-            activeIncomingTransferId = transferId
+            synchronized(transferTrackingLock) {
+                if (activeOutgoingTransferIds.contains(transferId)) {
+                    activeTransferId = transferId
+                } else {
+                    activeIncomingTransferIds.add(transferId)
+                    activeIncomingTransferId = transferId
+                }
+            }
             transferStatus.value = "Starting transfer: $filename"
             showProgressNotification(filename, 0, totalSize.toLong())
         }
@@ -609,50 +662,67 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onTransferCompleted(filename: String, totalSize: ULong) {
-            transferStatus.value = "Completed: $filename"
-            activeTransferId = null
-            activeIncomingTransferId = null
+            markOneTransferFinishedWithoutId()
+            val hasMoreTransfers = hasAnyActiveTransfers()
+            transferStatus.value = if (hasMoreTransfers) {
+                "Transferring..."
+            } else {
+                "Completed: $filename"
+            }
             val savedUri = moveToDownloads(filename)
             val openUri = resolveOpenUriForCompletedTransfer(savedUri, filename)
             Log.d("ConnectedApp", "Completed transfer URI for $filename: $openUri")
             showCompletionNotification(filename, openUri?.toString(), getMimeType(filename))
 
-            // Clean up any pending temp files
-            cleanupAllPendingTempFiles()
-            cleanupStreamingTempDirectory()
-            cleanupOrphanedCacheZipFiles()
+            // IMPORTANT: with concurrent transfers, cleaning temp files here can
+            // delete files still being sent by another active transfer and cause
+            // unexpected EOF on the receiver.
+            if (!hasMoreTransfers) {
+                cleanupAllPendingTempFiles()
+                cleanupStreamingTempDirectory()
+                cleanupOrphanedCacheZipFiles()
+            }
 
             scope.launch {
                 delay(2000)
-                if (transferStatus.value.startsWith("Completed: $filename")) {
+                if (!hasAnyActiveTransfers() && transferStatus.value.startsWith("Completed: $filename")) {
                     transferStatus.value = "Idle"
                 }
             }
         }
 
         override fun onTransferFailed(errorMsg: String) {
-            transferStatus.value = "Failed: $errorMsg"
-            activeTransferId = null
-            activeIncomingTransferId = null
+            markOneTransferFinishedWithoutId()
+            val hasMoreTransfers = hasAnyActiveTransfers()
+            transferStatus.value = if (hasMoreTransfers) {
+                "Transferring..."
+            } else {
+                "Failed: $errorMsg"
+            }
             showErrorNotification(errorMsg)
 
-            // Clean up any pending temp files on failure too
-            cleanupAllPendingTempFiles()
-            cleanupStreamingTempDirectory()
-            cleanupOrphanedCacheZipFiles()
+            // Same concurrency guard as onTransferCompleted.
+            if (!hasMoreTransfers) {
+                cleanupAllPendingTempFiles()
+                cleanupStreamingTempDirectory()
+                cleanupOrphanedCacheZipFiles()
+            }
         }
 
         override fun onTransferCancelled() {
-            transferStatus.value = "Cancelled"
-            activeTransferId = null
-            activeIncomingTransferId = null
+            markOneTransferFinishedWithoutId()
+            val hasMoreTransfers = hasAnyActiveTransfers()
+            transferStatus.value = if (hasMoreTransfers) "Transferring..." else "Cancelled"
             val notificationManager =
                 context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-            notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
+            if (!hasMoreTransfers) {
+                notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
+            }
 
-            // Clean up any pending temp files on cancellation
-            cleanupAllPendingTempFiles()
-            cleanupStreamingTempDirectory()
+            if (!hasMoreTransfers) {
+                cleanupAllPendingTempFiles()
+                cleanupStreamingTempDirectory()
+            }
         }
 
         override fun onCompressionProgress(
@@ -2026,7 +2096,7 @@ class ConnectedApp(private val context: Context) {
                 }
 
                 val transferId = sendFile(device.ip, device.port, filePathToSend)
-                activeTransferId = transferId
+                registerOutgoingTransfer(transferId)
 
             } catch (e: Exception) {
                 Log.e("ConnectedApp", "Failed to stream file from URI", e)
@@ -2059,8 +2129,6 @@ class ConnectedApp(private val context: Context) {
             try {
                 uniffi.connected_ffi.cancelFileTransfer(transferId)
                 Log.d("ConnectedApp", "Cancelled outgoing file transfer: $transferId")
-                activeTransferId = null
-                transferStatus.value = "Idle"
                 return
             } catch (e: Exception) {
                 Log.w("ConnectedApp", "Failed to cancel outgoing transfer, trying incoming", e)
@@ -2072,8 +2140,6 @@ class ConnectedApp(private val context: Context) {
             try {
                 uniffi.connected_ffi.cancelIncomingFileTransfer(transferId)
                 Log.d("ConnectedApp", "Cancelled incoming file transfer: $transferId")
-                activeIncomingTransferId = null
-                transferStatus.value = "Idle"
             } catch (e: Exception) {
                 Log.e("ConnectedApp", "Failed to cancel incoming file transfer", e)
             }
@@ -2967,7 +3033,7 @@ class ConnectedApp(private val context: Context) {
                         // Track temp file for cleanup after async transfer completes
                         pendingTempFilesForCleanup[zipFile.absolutePath] = zipFile
                         val transferId = sendFile(device.ip, device.port, zipFile.absolutePath)
-                        activeTransferId = transferId
+                        registerOutgoingTransfer(transferId)
                     }
 
                 } catch (e: Exception) {

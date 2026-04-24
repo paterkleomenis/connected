@@ -284,7 +284,7 @@ impl ConnectedClient {
     }
 
     pub fn clear_discovered_devices(&self) {
-        self.discovery.clear_discovered_devices()
+        let _ = self.discovery.clear_discovered_devices();
     }
 
     /// Lightweight discovery refresh: clears the stale device list and
@@ -331,7 +331,10 @@ impl ConnectedClient {
 
     pub fn refresh_discovery(&self) {
         info!("Refreshing discovery — clearing stale devices and re-announcing");
-        self.discovery.clear_discovered_devices();
+        let removed_ids = self.discovery.clear_discovered_devices();
+        for id in removed_ids {
+            let _ = self.event_tx.send(ConnectedEvent::DeviceLost(id));
+        }
 
         if let Err(e) = self.discovery.announce() {
             warn!("Failed to re-announce during discovery refresh: {}", e);
@@ -1055,8 +1058,12 @@ impl ConnectedClient {
             .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
-        let _ = send.write_all(&len_bytes).await;
-        let _ = send.write_all(&data).await;
+        if send.write_all(&len_bytes).await.is_err()
+            || send.write_all(&data).await.is_err()
+        {
+            warn!("Failed to write handshake reject to {}:{}", target_ip, target_port);
+            return Ok(());
+        }
         let _ = send.finish();
 
         info!("Sent handshake reject to {}:{}", target_ip, target_port);
@@ -1486,8 +1493,14 @@ impl ConnectedClient {
             .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
-        let _ = send.write_all(&len_bytes).await;
-        let _ = send.write_all(&data).await;
+        if send.write_all(&len_bytes).await.is_err()
+            || send.write_all(&data).await.is_err()
+        {
+            warn!(
+                "Failed to write unpair notification to {}:{}",
+                target_ip, target_port
+            );
+        }
         let _ = send.finish();
 
         Ok(())
@@ -1864,6 +1877,20 @@ impl ConnectedClient {
             active_transfers.write().remove(&tid_for_cleanup);
 
             if let Err(e) = result {
+                let is_cancelled = matches!(
+                    &e,
+                    ConnectedError::TransferFailed(msg)
+                        if msg.eq_ignore_ascii_case("cancelled")
+                            || msg.eq_ignore_ascii_case("cancelled by receiver")
+                );
+
+                // Cancellation already emits a progress-derived Cancelled event.
+                // Avoid sending an extra TransferFailed("File transfer failed: Cancelled")
+                // that confuses the UI and shows a false error toast.
+                if is_cancelled {
+                    return;
+                }
+
                 let _ = event_tx.send(ConnectedEvent::TransferFailed {
                     id: tid_for_cleanup,
                     error: e.to_string(),
@@ -2226,10 +2253,12 @@ impl ConnectedClient {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                let cutoff = Instant::now() - Duration::from_secs(300);
+                let cutoff = Instant::now().checked_sub(Duration::from_secs(300));
                 let mut hs = pending_handshakes_cleanup.write();
                 let before = hs.len();
-                hs.retain(|_, (ts, _)| *ts > cutoff);
+                hs.retain(|_, (ts, _)| {
+                    cutoff.is_none_or(|c| *ts > c)
+                });
                 let removed = before - hs.len();
                 if removed > 0 {
                     debug!("Cleaned up {} stale pending handshakes", removed);

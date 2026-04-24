@@ -14,7 +14,9 @@ use uuid::Uuid;
 
 // We need to match transport constants
 const STREAM_TYPE_FILE: u8 = 2;
-const BUFFER_SIZE: usize = 16 * 1024 * 1024; // 16MB Buffer for I/O (optimized for high-speed LAN transfers)
+// 2MB chunks keep throughput high while making cancellation noticeably more
+// responsive than very large (16MB) writes on slower links.
+const BUFFER_SIZE: usize = 2 * 1024 * 1024;
 /// Maximum allowed incoming file size (100 GB). Transfers exceeding this are rejected.
 const MAX_INCOMING_FILE_SIZE: u64 = 100 * 1024 * 1024 * 1024;
 

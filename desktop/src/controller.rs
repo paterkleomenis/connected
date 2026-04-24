@@ -290,6 +290,13 @@ fn spawn_event_loop(
         #[cfg(target_os = "linux")]
         let last_player_identity = Arc::new(std::sync::Mutex::new(None::<String>));
 
+        // Track active transfers so concurrent transfers do not lose cancel
+        // visibility/state when one transfer completes before the others.
+        let mut outgoing_transfers: std::collections::HashMap<String, (String, f32)> =
+            std::collections::HashMap::new();
+        let mut incoming_transfers: std::collections::HashMap<String, (String, f32)> =
+            std::collections::HashMap::new();
+
         loop {
             let event = match events.recv().await {
                 Ok(event) => event,
@@ -363,6 +370,7 @@ fn spawn_event_loop(
                 } => {
                     use connected_core::events::TransferDirection;
                     if direction == TransferDirection::Incoming {
+                        incoming_transfers.insert(id.clone(), (filename.clone(), 0.0));
                         set_active_incoming_transfer_id(Some(id.clone()));
                         *get_transfer_status().lock_or_recover() = TransferStatus::Starting {
                             filename: filename.clone(),
@@ -373,38 +381,89 @@ fn spawn_event_loop(
                             "",
                         );
                     } else {
+                        outgoing_transfers.insert(id.clone(), (filename.clone(), 0.0));
+                        set_active_outgoing_transfer_id(Some(id));
                         *get_transfer_status().lock_or_recover() = TransferStatus::Starting {
                             filename: filename.clone(),
                         };
-                        // Set the active outgoing transfer ID for cancellation
-                        // The ID was already set when send_file was called, so no action needed here
                     }
                 }
                 ConnectedEvent::TransferProgress {
+                    id,
                     bytes_transferred,
                     total_size,
-                    id: _,
                 } => {
                     let percent = if total_size > 0 {
                         (bytes_transferred as f32 / total_size as f32) * 100.0
                     } else {
                         0.0
                     };
-                    let mut status = get_transfer_status().lock_or_recover();
-                    let current_filename = match &*status {
-                        TransferStatus::Starting { filename } => Some(filename.clone()),
-                        TransferStatus::InProgress { filename, .. } => Some(filename.clone()),
-                        _ => None,
-                    };
-                    if let Some(filename) = current_filename {
-                        *status = TransferStatus::InProgress { filename, percent };
+
+                    // Prefer filename tracked for this specific outgoing transfer id.
+                    if let Some((filename, last_percent)) = outgoing_transfers.get_mut(&id) {
+                        *last_percent = percent;
+                        set_active_outgoing_transfer_id(Some(id));
+                        *get_transfer_status().lock_or_recover() = TransferStatus::InProgress {
+                            filename: filename.clone(),
+                            percent,
+                        };
+                    } else if let Some((filename, last_percent)) = incoming_transfers.get_mut(&id)
+                    {
+                        *last_percent = percent;
+                        set_active_incoming_transfer_id(Some(id));
+                        *get_transfer_status().lock_or_recover() = TransferStatus::InProgress {
+                            filename: filename.clone(),
+                            percent,
+                        };
+                    } else {
+                        // Fallback for incoming/protocols that don't carry direction in progress events.
+                        let mut status = get_transfer_status().lock_or_recover();
+                        let current_filename = match &*status {
+                            TransferStatus::Starting { filename } => Some(filename.clone()),
+                            TransferStatus::InProgress { filename, .. } => Some(filename.clone()),
+                            _ => None,
+                        };
+                        if let Some(filename) = current_filename {
+                            *status = TransferStatus::InProgress { filename, percent };
+                        }
                     }
                 }
                 ConnectedEvent::TransferCompleted { filename, id, .. } => {
-                    let incoming_transfer_id =
-                        get_active_incoming_transfer_id().lock_or_recover().clone();
-                    let is_incoming_completion =
-                        incoming_transfer_id.as_deref() == Some(id.as_str());
+                    let was_outgoing = outgoing_transfers.remove(&id).is_some();
+                    let was_incoming = incoming_transfers.remove(&id).is_some();
+
+                    if was_outgoing || was_incoming {
+                        // Keep active transfer ids aligned with live transfer maps
+                        // to avoid stale IDs causing cancel errors.
+                        let next_outgoing = outgoing_transfers.keys().next().cloned();
+                        let next_incoming = incoming_transfers.keys().next().cloned();
+                        set_active_outgoing_transfer_id(next_outgoing);
+                        set_active_incoming_transfer_id(next_incoming);
+                    }
+
+                    // If there are still transfers running, keep showing one of
+                    // them instead of clearing the transfer UI.
+                    if !outgoing_transfers.is_empty() || !incoming_transfers.is_empty() {
+                        if let Some((next_id, (next_filename, next_percent))) = outgoing_transfers
+                            .iter()
+                            .next()
+                            .or_else(|| incoming_transfers.iter().next())
+                        {
+                            if outgoing_transfers.contains_key(next_id) {
+                                set_active_outgoing_transfer_id(Some(next_id.clone()));
+                            } else {
+                                set_active_incoming_transfer_id(Some(next_id.clone()));
+                            }
+                            *get_transfer_status().lock_or_recover() = TransferStatus::InProgress {
+                                filename: next_filename.clone(),
+                                percent: *next_percent,
+                            };
+                        }
+
+                        add_notification("Transfer Complete", &format!("{} finished", filename), "");
+
+                        continue;
+                    }
 
                     set_active_outgoing_transfer_id(None);
                     set_active_incoming_transfer_id(None);
@@ -412,7 +471,7 @@ fn spawn_event_loop(
                         filename: filename.clone(),
                     });
 
-                    if is_incoming_completion {
+                    if was_incoming {
                         let download_dir = get_download_directory_setting()
                             .map(PathBuf::from)
                             .or_else(dirs::download_dir)
@@ -433,9 +492,47 @@ fn spawn_event_loop(
                         );
                     }
                 }
-                ConnectedEvent::TransferFailed { error, id: _, .. } => {
+                ConnectedEvent::TransferFailed { error, id, .. } => {
                     // Check if this was a cancellation
                     let is_cancelled = error == "Cancelled" || error == "Cancelled by receiver";
+
+                    let was_outgoing = outgoing_transfers.remove(&id).is_some();
+                    let was_incoming = incoming_transfers.remove(&id).is_some();
+
+                    if was_outgoing || was_incoming {
+                        // Keep active transfer ids aligned with live transfer maps
+                        // to avoid stale IDs causing cancel errors.
+                        let next_outgoing = outgoing_transfers.keys().next().cloned();
+                        let next_incoming = incoming_transfers.keys().next().cloned();
+                        set_active_outgoing_transfer_id(next_outgoing);
+                        set_active_incoming_transfer_id(next_incoming);
+                    }
+
+                    // If another transfer is still active, keep it visible and cancellable.
+                    if !outgoing_transfers.is_empty() || !incoming_transfers.is_empty() {
+                        if let Some((next_id, (next_filename, next_percent))) = outgoing_transfers
+                            .iter()
+                            .next()
+                            .or_else(|| incoming_transfers.iter().next())
+                        {
+                            if outgoing_transfers.contains_key(next_id) {
+                                set_active_outgoing_transfer_id(Some(next_id.clone()));
+                            } else {
+                                set_active_incoming_transfer_id(Some(next_id.clone()));
+                            }
+                            *get_transfer_status().lock_or_recover() = TransferStatus::InProgress {
+                                filename: next_filename.clone(),
+                                percent: *next_percent,
+                            };
+                        }
+
+                        if !is_cancelled {
+                            add_notification("Transfer Failed", &error, "");
+                        }
+
+                        continue;
+                    }
+
                     set_active_outgoing_transfer_id(None);
                     set_active_incoming_transfer_id(None);
                     if is_cancelled {
@@ -1514,7 +1611,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     "Outgoing file transfer has been cancelled",
                                     "",
                                 );
-                                set_active_outgoing_transfer_id(None);
                                 continue;
                             }
                             Err(e) => {

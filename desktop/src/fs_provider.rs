@@ -72,7 +72,12 @@ impl DesktopFilesystemProvider {
             full_path.clone()
         };
 
-        if !canonical.starts_with(&self.root_canonical) {
+        // Append a trailing separator so that `starts_with` matches the
+        // full directory name, not a prefix.  Otherwise "/home/user" would
+        // incorrectly match "/home/user2/secret".
+        let mut root_with_sep = self.root_canonical.clone();
+        root_with_sep.push("");
+        if !(canonical.starts_with(&root_with_sep) || canonical == self.root_canonical) {
             return Err(connected_core::ConnectedError::Filesystem(
                 "Path escapes root".to_string(),
             ));

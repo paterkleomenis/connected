@@ -652,8 +652,17 @@ fn main() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
+    // Firewall rules check can take 1-3 seconds on Windows due to COM/WFP
+    // enumeration.  Run it on a background thread so the window appears immediately.
     #[cfg(target_os = "windows")]
-    ensure_firewall_rules();
+    {
+        std::thread::Builder::new()
+            .name("firewall-setup".into())
+            .spawn(|| {
+                ensure_firewall_rules();
+            })
+            .ok();
+    }
 
     // Platform-specific window settings
     let decorations = cfg!(target_os = "windows") || cfg!(target_os = "macos");

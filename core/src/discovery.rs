@@ -1019,13 +1019,15 @@ impl DiscoveryService {
             .and_then(|tracked| tracked.active_device())
     }
 
-    pub fn clear_discovered_devices(&self) {
+    pub fn clear_discovered_devices(&self) -> Vec<String> {
         let mut devices = self.discovered_devices.write();
+        let ids: Vec<String> = devices.keys().cloned().collect();
         let count = devices.len();
         devices.clear();
         if count > 0 {
             info!("Cleared {} discovered devices", count);
         }
+        ids
     }
 }
 
