@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(non_snake_case)]
 
+mod autostart;
 mod components;
 mod controller;
 mod fs_provider;
@@ -819,6 +820,7 @@ fn App() -> Element {
     let mut auto_sync_messages = use_signal(get_auto_sync_messages);
     let mut auto_sync_calls = use_signal(get_auto_sync_calls);
     let mut auto_sync_contacts = use_signal(get_auto_sync_contacts);
+    let mut autostart_enabled = use_signal(get_autostart_enabled_setting);
     let mut notifications_enabled = use_signal(get_notifications_enabled_setting);
     let mut theme_mode = use_signal(get_theme_mode_setting);
     let mut open_mms_image = use_signal(|| None::<MmsInlineImage>);
@@ -1193,6 +1195,7 @@ fn App() -> Element {
             }
 
             pairing_mode.set(*get_pairing_mode_state().lock_or_recover());
+            autostart_enabled.set(get_autostart_enabled_setting());
 
             // Update Info
             {
@@ -2763,6 +2766,37 @@ fn App() -> Element {
                                     }
                                 }
                                 p { class: "settings-hint", "Show system notifications on this device." }
+                            }
+                        }
+
+                        if cfg!(target_os = "linux") || cfg!(target_os = "windows") || cfg!(target_os = "macos") {
+                            div {
+                                class: "info-card",
+                                h3 {
+                                    Icon { icon: IconType::Desktop, size: 20, color: "currentColor".to_string() }
+                                    " Startup"
+                                }
+                                div {
+                                    class: "info-grid",
+                                    div { class: "info-label", "Launch at login" }
+                                    div {
+                                        class: "info-value",
+                                        label {
+                                            class: "toggle-switch",
+                                            input {
+                                                r#type: "checkbox",
+                                                checked: "{autostart_enabled}",
+                                                oninput: move |_| {
+                                                    let new_val = !*autostart_enabled.read();
+                                                    autostart_enabled.set(new_val);
+                                                    action_tx.send(AppAction::SetAutostart(new_val));
+                                                },
+                                            }
+                                            span { class: "slider" }
+                                        }
+                                    }
+                                }
+                                p { class: "settings-hint", "Automatically open Connected when you sign in to your computer." }
                             }
                         }
 

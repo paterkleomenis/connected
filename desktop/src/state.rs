@@ -109,6 +109,7 @@ pub struct AppSettings {
     pub auto_sync_calls: bool,
     pub auto_sync_contacts: bool,
     pub notifications_enabled: bool,
+    pub autostart_enabled: bool,
     pub theme_mode: ThemeModeSetting,
     pub device_name: Option<String>,
     pub saved_devices: HashMap<String, SavedDeviceInfo>,
@@ -124,6 +125,7 @@ impl Default for AppSettings {
             auto_sync_calls: true,
             auto_sync_contacts: true,
             notifications_enabled: true,
+            autostart_enabled: false,
             theme_mode: ThemeModeSetting::System,
             device_name: None,
             saved_devices: HashMap::new(),
@@ -997,6 +999,14 @@ pub fn get_notifications_enabled_setting() -> bool {
 
 pub fn set_notifications_enabled_setting(enabled: bool) {
     update_setting(|s| s.notifications_enabled = enabled);
+}
+
+pub fn get_autostart_enabled_setting() -> bool {
+    get_app_settings().lock_or_recover().autostart_enabled
+}
+
+pub fn set_autostart_enabled_setting(enabled: bool) {
+    update_setting(|s| s.autostart_enabled = enabled);
 }
 
 pub fn get_theme_mode_setting() -> ThemeModeSetting {

@@ -5,7 +5,9 @@ $ErrorActionPreference = "Stop"
 
 if ($env:OS -eq "Windows_NT") {
     # Windows - use gradlew.bat
-    Set-Location android
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $androidDir = Join-Path $scriptDir "..\android"
+    Set-Location $androidDir
 
     Write-Host "🧹 Cleaning previous builds..." -ForegroundColor Cyan
     .\gradlew.bat clean
@@ -25,5 +27,7 @@ if ($env:OS -eq "Windows_NT") {
     Write-Host "✅ Build complete!" -ForegroundColor Green
 } else {
     # Unix - use bash script
-    cd android && ./build_release.sh
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $androidDir = Join-Path $scriptDir "..\android"
+    Set-Location $androidDir; ./build_release.sh
 }

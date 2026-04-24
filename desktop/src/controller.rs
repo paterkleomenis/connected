@@ -5,16 +5,17 @@ use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
     SavedDeviceInfo, TransferStatus, add_actionable_notification, add_file_transfer_request,
     add_notification, add_open_file_notification, get_active_incoming_transfer_id,
-    get_active_outgoing_transfer_id, get_auto_sync_messages, get_clipboard_sync_enabled,
-    get_current_media, get_current_remote_files, get_current_remote_path, get_device_name_setting,
-    get_devices_store, get_download_directory_setting, get_last_clipboard,
-    get_last_remote_clipboard_content, get_last_remote_media_device_id, get_last_remote_update,
-    get_media_enabled, get_pairing_requests, get_pending_pairings, get_phone_call_log,
-    get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_files_update, get_saved_devices_setting, get_transfer_status, mark_calls_synced,
-    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
-    remove_file_transfer_request, save_device_to_settings, set_active_call,
-    set_active_incoming_transfer_id, set_active_outgoing_transfer_id, set_device_name_setting,
+    get_active_outgoing_transfer_id, get_auto_sync_messages, get_autostart_enabled_setting,
+    get_clipboard_sync_enabled, get_current_media, get_current_remote_files,
+    get_current_remote_path, get_device_name_setting, get_devices_store,
+    get_download_directory_setting, get_last_clipboard, get_last_remote_clipboard_content,
+    get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
+    get_pairing_requests, get_pending_pairings, get_phone_call_log, get_phone_conversations,
+    get_phone_data_update, get_phone_messages, get_preview_data, get_remote_files_update,
+    get_saved_devices_setting, get_transfer_status, mark_calls_synced, mark_contacts_synced,
+    mark_messages_synced, remove_device_from_settings, remove_file_transfer_request,
+    save_device_to_settings, set_active_call, set_active_incoming_transfer_id,
+    set_active_outgoing_transfer_id, set_autostart_enabled_setting, set_device_name_setting,
     set_discovery_active, set_download_directory_setting, set_last_remote_clipboard_content,
     set_pairing_mode_state, set_phone_call_log, set_phone_contacts, set_phone_conversations,
     set_phone_messages, set_sdk_initialized, set_transfer_status,
@@ -208,6 +209,7 @@ pub enum AppAction {
     SetDownloadDirectory {
         path: String,
     },
+    SetAutostart(bool),
     CheckForUpdates,
     PerformUpdate,
 }
@@ -1316,6 +1318,12 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         info!("Applied saved download directory: {}", dir);
                     }
                 }
+
+                let actual_autostart = crate::autostart::is_enabled();
+                let saved_autostart = get_autostart_enabled_setting();
+                if actual_autostart != saved_autostart {
+                    set_autostart_enabled_setting(actual_autostart);
+                }
             }
             AppAction::RenameDevice { new_name } => {
                 set_device_name_setting(new_name.clone());
@@ -2279,6 +2287,44 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     }
                 }
             }
+            AppAction::SetAutostart(enabled) => match crate::autostart::set_enabled(enabled) {
+                Ok(()) => {
+                    let actual_state = crate::autostart::is_enabled();
+                    set_autostart_enabled_setting(actual_state);
+
+                    if actual_state == enabled {
+                        info!("Autostart set to {}", enabled);
+                        add_notification(
+                            "Settings",
+                            if enabled {
+                                "Connected will start automatically when you log in"
+                            } else {
+                                "Connected will no longer start automatically"
+                            },
+                            "",
+                        );
+                    } else {
+                        warn!(
+                            "Autostart request did not match final state (requested {}, actual {})",
+                            enabled, actual_state
+                        );
+                        add_notification(
+                            "Settings",
+                            "Autostart state could not be verified. Check your system startup settings.",
+                            "",
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to update autostart setting: {}", e);
+                    set_autostart_enabled_setting(crate::autostart::is_enabled());
+                    add_notification(
+                        "Settings",
+                        &format!("Failed to update startup setting: {e}"),
+                        "",
+                    );
+                }
+            },
             AppAction::CheckForUpdates => {
                 #[cfg(target_os = "windows")]
                 {
