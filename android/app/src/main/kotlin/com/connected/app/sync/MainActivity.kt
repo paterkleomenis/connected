@@ -606,7 +606,6 @@ fun MainAppNavigation(
                     label = { Text("Settings") },
                     selected = currentScreen == Screen.Settings,
                     onClick = {
-                        @Suppress("AssignedValueIsNeverRead")
                         currentScreen = Screen.Settings
                     },
                     colors = NavigationBarItemDefaults.colors(
@@ -924,7 +923,7 @@ fun HomeScreen(
                         compressionProgress.currentFile,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     LinearProgressIndicator(
@@ -1165,7 +1164,6 @@ fun SettingsScreen(
                 OutlinedTextField(
                     value = newName,
                     onValueChange = {
-                        @Suppress("AssignedValueIsNeverRead")
                         newName = it
                     },
                     label = { Text("Device Name") },
@@ -1709,7 +1707,7 @@ fun DeviceItem(
                             text = device.name,
                             style = MaterialTheme.typography.bodyLarge,
                             maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis
                         )
                         if (showDetails) {
                             Text(text = "${device.ip}:${device.port}", style = MaterialTheme.typography.bodySmall)

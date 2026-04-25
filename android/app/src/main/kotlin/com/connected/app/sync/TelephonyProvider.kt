@@ -30,8 +30,9 @@ import java.util.Base64
 class TelephonyProvider(private val context: Context) {
 
     companion object {
-        private val MMS_SMS_CONVERSATIONS_URI: Uri = Uri.parse("content://mms-sms/conversations?simple=true")
-        private val MMS_PARTS_URI: Uri = Uri.parse("content://mms/part")
+        private val MMS_SMS_CONVERSATIONS_URI: Uri =
+            "content://mms-sms/conversations?simple=true".toUri()
+        private val MMS_PARTS_URI: Uri = "content://mms/part".toUri()
 
         private const val MMS_ADDRESS_TYPE_FROM = 137
         private const val MMS_ADDRESS_TYPE_TO = 151
@@ -719,7 +720,7 @@ class TelephonyProvider(private val context: Context) {
         var fallbackAddress: String? = null
 
         val cursor = resolver.query(
-            Uri.parse("content://mms/$mmsId/addr"),
+            "content://mms/$mmsId/addr".toUri(),
             arrayOf("address", "type"),
             null,
             null,
@@ -883,7 +884,7 @@ class TelephonyProvider(private val context: Context) {
         }
 
         return try {
-            resolver.openInputStream(Uri.parse("content://mms/part/$partId"))?.use { input ->
+            resolver.openInputStream("content://mms/part/$partId".toUri())?.use { input ->
                 val output = ByteArrayOutputStream()
                 val buffer = ByteArray(8192)
                 var totalRead = 0
@@ -919,7 +920,7 @@ class TelephonyProvider(private val context: Context) {
         }
 
         return try {
-            resolver.openInputStream(Uri.parse("content://mms/part/$partId"))
+            resolver.openInputStream("content://mms/part/$partId".toUri())
                 ?.bufferedReader()
                 ?.use { reader -> reader.readText() }
         } catch (_: Exception) {

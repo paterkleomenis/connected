@@ -4,12 +4,12 @@ import android.content.ContentUris
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
-import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.util.Log
 import java.io.File
+import androidx.core.net.toUri
 
 /**
  * Utility to resolve content URIs to real file paths when possible.
@@ -65,7 +65,7 @@ object PathResolver {
                                 id.substring(4)
                             } else if (id.all { it.isDigit() }) {
                                 val contentUri = ContentUris.withAppendedId(
-                                    Uri.parse("content://downloads/public_downloads"),
+                                    "content://downloads/public_downloads".toUri(),
                                     id.toLong()
                                 )
                                 getDataColumn(context, contentUri, null, null)
@@ -200,7 +200,7 @@ object PathResolver {
         return try {
             val file = File(path)
             file.exists() && file.canRead()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }

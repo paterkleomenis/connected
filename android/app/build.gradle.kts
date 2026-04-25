@@ -95,6 +95,7 @@ configure<ApplicationExtension> {
 
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             // Use release signing if credentials are found in .env or environment
             val hasSigning = env.getProperty("ANDROID_KEYSTORE_PASSWORD") != null
                 || System.getenv("ANDROID_KEYSTORE_PASSWORD") != null

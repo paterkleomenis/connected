@@ -10,7 +10,6 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
-import android.provider.Settings
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -42,9 +41,7 @@ import uniffi.connected_ffi.MediaState
 import uniffi.connected_ffi.PairingCallback
 import uniffi.connected_ffi.TelephonyCallback
 import uniffi.connected_ffi.UnpairCallback
-import uniffi.connected_ffi.UpdateInfo
 import uniffi.connected_ffi.acceptFileTransfer
-import uniffi.connected_ffi.checkForUpdates
 import uniffi.connected_ffi.forgetDeviceById
 import uniffi.connected_ffi.getDiscoveredDevices
 import uniffi.connected_ffi.initialize
@@ -60,7 +57,6 @@ import uniffi.connected_ffi.registerTransferCallback
 import uniffi.connected_ffi.registerUnpairCallback
 import uniffi.connected_ffi.rejectFileTransfer
 import uniffi.connected_ffi.rejectPairing
-import uniffi.connected_ffi.requestDownloadFile
 import uniffi.connected_ffi.requestDownloadFileWithProgress
 import uniffi.connected_ffi.requestDownloadFolder
 import uniffi.connected_ffi.requestGetThumbnail
@@ -72,7 +68,6 @@ import uniffi.connected_ffi.sendClipboard
 import uniffi.connected_ffi.sendContacts
 import uniffi.connected_ffi.sendConversations
 import uniffi.connected_ffi.sendFile
-import uniffi.connected_ffi.cancelFileTransfer
 import uniffi.connected_ffi.sendMediaCommand
 import uniffi.connected_ffi.sendMediaState
 import uniffi.connected_ffi.sendMessages
@@ -88,7 +83,6 @@ import uniffi.connected_ffi.unpairDeviceById
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Collections
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -99,7 +93,7 @@ import java.util.zip.ZipOutputStream
 class ConnectedApp(private val context: Context) {
 
     private fun hasProximityPermissions(): Boolean {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
                     context,
                     Manifest.permission.NEARBY_WIFI_DEVICES
@@ -355,7 +349,7 @@ class ConnectedApp(private val context: Context) {
         // Typical format: "primary:Some/Path" — show the part after the colon
         return if (path.contains(":")) {
             val after = path.substringAfter(":")
-            if (after.isBlank()) "Internal Storage" else after
+            after.ifBlank { "Internal Storage" }
         } else {
             path
         }
@@ -421,7 +415,7 @@ class ConnectedApp(private val context: Context) {
                 refreshDiscovery()
                 // Re-fetch whatever the core already knows after a short delay
                 // to let the mDNS browse loop pick up responses
-                kotlinx.coroutines.delay(500)
+                delay(500)
                 val list = getDiscoveredDevices()
                 runOnMainThread {
                     devices.clear()
@@ -440,8 +434,8 @@ class ConnectedApp(private val context: Context) {
         val customName = prefs.getString(_prefDeviceName, null)
         if (customName != null) return customName
 
-        val manufacturer = android.os.Build.MANUFACTURER
-        val model = android.os.Build.MODEL
+        val manufacturer = Build.MANUFACTURER
+        val model = Build.MODEL
         if (model.startsWith(manufacturer, ignoreCase = true)) {
             return model.replaceFirstChar { it.uppercase() }
         }
@@ -466,15 +460,6 @@ class ConnectedApp(private val context: Context) {
                 "Device renamed locally. Restart app if other devices still show the old name.",
                 android.widget.Toast.LENGTH_LONG
             ).show()
-        }
-    }
-
-    // Renamed wrappers to avoid conflict with imported FFI functions
-    fun beginDiscovery() {
-        try {
-            startDiscovery(discoveryCallback)
-        } catch (e: Exception) {
-            Log.e("ConnectedApp", "Start discovery failed", e)
         }
     }
 
@@ -912,7 +897,7 @@ class ConnectedApp(private val context: Context) {
         runOnMainThread {
             try {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                val clip = android.content.ClipData.newPlainText("Connected", text)
+                val clip = ClipData.newPlainText("Connected", text)
                 clipboard.setPrimaryClip(clip)
             } catch (_: Exception) {
             }
@@ -1115,7 +1100,7 @@ class ConnectedApp(private val context: Context) {
             // Start periodic cleanup of stale pending file transfers (5 minute timeout)
             scope.launch {
                 while (true) {
-                    kotlinx.coroutines.delay(60_000) // Check every minute
+                    delay(60_000) // Check every minute
                     val cutoff = System.currentTimeMillis() - 300_000 // 5 minute timeout
                     pendingFileTransfersAwaitingIp.entries.removeIf { (_, pair) ->
                         val (timestamp, _) = pair
@@ -1420,15 +1405,13 @@ class ConnectedApp(private val context: Context) {
 
     private fun createOpenFilePendingIntent(openUriString: String, mimeType: String): android.app.PendingIntent? {
         val uri = try {
-            Uri.parse(openUriString)
+            openUriString.toUri()
         } catch (e: Exception) {
             Log.w("ConnectedApp", "Invalid URI for completion notification", e)
             return null
         }
 
-        val resolvedMimeType = if (mimeType.isNotBlank()) {
-            mimeType
-        } else {
+        val resolvedMimeType = mimeType.ifBlank {
             context.contentResolver.getType(uri) ?: "*/*"
         }
 
@@ -1448,7 +1431,7 @@ class ConnectedApp(private val context: Context) {
 
     private fun openCompletedFile(uriString: String, mimeType: String?) {
         val uri = try {
-            Uri.parse(uriString)
+            uriString.toUri()
         } catch (e: Exception) {
             Log.w("ConnectedApp", "Invalid URI for completed file", e)
             runOnMainThread {
@@ -1510,7 +1493,7 @@ class ConnectedApp(private val context: Context) {
             val contentValues = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
                 put(android.provider.MediaStore.MediaColumns.MIME_TYPE, getMimeType(filename))
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     put(
                         android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
                         android.os.Environment.DIRECTORY_DOWNLOADS
@@ -1519,7 +1502,7 @@ class ConnectedApp(private val context: Context) {
                 }
             }
             val resolver = context.contentResolver
-            val uri = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
             } else {
                 android.provider.MediaStore.Files.getContentUri("external")
@@ -1534,7 +1517,7 @@ class ConnectedApp(private val context: Context) {
                 outputStream.use { output ->
                     sourceFile.inputStream().use { input -> input.copyTo(output) }
                 }
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     contentValues.clear()
                     contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
                     resolver.update(itemUri, contentValues, null, null)
@@ -1746,130 +1729,6 @@ class ConnectedApp(private val context: Context) {
 
     fun isSyntheticIp(ip: String) = ip == "0.0.0.0"
 
-    fun getDevices() {
-        try {
-            val list = getDiscoveredDevices()
-            devices.clear()
-            devices.addAll(list)
-            trustedDevices.clear()
-            list.forEach { if (isDeviceTrusted(it)) trustedDevices.add(it.id) }
-        } catch (_: Exception) {
-        }
-    }
-
-    fun getRealPathFromUri(contentUri: String, progressCallback: ((Long, Long) -> Unit)? = null): String? {
-        try {
-            val uri = contentUri.toUri()
-            if (uri.scheme == "file") {
-                return uri.path
-            }
-            if (uri.scheme == "content") {
-                // For content URIs, try to get direct path first
-                Log.d("ConnectedApp", "Processing content URI: $contentUri")
-                context.contentResolver.query(uri, null, null, null, null)?.use {
-                    val nameIndex =
-                        it.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DATA)
-                    if (nameIndex >= 0) {
-                        it.moveToFirst()
-                        val dataPath = it.getString(nameIndex)
-                        if (!dataPath.isNullOrBlank()) {
-                            Log.d("ConnectedApp", "Found direct path: $dataPath")
-                            return dataPath
-                        }
-                    }
-                }
-
-                // For large files, use app's private storage directory instead of cache
-                // This avoids cache space limitations and allows files of any size
-                val displayName = queryDisplayName(uri)
-                val baseName = displayName ?: uri.lastPathSegment
-                val safeName = if (baseName.isNullOrBlank()) {
-                    "shared_file_${UUID.randomUUID().toString().take(8)}"
-                } else {
-                    baseName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-                }
-
-                Log.d("ConnectedApp", "Copying to app storage: $safeName")
-
-                // Use app's private files directory instead of cache for large files
-                // This directory has no size limits (bounded only by device storage)
-                val targetDir = File(context.filesDir, "incoming_files")
-                if (!targetDir.exists()) {
-                    if (!targetDir.mkdirs()) {
-                        Log.e("ConnectedApp", "Failed to create target directory: ${targetDir.absolutePath}")
-                        return null
-                    }
-                }
-
-                val tempFile =
-                    File(targetDir, "$safeName-${UUID.randomUUID().toString().take(8)}")
-                val input = context.contentResolver.openInputStream(uri)
-                if (input == null) {
-                    Log.e("ConnectedApp", "Failed to open input stream for URI: $contentUri")
-                    return null
-                }
-
-                // Get file size for progress tracking if available
-                val fileSize = try {
-                    context.contentResolver.query(uri, null, null, null, null)?.use {
-                        val sizeIndex = it.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                        if (sizeIndex >= 0) {
-                            it.moveToFirst()
-                            it.getLong(sizeIndex)
-                        } else -1
-                    } ?: -1L
-                } catch (_: Exception) {
-                    -1L
-                }
-
-                // Use a 2MB buffer for very fast copying (minimizes I/O operations)
-                var totalCopied = 0L
-                var lastProgressUpdate = 0L
-                input.use { stream ->
-                    tempFile.outputStream().use { output ->
-                        val buffer = ByteArray(2 * 1024 * 1024) // 2MB buffer for maximum throughput
-                        var bytesRead: Int
-                        while (stream.read(buffer).also { bytesRead = it } != -1) {
-                            output.write(buffer, 0, bytesRead)
-                            totalCopied += bytesRead
-
-                            // Update progress every 500ms
-                            val now = System.currentTimeMillis()
-                            if (progressCallback != null && fileSize > 0 && now - lastProgressUpdate >= 500) {
-                                progressCallback(totalCopied, fileSize)
-                                lastProgressUpdate = now
-                            }
-                        }
-                    }
-                }
-                return tempFile.absolutePath
-            }
-        } catch (e: Exception) {
-            Log.e("ConnectedApp", "Error getting real path from URI", e)
-        }
-        return null
-    }
-
-    private fun queryDisplayName(uri: Uri): String? {
-        return try {
-            context.contentResolver.query(
-                uri,
-                arrayOf(OpenableColumns.DISPLAY_NAME),
-                null,
-                null,
-                null
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    cursor.getString(0)
-                } else {
-                    null
-                }
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     fun copyDocumentFileToLocal(source: androidx.documentfile.provider.DocumentFile, dest: File): Boolean {
         if (source.isDirectory) {
             if (!dest.exists() && !dest.mkdirs()) return false
@@ -2004,13 +1863,11 @@ class ConnectedApp(private val context: Context) {
                 val canUseDirectPath = realPath?.let { PathResolver.isFileAccessible(it) } == true
 
                 val filePathToSend: String
-                val isTempFile: Boolean
 
                 if (canUseDirectPath) {
                     // Direct path - no temp copy needed!
                     Log.d("ConnectedApp", "Using direct file path: $realPath (no temp copy)")
                     filePathToSend = realPath
-                    isTempFile = false
                     runOnMainThread {
                         transferStatus.value = "Sending: $fileName (${fileSize / (1024 * 1024)}MB)"
                     }
@@ -2067,7 +1924,6 @@ class ConnectedApp(private val context: Context) {
 
                     Log.d("ConnectedApp", "File copied to temp: ${tempFile.absolutePath}")
                     filePathToSend = tempFile.absolutePath
-                    isTempFile = true
                 }
 
                 // Now send the file
@@ -2647,7 +2503,7 @@ class ConnectedApp(private val context: Context) {
     // Send Clipboard to all trusted devices
     fun sendClipboardToAllTrusted() {
         scope.launch {
-            if (!isAppInForeground.get() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            if (!isAppInForeground.get() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 // Background clipboard access restriction
                 runOnMainThread {
                     android.widget.Toast.makeText(
@@ -2850,7 +2706,7 @@ class ConnectedApp(private val context: Context) {
                     if (bitmap != null) {
                         runOnMainThread {
                             synchronized(thumbnailLock) {
-                                // Evict oldest entries if cache is full (LRU eviction)
+                                // Evict the oldest entries if cache is full (LRU eviction)
                                 // Oldest entries are at the beginning of the list
                                 while (thumbnails.size >= maxThumbnailCacheSize && thumbnailAccessOrder.isNotEmpty()) {
                                     val oldest = thumbnailAccessOrder.removeAt(0)
@@ -3096,7 +2952,6 @@ class ConnectedApp(private val context: Context) {
                 } else {
                     try {
                         val fileName = file.name ?: "unknown"
-                        val fileSize = file.length()
 
                         val entry = ZipEntry(entryPath)
                         zos.putNextEntry(entry)
@@ -3293,7 +3148,7 @@ class ConnectedApp(private val context: Context) {
 
     // Permission Helpers
     fun isFullAccessGranted(): Boolean {
-        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.os.Environment.isExternalStorageManager()
         } else {
             true // Legacy
@@ -3313,7 +3168,7 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun requestFullAccessPermission() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
                 intent.addCategory("android.intent.category.DEFAULT")

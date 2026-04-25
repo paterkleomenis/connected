@@ -400,6 +400,7 @@ class ProximityManager(private val context: Context) {
         }
     }
 
+    @RequiresPermission(anyOf = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES])
     private fun refreshLocalService(force: Boolean = false) {
         val manager = wifiP2pManager ?: return
         val channel = p2pChannel ?: return
@@ -432,6 +433,7 @@ class ProximityManager(private val context: Context) {
         clearAndAddLocalService(manager, channel, serviceInfo, signature)
     }
 
+    @RequiresPermission(anyOf = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES])
     private fun clearAndAddLocalService(
         manager: WifiP2pManager,
         channel: WifiP2pManager.Channel,
@@ -440,10 +442,12 @@ class ProximityManager(private val context: Context) {
     ) {
         try {
             manager.clearLocalServices(channel, object : WifiP2pManager.ActionListener {
+                @RequiresPermission(anyOf = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES])
                 override fun onSuccess() {
                     addLocalService(manager, channel, serviceInfo, signature)
                 }
 
+                @RequiresPermission(anyOf = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES])
                 override fun onFailure(reason: Int) {
                     Log.w(TAG, "clearLocalServices failed: $reason")
                     addLocalService(manager, channel, serviceInfo, signature)
@@ -455,6 +459,7 @@ class ProximityManager(private val context: Context) {
         }
     }
 
+    @RequiresPermission(anyOf = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES])
     private fun addLocalService(
         manager: WifiP2pManager,
         channel: WifiP2pManager.Channel,
@@ -663,7 +668,7 @@ class ProximityManager(private val context: Context) {
         if (!instanceName.isNullOrBlank()) {
             entry.instanceName = instanceName
         }
-        if (txtRecordMap != null && txtRecordMap.isNotEmpty()) {
+        if (!txtRecordMap.isNullOrEmpty()) {
             entry.txtRecord = HashMap(txtRecordMap)
         }
 
@@ -686,7 +691,7 @@ class ProximityManager(private val context: Context) {
         } else {
             peer.copy(
                 ip = peer.ip ?: previous.ip,
-                matchName = if (peer.matchName.isBlank()) previous.matchName else peer.matchName,
+                matchName = peer.matchName.ifBlank { previous.matchName },
                 deviceAddress = peer.deviceAddress ?: previous.deviceAddress,
                 lastSeenAtMs = now,
             )
@@ -910,13 +915,17 @@ class ProximityManager(private val context: Context) {
             groupOwnerIntent = 0
         }
 
-        val canConnect = ActivityCompat.checkSelfPermission(
-            context,
-            Manifest.permission.NEARBY_WIFI_DEVICES,
-        ) == PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED
+        val canConnect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.NEARBY_WIFI_DEVICES,
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED
+        }
 
         if (!canConnect) {
             p2pActionInFlight = false
@@ -946,27 +955,40 @@ class ProximityManager(private val context: Context) {
     private fun handleConnectionChanged() {
         val manager = wifiP2pManager ?: return
         val channel = p2pChannel ?: return
-        manager.requestConnectionInfo(channel) { info ->
-            p2pConnected = info.groupFormed
-            isGroupOwner = info.isGroupOwner
+        if (!hasP2pPermission()) {
+            Log.w(TAG, "Connection change skipped: missing Wi-Fi Direct permissions")
+            return
+        }
 
-            if (info.groupFormed) {
-                refreshLocalService(force = true)
+        try {
+            manager.requestConnectionInfo(channel) { info ->
+                try {
+                    p2pConnected = info.groupFormed
+                    isGroupOwner = info.isGroupOwner
 
-                if (!info.isGroupOwner) {
-                    val peerId = pendingPeerId
-                    val peer = peerId?.let { peersById[it] }
-                    val groupOwnerIp = info.groupOwnerAddress?.hostAddress
-                    if (peer != null && !groupOwnerIp.isNullOrEmpty()) {
-                        p2pIpById[peer.deviceId] = groupOwnerIp
-                        injectPeer(peer.copy(ip = groupOwnerIp, lastSeenAtMs = SystemClock.elapsedRealtime()))
+                    if (info.groupFormed) {
+                        refreshLocalService(force = true)
+
+                        if (!info.isGroupOwner) {
+                            val peerId = pendingPeerId
+                            val peer = peerId?.let { peersById[it] }
+                            val groupOwnerIp = info.groupOwnerAddress?.hostAddress
+                            if (peer != null && !groupOwnerIp.isNullOrEmpty()) {
+                                p2pIpById[peer.deviceId] = groupOwnerIp
+                                injectPeer(peer.copy(ip = groupOwnerIp, lastSeenAtMs = SystemClock.elapsedRealtime()))
+                            }
+                        }
+                    } else {
+                        p2pIpById.clear()
+                        refreshLocalService(force = true)
+                        discoverNearby(force = true)
                     }
+                } catch (e: SecurityException) {
+                    Log.w(TAG, "Connection change handling denied: ${e.message}")
                 }
-            } else {
-                p2pIpById.clear()
-                refreshLocalService(force = true)
-                discoverNearby(force = true)
             }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "requestConnectionInfo denied: ${e.message}")
         }
     }
 
@@ -1198,7 +1220,7 @@ class ProximityManager(private val context: Context) {
     }
 
     @RequiresPermission(
-        allOf = [
+        anyOf = [
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.NEARBY_WIFI_DEVICES,
         ],
@@ -1220,6 +1242,8 @@ class ProximityManager(private val context: Context) {
         }
     }
 
+    // Function used only once, kept for potential future needs
+    @Suppress("SameParameterValue")
     private fun trimTxtValue(value: String, maxLen: Int): String {
         if (maxLen <= 0) {
             return ""
