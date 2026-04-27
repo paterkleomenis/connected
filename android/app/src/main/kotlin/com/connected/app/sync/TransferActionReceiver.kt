@@ -32,9 +32,19 @@ class TransferActionReceiver : BroadcastReceiver() {
             }
 
             ConnectedApp.ACTION_REJECT_TRANSFER -> {
-                val request = transferRequestFromIntent(intent) ?: return
-                Log.d("TransferActionReceiver", "Rejecting transfer ${request.id}")
-                app.rejectTransfer(request)
+                val request = transferRequestFromIntent(intent)
+                if (request != null) {
+                    Log.d("TransferActionReceiver", "Rejecting transfer ${request.id}")
+                    app.rejectTransfer(request)
+                } else {
+                    Log.d("TransferActionReceiver", "Rejecting all pending transfers")
+                    app.rejectAllTransfers()
+                }
+            }
+
+            ConnectedApp.ACTION_ACCEPT_ALL_TRANSFERS -> {
+                Log.d("TransferActionReceiver", "Accepting all pending transfers")
+                app.acceptAllTransfers()
             }
 
             ConnectedApp.ACTION_ACCEPT_PAIRING -> {

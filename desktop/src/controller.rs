@@ -10,7 +10,8 @@ use crate::state::{
     get_current_remote_path, get_device_name_setting, get_devices_store,
     get_download_directory_setting, get_last_clipboard, get_last_remote_clipboard_content,
     get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
-    get_pairing_requests, get_pending_pairings, get_phone_call_log, get_phone_conversations,
+    get_pairing_mode_state, get_pairing_requests, get_pending_pairings, get_phone_call_log,
+    get_phone_conversations,
     get_phone_data_update, get_phone_messages, get_preview_data, get_remote_files_update,
     get_saved_devices_setting, get_transfer_status, mark_calls_synced, mark_contacts_synced,
     mark_messages_synced, remove_device_from_settings, remove_file_transfer_request,
@@ -570,6 +571,23 @@ fn spawn_event_loop(
                     fingerprint,
                     device_id,
                 } => {
+                    if !*get_pairing_mode_state().lock_or_recover()
+                        && !c_clone.is_device_trusted(&device_id)
+                    {
+                        info!(
+                            "Auto-rejecting pairing request while pairing mode is disabled: {} ({})",
+                            device_name, device_id
+                        );
+                        let c_reject = c_clone.clone();
+                        let did = device_id.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = c_reject.reject_pairing(&did).await {
+                                warn!("Failed to auto-reject pairing request: {}", e);
+                            }
+                        });
+                        continue;
+                    }
+
                     // Check if already trusted
                     if c_clone.is_device_trusted(&device_id) {
                         info!(
@@ -1307,6 +1325,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         handle.abort();
                     }
                     clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
+                    c.set_pairing_mode_persistent(true);
                 }
                 // Apply saved download directory to core
                 if let Some(c) = &client
@@ -1542,7 +1561,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::SetPairingMode(enabled) => {
                 if let Some(c) = &client {
-                    c.set_pairing_mode(enabled);
+                    c.set_pairing_mode_persistent(enabled);
                 }
             }
             AppAction::ForgetDevice { device_id } => {

@@ -405,6 +405,17 @@ impl ConnectedClient {
         }
     }
 
+    pub fn set_pairing_mode_persistent(&self, enabled: bool) {
+        if let Some(handle) = self.pairing_mode_handle.write().take() {
+            handle.abort();
+        }
+
+        self.key_store.write().set_pairing_mode(enabled);
+        let _ = self
+            .event_tx
+            .send(ConnectedEvent::PairingModeChanged(enabled));
+    }
+
     pub fn register_filesystem_provider(
         &self,
         provider: Box<dyn crate::filesystem::FilesystemProvider>,

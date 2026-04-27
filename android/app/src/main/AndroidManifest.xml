@@ -147,6 +147,9 @@
                     android:name="com.connected.app.sync.ACTION_REJECT_TRANSFER"
                 />
                 <action
+                    android:name="com.connected.app.sync.ACTION_ACCEPT_ALL_TRANSFERS"
+                />
+                <action
                     android:name="com.connected.app.sync.ACTION_ACCEPT_PAIRING"
                 />
                 <action

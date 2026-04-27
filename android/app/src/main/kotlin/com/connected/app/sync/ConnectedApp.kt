@@ -118,6 +118,7 @@ class ConnectedApp(private val context: Context) {
 
         const val ACTION_ACCEPT_TRANSFER = "com.connected.app.sync.ACTION_ACCEPT_TRANSFER"
         const val ACTION_REJECT_TRANSFER = "com.connected.app.sync.ACTION_REJECT_TRANSFER"
+        const val ACTION_ACCEPT_ALL_TRANSFERS = "com.connected.app.sync.ACTION_ACCEPT_ALL_TRANSFERS"
         const val ACTION_ACCEPT_PAIRING = "com.connected.app.sync.ACTION_ACCEPT_PAIRING"
         const val ACTION_REJECT_PAIRING = "com.connected.app.sync.ACTION_REJECT_PAIRING"
         const val ACTION_OPEN_TRANSFER_REQUEST = "com.connected.app.sync.ACTION_OPEN_TRANSFER_REQUEST"
@@ -246,6 +247,7 @@ class ConnectedApp(private val context: Context) {
     val clipboardContent = mutableStateOf("")
     val pairingRequest = mutableStateOf<PairingRequest?>(null)
     val transferRequest = mutableStateOf<TransferRequest?>(null)
+    val pendingTransferRequests = mutableStateListOf<TransferRequest>()
 
     // Telephony State
     val telephonyProvider = TelephonyProvider(context)
@@ -621,10 +623,14 @@ class ConnectedApp(private val context: Context) {
 
     private val transferCallback = object : FileTransferCallback {
         override fun onTransferRequest(transferId: String, filename: String, fileSize: ULong, fromDevice: String) {
-            val request = TransferRequest(transferId, filename, fileSize, fromDevice)
-            transferRequest.value = request
-            registerIncomingTransfer(transferId)
-            showTransferNotification(request)
+            runOnMainThread {
+                val request = TransferRequest(transferId, filename, fileSize, fromDevice)
+                pendingTransferRequests.removeAll { it.id == transferId }
+                pendingTransferRequests.add(request)
+                transferRequest.value = pendingTransferRequests.firstOrNull()
+                registerIncomingTransfer(transferId)
+                showTransferNotification(request)
+            }
         }
 
         override fun onTransferStarting(transferId: String, filename: String, totalSize: ULong) {
@@ -1201,7 +1207,9 @@ class ConnectedApp(private val context: Context) {
 
     fun openTransferRequestFromIntent(intent: Intent) {
         transferRequestFromIntent(intent)?.let {
-            transferRequest.value = it
+            pendingTransferRequests.removeAll { request -> request.id == it.id }
+            pendingTransferRequests.add(it)
+            transferRequest.value = pendingTransferRequests.firstOrNull()
             dismissTransferNotification()
         }
     }
@@ -1274,12 +1282,35 @@ class ConnectedApp(private val context: Context) {
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
         )
 
+        val acceptAllIntent = Intent(context, TransferActionReceiver::class.java).apply {
+            action = ACTION_ACCEPT_ALL_TRANSFERS
+        }
+        val acceptAllPendingIntent = android.app.PendingIntent.getBroadcast(
+            context,
+            "accept-all-transfers".hashCode(),
+            acceptAllIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val rejectAllIntent = Intent(context, TransferActionReceiver::class.java).apply {
+            action = ACTION_REJECT_TRANSFER
+        }
+        val rejectAllPendingIntent = android.app.PendingIntent.getBroadcast(
+            context,
+            "reject-all-transfers".hashCode(),
+            rejectAllIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
         val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
-            .setContentTitle("Incoming File")
+            .setContentTitle(if (pendingTransferRequests.size > 1) "Incoming Files" else "Incoming File")
             .setContentText("${request.fromDevice} wants to send ${request.filename}")
             .setSmallIcon(R.drawable.ic_notification_logo)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openPendingIntent)
+            .addAction(android.R.drawable.ic_menu_agenda, "All devices", openPendingIntent)
+            .addAction(android.R.drawable.ic_menu_upload, "Accept all", acceptAllPendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Reject all", rejectAllPendingIntent)
             .addAction(android.R.drawable.ic_menu_add, "Accept", acceptPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Reject", rejectPendingIntent)
             .setAutoCancel(true)
@@ -1779,7 +1810,7 @@ class ConnectedApp(private val context: Context) {
 
     fun setPendingShare(uris: List<Uri>) {
         pendingShareUris.clear()
-        pendingShareUris.addAll(uris.map { it.toString() })
+        pendingShareUris.addAll(uris.distinctBy { it.toString() }.map { it.toString() })
     }
 
     fun clearPendingShare() {
@@ -3118,7 +3149,10 @@ class ConnectedApp(private val context: Context) {
                 acceptFileTransfer(request.id)
             } catch (_: Exception) {
             }
-            transferRequest.value = null
+            runOnMainThread {
+                pendingTransferRequests.removeAll { it.id == request.id }
+                transferRequest.value = pendingTransferRequests.firstOrNull()
+            }
             dismissTransferNotification()
         }
     }
@@ -3129,7 +3163,44 @@ class ConnectedApp(private val context: Context) {
                 rejectFileTransfer(request.id)
             } catch (_: Exception) {
             }
-            transferRequest.value = null
+            runOnMainThread {
+                pendingTransferRequests.removeAll { it.id == request.id }
+                transferRequest.value = pendingTransferRequests.firstOrNull()
+            }
+            dismissTransferNotification()
+        }
+    }
+
+    fun acceptAllTransfers() {
+        scope.launch(Dispatchers.IO) {
+            val requests = pendingTransferRequests.toList()
+            requests.forEach { request ->
+                try {
+                    acceptFileTransfer(request.id)
+                } catch (_: Exception) {
+                }
+            }
+            runOnMainThread {
+                pendingTransferRequests.clear()
+                transferRequest.value = null
+            }
+            dismissTransferNotification()
+        }
+    }
+
+    fun rejectAllTransfers() {
+        scope.launch(Dispatchers.IO) {
+            val requests = pendingTransferRequests.toList()
+            requests.forEach { request ->
+                try {
+                    rejectFileTransfer(request.id)
+                } catch (_: Exception) {
+                }
+            }
+            runOnMainThread {
+                pendingTransferRequests.clear()
+                transferRequest.value = null
+            }
             dismissTransferNotification()
         }
     }

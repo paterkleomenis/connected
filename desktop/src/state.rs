@@ -440,7 +440,7 @@ pub fn get_media_enabled() -> &'static Arc<Mutex<bool>> {
 }
 
 pub fn get_pairing_mode_state() -> &'static Arc<Mutex<bool>> {
-    PAIRING_MODE.get_or_init(|| Arc::new(Mutex::new(false)))
+    PAIRING_MODE.get_or_init(|| Arc::new(Mutex::new(true)))
 }
 
 pub fn set_pairing_mode_state(enabled: bool) {

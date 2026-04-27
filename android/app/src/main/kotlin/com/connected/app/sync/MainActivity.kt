@@ -197,39 +197,68 @@ class MainActivity : ComponentActivity() {
     private fun handleShareIntent(intent: Intent?) {
         if (intent == null) return
         when (intent.action) {
-            Intent.ACTION_SEND -> {
-                val uri = intent.extras?.let { BundleCompat.getParcelable(it, Intent.EXTRA_STREAM, Uri::class.java) }
-                    ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
-                if (uri != null) {
-                    connectedApp.setPendingShare(listOf(uri))
-                }
-            }
-
+            Intent.ACTION_SEND,
             Intent.ACTION_SEND_MULTIPLE -> {
-                val uris =
-                    intent.extras?.let { BundleCompat.getParcelableArrayList(it, Intent.EXTRA_STREAM, Uri::class.java) }
-                        ?: intent.clipData?.let { clip ->
-                            ArrayList<Uri>(clip.itemCount).apply {
-                                for (i in 0 until clip.itemCount) {
-                                    clip.getItemAt(i)?.uri?.let { add(it) }
-                                }
-                            }
-                        }
-                if (!uris.isNullOrEmpty()) {
+                val uris = collectShareUris(intent)
+                if (uris.isNotEmpty()) {
                     connectedApp.setPendingShare(uris)
                 }
             }
         }
     }
 
+    private fun collectShareUris(intent: Intent): List<Uri> {
+        val result = linkedSetOf<Uri>()
+
+        intent.extras?.let { extras ->
+            BundleCompat.getParcelable(extras, Intent.EXTRA_STREAM, Uri::class.java)?.let { result.add(it) }
+            BundleCompat.getParcelableArrayList(extras, Intent.EXTRA_STREAM, Uri::class.java)
+                ?.forEach { result.add(it) }
+
+            when (val rawExtra = extras.get(Intent.EXTRA_STREAM)) {
+                is Uri -> result.add(rawExtra)
+                is ArrayList<*> -> rawExtra.filterIsInstance<Uri>().forEach { result.add(it) }
+                is Array<*> -> rawExtra.filterIsInstance<Uri>().forEach { result.add(it) }
+            }
+        }
+
+        intent.clipData?.let { clip ->
+            for (index in 0 until clip.itemCount) {
+                clip.getItemAt(index)?.uri?.let { result.add(it) }
+            }
+        }
+
+        if (intent.action == Intent.ACTION_SEND && result.isEmpty()) {
+            intent.data?.let { result.add(it) }
+        }
+
+        return result.toList()
+    }
+
     private fun handleNotificationIntent(intent: Intent?) {
         if (intent == null) return
-        when (intent.action) {
-            ConnectedApp.ACTION_OPEN_TRANSFER_REQUEST -> connectedApp.openTransferRequestFromIntent(intent)
-            ConnectedApp.ACTION_OPEN_PAIRING_REQUEST -> connectedApp.openPairingRequestFromIntent(intent)
-            ConnectedApp.ACTION_OPEN_COMPLETED_FILE -> connectedApp.openCompletedFileFromIntent(intent)
+        val handled = when (intent.action) {
+            ConnectedApp.ACTION_OPEN_TRANSFER_REQUEST -> {
+                connectedApp.openTransferRequestFromIntent(intent)
+                true
+            }
+
+            ConnectedApp.ACTION_OPEN_PAIRING_REQUEST -> {
+                connectedApp.openPairingRequestFromIntent(intent)
+                true
+            }
+
+            ConnectedApp.ACTION_OPEN_COMPLETED_FILE -> {
+                connectedApp.openCompletedFileFromIntent(intent)
+                true
+            }
+
+            else -> false
         }
-        intent.action = null
+
+        if (handled) {
+            intent.action = null
+        }
     }
 }
 
@@ -695,18 +724,48 @@ fun MainAppNavigation(
         // Transfer Request Dialog
         if (connectedApp.transferRequest.value != null) {
             val request = connectedApp.transferRequest.value!!
+            val pendingCount = connectedApp.pendingTransferRequests.size
+            val pendingDevices = connectedApp.pendingTransferRequests
+                .map { it.fromDevice }
+                .distinct()
+                .size
             AlertDialog(
                 onDismissRequest = { connectedApp.rejectTransfer(request) },
-                title = { Text("Incoming File") },
-                text = { Text("${request.fromDevice} wants to send:\n${request.filename}\nSize: ${request.fileSize} bytes") },
+                title = {
+                    Text(if (pendingCount > 1) "Incoming Files" else "Incoming File")
+                },
+                text = {
+                    Column {
+                        if (pendingCount > 1) {
+                            Text("All devices: $pendingDevices")
+                            Text("Pending requests: $pendingCount")
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        Text("${request.fromDevice} wants to send:\n${request.filename}\nSize: ${request.fileSize} bytes")
+                    }
+                },
                 confirmButton = {
-                    Button(onClick = { connectedApp.acceptTransfer(request) }) {
-                        Text("Accept")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (pendingCount > 1) {
+                            TextButton(onClick = { connectedApp.acceptAllTransfers() }) {
+                                Text("Accept all")
+                            }
+                        }
+                        Button(onClick = { connectedApp.acceptTransfer(request) }) {
+                            Text("Accept")
+                        }
                     }
                 },
                 dismissButton = {
-                    Button(onClick = { connectedApp.rejectTransfer(request) }) {
-                        Text("Reject")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (pendingCount > 1) {
+                            TextButton(onClick = { connectedApp.rejectAllTransfers() }) {
+                                Text("Reject all")
+                            }
+                        }
+                        Button(onClick = { connectedApp.rejectTransfer(request) }) {
+                            Text("Reject")
+                        }
                     }
                 }
             )
