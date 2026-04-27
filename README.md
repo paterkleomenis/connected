@@ -47,13 +47,10 @@ In a world of walled gardens, connecting devices shouldn't be a hassle.
 
 #### Communication
 
-![SMS](screenshots/desktop-sms.png)
-![Inside SMS](screenshots/desktop-inside-sms.png)
 ![Contacts](screenshots/desktop-contacts.png)
 
 #### Management
 
-![Call Logs](screenshots/desktop-call-logs.png)
 ![Media Control](screenshots/desktop-media-control.png)
 ![Settings](screenshots/desktop-settings.png)
 
@@ -61,7 +58,7 @@ In a world of walled gardens, connecting devices shouldn't be a hassle.
 
 | Home | Settings |
 |:---:|:---:|
-| ![Phone Home](screenshots/phone-home.png) | ![Phone Settings](screenshots/phone-settings.png) |
+| ![Phone Home](screenshots/phone-home-1.png) | ![Phone Home](screenshots/phone-home-2.png) | ![Phone Settings](screenshots/phone-settings-1.png) | ![Phone Settings](screenshots/phone-settings-2.png) | 
 
 ## Development
 
