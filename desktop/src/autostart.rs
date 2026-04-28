@@ -1,3 +1,5 @@
+pub const AUTOSTART_ARG: &str = "--autostart";
+
 pub fn is_enabled() -> bool {
     platform::is_enabled()
 }
@@ -25,7 +27,7 @@ mod platform {
         if enabled {
             let exe = std::env::current_exe()
                 .map_err(|e| format!("Failed to resolve executable path: {e}"))?;
-            let value = format!("\"{}\"", exe.display());
+            let value = format!("\"{}\" {}", exe.display(), super::AUTOSTART_ARG);
 
             let status = Command::new("reg")
                 .args([
@@ -78,8 +80,9 @@ mod platform {
 
     fn desktop_entry(exe: &Path) -> String {
         format!(
-            "[Desktop Entry]\nType=Application\nVersion=1.0\nName=Connected\nComment=High-speed, offline, cross-platform ecosystem bridging devices\nExec={}\nIcon=connected-desktop\nTerminal=false\nCategories=Utility;Network;FileTransfer;\nX-GNOME-Autostart-enabled=true\n",
-            quote_exec(exe)
+            "[Desktop Entry]\nType=Application\nVersion=1.0\nName=Connected\nComment=High-speed, offline, cross-platform ecosystem bridging devices\nExec={} {}\nIcon=connected-desktop\nTerminal=false\nCategories=Utility;Network;FileTransfer;\nX-GNOME-Autostart-enabled=true\n",
+            quote_exec(exe),
+            super::AUTOSTART_ARG
         )
     }
 
@@ -142,7 +145,8 @@ mod platform {
     fn launch_agent_plist(exe: &Path) -> String {
         let executable = xml_escape(&exe.display().to_string());
         format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n    <key>Label</key>\n    <string>io.connected.desktop</string>\n    <key>ProgramArguments</key>\n    <array>\n        <string>{executable}</string>\n    </array>\n    <key>RunAtLoad</key>\n    <true/>\n</dict>\n</plist>\n"
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n    <key>Label</key>\n    <string>io.connected.desktop</string>\n    <key>ProgramArguments</key>\n    <array>\n        <string>{executable}</string>\n        <string>{}</string>\n    </array>\n    <key>RunAtLoad</key>\n    <true/>\n</dict>\n</plist>\n",
+            super::AUTOSTART_ARG
         )
     }
 

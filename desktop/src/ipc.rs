@@ -21,12 +21,17 @@ pub async fn listen_for_wakeups(window: DesktopContext) {
 #[cfg(unix)]
 pub fn send_wakeup_signal() {
     use std::os::unix::net::UnixStream;
+    use std::time::Duration;
     let data_dir = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
     let socket_path = data_dir.join("connected").join("single_instance.sock");
 
-    if let Ok(mut stream) = UnixStream::connect(&socket_path) {
-        use std::io::Write;
-        let _ = stream.write_all(b"WAKE");
+    for _ in 0..10 {
+        if let Ok(mut stream) = UnixStream::connect(&socket_path) {
+            use std::io::Write;
+            let _ = stream.write_all(b"WAKE");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -55,9 +60,14 @@ pub async fn listen_for_wakeups(window: DesktopContext) {
 #[cfg(windows)]
 pub fn send_wakeup_signal() {
     use std::fs::OpenOptions;
+    use std::time::Duration;
     const PIPE_NAME: &str = r"\\.\pipe\connected-desktop-single-instance";
-    if let Ok(mut file) = OpenOptions::new().write(true).open(PIPE_NAME) {
-        use std::io::Write;
-        let _ = file.write_all(b"WAKE");
+    for _ in 0..10 {
+        if let Ok(mut file) = OpenOptions::new().write(true).open(PIPE_NAME) {
+            use std::io::Write;
+            let _ = file.write_all(b"WAKE");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }

@@ -665,6 +665,8 @@ fn main() {
             .ok();
     }
 
+    let launched_from_autostart = std::env::args().any(|a| a == autostart::AUTOSTART_ARG);
+
     // Platform-specific window settings
     let decorations = cfg!(target_os = "windows") || cfg!(target_os = "macos");
     let transparent = !cfg!(target_os = "windows") && !cfg!(target_os = "macos");
@@ -681,7 +683,8 @@ fn main() {
             .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
             .with_decorations(decorations)
             .with_transparent(transparent)
-            .with_window_icon(load_icon()),
+            .with_window_icon(load_icon())
+            .with_visible(!launched_from_autostart),
     );
 
     // Set up menu bar on macOS
@@ -770,6 +773,16 @@ fn App() -> Element {
             dioxus::prelude::spawn(async move {
                 ipc::listen_for_wakeups(window).await;
             });
+        }
+    });
+
+    use_hook(|| {
+        static SPUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !SPUN.swap(true, std::sync::atomic::Ordering::Relaxed)
+            && std::env::args().any(|a| a == autostart::AUTOSTART_ARG)
+        {
+            let window = dioxus::desktop::window();
+            window.set_visible(false);
         }
     });
 
