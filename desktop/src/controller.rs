@@ -1340,10 +1340,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                 let actual_autostart = crate::autostart::is_enabled();
                 let saved_autostart = get_autostart_enabled_setting();
-                if actual_autostart && saved_autostart {
-                    if let Err(e) = crate::autostart::set_enabled(true) {
-                        error!("Failed to refresh autostart entry: {}", e);
-                    }
+                if actual_autostart
+                    && saved_autostart
+                    && let Err(e) = crate::autostart::set_enabled(true)
+                {
+                    error!("Failed to refresh autostart entry: {}", e);
                 }
                 if actual_autostart != saved_autostart {
                     set_autostart_enabled_setting(actual_autostart);
