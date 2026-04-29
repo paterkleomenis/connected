@@ -82,13 +82,13 @@ mod tray {
         }
 
         fn icon_name(&self) -> String {
-            "connected-app-logo".to_string()
+            "connected-desktop".to_string()
         }
 
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
             let mut icons = Vec::new();
 
-            for size in [22u32, 32, 64] {
+            for size in [16u32, 22, 24, 32, 48, 64] {
                 let rgba = super::render_connected_tray_icon_rgba(size);
                 let mut argb = Vec::with_capacity((size * size * 4) as usize);
                 for px in rgba.chunks_exact(4) {
@@ -668,8 +668,12 @@ fn main() {
     let launched_from_autostart = std::env::args().any(|a| a == autostart::AUTOSTART_ARG);
 
     // Platform-specific window settings
-    let decorations = cfg!(target_os = "windows") || cfg!(target_os = "macos");
-    let transparent = !cfg!(target_os = "windows") && !cfg!(target_os = "macos");
+    let decorations = cfg!(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "linux"
+    ));
+    let transparent = !decorations;
 
     let data_dir = dirs::data_local_dir().map(|d| d.join("connected"));
     if let Some(d) = data_dir.as_ref().filter(|d| !d.exists()) {
