@@ -352,7 +352,7 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
-// Initial value and increment amount for handles. 
+// Initial value and increment amount for handles.
 // These ensure that SWIFT handles always have the lowest bit set
 fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
 fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
@@ -571,9 +571,9 @@ public struct DiscoveredDevice: Equatable, Hashable {
         self.deviceType = deviceType
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -587,10 +587,10 @@ public struct FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DiscoveredDevice {
         return
             try DiscoveredDevice(
-                id: FfiConverterString.read(from: &buf), 
-                name: FfiConverterString.read(from: &buf), 
-                ip: FfiConverterString.read(from: &buf), 
-                port: FfiConverterUInt16.read(from: &buf), 
+                id: FfiConverterString.read(from: &buf),
+                name: FfiConverterString.read(from: &buf),
+                ip: FfiConverterString.read(from: &buf),
+                port: FfiConverterUInt16.read(from: &buf),
                 deviceType: FfiConverterString.read(from: &buf)
         )
     }
@@ -637,9 +637,9 @@ public struct FfiActiveCall: Equatable, Hashable {
         self.isIncoming = isIncoming
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -653,10 +653,10 @@ public struct FfiConverterTypeFfiActiveCall: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiActiveCall {
         return
             try FfiActiveCall(
-                number: FfiConverterString.read(from: &buf), 
-                contactName: FfiConverterOptionString.read(from: &buf), 
-                state: FfiConverterTypeActiveCallState.read(from: &buf), 
-                duration: FfiConverterUInt32.read(from: &buf), 
+                number: FfiConverterString.read(from: &buf),
+                contactName: FfiConverterOptionString.read(from: &buf),
+                state: FfiConverterTypeActiveCallState.read(from: &buf),
+                duration: FfiConverterUInt32.read(from: &buf),
                 isIncoming: FfiConverterBool.read(from: &buf)
         )
     }
@@ -707,9 +707,9 @@ public struct FfiCallLogEntry: Equatable, Hashable {
         self.isRead = isRead
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -723,12 +723,12 @@ public struct FfiConverterTypeFfiCallLogEntry: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCallLogEntry {
         return
             try FfiCallLogEntry(
-                id: FfiConverterString.read(from: &buf), 
-                number: FfiConverterString.read(from: &buf), 
-                contactName: FfiConverterOptionString.read(from: &buf), 
-                callType: FfiConverterTypeCallType.read(from: &buf), 
-                timestamp: FfiConverterUInt64.read(from: &buf), 
-                duration: FfiConverterUInt32.read(from: &buf), 
+                id: FfiConverterString.read(from: &buf),
+                number: FfiConverterString.read(from: &buf),
+                contactName: FfiConverterOptionString.read(from: &buf),
+                callType: FfiConverterTypeCallType.read(from: &buf),
+                timestamp: FfiConverterUInt64.read(from: &buf),
+                duration: FfiConverterUInt32.read(from: &buf),
                 isRead: FfiConverterBool.read(from: &buf)
         )
     }
@@ -779,9 +779,9 @@ public struct FfiContact: Equatable, Hashable {
         self.starred = starred
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -795,11 +795,11 @@ public struct FfiConverterTypeFfiContact: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiContact {
         return
             try FfiContact(
-                id: FfiConverterString.read(from: &buf), 
-                name: FfiConverterString.read(from: &buf), 
-                phoneNumbers: FfiConverterSequenceTypeFfiPhoneNumber.read(from: &buf), 
-                emails: FfiConverterSequenceString.read(from: &buf), 
-                photo: FfiConverterOptionString.read(from: &buf), 
+                id: FfiConverterString.read(from: &buf),
+                name: FfiConverterString.read(from: &buf),
+                phoneNumbers: FfiConverterSequenceTypeFfiPhoneNumber.read(from: &buf),
+                emails: FfiConverterSequenceString.read(from: &buf),
+                photo: FfiConverterOptionString.read(from: &buf),
                 starred: FfiConverterBool.read(from: &buf)
         )
     }
@@ -849,9 +849,9 @@ public struct FfiConversation: Equatable, Hashable {
         self.unreadCount = unreadCount
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -865,11 +865,11 @@ public struct FfiConverterTypeFfiConversation: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiConversation {
         return
             try FfiConversation(
-                id: FfiConverterString.read(from: &buf), 
-                addresses: FfiConverterSequenceString.read(from: &buf), 
-                contactNames: FfiConverterSequenceString.read(from: &buf), 
-                lastMessage: FfiConverterOptionString.read(from: &buf), 
-                lastTimestamp: FfiConverterUInt64.read(from: &buf), 
+                id: FfiConverterString.read(from: &buf),
+                addresses: FfiConverterSequenceString.read(from: &buf),
+                contactNames: FfiConverterSequenceString.read(from: &buf),
+                lastMessage: FfiConverterOptionString.read(from: &buf),
+                lastTimestamp: FfiConverterUInt64.read(from: &buf),
                 unreadCount: FfiConverterUInt32.read(from: &buf)
         )
     }
@@ -917,9 +917,9 @@ public struct FfiFsEntry: Equatable, Hashable {
         self.modified = modified
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -933,10 +933,10 @@ public struct FfiConverterTypeFfiFsEntry: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiFsEntry {
         return
             try FfiFsEntry(
-                name: FfiConverterString.read(from: &buf), 
-                path: FfiConverterString.read(from: &buf), 
-                entryType: FfiConverterTypeFfiFsEntryType.read(from: &buf), 
-                size: FfiConverterUInt64.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf),
+                path: FfiConverterString.read(from: &buf),
+                entryType: FfiConverterTypeFfiFsEntryType.read(from: &buf),
+                size: FfiConverterUInt64.read(from: &buf),
                 modified: FfiConverterOptionUInt64.read(from: &buf)
         )
     }
@@ -977,7 +977,7 @@ public struct FfiMmsAttachment: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, contentType: String, filename: String?, 
+    public init(id: String, contentType: String, filename: String?,
         /**
          * Base64 encoded data for small attachments, or a reference ID for larger ones
          */data: String?) {
@@ -987,9 +987,9 @@ public struct FfiMmsAttachment: Equatable, Hashable {
         self.data = data
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -1003,9 +1003,9 @@ public struct FfiConverterTypeFfiMmsAttachment: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMmsAttachment {
         return
             try FfiMmsAttachment(
-                id: FfiConverterString.read(from: &buf), 
-                contentType: FfiConverterString.read(from: &buf), 
-                filename: FfiConverterOptionString.read(from: &buf), 
+                id: FfiConverterString.read(from: &buf),
+                contentType: FfiConverterString.read(from: &buf),
+                filename: FfiConverterOptionString.read(from: &buf),
                 data: FfiConverterOptionString.read(from: &buf)
         )
     }
@@ -1045,9 +1045,9 @@ public struct FfiPhoneNumber: Equatable, Hashable {
         self.label = label
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -1061,7 +1061,7 @@ public struct FfiConverterTypeFfiPhoneNumber: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPhoneNumber {
         return
             try FfiPhoneNumber(
-                number: FfiConverterString.read(from: &buf), 
+                number: FfiConverterString.read(from: &buf),
                 label: FfiConverterTypePhoneNumberType.read(from: &buf)
         )
     }
@@ -1115,9 +1115,9 @@ public struct FfiSmsMessage: Equatable, Hashable {
         self.attachments = attachments
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -1131,15 +1131,15 @@ public struct FfiConverterTypeFfiSmsMessage: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSmsMessage {
         return
             try FfiSmsMessage(
-                id: FfiConverterString.read(from: &buf), 
-                threadId: FfiConverterString.read(from: &buf), 
-                address: FfiConverterString.read(from: &buf), 
-                contactName: FfiConverterOptionString.read(from: &buf), 
-                body: FfiConverterString.read(from: &buf), 
-                timestamp: FfiConverterUInt64.read(from: &buf), 
-                isOutgoing: FfiConverterBool.read(from: &buf), 
-                isRead: FfiConverterBool.read(from: &buf), 
-                status: FfiConverterTypeSmsStatus.read(from: &buf), 
+                id: FfiConverterString.read(from: &buf),
+                threadId: FfiConverterString.read(from: &buf),
+                address: FfiConverterString.read(from: &buf),
+                contactName: FfiConverterOptionString.read(from: &buf),
+                body: FfiConverterString.read(from: &buf),
+                timestamp: FfiConverterUInt64.read(from: &buf),
+                isOutgoing: FfiConverterBool.read(from: &buf),
+                isRead: FfiConverterBool.read(from: &buf),
+                status: FfiConverterTypeSmsStatus.read(from: &buf),
                 attachments: FfiConverterSequenceTypeFfiMmsAttachment.read(from: &buf)
         )
     }
@@ -1189,9 +1189,9 @@ public struct MediaState: Equatable, Hashable {
         self.playing = playing
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -1205,9 +1205,9 @@ public struct FfiConverterTypeMediaState: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MediaState {
         return
             try MediaState(
-                title: FfiConverterOptionString.read(from: &buf), 
-                artist: FfiConverterOptionString.read(from: &buf), 
-                album: FfiConverterOptionString.read(from: &buf), 
+                title: FfiConverterOptionString.read(from: &buf),
+                artist: FfiConverterOptionString.read(from: &buf),
+                album: FfiConverterOptionString.read(from: &buf),
                 playing: FfiConverterBool.read(from: &buf)
         )
     }
@@ -1249,9 +1249,9 @@ public struct TrustedPeer: Equatable, Hashable {
         self.deviceId = deviceId
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -1265,8 +1265,8 @@ public struct FfiConverterTypeTrustedPeer: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TrustedPeer {
         return
             try TrustedPeer(
-                fingerprint: FfiConverterString.read(from: &buf), 
-                name: FfiConverterString.read(from: &buf), 
+                fingerprint: FfiConverterString.read(from: &buf),
+                name: FfiConverterString.read(from: &buf),
                 deviceId: FfiConverterString.read(from: &buf)
         )
     }
@@ -1311,9 +1311,9 @@ public struct UpdateInfo: Equatable, Hashable {
         self.releaseNotes = releaseNotes
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -1327,10 +1327,10 @@ public struct FfiConverterTypeUpdateInfo: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UpdateInfo {
         return
             try UpdateInfo(
-                hasUpdate: FfiConverterBool.read(from: &buf), 
-                latestVersion: FfiConverterString.read(from: &buf), 
-                currentVersion: FfiConverterString.read(from: &buf), 
-                downloadUrl: FfiConverterOptionString.read(from: &buf), 
+                hasUpdate: FfiConverterBool.read(from: &buf),
+                latestVersion: FfiConverterString.read(from: &buf),
+                currentVersion: FfiConverterString.read(from: &buf),
+                downloadUrl: FfiConverterOptionString.read(from: &buf),
                 releaseNotes: FfiConverterOptionString.read(from: &buf)
         )
     }
@@ -1363,7 +1363,7 @@ public func FfiConverterTypeUpdateInfo_lower(_ value: UpdateInfo) -> RustBuffer 
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum ActiveCallState: Equatable, Hashable {
-    
+
     case ringing
     case dialing
     case connected
@@ -1389,44 +1389,44 @@ public struct FfiConverterTypeActiveCallState: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ActiveCallState {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .ringing
-        
+
         case 2: return .dialing
-        
+
         case 3: return .connected
-        
+
         case 4: return .onHold
-        
+
         case 5: return .ended
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: ActiveCallState, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .ringing:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .dialing:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .connected:
             writeInt(&buf, Int32(3))
-        
-        
+
+
         case .onHold:
             writeInt(&buf, Int32(4))
-        
-        
+
+
         case .ended:
             writeInt(&buf, Int32(5))
-        
+
         }
     }
 }
@@ -1451,7 +1451,7 @@ public func FfiConverterTypeActiveCallState_lower(_ value: ActiveCallState) -> R
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum CallAction: Equatable, Hashable {
-    
+
     case answer
     case reject
     case hangUp
@@ -1481,64 +1481,64 @@ public struct FfiConverterTypeCallAction: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CallAction {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .answer
-        
+
         case 2: return .reject
-        
+
         case 3: return .hangUp
-        
+
         case 4: return .mute
-        
+
         case 5: return .unmute
-        
+
         case 6: return .hold
-        
+
         case 7: return .unhold
-        
+
         case 8: return .sendDtmf(digit: try FfiConverterString.read(from: &buf)
         )
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: CallAction, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .answer:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .reject:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .hangUp:
             writeInt(&buf, Int32(3))
-        
-        
+
+
         case .mute:
             writeInt(&buf, Int32(4))
-        
-        
+
+
         case .unmute:
             writeInt(&buf, Int32(5))
-        
-        
+
+
         case .hold:
             writeInt(&buf, Int32(6))
-        
-        
+
+
         case .unhold:
             writeInt(&buf, Int32(7))
-        
-        
+
+
         case let .sendDtmf(digit):
             writeInt(&buf, Int32(8))
             FfiConverterString.write(digit, into: &buf)
-            
+
         }
     }
 }
@@ -1563,7 +1563,7 @@ public func FfiConverterTypeCallAction_lower(_ value: CallAction) -> RustBuffer 
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum CallType: Equatable, Hashable {
-    
+
     case incoming
     case outgoing
     case missed
@@ -1590,50 +1590,50 @@ public struct FfiConverterTypeCallType: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CallType {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .incoming
-        
+
         case 2: return .outgoing
-        
+
         case 3: return .missed
-        
+
         case 4: return .rejected
-        
+
         case 5: return .blocked
-        
+
         case 6: return .voicemail
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: CallType, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .incoming:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .outgoing:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .missed:
             writeInt(&buf, Int32(3))
-        
-        
+
+
         case .rejected:
             writeInt(&buf, Int32(4))
-        
-        
+
+
         case .blocked:
             writeInt(&buf, Int32(5))
-        
-        
+
+
         case .voicemail:
             writeInt(&buf, Int32(6))
-        
+
         }
     }
 }
@@ -1657,8 +1657,8 @@ public func FfiConverterTypeCallType_lower(_ value: CallType) -> RustBuffer {
 
 public enum ConnectedFfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
-    
-    
+
+
     case InitializationError(msg: String
     )
     case DiscoveryError(msg: String
@@ -1671,15 +1671,15 @@ public enum ConnectedFfiError: Swift.Error, Equatable, Hashable, Foundation.Loca
     case Internal(msg: String
     )
 
-    
 
-    
 
-    
+
+
+
     public var errorDescription: String? {
         String(reflecting: self)
     }
-    
+
 }
 
 #if compiler(>=6)
@@ -1696,9 +1696,9 @@ public struct FfiConverterTypeConnectedFfiError: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        
 
-        
+
+
         case 1: return .InitializationError(
             msg: try FfiConverterString.read(from: &buf)
             )
@@ -1723,38 +1723,38 @@ public struct FfiConverterTypeConnectedFfiError: FfiConverterRustBuffer {
     public static func write(_ value: ConnectedFfiError, into buf: inout [UInt8]) {
         switch value {
 
-        
 
-        
-        
+
+
+
         case let .InitializationError(msg):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(msg, into: &buf)
-            
-        
+
+
         case let .DiscoveryError(msg):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(msg, into: &buf)
-            
-        
+
+
         case let .ConnectionError(msg):
             writeInt(&buf, Int32(3))
             FfiConverterString.write(msg, into: &buf)
-            
-        
+
+
         case .NotInitialized:
             writeInt(&buf, Int32(4))
-        
-        
+
+
         case let .InvalidArgument(msg):
             writeInt(&buf, Int32(5))
             FfiConverterString.write(msg, into: &buf)
-            
-        
+
+
         case let .Internal(msg):
             writeInt(&buf, Int32(6))
             FfiConverterString.write(msg, into: &buf)
-            
+
         }
     }
 }
@@ -1778,7 +1778,7 @@ public func FfiConverterTypeConnectedFfiError_lower(_ value: ConnectedFfiError) 
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum FfiFsEntryType: Equatable, Hashable {
-    
+
     case file
     case directory
     case symlink
@@ -1803,38 +1803,38 @@ public struct FfiConverterTypeFfiFsEntryType: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiFsEntryType {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .file
-        
+
         case 2: return .directory
-        
+
         case 3: return .symlink
-        
+
         case 4: return .unknown
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FfiFsEntryType, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .file:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .directory:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .symlink:
             writeInt(&buf, Int32(3))
-        
-        
+
+
         case .unknown:
             writeInt(&buf, Int32(4))
-        
+
         }
     }
 }
@@ -1858,20 +1858,20 @@ public func FfiConverterTypeFfiFsEntryType_lower(_ value: FfiFsEntryType) -> Rus
 
 public enum FilesystemError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
-    
-    
+
+
     case Generic(msg: String
     )
 
-    
 
-    
 
-    
+
+
+
     public var errorDescription: String? {
         String(reflecting: self)
     }
-    
+
 }
 
 #if compiler(>=6)
@@ -1888,9 +1888,9 @@ public struct FfiConverterTypeFilesystemError: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        
 
-        
+
+
         case 1: return .Generic(
             msg: try FfiConverterString.read(from: &buf)
             )
@@ -1902,14 +1902,14 @@ public struct FfiConverterTypeFilesystemError: FfiConverterRustBuffer {
     public static func write(_ value: FilesystemError, into buf: inout [UInt8]) {
         switch value {
 
-        
 
-        
-        
+
+
+
         case let .Generic(msg):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(msg, into: &buf)
-            
+
         }
     }
 }
@@ -1933,7 +1933,7 @@ public func FfiConverterTypeFilesystemError_lower(_ value: FilesystemError) -> R
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum MediaCommand: Equatable, Hashable {
-    
+
     case play
     case pause
     case playPause
@@ -1962,62 +1962,62 @@ public struct FfiConverterTypeMediaCommand: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MediaCommand {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .play
-        
+
         case 2: return .pause
-        
+
         case 3: return .playPause
-        
+
         case 4: return .next
-        
+
         case 5: return .previous
-        
+
         case 6: return .stop
-        
+
         case 7: return .volumeUp
-        
+
         case 8: return .volumeDown
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: MediaCommand, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .play:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .pause:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .playPause:
             writeInt(&buf, Int32(3))
-        
-        
+
+
         case .next:
             writeInt(&buf, Int32(4))
-        
-        
+
+
         case .previous:
             writeInt(&buf, Int32(5))
-        
-        
+
+
         case .stop:
             writeInt(&buf, Int32(6))
-        
-        
+
+
         case .volumeUp:
             writeInt(&buf, Int32(7))
-        
-        
+
+
         case .volumeDown:
             writeInt(&buf, Int32(8))
-        
+
         }
     }
 }
@@ -2042,7 +2042,7 @@ public func FfiConverterTypeMediaCommand_lower(_ value: MediaCommand) -> RustBuf
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum PhoneNumberType: Equatable, Hashable {
-    
+
     case mobile
     case home
     case work
@@ -2068,44 +2068,44 @@ public struct FfiConverterTypePhoneNumberType: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PhoneNumberType {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .mobile
-        
+
         case 2: return .home
-        
+
         case 3: return .work
-        
+
         case 4: return .main
-        
+
         case 5: return .other
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: PhoneNumberType, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .mobile:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .home:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .work:
             writeInt(&buf, Int32(3))
-        
-        
+
+
         case .main:
             writeInt(&buf, Int32(4))
-        
-        
+
+
         case .other:
             writeInt(&buf, Int32(5))
-        
+
         }
     }
 }
@@ -2130,7 +2130,7 @@ public func FfiConverterTypePhoneNumberType_lower(_ value: PhoneNumberType) -> R
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum SmsStatus: Equatable, Hashable {
-    
+
     case pending
     case sent
     case delivered
@@ -2156,44 +2156,44 @@ public struct FfiConverterTypeSmsStatus: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SmsStatus {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .pending
-        
+
         case 2: return .sent
-        
+
         case 3: return .delivered
-        
+
         case 4: return .failed
-        
+
         case 5: return .received
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: SmsStatus, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .pending:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .sent:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .delivered:
             writeInt(&buf, Int32(3))
-        
-        
+
+
         case .failed:
             writeInt(&buf, Int32(4))
-        
-        
+
+
         case .received:
             writeInt(&buf, Int32(5))
-        
+
         }
     }
 }
@@ -2218,18 +2218,18 @@ public func FfiConverterTypeSmsStatus_lower(_ value: SmsStatus) -> RustBuffer {
 
 
 public protocol BrowserDownloadCallback: AnyObject, Sendable {
-    
+
     /**
      * Called when download progress updates
      * For file downloads: current_file is the filename
      * For folder downloads: current_file shows the file currently being downloaded
      */
-    func onDownloadProgress(bytesDownloaded: UInt64, totalBytes: UInt64, currentFile: String) 
-    
-    func onDownloadCompleted(totalBytes: UInt64) 
-    
-    func onDownloadFailed(errorMsg: String) 
-    
+    func onDownloadProgress(bytesDownloaded: UInt64, totalBytes: UInt64, currentFile: String)
+
+    func onDownloadCompleted(totalBytes: UInt64)
+
+    func onDownloadFailed(errorMsg: String)
+
 }
 
 
@@ -2275,7 +2275,7 @@ fileprivate struct UniffiCallbackInterfaceBrowserDownloadCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2299,7 +2299,7 @@ fileprivate struct UniffiCallbackInterfaceBrowserDownloadCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2323,7 +2323,7 @@ fileprivate struct UniffiCallbackInterfaceBrowserDownloadCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2410,11 +2410,11 @@ public func FfiConverterCallbackInterfaceBrowserDownloadCallback_lower(_ v: Brow
 
 
 public protocol ClipboardCallback: AnyObject, Sendable {
-    
-    func onClipboardReceived(text: String, fromDevice: String) 
-    
-    func onClipboardSent(success: Bool, errorMsg: String?) 
-    
+
+    func onClipboardReceived(text: String, fromDevice: String)
+
+    func onClipboardSent(success: Bool, errorMsg: String?)
+
 }
 
 
@@ -2458,7 +2458,7 @@ fileprivate struct UniffiCallbackInterfaceClipboardCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2484,7 +2484,7 @@ fileprivate struct UniffiCallbackInterfaceClipboardCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2571,13 +2571,13 @@ public func FfiConverterCallbackInterfaceClipboardCallback_lower(_ v: ClipboardC
 
 
 public protocol DiscoveryCallback: AnyObject, Sendable {
-    
-    func onDeviceFound(device: DiscoveredDevice) 
-    
-    func onDeviceLost(deviceId: String) 
-    
-    func onError(errorMsg: String) 
-    
+
+    func onDeviceFound(device: DiscoveredDevice)
+
+    func onDeviceLost(deviceId: String)
+
+    func onError(errorMsg: String)
+
 }
 
 
@@ -2619,7 +2619,7 @@ fileprivate struct UniffiCallbackInterfaceDiscoveryCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2643,7 +2643,7 @@ fileprivate struct UniffiCallbackInterfaceDiscoveryCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2667,7 +2667,7 @@ fileprivate struct UniffiCallbackInterfaceDiscoveryCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2754,21 +2754,21 @@ public func FfiConverterCallbackInterfaceDiscoveryCallback_lower(_ v: DiscoveryC
 
 
 public protocol FileTransferCallback: AnyObject, Sendable {
-    
-    func onTransferRequest(transferId: String, filename: String, fileSize: UInt64, fromDevice: String) 
-    
-    func onTransferStarting(transferId: String, filename: String, totalSize: UInt64) 
-    
-    func onTransferProgress(bytesTransferred: UInt64, totalSize: UInt64) 
-    
-    func onTransferCompleted(filename: String, totalSize: UInt64) 
-    
-    func onTransferFailed(errorMsg: String) 
-    
-    func onTransferCancelled() 
-    
-    func onCompressionProgress(filename: String, currentFile: String, filesProcessed: UInt64, totalFiles: UInt64, bytesProcessed: UInt64, totalBytes: UInt64, speedBytesPerSec: UInt64) 
-    
+
+    func onTransferRequest(transferId: String, filename: String, fileSize: UInt64, fromDevice: String)
+
+    func onTransferStarting(transferId: String, filename: String, totalSize: UInt64)
+
+    func onTransferProgress(bytesTransferred: UInt64, totalSize: UInt64)
+
+    func onTransferCompleted(filename: String, totalSize: UInt64)
+
+    func onTransferFailed(errorMsg: String)
+
+    func onTransferCancelled()
+
+    func onCompressionProgress(filename: String, currentFile: String, filesProcessed: UInt64, totalFiles: UInt64, bytesProcessed: UInt64, totalBytes: UInt64, speedBytesPerSec: UInt64)
+
 }
 
 
@@ -2816,7 +2816,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2844,7 +2844,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2870,7 +2870,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2896,7 +2896,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2920,7 +2920,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2942,7 +2942,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2978,7 +2978,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3065,17 +3065,17 @@ public func FfiConverterCallbackInterfaceFileTransferCallback_lower(_ v: FileTra
 
 
 public protocol FilesystemProviderCallback: AnyObject, Sendable {
-    
+
     func listDir(path: String) throws  -> [FfiFsEntry]
-    
+
     func readFile(path: String, offset: UInt64, size: UInt64) throws  -> Data
-    
+
     func writeFile(path: String, offset: UInt64, data: Data) throws  -> UInt64
-    
+
     func getMetadata(path: String) throws  -> FfiFsEntry
-    
+
     func getThumbnail(path: String) throws  -> Data
-    
+
 }
 
 
@@ -3117,7 +3117,7 @@ fileprivate struct UniffiCallbackInterfaceFilesystemProviderCallback {
                 )
             }
 
-            
+
             let writeReturn = { uniffiOutReturn.pointee = FfiConverterSequenceTypeFfiFsEntry.lower($0) }
             uniffiTraitInterfaceCallWithError(
                 callStatus: uniffiCallStatus,
@@ -3146,7 +3146,7 @@ fileprivate struct UniffiCallbackInterfaceFilesystemProviderCallback {
                 )
             }
 
-            
+
             let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
             uniffiTraitInterfaceCallWithError(
                 callStatus: uniffiCallStatus,
@@ -3175,7 +3175,7 @@ fileprivate struct UniffiCallbackInterfaceFilesystemProviderCallback {
                 )
             }
 
-            
+
             let writeReturn = { uniffiOutReturn.pointee = FfiConverterUInt64.lower($0) }
             uniffiTraitInterfaceCallWithError(
                 callStatus: uniffiCallStatus,
@@ -3200,7 +3200,7 @@ fileprivate struct UniffiCallbackInterfaceFilesystemProviderCallback {
                 )
             }
 
-            
+
             let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeFfiFsEntry_lower($0) }
             uniffiTraitInterfaceCallWithError(
                 callStatus: uniffiCallStatus,
@@ -3225,7 +3225,7 @@ fileprivate struct UniffiCallbackInterfaceFilesystemProviderCallback {
                 )
             }
 
-            
+
             let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
             uniffiTraitInterfaceCallWithError(
                 callStatus: uniffiCallStatus,
@@ -3313,11 +3313,11 @@ public func FfiConverterCallbackInterfaceFilesystemProviderCallback_lower(_ v: F
 
 
 public protocol MediaControlCallback: AnyObject, Sendable {
-    
-    func onMediaCommand(fromDevice: String, command: MediaCommand) 
-    
-    func onMediaStateUpdate(fromDevice: String, state: MediaState) 
-    
+
+    func onMediaCommand(fromDevice: String, command: MediaCommand)
+
+    func onMediaStateUpdate(fromDevice: String, state: MediaState)
+
 }
 
 
@@ -3361,7 +3361,7 @@ fileprivate struct UniffiCallbackInterfaceMediaControlCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3387,7 +3387,7 @@ fileprivate struct UniffiCallbackInterfaceMediaControlCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3474,13 +3474,13 @@ public func FfiConverterCallbackInterfaceMediaControlCallback_lower(_ v: MediaCo
 
 
 public protocol PairingCallback: AnyObject, Sendable {
-    
-    func onPairingRequest(deviceName: String, fingerprint: String, deviceId: String) 
-    
-    func onPairingRejected(deviceName: String, deviceId: String) 
-    
-    func onPairingModeChanged(enabled: Bool) 
-    
+
+    func onPairingRequest(deviceName: String, fingerprint: String, deviceId: String)
+
+    func onPairingRejected(deviceName: String, deviceId: String)
+
+    func onPairingModeChanged(enabled: Bool)
+
 }
 
 
@@ -3526,7 +3526,7 @@ fileprivate struct UniffiCallbackInterfacePairingCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3552,7 +3552,7 @@ fileprivate struct UniffiCallbackInterfacePairingCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3576,7 +3576,7 @@ fileprivate struct UniffiCallbackInterfacePairingCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3663,77 +3663,77 @@ public func FfiConverterCallbackInterfacePairingCallback_lower(_ v: PairingCallb
 
 
 public protocol TelephonyCallback: AnyObject, Sendable {
-    
+
     /**
      * Called when contacts sync is requested
      */
-    func onContactsSyncRequest(fromDevice: String, fromIp: String, fromPort: UInt16) 
-    
+    func onContactsSyncRequest(fromDevice: String, fromIp: String, fromPort: UInt16)
+
     /**
      * Called when contacts are received
      */
-    func onContactsReceived(fromDevice: String, contacts: [FfiContact]) 
-    
+    func onContactsReceived(fromDevice: String, contacts: [FfiContact])
+
     /**
      * Called when conversations sync is requested
      */
-    func onConversationsSyncRequest(fromDevice: String, fromIp: String, fromPort: UInt16) 
-    
+    func onConversationsSyncRequest(fromDevice: String, fromIp: String, fromPort: UInt16)
+
     /**
      * Called when conversations are received
      */
-    func onConversationsReceived(fromDevice: String, conversations: [FfiConversation]) 
-    
+    func onConversationsReceived(fromDevice: String, conversations: [FfiConversation])
+
     /**
      * Called when messages for a thread are requested
      */
-    func onMessagesRequest(fromDevice: String, fromIp: String, fromPort: UInt16, threadId: String, limit: UInt32) 
-    
+    func onMessagesRequest(fromDevice: String, fromIp: String, fromPort: UInt16, threadId: String, limit: UInt32)
+
     /**
      * Called when messages are received
      */
-    func onMessagesReceived(fromDevice: String, threadId: String, messages: [FfiSmsMessage]) 
-    
+    func onMessagesReceived(fromDevice: String, threadId: String, messages: [FfiSmsMessage])
+
     /**
      * Called when a request to send SMS is received
      */
-    func onSendSmsRequest(fromDevice: String, fromIp: String, fromPort: UInt16, to: String, body: String) 
-    
+    func onSendSmsRequest(fromDevice: String, fromIp: String, fromPort: UInt16, to: String, body: String)
+
     /**
      * Called when SMS send result is received
      */
-    func onSmsSendResult(success: Bool, messageId: String?, error: String?) 
-    
+    func onSmsSendResult(success: Bool, messageId: String?, error: String?)
+
     /**
      * Called when a new SMS notification is received
      */
-    func onNewSms(fromDevice: String, message: FfiSmsMessage) 
-    
+    func onNewSms(fromDevice: String, message: FfiSmsMessage)
+
     /**
      * Called when call log is requested
      */
-    func onCallLogRequest(fromDevice: String, fromIp: String, fromPort: UInt16, limit: UInt32) 
-    
+    func onCallLogRequest(fromDevice: String, fromIp: String, fromPort: UInt16, limit: UInt32)
+
     /**
      * Called when call log is received
      */
-    func onCallLogReceived(fromDevice: String, entries: [FfiCallLogEntry]) 
-    
+    func onCallLogReceived(fromDevice: String, entries: [FfiCallLogEntry])
+
     /**
      * Called when a call initiation is requested
      */
-    func onInitiateCallRequest(fromDevice: String, fromIp: String, fromPort: UInt16, number: String) 
-    
+    func onInitiateCallRequest(fromDevice: String, fromIp: String, fromPort: UInt16, number: String)
+
     /**
      * Called when a call action is requested
      */
-    func onCallActionRequest(fromDevice: String, fromIp: String, fromPort: UInt16, action: CallAction) 
-    
+    func onCallActionRequest(fromDevice: String, fromIp: String, fromPort: UInt16, action: CallAction)
+
     /**
      * Called when active call state is updated
      */
-    func onActiveCallUpdate(fromDevice: String, call: FfiActiveCall?) 
-    
+    func onActiveCallUpdate(fromDevice: String, call: FfiActiveCall?)
+
 }
 
 
@@ -3779,7 +3779,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3805,7 +3805,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3833,7 +3833,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3859,7 +3859,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3891,7 +3891,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3919,7 +3919,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3951,7 +3951,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3979,7 +3979,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -4005,7 +4005,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -4035,7 +4035,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -4061,7 +4061,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -4091,7 +4091,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -4121,7 +4121,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -4147,7 +4147,7 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -4234,9 +4234,9 @@ public func FfiConverterCallbackInterfaceTelephonyCallback_lower(_ v: TelephonyC
 
 
 public protocol UnpairCallback: AnyObject, Sendable {
-    
-    func onDeviceUnpaired(deviceId: String, deviceName: String, reason: String) 
-    
+
+    func onDeviceUnpaired(deviceId: String, deviceName: String, reason: String)
+
 }
 
 
@@ -4282,7 +4282,7 @@ fileprivate struct UniffiCallbackInterfaceUnpairCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,

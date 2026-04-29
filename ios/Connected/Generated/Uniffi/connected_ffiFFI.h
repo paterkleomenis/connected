@@ -245,280 +245,280 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureRes
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_BROWSER_DOWNLOAD_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_BROWSER_DOWNLOAD_CALLBACK_METHOD0
-typedef void (*UniffiCallbackInterfaceBrowserDownloadCallbackMethod0)(uint64_t, uint64_t, uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceBrowserDownloadCallbackMethod0)(uint64_t, uint64_t, uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_BROWSER_DOWNLOAD_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_BROWSER_DOWNLOAD_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfaceBrowserDownloadCallbackMethod1)(uint64_t, uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceBrowserDownloadCallbackMethod1)(uint64_t, uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_BROWSER_DOWNLOAD_CALLBACK_METHOD2
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_BROWSER_DOWNLOAD_CALLBACK_METHOD2
-typedef void (*UniffiCallbackInterfaceBrowserDownloadCallbackMethod2)(uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceBrowserDownloadCallbackMethod2)(uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CLIPBOARD_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CLIPBOARD_CALLBACK_METHOD0
-typedef void (*UniffiCallbackInterfaceClipboardCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceClipboardCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CLIPBOARD_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CLIPBOARD_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfaceClipboardCallbackMethod1)(uint64_t, int8_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceClipboardCallbackMethod1)(uint64_t, int8_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_DISCOVERY_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_DISCOVERY_CALLBACK_METHOD0
-typedef void (*UniffiCallbackInterfaceDiscoveryCallbackMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceDiscoveryCallbackMethod0)(uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_DISCOVERY_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_DISCOVERY_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfaceDiscoveryCallbackMethod1)(uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceDiscoveryCallbackMethod1)(uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_DISCOVERY_CALLBACK_METHOD2
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_DISCOVERY_CALLBACK_METHOD2
-typedef void (*UniffiCallbackInterfaceDiscoveryCallbackMethod2)(uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceDiscoveryCallbackMethod2)(uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD0
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD2
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD2
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod2)(uint64_t, uint64_t, uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod2)(uint64_t, uint64_t, uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD3
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD3
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod3)(uint64_t, RustBuffer, uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod3)(uint64_t, RustBuffer, uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD4
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD4
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod4)(uint64_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod4)(uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD5
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD5
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod5)(uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod5)(uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD6
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD6
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod6)(uint64_t, RustBuffer, RustBuffer, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod6)(uint64_t, RustBuffer, RustBuffer, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD0
-typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod0)(uint64_t, RustBuffer, RustBuffer* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod0)(uint64_t, RustBuffer, RustBuffer* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod1)(uint64_t, RustBuffer, uint64_t, uint64_t, RustBuffer* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod1)(uint64_t, RustBuffer, uint64_t, uint64_t, RustBuffer* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD2
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD2
-typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod2)(uint64_t, RustBuffer, uint64_t, RustBuffer, uint64_t* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod2)(uint64_t, RustBuffer, uint64_t, RustBuffer, uint64_t* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD3
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD3
-typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod3)(uint64_t, RustBuffer, RustBuffer* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod3)(uint64_t, RustBuffer, RustBuffer* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD4
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD4
-typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod4)(uint64_t, RustBuffer, RustBuffer* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod4)(uint64_t, RustBuffer, RustBuffer* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_MEDIA_CONTROL_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_MEDIA_CONTROL_CALLBACK_METHOD0
-typedef void (*UniffiCallbackInterfaceMediaControlCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceMediaControlCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_MEDIA_CONTROL_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_MEDIA_CONTROL_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfaceMediaControlCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceMediaControlCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD0
-typedef void (*UniffiCallbackInterfacePairingCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePairingCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfacePairingCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePairingCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD2
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD2
-typedef void (*UniffiCallbackInterfacePairingCallbackMethod2)(uint64_t, int8_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfacePairingCallbackMethod2)(uint64_t, int8_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD0
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, uint16_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, uint16_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD2
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD2
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod2)(uint64_t, RustBuffer, RustBuffer, uint16_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod2)(uint64_t, RustBuffer, RustBuffer, uint16_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD3
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD3
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod3)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod3)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD4
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD4
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod4)(uint64_t, RustBuffer, RustBuffer, uint16_t, RustBuffer, uint32_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod4)(uint64_t, RustBuffer, RustBuffer, uint16_t, RustBuffer, uint32_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD5
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD5
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod5)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod5)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD6
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD6
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod6)(uint64_t, RustBuffer, RustBuffer, uint16_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod6)(uint64_t, RustBuffer, RustBuffer, uint16_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD7
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD7
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod7)(uint64_t, int8_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod7)(uint64_t, int8_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD8
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD8
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod8)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod8)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD9
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD9
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod9)(uint64_t, RustBuffer, RustBuffer, uint16_t, uint32_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod9)(uint64_t, RustBuffer, RustBuffer, uint16_t, uint32_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD10
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD10
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod10)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod10)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD11
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD11
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod11)(uint64_t, RustBuffer, RustBuffer, uint16_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod11)(uint64_t, RustBuffer, RustBuffer, uint16_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD12
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD12
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod12)(uint64_t, RustBuffer, RustBuffer, uint16_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod12)(uint64_t, RustBuffer, RustBuffer, uint16_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD13
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_TELEPHONY_CALLBACK_METHOD13
-typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod13)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceTelephonyCallbackMethod13)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_UNPAIR_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_UNPAIR_CALLBACK_METHOD0
-typedef void (*UniffiCallbackInterfaceUnpairCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceUnpairCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -703,7 +703,7 @@ RustBuffer uniffi_connected_ffi_fn_func_check_for_updates(RustBuffer current_ver
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CLEAR_DISCOVERED_DEVICES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CLEAR_DISCOVERED_DEVICES
 void uniffi_connected_ffi_fn_func_clear_discovered_devices(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_FORGET_DEVICE
@@ -719,25 +719,25 @@ void uniffi_connected_ffi_fn_func_forget_device_by_id(RustBuffer device_id, Rust
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_DISCOVERED_DEVICES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_DISCOVERED_DEVICES
 RustBuffer uniffi_connected_ffi_fn_func_get_discovered_devices(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_DOWNLOAD_DIRECTORY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_DOWNLOAD_DIRECTORY
 RustBuffer uniffi_connected_ffi_fn_func_get_download_directory(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_LOCAL_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_LOCAL_DEVICE
 RustBuffer uniffi_connected_ffi_fn_func_get_local_device(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_LOCAL_FINGERPRINT
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_LOCAL_FINGERPRINT
 RustBuffer uniffi_connected_ffi_fn_func_get_local_fingerprint(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_INITIALIZE
@@ -783,7 +783,7 @@ void uniffi_connected_ffi_fn_func_pair_device(RustBuffer target_ip, uint16_t tar
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REFRESH_DISCOVERY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REFRESH_DISCOVERY
 void uniffi_connected_ffi_fn_func_refresh_discovery(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REGISTER_CLIPBOARD_RECEIVER
@@ -959,7 +959,7 @@ void uniffi_connected_ffi_fn_func_set_pairing_mode(int8_t enabled, RustCallStatu
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SHUTDOWN
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SHUTDOWN
 void uniffi_connected_ffi_fn_func_shutdown(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_START_DISCOVERY
@@ -970,7 +970,7 @@ void uniffi_connected_ffi_fn_func_start_discovery(uint64_t callback, RustCallSta
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_STOP_DISCOVERY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_STOP_DISCOVERY
 void uniffi_connected_ffi_fn_func_stop_discovery(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_TRUST_DEVICE
@@ -1251,607 +1251,606 @@ void ffi_connected_ffi_rust_future_complete_void(uint64_t handle, RustCallStatus
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_ACCEPT_FILE_TRANSFER
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_ACCEPT_FILE_TRANSFER
 uint16_t uniffi_connected_ffi_checksum_func_accept_file_transfer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_FILE_TRANSFER
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_FILE_TRANSFER
 uint16_t uniffi_connected_ffi_checksum_func_cancel_file_transfer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_INCOMING_FILE_TRANSFER
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_INCOMING_FILE_TRANSFER
 uint16_t uniffi_connected_ffi_checksum_func_cancel_incoming_file_transfer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CHECK_FOR_UPDATES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CHECK_FOR_UPDATES
 uint16_t uniffi_connected_ffi_checksum_func_check_for_updates(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CLEAR_DISCOVERED_DEVICES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CLEAR_DISCOVERED_DEVICES
 uint16_t uniffi_connected_ffi_checksum_func_clear_discovered_devices(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_FORGET_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_FORGET_DEVICE
 uint16_t uniffi_connected_ffi_checksum_func_forget_device(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_FORGET_DEVICE_BY_ID
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_FORGET_DEVICE_BY_ID
 uint16_t uniffi_connected_ffi_checksum_func_forget_device_by_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_DISCOVERED_DEVICES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_DISCOVERED_DEVICES
 uint16_t uniffi_connected_ffi_checksum_func_get_discovered_devices(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_DOWNLOAD_DIRECTORY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_DOWNLOAD_DIRECTORY
 uint16_t uniffi_connected_ffi_checksum_func_get_download_directory(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_LOCAL_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_LOCAL_DEVICE
 uint16_t uniffi_connected_ffi_checksum_func_get_local_device(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_LOCAL_FINGERPRINT
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_LOCAL_FINGERPRINT
 uint16_t uniffi_connected_ffi_checksum_func_get_local_fingerprint(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INITIALIZE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INITIALIZE
 uint16_t uniffi_connected_ffi_checksum_func_initialize(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INITIALIZE_WITH_IP
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INITIALIZE_WITH_IP
 uint16_t uniffi_connected_ffi_checksum_func_initialize_with_ip(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INITIATE_CALL
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INITIATE_CALL
 uint16_t uniffi_connected_ffi_checksum_func_initiate_call(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INJECT_PROXIMITY_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INJECT_PROXIMITY_DEVICE
 uint16_t uniffi_connected_ffi_checksum_func_inject_proximity_device(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_IS_DEVICE_FORGOTTEN
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_IS_DEVICE_FORGOTTEN
 uint16_t uniffi_connected_ffi_checksum_func_is_device_forgotten(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_IS_DEVICE_TRUSTED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_IS_DEVICE_TRUSTED
 uint16_t uniffi_connected_ffi_checksum_func_is_device_trusted(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_NOTIFY_NEW_SMS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_NOTIFY_NEW_SMS
 uint16_t uniffi_connected_ffi_checksum_func_notify_new_sms(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_PAIR_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_PAIR_DEVICE
 uint16_t uniffi_connected_ffi_checksum_func_pair_device(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REFRESH_DISCOVERY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REFRESH_DISCOVERY
 uint16_t uniffi_connected_ffi_checksum_func_refresh_discovery(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_CLIPBOARD_RECEIVER
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_CLIPBOARD_RECEIVER
 uint16_t uniffi_connected_ffi_checksum_func_register_clipboard_receiver(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_FILESYSTEM_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_FILESYSTEM_PROVIDER
 uint16_t uniffi_connected_ffi_checksum_func_register_filesystem_provider(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_MEDIA_CONTROL_CALLBACK
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_MEDIA_CONTROL_CALLBACK
 uint16_t uniffi_connected_ffi_checksum_func_register_media_control_callback(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_PAIRING_CALLBACK
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_PAIRING_CALLBACK
 uint16_t uniffi_connected_ffi_checksum_func_register_pairing_callback(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_TELEPHONY_CALLBACK
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_TELEPHONY_CALLBACK
 uint16_t uniffi_connected_ffi_checksum_func_register_telephony_callback(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_TRANSFER_CALLBACK
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_TRANSFER_CALLBACK
 uint16_t uniffi_connected_ffi_checksum_func_register_transfer_callback(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_UNPAIR_CALLBACK
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_UNPAIR_CALLBACK
 uint16_t uniffi_connected_ffi_checksum_func_register_unpair_callback(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REJECT_FILE_TRANSFER
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REJECT_FILE_TRANSFER
 uint16_t uniffi_connected_ffi_checksum_func_reject_file_transfer(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REJECT_PAIRING
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REJECT_PAIRING
 uint16_t uniffi_connected_ffi_checksum_func_reject_pairing(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_CALL_LOG
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_CALL_LOG
 uint16_t uniffi_connected_ffi_checksum_func_request_call_log(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_CONTACTS_SYNC
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_CONTACTS_SYNC
 uint16_t uniffi_connected_ffi_checksum_func_request_contacts_sync(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_CONVERSATIONS_SYNC
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_CONVERSATIONS_SYNC
 uint16_t uniffi_connected_ffi_checksum_func_request_conversations_sync(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_DOWNLOAD_FILE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_DOWNLOAD_FILE
 uint16_t uniffi_connected_ffi_checksum_func_request_download_file(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_DOWNLOAD_FILE_WITH_PROGRESS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_DOWNLOAD_FILE_WITH_PROGRESS
 uint16_t uniffi_connected_ffi_checksum_func_request_download_file_with_progress(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_DOWNLOAD_FOLDER
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_DOWNLOAD_FOLDER
 uint16_t uniffi_connected_ffi_checksum_func_request_download_folder(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_GET_THUMBNAIL
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_GET_THUMBNAIL
 uint16_t uniffi_connected_ffi_checksum_func_request_get_thumbnail(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_LIST_DIR
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_LIST_DIR
 uint16_t uniffi_connected_ffi_checksum_func_request_list_dir(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_MESSAGES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REQUEST_MESSAGES
 uint16_t uniffi_connected_ffi_checksum_func_request_messages(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_ACTIVE_CALL_UPDATE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_ACTIVE_CALL_UPDATE
 uint16_t uniffi_connected_ffi_checksum_func_send_active_call_update(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_CALL_ACTION
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_CALL_ACTION
 uint16_t uniffi_connected_ffi_checksum_func_send_call_action(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_CALL_LOG
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_CALL_LOG
 uint16_t uniffi_connected_ffi_checksum_func_send_call_log(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_CLIPBOARD
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_CLIPBOARD
 uint16_t uniffi_connected_ffi_checksum_func_send_clipboard(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_CONTACTS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_CONTACTS
 uint16_t uniffi_connected_ffi_checksum_func_send_contacts(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_CONVERSATIONS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_CONVERSATIONS
 uint16_t uniffi_connected_ffi_checksum_func_send_conversations(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_FILE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_FILE
 uint16_t uniffi_connected_ffi_checksum_func_send_file(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_MEDIA_COMMAND
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_MEDIA_COMMAND
 uint16_t uniffi_connected_ffi_checksum_func_send_media_command(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_MEDIA_STATE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_MEDIA_STATE
 uint16_t uniffi_connected_ffi_checksum_func_send_media_state(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_MESSAGES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_MESSAGES
 uint16_t uniffi_connected_ffi_checksum_func_send_messages(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_SMS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_SMS
 uint16_t uniffi_connected_ffi_checksum_func_send_sms(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_SMS_SEND_RESULT
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_SMS_SEND_RESULT
 uint16_t uniffi_connected_ffi_checksum_func_send_sms_send_result(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_TRUST_CONFIRMATION
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_TRUST_CONFIRMATION
 uint16_t uniffi_connected_ffi_checksum_func_send_trust_confirmation(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_UNPAIR_NOTIFICATION
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_UNPAIR_NOTIFICATION
 uint16_t uniffi_connected_ffi_checksum_func_send_unpair_notification(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_DOWNLOAD_DIRECTORY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_DOWNLOAD_DIRECTORY
 uint16_t uniffi_connected_ffi_checksum_func_set_download_directory(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_PAIRING_MODE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_PAIRING_MODE
 uint16_t uniffi_connected_ffi_checksum_func_set_pairing_mode(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SHUTDOWN
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SHUTDOWN
 uint16_t uniffi_connected_ffi_checksum_func_shutdown(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_START_DISCOVERY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_START_DISCOVERY
 uint16_t uniffi_connected_ffi_checksum_func_start_discovery(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_STOP_DISCOVERY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_STOP_DISCOVERY
 uint16_t uniffi_connected_ffi_checksum_func_stop_discovery(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_TRUST_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_TRUST_DEVICE
 uint16_t uniffi_connected_ffi_checksum_func_trust_device(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_UNPAIR_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_UNPAIR_DEVICE
 uint16_t uniffi_connected_ffi_checksum_func_unpair_device(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_UNPAIR_DEVICE_BY_ID
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_UNPAIR_DEVICE_BY_ID
 uint16_t uniffi_connected_ffi_checksum_func_unpair_device_by_id(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_BROWSERDOWNLOADCALLBACK_ON_DOWNLOAD_PROGRESS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_BROWSERDOWNLOADCALLBACK_ON_DOWNLOAD_PROGRESS
 uint16_t uniffi_connected_ffi_checksum_method_browserdownloadcallback_on_download_progress(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_BROWSERDOWNLOADCALLBACK_ON_DOWNLOAD_COMPLETED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_BROWSERDOWNLOADCALLBACK_ON_DOWNLOAD_COMPLETED
 uint16_t uniffi_connected_ffi_checksum_method_browserdownloadcallback_on_download_completed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_BROWSERDOWNLOADCALLBACK_ON_DOWNLOAD_FAILED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_BROWSERDOWNLOADCALLBACK_ON_DOWNLOAD_FAILED
 uint16_t uniffi_connected_ffi_checksum_method_browserdownloadcallback_on_download_failed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_CLIPBOARDCALLBACK_ON_CLIPBOARD_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_CLIPBOARDCALLBACK_ON_CLIPBOARD_RECEIVED
 uint16_t uniffi_connected_ffi_checksum_method_clipboardcallback_on_clipboard_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_CLIPBOARDCALLBACK_ON_CLIPBOARD_SENT
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_CLIPBOARDCALLBACK_ON_CLIPBOARD_SENT
 uint16_t uniffi_connected_ffi_checksum_method_clipboardcallback_on_clipboard_sent(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_DISCOVERYCALLBACK_ON_DEVICE_FOUND
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_DISCOVERYCALLBACK_ON_DEVICE_FOUND
 uint16_t uniffi_connected_ffi_checksum_method_discoverycallback_on_device_found(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_DISCOVERYCALLBACK_ON_DEVICE_LOST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_DISCOVERYCALLBACK_ON_DEVICE_LOST
 uint16_t uniffi_connected_ffi_checksum_method_discoverycallback_on_device_lost(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_DISCOVERYCALLBACK_ON_ERROR
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_DISCOVERYCALLBACK_ON_ERROR
 uint16_t uniffi_connected_ffi_checksum_method_discoverycallback_on_error(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_REQUEST
 uint16_t uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_STARTING
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_STARTING
 uint16_t uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_starting(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_PROGRESS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_PROGRESS
 uint16_t uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_progress(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_COMPLETED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_COMPLETED
 uint16_t uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_completed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_FAILED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_FAILED
 uint16_t uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_failed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_CANCELLED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_CANCELLED
 uint16_t uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_cancelled(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_COMPRESSION_PROGRESS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_COMPRESSION_PROGRESS
 uint16_t uniffi_connected_ffi_checksum_method_filetransfercallback_on_compression_progress(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILESYSTEMPROVIDERCALLBACK_LIST_DIR
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILESYSTEMPROVIDERCALLBACK_LIST_DIR
 uint16_t uniffi_connected_ffi_checksum_method_filesystemprovidercallback_list_dir(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILESYSTEMPROVIDERCALLBACK_READ_FILE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILESYSTEMPROVIDERCALLBACK_READ_FILE
 uint16_t uniffi_connected_ffi_checksum_method_filesystemprovidercallback_read_file(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILESYSTEMPROVIDERCALLBACK_WRITE_FILE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILESYSTEMPROVIDERCALLBACK_WRITE_FILE
 uint16_t uniffi_connected_ffi_checksum_method_filesystemprovidercallback_write_file(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILESYSTEMPROVIDERCALLBACK_GET_METADATA
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILESYSTEMPROVIDERCALLBACK_GET_METADATA
 uint16_t uniffi_connected_ffi_checksum_method_filesystemprovidercallback_get_metadata(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILESYSTEMPROVIDERCALLBACK_GET_THUMBNAIL
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILESYSTEMPROVIDERCALLBACK_GET_THUMBNAIL
 uint16_t uniffi_connected_ffi_checksum_method_filesystemprovidercallback_get_thumbnail(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_MEDIACONTROLCALLBACK_ON_MEDIA_COMMAND
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_MEDIACONTROLCALLBACK_ON_MEDIA_COMMAND
 uint16_t uniffi_connected_ffi_checksum_method_mediacontrolcallback_on_media_command(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_MEDIACONTROLCALLBACK_ON_MEDIA_STATE_UPDATE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_MEDIACONTROLCALLBACK_ON_MEDIA_STATE_UPDATE
 uint16_t uniffi_connected_ffi_checksum_method_mediacontrolcallback_on_media_state_update(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_PAIRINGCALLBACK_ON_PAIRING_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_PAIRINGCALLBACK_ON_PAIRING_REQUEST
 uint16_t uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_PAIRINGCALLBACK_ON_PAIRING_REJECTED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_PAIRINGCALLBACK_ON_PAIRING_REJECTED
 uint16_t uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_rejected(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_PAIRINGCALLBACK_ON_PAIRING_MODE_CHANGED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_PAIRINGCALLBACK_ON_PAIRING_MODE_CHANGED
 uint16_t uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_mode_changed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CONTACTS_SYNC_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CONTACTS_SYNC_REQUEST
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_contacts_sync_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CONTACTS_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CONTACTS_RECEIVED
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_contacts_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CONVERSATIONS_SYNC_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CONVERSATIONS_SYNC_REQUEST
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_conversations_sync_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CONVERSATIONS_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CONVERSATIONS_RECEIVED
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_conversations_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_MESSAGES_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_MESSAGES_REQUEST
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_messages_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_MESSAGES_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_MESSAGES_RECEIVED
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_messages_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_SEND_SMS_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_SEND_SMS_REQUEST
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_send_sms_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_SMS_SEND_RESULT
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_SMS_SEND_RESULT
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_sms_send_result(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_NEW_SMS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_NEW_SMS
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_new_sms(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CALL_LOG_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CALL_LOG_REQUEST
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_call_log_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CALL_LOG_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CALL_LOG_RECEIVED
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_call_log_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_INITIATE_CALL_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_INITIATE_CALL_REQUEST
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_initiate_call_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CALL_ACTION_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_CALL_ACTION_REQUEST
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_call_action_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_ACTIVE_CALL_UPDATE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_TELEPHONYCALLBACK_ON_ACTIVE_CALL_UPDATE
 uint16_t uniffi_connected_ffi_checksum_method_telephonycallback_on_active_call_update(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_UNPAIRCALLBACK_ON_DEVICE_UNPAIRED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_UNPAIRCALLBACK_ON_DEVICE_UNPAIRED
 uint16_t uniffi_connected_ffi_checksum_method_unpaircallback_on_device_unpaired(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_CONNECTED_FFI_UNIFFI_CONTRACT_VERSION
 #define UNIFFI_FFIDEF_FFI_CONNECTED_FFI_UNIFFI_CONTRACT_VERSION
 uint32_t ffi_connected_ffi_uniffi_contract_version(void
-    
+
 );
 #endif
-
