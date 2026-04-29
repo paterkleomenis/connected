@@ -84,7 +84,7 @@ just
 
 - **Rust** (stable): [Install Rust](https://rustup.rs/)
 - **just**: Task runner (`cargo install just`)
-- **pre-commit**: Git hooks (`pip install pre-commit`)
+- **pre-commit**: Git hooks (`pip install pre-commit` or `sudo pacman -S python-pre-commit`)
 
 ### Development Workflow
 
