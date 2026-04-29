@@ -111,6 +111,37 @@ just run-desktop
 2. Connect your device via USB.
 3. From Android Studio select the `android/` directory
 
+### iOS (Preview)
+
+The repository now includes a first iOS app scaffold under `ios/` that reuses the Rust core through UniFFI-generated Swift bindings.
+
+**Requirements:**
+
+- macOS with Xcode + iOS SDK installed
+- Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`
+- `xcodegen` (`brew install xcodegen`)
+
+Build steps:
+
+```bash
+# Generate Swift bindings from ffi
+./scripts/ios/generate-bindings.sh
+
+# Build Rust static libraries for iOS and create xcframework
+./scripts/ios/build-rust-ios.sh
+
+# Generate the Xcode project from ios/project.yml
+xcodegen generate --spec ios/project.yml
+
+# Open and run the app
+open ios/Connected.xcodeproj
+```
+
+Notes:
+
+- The iOS app currently includes foundations for discovery, pairing, transfers, clipboard, filesystem browsing, media/telephony message surfaces, and update checks.
+- On systems without iOS SDKs installed, Rust iOS builds will fail until Xcode command line tools/SDKs are available.
+
 ### Linux (Desktop)
 
 **Requirements:**
@@ -146,7 +177,8 @@ just run-desktop
 - `core/`: Shared Rust logic (networking, discovery, encryption).
 - `desktop/`: Desktop application (Linux/Windows) (Rust + Tauri-like WebView/UI logic).
 - `android/`: Native Android application (Kotlin + Jetpack Compose).
-- `ffi/`: UniFFI bindings to expose the Rust `core` to Kotlin.
+- `ios/`: Native iOS application (SwiftUI + UniFFI Swift bindings).
+- `ffi/`: UniFFI bindings to expose the Rust `core` to Kotlin and Swift.
 
 ## Contributing
 

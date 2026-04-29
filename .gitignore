@@ -17,6 +17,10 @@ android/*.aab
 # Generated UniFFI bindings
 android/app/src/main/kotlin/uniffi/
 
+# iOS build artifacts
+ios/Connected.xcodeproj/
+ios/Vendor/connected_ffi.xcframework/
+
 # IDE
 .idea/
 *.iml

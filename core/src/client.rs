@@ -2715,15 +2715,29 @@ impl ConnectedClient {
                     }
                     Message::MediaControl(media_msg) => {
                         // Single KeyStore snapshot for trust check + name lookup
-                        let (is_trusted, from_device) = {
+                        let (is_trusted, from_device, peer_device_id) = {
                             let ks = key_store.read();
                             let trusted = ks.is_trusted(&fingerprint);
-                            let name = ks
-                                .get_peer_name(&fingerprint)
+                            let peer = ks.get_peer_info(&fingerprint);
+                            let name = peer
+                                .as_ref()
+                                .and_then(|p| p.name.clone())
                                 .unwrap_or_else(|| "Unknown".to_string());
-                            (trusted, name)
+                            let device_id = peer.and_then(|p| p.device_id);
+                            (trusted, name, device_id)
                         };
                         if is_trusted {
+                            if let Some(device_id) = peer_device_id
+                                && let Some(device) = discovery.get_device_by_id(&device_id)
+                                && let Some(ip) = device.ip_addr()
+                                && device.port != 0
+                            {
+                                let listening_addr = SocketAddr::new(ip, device.port);
+                                if listening_addr != addr {
+                                    transport.register_connection_alias(addr, listening_addr);
+                                }
+                            }
+
                             let _ = event_tx.send(ConnectedEvent::MediaControl {
                                 from_device,
                                 event: media_msg,

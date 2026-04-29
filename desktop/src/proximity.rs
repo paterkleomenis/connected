@@ -189,6 +189,7 @@ fn parse_payload(data: &[u8]) -> Option<ProximityPayload> {
         }
         let device_type = match device_type_code {
             1 => DeviceType::Android,
+            5 => DeviceType::IOS,
             2 => DeviceType::Linux,
             3 => DeviceType::Windows,
             4 => DeviceType::MacOS,
@@ -226,6 +227,7 @@ fn parse_payload(data: &[u8]) -> Option<ProximityPayload> {
 
     let device_type = match device_type_code {
         1 => DeviceType::Android,
+        5 => DeviceType::IOS,
         2 => DeviceType::Linux,
         3 => DeviceType::Windows,
         4 => DeviceType::MacOS,

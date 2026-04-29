@@ -128,6 +128,19 @@ outdated:
 build-android:
     cargo ndk -t aarch64-linux-android -t armv7-linux-androideabi -t x86_64-linux-android -t i686-linux-android -o android/app/src/main/jniLibs build --release
 
+# iOS-specific commands
+[doc("Generate Swift UniFFI bindings for iOS")]
+ios-generate-bindings:
+    ./scripts/ios/generate-bindings.sh
+
+[doc("Build Rust iOS libraries and create xcframework")]
+ios-build-rust:
+    ./scripts/ios/build-rust-ios.sh
+
+[doc("Generate iOS Xcode project from xcodegen spec")]
+ios-generate-project:
+    xcodegen generate --spec ios/project.yml
+
 # Build macOS App and DMG
 [doc("Build macOS .app bundle and DMG installer")]
 build-macos:
