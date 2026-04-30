@@ -268,6 +268,7 @@ fn load_icon() -> Option<dioxus::desktop::tao::window::Icon> {
     dioxus::desktop::tao::window::Icon::from_rgba(rgba.into_raw(), width, height).ok()
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn sdf_rounded_rect(px: f32, py: f32, cx: f32, cy: f32, half_w: f32, half_h: f32, r: f32) -> f32 {
     let qx = (px - cx).abs() - (half_w - r);
     let qy = (py - cy).abs() - (half_h - r);
@@ -276,10 +277,12 @@ fn sdf_rounded_rect(px: f32, py: f32, cx: f32, cy: f32, half_w: f32, half_h: f32
     (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - r
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn sdf_to_alpha(distance: f32, aa: f32) -> f32 {
     ((aa - distance) / aa).clamp(0.0, 1.0)
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn blend_rgba(dst: [f32; 4], src: [f32; 4]) -> [f32; 4] {
     let src_a = src[3];
     let dst_a = dst[3];
@@ -296,6 +299,7 @@ fn blend_rgba(dst: [f32; 4], src: [f32; 4]) -> [f32; 4] {
     [out_r, out_g, out_b, out_a]
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn render_connected_tray_icon_rgba(size: u32) -> Vec<u8> {
     let mut rgba = vec![0u8; (size * size * 4) as usize];
     let s = size as f32;

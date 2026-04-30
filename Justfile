@@ -78,12 +78,16 @@ pre-commit:
 ci:
     @echo "=== Pre-commit Hooks & Code Quality ==="
     just pre-commit
+    @echo ""
     @echo "=== Security Audit ==="
     just audit
+    @echo ""
     @echo "=== Build ==="
     just build
+    @echo ""
     @echo "=== Version Checks ==="
     just check-versions
+    @echo ""
     @echo "✅ All CI checks passed"
 
 [doc("Check version consistency scripts")]

@@ -679,6 +679,9 @@ pub fn add_open_file_notification(
     icon: &'static str,
     file_path: &std::path::Path,
 ) {
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let _ = file_path;
+
     if (cfg!(target_os = "linux") || cfg!(target_os = "windows"))
         && !get_notifications_enabled_setting()
     {
