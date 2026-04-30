@@ -40,7 +40,6 @@ targets:
         PRODUCT_NAME: Connected
         INFOPLIST_FILE: Connected/Support/Info.plist
         SWIFT_OBJC_BRIDGING_HEADER: Connected/Support/Connected-Bridging-Header.h
-        OTHER_SWIFT_FLAGS: "$(inherited) -enable-experimental-feature IsolatedDeinit"
         SWIFT_INCLUDE_PATHS:
           - $(SRCROOT)/Connected/Generated/Uniffi
         HEADER_SEARCH_PATHS:

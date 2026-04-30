@@ -276,6 +276,7 @@ final class ConnectedAppModel: ObservableObject {
         }
     }
 
+#if compiler(>=6.2)
     nonisolated deinit {
 #if canImport(UIKit)
         if let observer = clipboardObserver {
@@ -295,6 +296,27 @@ final class ConnectedAppModel: ObservableObject {
             scopedURL.stopAccessingSecurityScopedResource()
         }
     }
+#else
+    deinit {
+#if canImport(UIKit)
+        if let observer = clipboardObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+#endif
+#if canImport(MediaPlayer)
+        for observer in mediaPlaybackObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        MPMusicPlayerController.systemMusicPlayer.endGeneratingPlaybackNotifications()
+#endif
+        if let scopedURL = securityScopedDownloadRootURL {
+            scopedURL.stopAccessingSecurityScopedResource()
+        }
+        if let scopedURL = securityScopedSharedRootURL {
+            scopedURL.stopAccessingSecurityScopedResource()
+        }
+    }
+#endif
 
     var activeDevice: DiscoveredDevice? {
         if let id = selectedDeviceId {
