@@ -35,6 +35,13 @@ val ndkDir = File(sdkDir, "ndk").listFiles()
 
 val latestNdkVersion: String = ndkDir.name
 
+val workspaceVersion: String = run {
+    val cargoToml = rootProject.file("../Cargo.toml")
+    val match = Regex("""(?m)^\s*version\s*=\s*"([^"]+)"""").find(cargoToml.readText())
+        ?: throw GradleException("Could not find workspace package version in ${cargoToml.path}")
+    match.groupValues[1]
+}
+
 kotlin {
     compilerOptions {
         freeCompilerArgs.add("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
@@ -52,7 +59,7 @@ configure<ApplicationExtension> {
         minSdk = 26
         targetSdk = 37
         versionCode = 54
-        versionName = "2.9.9"
+        versionName = workspaceVersion
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

@@ -274,11 +274,96 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 6: Create Release
+  # Job 6: Build iOS IPA
+  # -------------------------------------------------------------------------
+  build-ios:
+    name: Build iOS
+    runs-on: macos-latest
+    env:
+      IOS_BUILD_NUMBER: ${{ vars.IOS_BUILD_NUMBER }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify tag matches Cargo version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          cargo_version="$(grep -E '^[[:space:]]*version[[:space:]]*=[[:space:]]*"[^"]+"' Cargo.toml | tail -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [[ -z "$cargo_version" ]]; then
+            echo "Could not find workspace version in Cargo.toml" >&2
+            exit 1
+          fi
+          if [[ "$cargo_version" != "$version" ]]; then
+            echo "Tag version ($version) does not match Cargo.toml workspace version ($cargo_version)." >&2
+            exit 1
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim, x86_64-apple-ios
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ios-release"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Sync iOS version
+        run: bash scripts/ios/sync-version.sh
+
+      - name: Detect iOS signing
+        id: ios_signing
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          if [[ -n "$APPLE_TEAM_ID" && -n "$IOS_CERTIFICATE" && -n "$IOS_CERTIFICATE_PASSWORD" && -n "$IOS_PROVISIONING_PROFILE" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install iOS signing assets
+        if: steps.ios_signing.outputs.available == 'true'
+        run: bash scripts/ios/install-signing.sh
+        env:
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+
+      - name: Generate Swift bindings
+        run: bash scripts/ios/generate-bindings.sh
+
+      - name: Build Rust iOS framework
+        run: bash scripts/ios/build-rust-ios.sh
+        env:
+          IOS_RUST_PROFILE: release
+
+      - name: Build iOS IPA
+        run: bash scripts/ios/archive-ipa.sh
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Upload iOS Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: connected-ios.ipa
+          path: connected-ios.ipa
+          archive: false
+
+  # -------------------------------------------------------------------------
+  # Job 7: Create Release
   # -------------------------------------------------------------------------
   create-release:
     name: Create GitHub Release
-    needs: [build-linux, bundle-windows-msix, build-macos, build-android]
+    needs:
+      [build-linux, bundle-windows-msix, build-macos, build-android, build-ios]
     runs-on: ubuntu-latest
     steps:
       - name: Download All Artifacts
@@ -300,12 +385,13 @@ jobs:
             target/msix/connected-desktop-windows.msixbundle
             target/msix/connected-desktop-windows.msixupload
             connected-android.apk
+            connected-ios.ipa
             connected-desktop.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # -------------------------------------------------------------------------
-  # Job 7: Update AUR
+  # Job 8: Update AUR
   # -------------------------------------------------------------------------
   update-aur:
     name: Update AUR
@@ -336,7 +422,7 @@ jobs:
             '"
 
   # -------------------------------------------------------------------------
-  # Job 8: Publish to Microsoft Store
+  # Job 9: Publish to Microsoft Store
   # -------------------------------------------------------------------------
   publish-microsoft-store:
     name: Publish to Microsoft Store

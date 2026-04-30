@@ -11,10 +11,12 @@ settings:
   base:
     SWIFT_VERSION: 5.10
     IPHONEOS_DEPLOYMENT_TARGET: 16.0
-    MARKETING_VERSION: 2.9.3
-    CURRENT_PROJECT_VERSION: 1
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
+
+configFiles:
+  Debug: Config/Version.xcconfig
+  Release: Config/Version.xcconfig
 
 targets:
   Connected:
@@ -22,6 +24,7 @@ targets:
     platform: iOS
     deploymentTarget: "16.0"
     sources:
+      - path: Connected/Assets.xcassets
       - path: Connected/App
       - path: Connected/Core
       - path: Connected/Views
@@ -33,7 +36,7 @@ targets:
         buildPhase: none
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.connected.ios
+        PRODUCT_BUNDLE_IDENTIFIER: com.connected.app.sync
         PRODUCT_NAME: Connected
         INFOPLIST_FILE: Connected/Support/Info.plist
         SWIFT_OBJC_BRIDGING_HEADER: Connected/Support/Connected-Bridging-Header.h
@@ -44,7 +47,7 @@ targets:
         FRAMEWORK_SEARCH_PATHS:
           - $(SRCROOT)/Vendor
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
     dependencies:
       - framework: Vendor/connected_ffi.xcframework

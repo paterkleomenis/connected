@@ -425,3 +425,76 @@ jobs:
         with:
           path: connected-android.apk
           archive: false
+
+  # -------------------------------------------------------------------------
+  # Job 9: Build iOS IPA
+  # -------------------------------------------------------------------------
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-latest
+    needs: [pre-commit, quality, security]
+    if: github.event_name != 'schedule'
+    env:
+      IOS_BUILD_NUMBER: ${{ vars.IOS_BUILD_NUMBER }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim, x86_64-apple-ios
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ios-build"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Sync iOS version
+        run: bash scripts/ios/sync-version.sh
+
+      - name: Generate Swift bindings
+        run: bash scripts/ios/generate-bindings.sh
+
+      - name: Build Rust iOS framework
+        run: bash scripts/ios/build-rust-ios.sh
+
+      - name: Detect iOS signing
+        id: ios_signing
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          if [[ -n "$APPLE_TEAM_ID" && -n "$IOS_CERTIFICATE" && -n "$IOS_CERTIFICATE_PASSWORD" && -n "$IOS_PROVISIONING_PROFILE" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install iOS signing assets
+        if: steps.ios_signing.outputs.available == 'true'
+        run: bash scripts/ios/install-signing.sh
+        env:
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+
+      - name: Build iOS IPA
+        run: bash scripts/ios/archive-ipa.sh
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_CONFIGURATION: Debug
+          IOS_EXPORT_METHOD: release-testing
+          IOS_IPA_NAME: connected-ios.ipa
+
+      - name: Upload iOS IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: connected-ios.ipa
+          path: connected-ios.ipa
+          archive: false
