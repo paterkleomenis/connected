@@ -41,7 +41,11 @@ security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security import "$CERTIFICATE_PATH" -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | sed 's/[\" ]//g')
+EXISTING_KEYCHAINS=()
+while IFS= read -r keychain; do
+    EXISTING_KEYCHAINS+=("$keychain")
+done < <(security list-keychain -d user | sed 's/[\" ]//g')
+security list-keychain -d user -s "$KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}"
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
 security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
