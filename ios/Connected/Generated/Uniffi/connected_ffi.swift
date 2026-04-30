@@ -5079,6 +5079,12 @@ public func setPairingMode(enabled: Bool)throws   {try rustCallWithError(FfiConv
     )
 }
 }
+public func setPairingModePersistent(enabled: Bool)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+    uniffi_connected_ffi_fn_func_set_pairing_mode_persistent(
+        FfiConverterBool.lower(enabled),$0
+    )
+}
+}
 public func shutdown()  {try! rustCall() {
     uniffi_connected_ffi_fn_func_shutdown($0
     )
@@ -5294,6 +5300,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_set_pairing_mode() != 47523) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_connected_ffi_checksum_func_set_pairing_mode_persistent() != 49337) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_shutdown() != 25033) {

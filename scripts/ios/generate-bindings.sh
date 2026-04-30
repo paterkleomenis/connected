@@ -37,4 +37,9 @@ cargo run --release -p connected-ffi --bin uniffi-bindgen --manifest-path "$ROOT
     --out-dir "$OUT_DIR" \
     --no-format
 
+perl -0pi -e 's/[ \t]+$//mg; s/\n*\z/\n/' \
+    "$OUT_DIR/connected_ffi.swift" \
+    "$OUT_DIR/connected_ffiFFI.h" \
+    "$OUT_DIR/connected_ffiFFI.modulemap"
+
 echo "Swift bindings generated in $OUT_DIR"

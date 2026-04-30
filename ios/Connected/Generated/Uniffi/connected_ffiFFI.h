@@ -961,6 +961,11 @@ void uniffi_connected_ffi_fn_func_set_download_directory(RustBuffer path, RustCa
 void uniffi_connected_ffi_fn_func_set_pairing_mode(int8_t enabled, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SET_PAIRING_MODE_PERSISTENT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SET_PAIRING_MODE_PERSISTENT
+void uniffi_connected_ffi_fn_func_set_pairing_mode_persistent(int8_t enabled, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SHUTDOWN
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SHUTDOWN
 void uniffi_connected_ffi_fn_func_shutdown(RustCallStatus *_Nonnull out_status
@@ -1580,6 +1585,12 @@ uint16_t uniffi_connected_ffi_checksum_func_set_download_directory(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_PAIRING_MODE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_PAIRING_MODE
 uint16_t uniffi_connected_ffi_checksum_func_set_pairing_mode(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_PAIRING_MODE_PERSISTENT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_PAIRING_MODE_PERSISTENT
+uint16_t uniffi_connected_ffi_checksum_func_set_pairing_mode_persistent(void
 
 );
 #endif

@@ -368,7 +368,7 @@ final class ConnectedAppModel: ObservableObject {
                 registerMediaControlCallback(callback: media)
                 registerTelephonyCallback(callback: telephony)
                 try setDownloadDirectory(path: downloadPath)
-                try setPairingMode(enabled: pairingMode)
+                try setPairingModePersistent(enabled: pairingMode)
 
                 do {
                     try startDiscovery(callback: discovery)
@@ -436,7 +436,7 @@ final class ConnectedAppModel: ObservableObject {
     func updatePairingMode(enabled: Bool) {
         runInBackground { [weak self] in
             do {
-                try setPairingMode(enabled: enabled)
+                try setPairingModePersistent(enabled: enabled)
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.pairingModeEnabled = enabled

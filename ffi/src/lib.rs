@@ -1407,6 +1407,15 @@ pub fn set_pairing_mode(enabled: bool) -> Result<(), ConnectedFfiError> {
 }
 
 #[uniffi::export]
+pub fn set_pairing_mode_persistent(enabled: bool) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    get_runtime().spawn(async move {
+        client.set_pairing_mode_persistent(enabled);
+    });
+    Ok(())
+}
+
+#[uniffi::export]
 pub fn pair_device(target_ip: String, target_port: u16) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
     let ip: std::net::IpAddr =
