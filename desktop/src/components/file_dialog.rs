@@ -34,7 +34,10 @@ pub fn FileDialog(
                 }
             } else {
                 if let Some(handles) = dialog.pick_files().await {
-                    let paths = handles.into_iter().map(|h| h.path().display().to_string()).collect();
+                    let paths = handles
+                        .into_iter()
+                        .map(|h| h.path().display().to_string())
+                        .collect();
                     file_paths.set(paths);
                     drag_over.set(false);
                 }
