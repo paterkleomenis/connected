@@ -301,42 +301,42 @@ typedef void (*UniffiCallbackInterfaceDiscoveryCallbackMethod2)(uint64_t, RustBu
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD0
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, uint64_t, RustBuffer, void* _Nonnull,
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, uint64_t, void* _Nonnull,
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, uint64_t, int8_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD2
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD2
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod2)(uint64_t, uint64_t, uint64_t, void* _Nonnull,
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod2)(uint64_t, RustBuffer, uint64_t, uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD3
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD3
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod3)(uint64_t, RustBuffer, uint64_t, void* _Nonnull,
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod3)(uint64_t, RustBuffer, RustBuffer, uint64_t, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD4
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD4
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod4)(uint64_t, RustBuffer, void* _Nonnull,
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod4)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD5
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD5
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod5)(uint64_t, void* _Nonnull,
+typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod5)(uint64_t, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -829,6 +829,11 @@ void uniffi_connected_ffi_fn_func_reject_file_transfer(RustBuffer transfer_id, R
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REJECT_PAIRING
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REJECT_PAIRING
 void uniffi_connected_ffi_fn_func_reject_pairing(RustBuffer device_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_RENAME_LOCAL_DEVICE
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_RENAME_LOCAL_DEVICE
+void uniffi_connected_ffi_fn_func_rename_local_device(RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REQUEST_CALL_LOG
@@ -1419,6 +1424,12 @@ uint16_t uniffi_connected_ffi_checksum_func_reject_file_transfer(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REJECT_PAIRING
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REJECT_PAIRING
 uint16_t uniffi_connected_ffi_checksum_func_reject_pairing(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_RENAME_LOCAL_DEVICE
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_RENAME_LOCAL_DEVICE
+uint16_t uniffi_connected_ffi_checksum_func_rename_local_device(void
 
 );
 #endif

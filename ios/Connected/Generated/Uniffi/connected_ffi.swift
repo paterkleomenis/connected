@@ -2755,17 +2755,17 @@ public func FfiConverterCallbackInterfaceDiscoveryCallback_lower(_ v: DiscoveryC
 
 public protocol FileTransferCallback: AnyObject, Sendable {
 
-    func onTransferRequest(transferId: String, filename: String, fileSize: UInt64, fromDevice: String)
+    func onTransferRequest(transferId: String, filename: String, fileSize: UInt64, fromDevice: String, fromFingerprint: String)
 
-    func onTransferStarting(transferId: String, filename: String, totalSize: UInt64)
+    func onTransferStarting(transferId: String, filename: String, totalSize: UInt64, isOutgoing: Bool)
 
-    func onTransferProgress(bytesTransferred: UInt64, totalSize: UInt64)
+    func onTransferProgress(transferId: String, bytesTransferred: UInt64, totalSize: UInt64)
 
-    func onTransferCompleted(filename: String, totalSize: UInt64)
+    func onTransferCompleted(transferId: String, filename: String, totalSize: UInt64)
 
-    func onTransferFailed(errorMsg: String)
+    func onTransferFailed(transferId: String, errorMsg: String)
 
-    func onTransferCancelled()
+    func onTransferCancelled(transferId: String)
 
     func onCompressionProgress(filename: String, currentFile: String, filesProcessed: UInt64, totalFiles: UInt64, bytesProcessed: UInt64, totalBytes: UInt64, speedBytesPerSec: UInt64)
 
@@ -2800,6 +2800,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
             filename: RustBuffer,
             fileSize: UInt64,
             fromDevice: RustBuffer,
+            fromFingerprint: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -2812,7 +2813,8 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                      transferId: try FfiConverterString.lift(transferId),
                      filename: try FfiConverterString.lift(filename),
                      fileSize: try FfiConverterUInt64.lift(fileSize),
-                     fromDevice: try FfiConverterString.lift(fromDevice)
+                     fromDevice: try FfiConverterString.lift(fromDevice),
+                     fromFingerprint: try FfiConverterString.lift(fromFingerprint)
                 )
             }
 
@@ -2829,6 +2831,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
             transferId: RustBuffer,
             filename: RustBuffer,
             totalSize: UInt64,
+            isOutgoing: Int8,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -2840,7 +2843,8 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                 return uniffiObj.onTransferStarting(
                      transferId: try FfiConverterString.lift(transferId),
                      filename: try FfiConverterString.lift(filename),
-                     totalSize: try FfiConverterUInt64.lift(totalSize)
+                     totalSize: try FfiConverterUInt64.lift(totalSize),
+                     isOutgoing: try FfiConverterBool.lift(isOutgoing)
                 )
             }
 
@@ -2854,6 +2858,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
         },
         onTransferProgress: { (
             uniffiHandle: UInt64,
+            transferId: RustBuffer,
             bytesTransferred: UInt64,
             totalSize: UInt64,
             uniffiOutReturn: UnsafeMutableRawPointer,
@@ -2865,6 +2870,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onTransferProgress(
+                     transferId: try FfiConverterString.lift(transferId),
                      bytesTransferred: try FfiConverterUInt64.lift(bytesTransferred),
                      totalSize: try FfiConverterUInt64.lift(totalSize)
                 )
@@ -2880,6 +2886,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
         },
         onTransferCompleted: { (
             uniffiHandle: UInt64,
+            transferId: RustBuffer,
             filename: RustBuffer,
             totalSize: UInt64,
             uniffiOutReturn: UnsafeMutableRawPointer,
@@ -2891,6 +2898,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onTransferCompleted(
+                     transferId: try FfiConverterString.lift(transferId),
                      filename: try FfiConverterString.lift(filename),
                      totalSize: try FfiConverterUInt64.lift(totalSize)
                 )
@@ -2906,6 +2914,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
         },
         onTransferFailed: { (
             uniffiHandle: UInt64,
+            transferId: RustBuffer,
             errorMsg: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
@@ -2916,6 +2925,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onTransferFailed(
+                     transferId: try FfiConverterString.lift(transferId),
                      errorMsg: try FfiConverterString.lift(errorMsg)
                 )
             }
@@ -2930,6 +2940,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
         },
         onTransferCancelled: { (
             uniffiHandle: UInt64,
+            transferId: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -2939,6 +2950,7 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onTransferCancelled(
+                     transferId: try FfiConverterString.lift(transferId)
                 )
             }
 
@@ -4853,6 +4865,12 @@ public func rejectPairing(deviceId: String)throws   {try rustCallWithError(FfiCo
     )
 }
 }
+public func renameLocalDevice(name: String)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+    uniffi_connected_ffi_fn_func_rename_local_device(
+        FfiConverterString.lower(name),$0
+    )
+}
+}
 public func requestCallLog(targetIp: String, targetPort: UInt16, limit: UInt32)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
     uniffi_connected_ffi_fn_func_request_call_log(
         FfiConverterString.lower(targetIp),
@@ -5200,6 +5218,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_connected_ffi_checksum_func_reject_pairing() != 23710) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_connected_ffi_checksum_func_rename_local_device() != 24921) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_connected_ffi_checksum_func_request_call_log() != 4388) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5317,22 +5338,22 @@ private let initializationResult: InitializationResult = {
     if (uniffi_connected_ffi_checksum_method_discoverycallback_on_error() != 47194) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_request() != 62859) {
+    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_request() != 3786) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_starting() != 35298) {
+    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_starting() != 13221) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_progress() != 28793) {
+    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_progress() != 46987) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_completed() != 40297) {
+    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_completed() != 19958) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_failed() != 11063) {
+    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_failed() != 2508) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_cancelled() != 64886) {
+    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_cancelled() != 29667) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_compression_progress() != 4498) {

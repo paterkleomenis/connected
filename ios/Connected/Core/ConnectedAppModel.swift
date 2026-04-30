@@ -2437,7 +2437,7 @@ private final class ClipboardBridge: ClipboardCallback, @unchecked Sendable {
 private final class TransferBridge: FileTransferCallback, @unchecked Sendable {
     weak var app: ConnectedAppModel?
 
-    func onTransferRequest(transferId: String, filename: String, fileSize: UInt64, fromDevice: String) {
+    func onTransferRequest(transferId: String, filename: String, fileSize: UInt64, fromDevice: String, fromFingerprint: String) {
         Task { @MainActor [weak app] in
             app?.handleTransferRequest(
                 transferId: transferId,
@@ -2448,31 +2448,31 @@ private final class TransferBridge: FileTransferCallback, @unchecked Sendable {
         }
     }
 
-    func onTransferStarting(transferId: String, filename: String, totalSize: UInt64) {
+    func onTransferStarting(transferId: String, filename: String, totalSize: UInt64, isOutgoing: Bool) {
         Task { @MainActor [weak app] in
             app?.handleTransferStarting(transferId: transferId, filename: filename, totalSize: totalSize)
         }
     }
 
-    func onTransferProgress(bytesTransferred: UInt64, totalSize: UInt64) {
+    func onTransferProgress(transferId: String, bytesTransferred: UInt64, totalSize: UInt64) {
         Task { @MainActor [weak app] in
             app?.handleTransferProgress(bytesTransferred: bytesTransferred, totalSize: totalSize)
         }
     }
 
-    func onTransferCompleted(filename: String, totalSize: UInt64) {
+    func onTransferCompleted(transferId: String, filename: String, totalSize: UInt64) {
         Task { @MainActor [weak app] in
             app?.handleTransferCompleted(filename: filename, totalSize: totalSize)
         }
     }
 
-    func onTransferFailed(errorMsg: String) {
+    func onTransferFailed(transferId: String, errorMsg: String) {
         Task { @MainActor [weak app] in
             app?.handleTransferFailed(errorMsg)
         }
     }
 
-    func onTransferCancelled() {
+    func onTransferCancelled(transferId: String) {
         Task { @MainActor [weak app] in
             app?.handleTransferCancelled()
         }
