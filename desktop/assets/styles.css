@@ -518,11 +518,9 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden;
     padding: var(--space-8);
     background: var(--bg-primary);
-    scroll-behavior: smooth;
 }
 
 .main-content::-webkit-scrollbar {
@@ -544,7 +542,7 @@ body {
 }
 
 .content-header {
-    margin-bottom: var(--space-8);
+    margin-bottom: var(--space-10);
     animation: fade-slide-down 0.4s ease-out;
 }
 
@@ -694,11 +692,18 @@ body {
 /* ============================================================================
    Device Grid
    ============================================================================ */
+.devices-container {
+    flex: 1;
+    overflow-y: auto;
+    height: 100%;
+    padding-top: var(--space-4);
+}
 
 .device-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: var(--space-6);
+}
     padding: var(--space-2);
     animation: stagger-fade-in 0.5s ease-out;
 }
@@ -2099,6 +2104,7 @@ input:focus + .slider {
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
     margin-bottom: var(--space-4);
+    word-break: break-all;
 }
 
 /* Drop Zone */
@@ -2231,6 +2237,13 @@ input:focus + .slider {
 /* ============================================================================
    Settings Section
    ============================================================================ */
+
+.settings-container {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: var(--space-4);
+    height: 100%;
+}
 
 .settings-section {
     display: flex;

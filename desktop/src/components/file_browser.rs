@@ -105,32 +105,6 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
         }
     });
 
-    let go_up = {
-        let ip = device.ip.clone();
-        let port = device.port;
-        move |_| {
-            let p = current_path.read().clone();
-            if p != "/" {
-                let parent = std::path::Path::new(&p)
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or("/".to_string());
-                let parent = if parent.is_empty() {
-                    "/".to_string()
-                } else {
-                    parent
-                };
-
-                loading.set(true);
-                action_tx.send(AppAction::ListRemoteFiles {
-                    ip: ip.clone(),
-                    port,
-                    path: parent,
-                });
-            }
-        }
-    };
-
     rsx! {
         div {
             class: "file-browser",
@@ -140,7 +114,33 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 class: "browser-header",
                 button {
                     class: "secondary-button",
-                    onclick: move |_| on_close.call(()),
+                    onclick: {
+                        let ip = device.ip.clone();
+                        let port = device.port;
+                        move |_| {
+                            let p = current_path.read().clone();
+                            if p != "/" {
+                                let parent = std::path::Path::new(&p)
+                                    .parent()
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or("/".to_string());
+                                let parent = if parent.is_empty() {
+                                    "/".to_string()
+                                } else {
+                                    parent
+                                };
+
+                                loading.set(true);
+                                action_tx.send(AppAction::ListRemoteFiles {
+                                    ip: ip.clone(),
+                                    port,
+                                    path: parent,
+                                });
+                            } else {
+                                on_close.call(());
+                            }
+                        }
+                    },
                     Icon { icon: IconType::Back, size: 14, color: "currentColor".to_string() }
                     span { " Back" }
                 }
@@ -164,7 +164,31 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                     if current_path.read().as_str() != "/" {
                         div {
                             class: "file-entry directory",
-                            onclick: go_up,
+                            onclick: {
+                                let ip = device.ip.clone();
+                                let port = device.port;
+                                move |_| {
+                                    let p = current_path.read().clone();
+                                    if p != "/" {
+                                        let parent = std::path::Path::new(&p)
+                                            .parent()
+                                            .map(|p| p.to_string_lossy().to_string())
+                                            .unwrap_or("/".to_string());
+                                        let parent = if parent.is_empty() {
+                                            "/".to_string()
+                                        } else {
+                                            parent
+                                        };
+
+                                        loading.set(true);
+                                        action_tx.send(AppAction::ListRemoteFiles {
+                                            ip: ip.clone(),
+                                            port,
+                                            path: parent,
+                                        });
+                                    }
+                                }
+                            },
                             span {
                                 class: "icon",
                                 Icon { icon: IconType::Folder, size: 18, color: "var(--accent)".to_string() }

@@ -1452,23 +1452,26 @@ fn App() -> Element {
                         }
                     } else {
                         div {
-                            class: "device-grid",
-                            for device in devices_list.read().iter() {
-                                DeviceCard {
-                                    key: "{device.id}",
-                                    device: device.clone(),
-                                    is_selected: false,
-                                    on_select: move |d: DeviceInfo| {
-                                        selected_device.set(Some(d));
-                                        device_detail_tab.set("clipboard".to_string());
-                                    },
-                                    on_pair: move |d: DeviceInfo| {
-                                        action_tx.send(AppAction::PairWithDevice { ip: d.ip.clone(), port: d.port });
-                                    },
-                                    on_send_file: move |d: DeviceInfo| {
-                                        send_target_device.set(Some(d));
-                                        show_send_dialog.set(true);
-                                    },
+                            class: "devices-container",
+                            div {
+                                class: "device-grid",
+                                for device in devices_list.read().iter() {
+                                    DeviceCard {
+                                        key: "{device.id}",
+                                        device: device.clone(),
+                                        is_selected: false,
+                                        on_select: move |d: DeviceInfo| {
+                                            selected_device.set(Some(d));
+                                            device_detail_tab.set("clipboard".to_string());
+                                        },
+                                        on_pair: move |d: DeviceInfo| {
+                                            action_tx.send(AppAction::PairWithDevice { ip: d.ip.clone(), port: d.port });
+                                        },
+                                        on_send_file: move |d: DeviceInfo| {
+                                            send_target_device.set(Some(d));
+                                            show_send_dialog.set(true);
+                                        },
+                                    }
                                 }
                             }
                         }
@@ -1484,16 +1487,9 @@ fn App() -> Element {
                             // Compact header with device info and actions
                             div {
                                 class: "device-detail-header",
-                                button {
-                                    class: "back-button",
-                                    onclick: move |_| {
-                                        selected_device.set(None);
-                                        active_tab.set("devices".to_string());
-                                    },
-                                    Icon { icon: IconType::Back, size: 14, color: "currentColor".to_string() }
-                                }
                                 div {
                                     class: "device-detail-info",
+                                    style: "margin-left: 0;",
                                     span { class: "device-address", "{device.ip}:{device.port}" }
                                     span { class: "device-type-badge", "{device.device_type}" }
                                 }
@@ -2519,9 +2515,11 @@ fn App() -> Element {
                 // Tab: Settings
                 if *active_tab.read() == "settings" {
                     div {
-                        class: "settings-section",
+                        class: "settings-container",
                         div {
-                            class: "info-card",
+                            class: "settings-section",
+                            div {
+                                class: "info-card",
                             h3 {
                                 Icon { icon: IconType::Refresh, size: 20, color: "currentColor".to_string() }
                                 " Updates"
@@ -2879,6 +2877,7 @@ fn App() -> Element {
                         }
                     }
                 }
+            }
             }
 
             // Notifications (in-app)
