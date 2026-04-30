@@ -8,7 +8,7 @@ Currently available for **Linux**, **Mac**, **Windows**, and **Android**.
 
 ![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)
 ![Rust](https://img.shields.io/badge/rust-edition%202024-orange)
-![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Mac%20%7C%20Windows-green)
+![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Mac%20%7C%20Windows%20%7C%20iOS-green)
 
 ## Features
 
