@@ -12,8 +12,15 @@ if [[ -z "${IOS_CERTIFICATE_PASSWORD:-}" ]]; then
     exit 1
 fi
 
-if [[ -z "${IOS_PROVISIONING_PROFILE:-}" ]]; then
-    echo "IOS_PROVISIONING_PROFILE is required. It must contain the base64-encoded provisioning profile." >&2
+PROFILE_VALUE="${IOS_PROVISIONING_PROFILE:-}"
+PROFILE_ENV_NAME="IOS_PROVISIONING_PROFILE"
+if [[ -n "${IOS_DEV_PROVISIONING_PROFILE:-}" ]]; then
+    PROFILE_VALUE="$IOS_DEV_PROVISIONING_PROFILE"
+    PROFILE_ENV_NAME="IOS_DEV_PROVISIONING_PROFILE"
+fi
+
+if [[ -z "$PROFILE_VALUE" ]]; then
+    echo "IOS_PROVISIONING_PROFILE or IOS_DEV_PROVISIONING_PROFILE is required. It must contain the base64-encoded provisioning profile." >&2
     exit 1
 fi
 
@@ -35,7 +42,7 @@ decode_base64() {
 }
 
 decode_base64 "$IOS_CERTIFICATE" "$CERTIFICATE_PATH"
-decode_base64 "$IOS_PROVISIONING_PROFILE" "$PROFILE_PATH"
+decode_base64 "$PROFILE_VALUE" "$PROFILE_PATH"
 
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
@@ -60,4 +67,4 @@ if [[ -n "${GITHUB_ENV:-}" ]]; then
     } >> "$GITHUB_ENV"
 fi
 
-echo "Installed iOS signing certificate and provisioning profile: $PROFILE_NAME ($PROFILE_UUID)"
+echo "Installed iOS signing certificate and provisioning profile from $PROFILE_ENV_NAME: $PROFILE_NAME ($PROFILE_UUID)"

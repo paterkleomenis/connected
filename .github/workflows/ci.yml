@@ -468,9 +468,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
-          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          IOS_DEV_PROVISIONING_PROFILE: ${{ secrets.IOS_DEV_PROVISIONING_PROFILE }}
         run: |
-          if [[ -n "$APPLE_TEAM_ID" && -n "$IOS_CERTIFICATE" && -n "$IOS_CERTIFICATE_PASSWORD" && -n "$IOS_PROVISIONING_PROFILE" ]]; then
+          if [[ -n "$APPLE_TEAM_ID" && -n "$IOS_CERTIFICATE" && -n "$IOS_CERTIFICATE_PASSWORD" && -n "$IOS_DEV_PROVISIONING_PROFILE" ]]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
@@ -482,7 +482,7 @@ jobs:
         env:
           IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
-          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          IOS_DEV_PROVISIONING_PROFILE: ${{ secrets.IOS_DEV_PROVISIONING_PROFILE }}
 
       - name: Build iOS IPA
         run: bash scripts/ios/archive-ipa.sh
