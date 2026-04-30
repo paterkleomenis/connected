@@ -11,8 +11,6 @@ mod proximity;
 mod state;
 mod utils;
 
-use state::{is_discovery_active, is_sdk_initialized};
-
 use state::{
     ThemeModeSetting, get_clipboard_sync_enabled, get_device_name_setting,
     get_media_enabled_setting, get_theme_mode_setting, set_clipboard_sync_enabled,
@@ -3017,35 +3015,68 @@ fn App() -> Element {
                     class: "modal-overlay",
                     div {
                         class: "modal-content",
-                        h3 { "Incoming File Transfer" }
-                        for req in file_transfer_requests.read().iter() {
-                            div {
-                                key: "{req.id}",
-                                class: "pairing-request", // Reuse styling
-                                p { "From: {req.from_device}" }
-                                p { class: "fingerprint", "File: {req.filename}" }
-                                p { class: "fingerprint", "Size: {req.size} bytes" }
+                        div {
+                            class: "modal-header-with-actions",
+                            h3 { "Incoming File Transfer" }
+                            if file_transfer_requests.read().len() > 1 {
                                 div {
-                                    class: "modal-actions",
+                                    class: "bulk-actions",
                                     button {
-                                        class: "secondary-button",
-                                        onclick: {
-                                            let req = req.clone();
-                                            move |_| {
+                                        class: "bulk-action-btn secondary",
+                                        onclick: move |_| {
+                                            for req in file_transfer_requests.read().iter() {
                                                 action_tx.send(AppAction::RejectFileTransfer { transfer_id: req.id.clone() });
                                             }
                                         },
-                                        "Reject"
+                                        "Reject All"
                                     }
                                     button {
-                                        class: "primary-button",
-                                        onclick: {
-                                            let req = req.clone();
-                                            move |_| {
+                                        class: "bulk-action-btn primary",
+                                        onclick: move |_| {
+                                            for req in file_transfer_requests.read().iter() {
+                                                set_auto_accept_fingerprint(req.from_fingerprint.clone());
                                                 action_tx.send(AppAction::AcceptFileTransfer { transfer_id: req.id.clone() });
                                             }
                                         },
-                                        "Accept"
+                                        "Accept All"
+                                    }
+                                }
+                            }
+                        }
+                        div {
+                            class: "modal-scroll-area",
+                            for req in file_transfer_requests.read().iter() {
+                                div {
+                                    key: "{req.id}",
+                                    class: "pairing-request", // Reuse styling
+                                    div {
+                                        class: "request-info",
+                                        p { "From: {req.from_device}" }
+                                        p { class: "fingerprint", "File: {req.filename}" }
+                                        p { class: "fingerprint", "Size: {req.size} bytes" }
+                                    }
+                                    div {
+                                        class: "modal-actions",
+                                        button {
+                                            class: "secondary-button",
+                                            onclick: {
+                                                let req = req.clone();
+                                                move |_| {
+                                                    action_tx.send(AppAction::RejectFileTransfer { transfer_id: req.id.clone() });
+                                                }
+                                            },
+                                            "Reject"
+                                        }
+                                        button {
+                                            class: "primary-button",
+                                            onclick: {
+                                                let req = req.clone();
+                                                move |_| {
+                                                    action_tx.send(AppAction::AcceptFileTransfer { transfer_id: req.id.clone() });
+                                                }
+                                            },
+                                            "Accept"
+                                        }
                                     }
                                 }
                             }
@@ -3246,17 +3277,14 @@ fn App() -> Element {
                         show_send_dialog.set(false);
                         send_target_device.set(None);
                     },
-                    on_send: move |path: String| {
-                        let final_path = path.clone();
-                        let success = true;
+                    on_send: move |paths: Vec<String>| {
+                        let final_paths = paths.clone();
 
-                        if let Some(ref device) = *send_target_device.read()
-                            && success
-                        {
+                        if let Some(ref device) = *send_target_device.read() {
                             action_tx.send(AppAction::SendFile {
                                 ip: device.ip.clone(),
                                 port: device.port,
-                                path: final_path
+                                paths: final_paths
                             });
                         }
                         show_send_dialog.set(false);

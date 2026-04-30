@@ -608,7 +608,7 @@ impl FileTransfer {
         }
 
         // Sanitize filename and avoid overwriting existing files
-        let safe_filename = sanitize_filename(&filename);
+        let mut safe_filename = sanitize_filename(&filename);
         let save_dir = save_dir.as_ref();
         let mut save_path = save_dir.join(&safe_filename);
 
@@ -660,6 +660,7 @@ impl FileTransfer {
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                         save_path = candidate_path;
+                        safe_filename = candidate;
                         exists = false;
                         break;
                     }

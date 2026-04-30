@@ -1,6 +1,8 @@
 #![allow(unsafe_code)]
 
-use connected_core::{ConnectedClient, ConnectedError, ConnectedEvent, Device, DeviceType};
+use connected_core::{
+    ConnectedClient, ConnectedError, ConnectedEvent, Device, DeviceType, TransferDirection,
+};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -675,12 +677,19 @@ pub trait FileTransferCallback: Send + Sync {
         filename: String,
         file_size: u64,
         from_device: String,
+        from_fingerprint: String,
     );
-    fn on_transfer_starting(&self, transfer_id: String, filename: String, total_size: u64);
-    fn on_transfer_progress(&self, bytes_transferred: u64, total_size: u64);
-    fn on_transfer_completed(&self, filename: String, total_size: u64);
-    fn on_transfer_failed(&self, error_msg: String);
-    fn on_transfer_cancelled(&self);
+    fn on_transfer_starting(
+        &self,
+        transfer_id: String,
+        filename: String,
+        total_size: u64,
+        is_outgoing: bool,
+    );
+    fn on_transfer_progress(&self, transfer_id: String, bytes_transferred: u64, total_size: u64);
+    fn on_transfer_completed(&self, transfer_id: String, filename: String, total_size: u64);
+    fn on_transfer_failed(&self, transfer_id: String, error_msg: String);
+    fn on_transfer_cancelled(&self, transfer_id: String);
     fn on_compression_progress(
         &self,
         filename: String,
@@ -936,21 +945,23 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                         filename,
                         size,
                         from_device,
-                        from_fingerprint: _,
+                        from_fingerprint,
                     } => {
                         if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                            cb.on_transfer_request(id, filename, size, from_device);
+                            cb.on_transfer_request(id, filename, size, from_device, from_fingerprint);
                         }
                     }
                     ConnectedEvent::TransferStarting {
                         id,
                         filename,
                         total_size,
+                        direction,
                         ..
                     } => {
+                        let is_outgoing = matches!(direction, TransferDirection::Outgoing);
                         get_transfer_sizes().write().insert(id.clone(), total_size);
                         if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                            cb.on_transfer_starting(id, filename, total_size);
+                            cb.on_transfer_starting(id, filename, total_size, is_outgoing);
                         }
                     }
                     ConnectedEvent::TransferProgress {
@@ -959,21 +970,26 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                         total_size,
                         ..
                     } => {
-                        get_transfer_sizes().write().insert(id, total_size);
+                        get_transfer_sizes().write().insert(id.clone(), total_size);
                         if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                            cb.on_transfer_progress(bytes_transferred, total_size);
+                            cb.on_transfer_progress(id, bytes_transferred, total_size);
                         }
                     }
                     ConnectedEvent::TransferCompleted { id, filename } => {
                         let total_size = get_transfer_sizes().write().remove(&id).unwrap_or(0);
                         if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                            cb.on_transfer_completed(filename, total_size);
+                            cb.on_transfer_completed(id, filename, total_size);
                         }
                     }
                     ConnectedEvent::TransferFailed { id, error } => {
                         get_transfer_sizes().write().remove(&id);
                         if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                            cb.on_transfer_failed(error);
+                            let e = error.to_lowercase();
+                            if e.contains("cancelled") || e.contains("canceled") {
+                                cb.on_transfer_cancelled(id);
+                            } else {
+                                cb.on_transfer_failed(id, error);
+                            }
                         }
                     }
                     ConnectedEvent::PairingRequest {

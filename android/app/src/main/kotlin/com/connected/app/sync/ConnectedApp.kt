@@ -14,6 +14,7 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
+import java.util.concurrent.atomic.AtomicInteger
 import androidx.core.content.FileProvider
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.mutableStateListOf
@@ -119,6 +120,7 @@ class ConnectedApp(private val context: Context) {
         const val ACTION_ACCEPT_TRANSFER = "com.connected.app.sync.ACTION_ACCEPT_TRANSFER"
         const val ACTION_REJECT_TRANSFER = "com.connected.app.sync.ACTION_REJECT_TRANSFER"
         const val ACTION_ACCEPT_ALL_TRANSFERS = "com.connected.app.sync.ACTION_ACCEPT_ALL_TRANSFERS"
+        const val ACTION_CANCEL_TRANSFER = "com.connected.app.sync.ACTION_CANCEL_TRANSFER"
         const val ACTION_ACCEPT_PAIRING = "com.connected.app.sync.ACTION_ACCEPT_PAIRING"
         const val ACTION_REJECT_PAIRING = "com.connected.app.sync.ACTION_REJECT_PAIRING"
         const val ACTION_OPEN_TRANSFER_REQUEST = "com.connected.app.sync.ACTION_OPEN_TRANSFER_REQUEST"
@@ -165,6 +167,9 @@ class ConnectedApp(private val context: Context) {
     // Maps file path -> File object for cleanup
     private val pendingTempFilesForCleanup = ConcurrentHashMap<String, File>()
 
+    // Fingerprints of devices for which we auto-accept transfers (short-lived after "Accept All")
+    private val autoAcceptFingerprints = ConcurrentHashMap<String, Long>()
+
     val transferStatus = mutableStateOf("Idle")
     var activeTransferId: String? = null
         private set
@@ -173,6 +178,8 @@ class ConnectedApp(private val context: Context) {
     private val transferTrackingLock = Any()
     private val activeOutgoingTransferIds = linkedSetOf<String>()
     private val activeIncomingTransferIds = linkedSetOf<String>()
+    private val preparingTransfersCount = AtomicInteger(0)
+
     val compressionProgress = mutableStateOf<CompressionProgress?>(null)
     val browserDownloadProgress = mutableStateOf<BrowserDownloadProgress?>(null)
 
@@ -192,30 +199,27 @@ class ConnectedApp(private val context: Context) {
 
     private fun hasAnyActiveTransfers(): Boolean {
         synchronized(transferTrackingLock) {
-            return activeOutgoingTransferIds.isNotEmpty() || activeIncomingTransferIds.isNotEmpty()
+            val hasActive = activeOutgoingTransferIds.isNotEmpty() ||
+                    activeIncomingTransferIds.isNotEmpty() ||
+                    preparingTransfersCount.get() > 0
+
+            if (hasActive) return true
+
+            // Also check queued transfers
+            return pendingFileTransfersAwaitingIp.values.any { it.second.isNotEmpty() }
         }
     }
 
-    private fun markOneTransferFinishedWithoutId() {
+    private fun markTransferFinished(transferId: String) {
         synchronized(transferTrackingLock) {
-            val incomingActive = activeIncomingTransferId
-            val outgoingActive = activeTransferId
-
-            when {
-                incomingActive != null && activeIncomingTransferIds.remove(incomingActive) -> Unit
-                outgoingActive != null && activeOutgoingTransferIds.remove(outgoingActive) -> Unit
-                activeIncomingTransferIds.isNotEmpty() -> {
-                    val firstIncoming = activeIncomingTransferIds.first()
-                    activeIncomingTransferIds.remove(firstIncoming)
-                }
-                activeOutgoingTransferIds.isNotEmpty() -> {
-                    val firstOutgoing = activeOutgoingTransferIds.first()
-                    activeOutgoingTransferIds.remove(firstOutgoing)
-                }
+            activeOutgoingTransferIds.remove(transferId)
+            if (activeTransferId == transferId) {
+                activeTransferId = activeOutgoingTransferIds.lastOrNull()
             }
-
-            activeIncomingTransferId = activeIncomingTransferIds.lastOrNull()
-            activeTransferId = activeOutgoingTransferIds.lastOrNull()
+            activeIncomingTransferIds.remove(transferId)
+            if (activeIncomingTransferId == transferId) {
+                activeIncomingTransferId = activeIncomingTransferIds.lastOrNull()
+            }
         }
     }
 
@@ -267,7 +271,13 @@ class ConnectedApp(private val context: Context) {
     private var lastBroadcastMediaState: MediaState? = null
 
     data class PairingRequest(val deviceName: String, val fingerprint: String, val deviceId: String)
-    data class TransferRequest(val id: String, val filename: String, val fileSize: ULong, val fromDevice: String)
+    data class TransferRequest(
+        val id: String,
+        val filename: String,
+        val fileSize: ULong,
+        val fromDevice: String,
+        val fromFingerprint: String
+    )
 
     // Clipboard Sync State
     val isClipboardSyncEnabled = mutableStateOf(false)
@@ -622,9 +632,26 @@ class ConnectedApp(private val context: Context) {
     }
 
     private val transferCallback = object : FileTransferCallback {
-        override fun onTransferRequest(transferId: String, filename: String, fileSize: ULong, fromDevice: String) {
+        override fun onTransferRequest(
+            transferId: String,
+            filename: String,
+            fileSize: ULong,
+            fromDevice: String,
+            fromFingerprint: String
+        ) {
+            val lastAccepted = autoAcceptFingerprints[fromFingerprint]
+            if (lastAccepted != null && System.currentTimeMillis() - lastAccepted < 30000) {
+                // Auto-accept (window is 30 seconds since last activity)
+                Log.d("ConnectedApp", "Auto-accepting $filename from $fromDevice ($fromFingerprint)")
+                // Update timestamp to extend window
+                autoAcceptFingerprints[fromFingerprint] = System.currentTimeMillis()
+                val request = TransferRequest(transferId, filename, fileSize, fromDevice, fromFingerprint)
+                acceptTransfer(request)
+                return
+            }
+
             runOnMainThread {
-                val request = TransferRequest(transferId, filename, fileSize, fromDevice)
+                val request = TransferRequest(transferId, filename, fileSize, fromDevice, fromFingerprint)
                 pendingTransferRequests.removeAll { it.id == transferId }
                 pendingTransferRequests.add(request)
                 transferRequest.value = pendingTransferRequests.firstOrNull()
@@ -633,9 +660,25 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        override fun onTransferStarting(transferId: String, filename: String, totalSize: ULong) {
+        override fun onTransferStarting(
+            transferId: String,
+            filename: String,
+            totalSize: ULong,
+            isOutgoing: Boolean
+        ) {
+            if (!isOutgoing) {
+                // For incoming transfers, extend the auto-accept window if active
+                val fingerprint = pendingTransferRequests.find { it.id == transferId }?.fromFingerprint
+                fingerprint?.let { fp ->
+                    if (autoAcceptFingerprints.containsKey(fp)) {
+                        autoAcceptFingerprints[fp] = System.currentTimeMillis()
+                    }
+                }
+            }
+
             synchronized(transferTrackingLock) {
-                if (activeOutgoingTransferIds.contains(transferId)) {
+                if (isOutgoing) {
+                    activeOutgoingTransferIds.add(transferId)
                     activeTransferId = transferId
                 } else {
                     activeIncomingTransferIds.add(transferId)
@@ -646,14 +689,19 @@ class ConnectedApp(private val context: Context) {
             showProgressNotification(filename, 0, totalSize.toLong())
         }
 
-        override fun onTransferProgress(bytesTransferred: ULong, totalSize: ULong) {
-            val percent = if (totalSize > 0u) (bytesTransferred.toLong() * 100 / totalSize.toLong()) else 0
+        override fun onTransferProgress(
+            transferId: String,
+            bytesTransferred: ULong,
+            totalSize: ULong
+        ) {
+            val percent =
+                if (totalSize > 0u) (bytesTransferred.toLong() * 100 / totalSize.toLong()) else 0
             transferStatus.value = "Transferring: $percent%"
             showProgressNotification("Downloading...", bytesTransferred.toLong(), totalSize.toLong())
         }
 
-        override fun onTransferCompleted(filename: String, totalSize: ULong) {
-            markOneTransferFinishedWithoutId()
+        override fun onTransferCompleted(transferId: String, filename: String, totalSize: ULong) {
+            markTransferFinished(transferId)
             val hasMoreTransfers = hasAnyActiveTransfers()
             transferStatus.value = if (hasMoreTransfers) {
                 "Transferring..."
@@ -682,8 +730,8 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        override fun onTransferFailed(errorMsg: String) {
-            markOneTransferFinishedWithoutId()
+        override fun onTransferFailed(transferId: String, errorMsg: String) {
+            markTransferFinished(transferId)
             val hasMoreTransfers = hasAnyActiveTransfers()
             transferStatus.value = if (hasMoreTransfers) {
                 "Transferring..."
@@ -700,8 +748,8 @@ class ConnectedApp(private val context: Context) {
             }
         }
 
-        override fun onTransferCancelled() {
-            markOneTransferFinishedWithoutId()
+        override fun onTransferCancelled(transferId: String) {
+            markTransferFinished(transferId)
             val hasMoreTransfers = hasAnyActiveTransfers()
             transferStatus.value = if (hasMoreTransfers) "Transferring..." else "Cancelled"
             val notificationManager =
@@ -1195,7 +1243,8 @@ class ConnectedApp(private val context: Context) {
         val filename = intent.getStringExtra(EXTRA_FILENAME).orEmpty()
         val fileSize = intent.getLongExtra(EXTRA_FILE_SIZE, 0L).coerceAtLeast(0L).toULong()
         val fromDevice = intent.getStringExtra(EXTRA_FROM_DEVICE).orEmpty()
-        return TransferRequest(transferId, filename, fileSize, fromDevice)
+        val fromFingerprint = intent.getStringExtra(EXTRA_FINGERPRINT).orEmpty()
+        return TransferRequest(transferId, filename, fileSize, fromDevice, fromFingerprint)
     }
 
     private fun pairingRequestFromIntent(intent: Intent): PairingRequest? {
@@ -1245,6 +1294,7 @@ class ConnectedApp(private val context: Context) {
             putExtra(EXTRA_FILENAME, request.filename)
             putExtra(EXTRA_FILE_SIZE, request.fileSize.toLong())
             putExtra(EXTRA_FROM_DEVICE, request.fromDevice)
+            putExtra(EXTRA_FINGERPRINT, request.fromFingerprint)
         }
         val acceptPendingIntent = android.app.PendingIntent.getBroadcast(
             context,
@@ -1259,6 +1309,7 @@ class ConnectedApp(private val context: Context) {
             putExtra(EXTRA_FILENAME, request.filename)
             putExtra(EXTRA_FILE_SIZE, request.fileSize.toLong())
             putExtra(EXTRA_FROM_DEVICE, request.fromDevice)
+            putExtra(EXTRA_FINGERPRINT, request.fromFingerprint)
         }
         val rejectPendingIntent = android.app.PendingIntent.getBroadcast(
             context,
@@ -1274,6 +1325,7 @@ class ConnectedApp(private val context: Context) {
             putExtra(EXTRA_FILENAME, request.filename)
             putExtra(EXTRA_FILE_SIZE, request.fileSize.toLong())
             putExtra(EXTRA_FROM_DEVICE, request.fromDevice)
+            putExtra(EXTRA_FINGERPRINT, request.fromFingerprint)
         }
         val openPendingIntent = android.app.PendingIntent.getActivity(
             context,
@@ -1302,21 +1354,26 @@ class ConnectedApp(private val context: Context) {
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
-            .setContentTitle(if (pendingTransferRequests.size > 1) "Incoming Files" else "Incoming File")
-            .setContentText("${request.fromDevice} wants to send ${request.filename}")
+        val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification_logo)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openPendingIntent)
-            .addAction(android.R.drawable.ic_menu_agenda, "All devices", openPendingIntent)
-            .addAction(android.R.drawable.ic_menu_upload, "Accept all", acceptAllPendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Reject all", rejectAllPendingIntent)
-            .addAction(android.R.drawable.ic_menu_add, "Accept", acceptPendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Reject", rejectPendingIntent)
             .setAutoCancel(true)
-            .build()
+            .setCategory(androidx.core.app.NotificationCompat.CATEGORY_MESSAGE)
 
-        notificationManager.notify(NOTIFICATION_ID_REQUEST, notification)
+        if (pendingTransferRequests.size > 1) {
+            builder.setContentTitle("Incoming Files")
+            builder.setContentText("${pendingTransferRequests.size} files waiting from multiple devices")
+            builder.addAction(R.drawable.ic_close, "Reject All", rejectAllPendingIntent)
+            builder.addAction(R.drawable.ic_download, "Accept All", acceptAllPendingIntent)
+        } else {
+            builder.setContentTitle("Incoming File")
+            builder.setContentText("${request.fromDevice} wants to send ${request.filename}")
+            builder.addAction(R.drawable.ic_close, "Reject", rejectPendingIntent)
+            builder.addAction(R.drawable.ic_download, "Accept", acceptPendingIntent)
+        }
+
+        notificationManager.notify(NOTIFICATION_ID_REQUEST, builder.build())
     }
 
     private fun showPairingNotification(request: PairingRequest) {
@@ -1376,9 +1433,10 @@ class ConnectedApp(private val context: Context) {
             .setSmallIcon(R.drawable.ic_notification_logo)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openPendingIntent)
-            .addAction(android.R.drawable.ic_menu_add, "Trust", acceptPendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Reject", rejectPendingIntent)
+            .addAction(R.drawable.ic_close, "Reject", rejectPendingIntent)
+            .addAction(R.drawable.ic_pair, "Trust", acceptPendingIntent)
             .setAutoCancel(true)
+            .setCategory(androidx.core.app.NotificationCompat.CATEGORY_MESSAGE)
             .build()
 
         notificationManager.notify(NOTIFICATION_ID_PAIRING, notification)
@@ -1388,12 +1446,24 @@ class ConnectedApp(private val context: Context) {
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         val channelId = "connected_transfer_channel"
+
+        val cancelIntent = Intent(context, TransferActionReceiver::class.java).apply {
+            action = ACTION_CANCEL_TRANSFER
+        }
+        val cancelPendingIntent = android.app.PendingIntent.getBroadcast(
+            context,
+            "cancel-transfer".hashCode(),
+            cancelIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
         val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setContentTitle(title)
             .setSmallIcon(R.drawable.ic_notification_logo)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .addAction(R.drawable.ic_close, "Cancel", cancelPendingIntent)
 
         if (total > 0) {
             val safeCurrent = current.coerceIn(0L, total)
@@ -1842,6 +1912,7 @@ class ConnectedApp(private val context: Context) {
             transferStatus.value = "Preparing file..."
         }
 
+        preparingTransfersCount.incrementAndGet()
         scope.launch(Dispatchers.IO) {
             try {
                 val uri = fileUri.toUri()
@@ -1910,9 +1981,10 @@ class ConnectedApp(private val context: Context) {
                     }
 
                     val targetDir = File(context.filesDir, "streaming_temp")
-                    if (!targetDir.exists()) targetDir.mkdirs()
+                    val uniqueDir = File(targetDir, java.util.UUID.randomUUID().toString())
+                    if (!uniqueDir.exists()) uniqueDir.mkdirs()
 
-                    val tempFile = File(targetDir, "$fileName-${System.currentTimeMillis()}")
+                    val tempFile = File(uniqueDir, fileName)
                     pendingTempFilesForCleanup[tempFile.absolutePath] = tempFile
 
                     // Copy file with progress tracking
@@ -1995,6 +2067,8 @@ class ConnectedApp(private val context: Context) {
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
+            } finally {
+                preparingTransfersCount.decrementAndGet()
             }
         }
     }
@@ -2006,29 +2080,37 @@ class ConnectedApp(private val context: Context) {
     }
 
     /**
-     * Cancel the currently active file transfer (outgoing or incoming).
-     * This sends a cancellation signal to the Rust core, which will
-     * stop the transfer and clean up any temporary files.
+     * Cancel all currently active file transfers (outgoing and incoming).
+     * This sends cancellation signals to the Rust core for every active transfer ID.
      */
     fun cancelFileTransfer() {
-        // Try outgoing first
-        activeTransferId?.let { transferId ->
-            try {
-                uniffi.connected_ffi.cancelFileTransfer(transferId)
-                Log.d("ConnectedApp", "Cancelled outgoing file transfer: $transferId")
-                return
-            } catch (e: Exception) {
-                Log.w("ConnectedApp", "Failed to cancel outgoing transfer, trying incoming", e)
+        synchronized(transferTrackingLock) {
+            // Cancel all outgoing transfers
+            if (activeOutgoingTransferIds.isNotEmpty()) {
+                val outgoingIds = activeOutgoingTransferIds.toList()
+                for (id in outgoingIds) {
+                    try {
+                        uniffi.connected_ffi.cancelFileTransfer(id)
+                        Log.d("ConnectedApp", "Cancelled outgoing file transfer: $id")
+                    } catch (e: Exception) {
+                        Log.w("ConnectedApp", "Failed to cancel outgoing transfer $id: ${e.message}")
+                    }
+                }
+                // We don't clear the list here manually; onTransferCancelled callback will handle it
+                // as the core processes each cancellation.
             }
-        }
 
-        // Try incoming
-        activeIncomingTransferId?.let { transferId ->
-            try {
-                uniffi.connected_ffi.cancelIncomingFileTransfer(transferId)
-                Log.d("ConnectedApp", "Cancelled incoming file transfer: $transferId")
-            } catch (e: Exception) {
-                Log.e("ConnectedApp", "Failed to cancel incoming file transfer", e)
+            // Cancel all incoming transfers
+            if (activeIncomingTransferIds.isNotEmpty()) {
+                val incomingIds = activeIncomingTransferIds.toList()
+                for (id in incomingIds) {
+                    try {
+                        uniffi.connected_ffi.cancelIncomingFileTransfer(id)
+                        Log.d("ConnectedApp", "Cancelled incoming file transfer: $id")
+                    } catch (e: Exception) {
+                        Log.w("ConnectedApp", "Failed to cancel incoming transfer $id: ${e.message}")
+                    }
+                }
             }
         }
     }
@@ -3176,6 +3258,7 @@ class ConnectedApp(private val context: Context) {
             val requests = pendingTransferRequests.toList()
             requests.forEach { request ->
                 try {
+                    autoAcceptFingerprints[request.fromFingerprint] = System.currentTimeMillis()
                     acceptFileTransfer(request.id)
                 } catch (_: Exception) {
                 }

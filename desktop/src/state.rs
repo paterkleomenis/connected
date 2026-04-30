@@ -370,6 +370,8 @@ static PAIRING_REQUESTS: OnceLock<Arc<Mutex<Vec<PairingRequest>>>> = OnceLock::n
 static PENDING_PAIRINGS: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 static FILE_TRANSFER_REQUESTS: OnceLock<Arc<Mutex<HashMap<String, FileTransferRequest>>>> =
     OnceLock::new();
+static AUTO_ACCEPT_FINGERPRINTS: OnceLock<Arc<Mutex<HashMap<String, std::time::Instant>>>> =
+    OnceLock::new();
 static REMOTE_FILES: OnceLock<Arc<Mutex<Option<Vec<FsEntry>>>>> = OnceLock::new();
 static REMOTE_PATH: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 static REMOTE_FILES_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
@@ -556,6 +558,30 @@ pub fn get_pending_pairings() -> &'static Arc<Mutex<HashSet<String>>> {
 
 pub fn get_file_transfer_requests() -> &'static Arc<Mutex<HashMap<String, FileTransferRequest>>> {
     FILE_TRANSFER_REQUESTS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn get_auto_accept_fingerprints() -> &'static Arc<Mutex<HashMap<String, std::time::Instant>>> {
+    AUTO_ACCEPT_FINGERPRINTS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn set_auto_accept_fingerprint(fingerprint: String) {
+    let mut store = get_auto_accept_fingerprints().lock_or_recover();
+    store.insert(fingerprint, std::time::Instant::now());
+}
+
+pub fn is_auto_accept_enabled(fingerprint: &str) -> bool {
+    let mut store = get_auto_accept_fingerprints().lock_or_recover();
+    if let Some(timestamp) = store.get(fingerprint) {
+        // Auto-accept expires after 30 seconds of inactivity
+        if timestamp.elapsed() < std::time::Duration::from_secs(30) {
+            // Update timestamp to extend window on activity
+            store.insert(fingerprint.to_string(), std::time::Instant::now());
+            return true;
+        } else {
+            store.remove(fingerprint);
+        }
+    }
+    false
 }
 
 pub fn get_current_media() -> &'static Arc<Mutex<Option<RemoteMedia>>> {

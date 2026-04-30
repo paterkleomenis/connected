@@ -12,11 +12,12 @@ use crate::state::{
     get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
     get_pairing_mode_state, get_pairing_requests, get_pending_pairings, get_phone_call_log,
     get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_files_update, get_saved_devices_setting, get_transfer_status, mark_calls_synced,
-    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
-    remove_file_transfer_request, save_device_to_settings, set_active_call,
-    set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
-    set_autostart_enabled_setting, set_device_name_setting, set_discovery_active,
+    get_remote_files_update, get_saved_devices_setting, get_transfer_status,
+    is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced, mark_messages_synced,
+    remove_device_from_settings, remove_file_transfer_request, save_device_to_settings,
+    set_active_call, set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
+    set_auto_accept_fingerprint, set_autostart_enabled_setting, set_device_name_setting,
+ set_discovery_active,
     set_download_directory_setting, set_last_remote_clipboard_content, set_pairing_mode_state,
     set_phone_call_log, set_phone_contacts, set_phone_conversations, set_phone_messages,
     set_sdk_initialized, set_transfer_status,
@@ -101,7 +102,7 @@ pub enum AppAction {
     SendFile {
         ip: String,
         port: u16,
-        path: String,
+        paths: Vec<String>,
     },
     SendClipboard {
         ip: String,
@@ -288,6 +289,11 @@ fn spawn_event_loop(
     c: Arc<ConnectedClient>,
     mut events: tokio::sync::broadcast::Receiver<ConnectedEvent>,
 ) {
+    fn is_cancelled_error(error: &str) -> bool {
+        let lower = error.to_ascii_lowercase();
+        lower.contains("cancelled") || lower.contains("canceled")
+    }
+
     let c_clone = c.clone();
     tokio::spawn(async move {
         #[cfg(target_os = "linux")]
@@ -499,8 +505,11 @@ fn spawn_event_loop(
                     }
                 }
                 ConnectedEvent::TransferFailed { error, id, .. } => {
+                    // Remove pending request if it still exists
+                    remove_file_transfer_request(&id);
+
                     // Check if this was a cancellation
-                    let is_cancelled = error == "Cancelled" || error == "Cancelled by receiver";
+                    let is_cancelled = is_cancelled_error(&error);
 
                     let was_outgoing = outgoing_transfers.remove(&id).is_some();
                     let was_incoming = incoming_transfers.remove(&id).is_some();
@@ -608,7 +617,7 @@ fn spawn_event_loop(
                                 warn!("Failed to send trust confirmation: {}", e);
                             }
                         });
-                        return;
+                        continue;
                     }
 
                     // Deduplicate requests
@@ -685,29 +694,36 @@ fn spawn_event_loop(
                     from_device,
                     from_fingerprint,
                 } => {
-                    *get_transfer_status().lock_or_recover() = TransferStatus::Pending {
-                        transfer_id: id.clone(),
-                        filename: filename.clone(),
-                        from_device: from_device.clone(),
-                    };
+                    if is_auto_accept_enabled(&from_fingerprint) {
+                        info!("Auto-accepting transfer {} from {}", filename, from_device);
+                        if let Err(e) = c_clone.accept_file_transfer(&id) {
+                            error!("Failed to auto-accept transfer: {}", e);
+                        }
+                    } else {
+                        *get_transfer_status().lock_or_recover() = TransferStatus::Pending {
+                            transfer_id: id.clone(),
+                            filename: filename.clone(),
+                            from_device: from_device.clone(),
+                        };
 
-                    add_actionable_notification(
-                        "File Transfer Request",
-                        &format!(
-                            "{} wants to send {} ({} bytes)",
-                            from_device, filename, size
-                        ),
-                        "",
-                    );
-                    // Store the request for UI to display
-                    add_file_transfer_request(FileTransferRequest {
-                        id: id.clone(),
-                        filename,
-                        size,
-                        from_device,
-                        from_fingerprint,
-                        timestamp: Instant::now(),
-                    });
+                        add_actionable_notification(
+                            "File Transfer Request",
+                            &format!(
+                                "{} wants to send {} ({} bytes)",
+                                from_device, filename, size
+                            ),
+                            "",
+                        );
+                        // Store the request for UI to display
+                        add_file_transfer_request(FileTransferRequest {
+                            id: id.clone(),
+                            filename,
+                            size,
+                            from_device,
+                            from_fingerprint,
+                            timestamp: Instant::now(),
+                        });
+                    }
                 }
                 ConnectedEvent::MediaControl { from_device, event } => {
                     info!("EVENT: Received MediaControl event from {}", from_device);
@@ -1358,7 +1374,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     error!("Failed to rename local device: {}", e);
                 }
             }
-            AppAction::SendFile { ip, port, path } => {
+            AppAction::SendFile { ip, port, paths } => {
                 if let Some(c) = &client {
                     if ip == "0.0.0.0" {
                         add_notification(
@@ -1371,13 +1387,17 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     let c = c.clone();
                     tokio::spawn(async move {
                         if let Ok(ip_addr) = ip.parse() {
-                            match c.send_file(ip_addr, port, PathBuf::from(path)).await {
-                                Ok(transfer_id) => {
-                                    set_active_outgoing_transfer_id(Some(transfer_id));
+                            for path in paths {
+                                match c.send_file(ip_addr, port, PathBuf::from(path)).await {
+                                    Ok(transfer_id) => {
+                                        set_active_outgoing_transfer_id(Some(transfer_id));
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to start file transfer: {}", e);
+                                    }
                                 }
-                                Err(e) => {
-                                    error!("Failed to start file transfer: {}", e);
-                                }
+                                // Small delay between multiple files to avoid overwhelming the receiver/UI
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                             }
                         }
                     });

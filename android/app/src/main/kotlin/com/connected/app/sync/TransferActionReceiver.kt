@@ -14,7 +14,8 @@ class TransferActionReceiver : BroadcastReceiver() {
             val filename = source.getStringExtra(ConnectedApp.EXTRA_FILENAME).orEmpty()
             val fileSize = source.getLongExtra(ConnectedApp.EXTRA_FILE_SIZE, 0L).coerceAtLeast(0L).toULong()
             val fromDevice = source.getStringExtra(ConnectedApp.EXTRA_FROM_DEVICE).orEmpty()
-            return ConnectedApp.TransferRequest(transferId, filename, fileSize, fromDevice)
+            val fromFingerprint = source.getStringExtra(ConnectedApp.EXTRA_FINGERPRINT).orEmpty()
+            return ConnectedApp.TransferRequest(transferId, filename, fileSize, fromDevice, fromFingerprint)
         }
 
         fun pairingRequestFromIntent(source: Intent): ConnectedApp.PairingRequest? {
@@ -45,6 +46,11 @@ class TransferActionReceiver : BroadcastReceiver() {
             ConnectedApp.ACTION_ACCEPT_ALL_TRANSFERS -> {
                 Log.d("TransferActionReceiver", "Accepting all pending transfers")
                 app.acceptAllTransfers()
+            }
+
+            ConnectedApp.ACTION_CANCEL_TRANSFER -> {
+                Log.d("TransferActionReceiver", "Cancelling active file transfer")
+                app.cancelFileTransfer()
             }
 
             ConnectedApp.ACTION_ACCEPT_PAIRING -> {

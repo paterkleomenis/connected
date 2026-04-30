@@ -98,6 +98,15 @@ configure<ApplicationExtension> {
             // Allow debug/dev install side-by-side with production app.
             applicationIdSuffix = ".dev"
             versionNameSuffix = "-dev"
+
+            // Use release signing for debug builds if credentials are found,
+            // so developers can sync signatures across machines.
+            val hasSigning = env.getProperty("ANDROID_KEYSTORE_PASSWORD") != null
+                || System.getenv("ANDROID_KEYSTORE_PASSWORD") != null
+
+            if (hasSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
 
         release {

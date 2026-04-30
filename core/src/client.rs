@@ -3134,6 +3134,17 @@ impl ConnectedClient {
                     pending.write().remove(&transfer_id);
 
                     if let Err(e) = result {
+                        let is_cancelled = matches!(
+                            &e,
+                            ConnectedError::TransferFailed(msg)
+                                if msg.eq_ignore_ascii_case("cancelled")
+                                    || msg.eq_ignore_ascii_case("cancelled by receiver")
+                        );
+
+                        if is_cancelled {
+                            return;
+                        }
+
                         error!("File receive failed: {}", e);
                         let _ = event_tx.send(ConnectedEvent::TransferFailed {
                             id: transfer_id,

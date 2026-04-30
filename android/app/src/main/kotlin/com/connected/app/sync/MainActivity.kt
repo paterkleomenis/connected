@@ -58,6 +58,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.core.content.ContextCompat
 import androidx.core.os.BundleCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.connected_ffi.DiscoveredDevice
 import androidx.core.net.toUri
@@ -68,10 +70,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var proximityPermissionsLauncher: ActivityResultLauncher<Array<String>>
     private var proximityPermissionsInFlight = false
 
-    private val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { selectedUri ->
+    private val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        if (uris.isNotEmpty()) {
             connectedApp.getSelectedDeviceForFileTransfer()?.let { device ->
-                connectedApp.sendFileToDevice(device, selectedUri.toString())
+                lifecycleScope.launch {
+                    uris.forEachIndexed { index, selectedUri ->
+                        if (index > 0) delay(200) // Small delay to avoid overwhelming the connection
+                        connectedApp.sendFileToDevice(device, selectedUri.toString())
+                    }
+                }
             }
         }
     }

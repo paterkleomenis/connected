@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -559,20 +559,30 @@ impl QuicTransport {
         };
 
         if already_connecting {
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            // Wait for the other task to finish connecting or timeout
+            let start = Instant::now();
+            while start.elapsed() < CONNECT_TIMEOUT {
+                tokio::time::sleep(Duration::from_millis(50)).await;
 
-            let cached = {
-                let mut cache = self.connection_cache.write();
-                cache.get(&addr)
-            };
-            if let Some(conn) = cached {
-                debug!(
-                    "Reusing connection (allow_unknown) to {} (created by concurrent task)",
-                    addr
-                );
-                return Ok(conn);
+                let cached = {
+                    let mut cache = self.connection_cache.write();
+                    cache.get(&addr)
+                };
+                if let Some(conn) = cached {
+                    debug!(
+                        "Reusing connection (allow_unknown) to {} (created by concurrent task)",
+                        addr
+                    );
+                    return Ok(conn);
+                }
+
+                // Check if the other task failed and removed the flag
+                let in_progress = self.connecting.lock().await;
+                if !in_progress.contains(&canonical) {
+                    // Other task finished with error, we should try ourselves now
+                    break;
+                }
             }
-            self.connecting.lock().await.insert(canonical);
         }
 
         let _connecting_guard = ConnectingGuard {

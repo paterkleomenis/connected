@@ -8,9 +8,9 @@ pub fn FileDialog(
     device: Option<DeviceInfo>,
     is_folder: bool,
     on_close: EventHandler<()>,
-    on_send: EventHandler<String>,
+    on_send: EventHandler<Vec<String>>,
 ) -> Element {
-    let mut file_path = use_signal(String::new);
+    let mut file_paths = use_signal(Vec::<String>::new);
     let mut drag_over = use_signal(|| false);
     let mut is_browsing = use_signal(|| false);
 
@@ -20,26 +20,25 @@ pub fn FileDialog(
         }
         is_browsing.set(true);
 
-        let mut file_path = file_path;
+        let mut file_paths = file_paths;
         let mut drag_over = drag_over;
         let mut is_browsing = is_browsing;
 
-        // On Windows, the sync dialog can fail to open if COM is already initialized in a
-        // different apartment mode on the UI thread (common with WebView-based apps).
-        // The async dialog runs on a dedicated thread and avoids freezing/crashing the UI.
         spawn(async move {
             let dialog = rfd::AsyncFileDialog::new();
 
-            let selected = if is_folder {
-                dialog.pick_folder().await
+            if is_folder {
+                if let Some(handle) = dialog.pick_folder().await {
+                    file_paths.set(vec![handle.path().display().to_string()]);
+                    drag_over.set(false);
+                }
             } else {
-                dialog.pick_file().await
+                if let Some(handles) = dialog.pick_files().await {
+                    let paths = handles.into_iter().map(|h| h.path().display().to_string()).collect();
+                    file_paths.set(paths);
+                    drag_over.set(false);
+                }
             };
-
-            if let Some(handle) = selected {
-                file_path.set(handle.path().display().to_string());
-                drag_over.set(false);
-            }
 
             is_browsing.set(false);
         });
@@ -50,32 +49,36 @@ pub fn FileDialog(
         .map(|d| d.name.clone())
         .unwrap_or_else(|| "Unknown Device".to_string());
 
-    let has_file = !file_path.read().is_empty();
+    let has_files = !file_paths.read().is_empty();
 
     let title_text = if is_folder {
         " Send Folder"
     } else {
-        " Send File"
+        " Send Files"
     };
     let drop_text = if is_folder {
         "Click to browse a folder"
     } else {
-        "Click to browse or drag a file here"
+        "Click to browse or drag files here"
     };
     let support_text = if is_folder {
         "Folder will be sent as a zip archive"
     } else {
-        "Supports all file types"
+        "Supports multiple files and types"
     };
     let button_text = if is_folder {
-        " Send Folder"
+        " Send Folder".to_string()
     } else {
-        " Send File"
+        if file_paths.read().len() > 1 {
+            format!(" Send {} Files", file_paths.read().len())
+        } else {
+            " Send File".to_string()
+        }
     };
     let select_text = if is_folder {
         "Select a Folder"
     } else {
-        "Select a File"
+        "Select Files"
     };
 
     rsx! {
@@ -123,23 +126,29 @@ pub fn FileDialog(
                             evt.prevent_default();
                             drag_over.set(false);
 
-                            let dropped = evt
+                            let dropped: Vec<_> = evt
                                 .data()
                                 .as_ref()
                                 .files()
                                 .into_iter()
-                                .next()
-                                .map(|f| f.path());
+                                .map(|f| f.path())
+                                .collect();
 
-                            if let Some(path) = dropped {
-                                let ok = if is_folder { path.is_dir() } else { path.is_file() };
-                                if ok {
-                                    file_path.set(path.display().to_string());
+                            if !dropped.is_empty() {
+                                let mut valid_paths = Vec::new();
+                                for path in dropped {
+                                    let ok = if is_folder { path.is_dir() } else { path.is_file() };
+                                    if ok {
+                                        valid_paths.push(path.display().to_string());
+                                    }
+                                }
+                                if !valid_paths.is_empty() {
+                                    file_paths.set(valid_paths);
                                 }
                             }
                         },
 
-                        if !has_file {
+                        if !has_files {
                             div {
                                 class: "drop-icon",
                                 Icon { icon: IconType::Upload, size: 48, color: "var(--text-tertiary)".to_string() }
@@ -151,15 +160,26 @@ pub fn FileDialog(
                                 class: "drop-icon",
                                 Icon { icon: IconType::Check, size: 48, color: "var(--success)".to_string() }
                             }
-                            p { class: "file-path", "{file_path}" }
+                            div {
+                                class: "file-paths-list",
+                                if file_paths.read().len() > 3 {
+                                    p { class: "file-path", "{file_paths.read()[0]}" }
+                                    p { class: "file-path", "{file_paths.read()[1]}" }
+                                    p { class: "file-path muted", "... and {file_paths.read().len() - 2} more" }
+                                } else {
+                                    for path in file_paths.read().iter() {
+                                        p { class: "file-path", "{path}" }
+                                    }
+                                }
+                            }
                             button {
                                 class: "clear-button",
                                 onclick: move |evt: Event<MouseData>| {
                                     evt.stop_propagation();
-                                    file_path.set(String::new());
+                                    file_paths.set(Vec::new());
                                 },
                                 Icon { icon: IconType::Close, size: 12, color: "currentColor".to_string() }
-                                span { " Remove" }
+                                span { " Remove All" }
                             }
                         }
                     }
@@ -173,16 +193,16 @@ pub fn FileDialog(
                         }
                         button {
                             class: "primary-button",
-                            disabled: !has_file,
+                            disabled: !has_files,
                             onclick: {
-                                let path = file_path.read().clone();
+                                let paths = file_paths.read().clone();
                                 move |_| {
-                                    if !path.is_empty() {
-                                        on_send.call(path.clone());
+                                    if !paths.is_empty() {
+                                        on_send.call(paths.clone());
                                     }
                                 }
                             },
-                            if has_file {
+                            if has_files {
                                 Icon { icon: IconType::Send, size: 14, color: "currentColor".to_string() }
                                 span { "{button_text}" }
                             } else {
