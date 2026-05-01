@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Close
@@ -62,6 +63,10 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.connected_ffi.DiscoveredDevice
+import uniffi.connected_ffi.FfiCallLogEntry
+import uniffi.connected_ffi.FfiContact
+import uniffi.connected_ffi.FfiConversation
+import uniffi.connected_ffi.FfiSmsMessage
 import androidx.core.net.toUri
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -589,6 +594,12 @@ fun getDeviceIcon(type: String, name: String? = null): Int {
 enum class Screen {
     Home,
     Settings
+}
+
+enum class PhoneDataKind(val title: String) {
+    Contacts("Contacts"),
+    Conversations("Conversations"),
+    CallLog("Call Log")
 }
 
 @RequiresApi(Build.VERSION_CODES.R)
@@ -1738,6 +1749,315 @@ fun PermissionStatusRow(label: String, granted: Boolean) {
     }
 }
 
+@Composable
+private fun PhoneDataDialog(
+    kind: PhoneDataKind,
+    device: DiscoveredDevice,
+    app: ConnectedApp,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var selectedConversation by remember(kind, device.id) { mutableStateOf<FfiConversation?>(null) }
+    val title = selectedConversation?.let { conversationTitle(it) } ?: kind.title
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    device.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                if (kind == PhoneDataKind.Conversations && selectedConversation != null) {
+                    ConversationMessagesList(device, selectedConversation!!, app)
+                } else {
+                    when (kind) {
+                        PhoneDataKind.Contacts -> ContactsDataList(app.contacts, device.name, context)
+                        PhoneDataKind.Conversations -> ConversationsDataList(
+                            conversations = app.conversations,
+                            deviceName = device.name,
+                            onConversationClick = { conversation ->
+                                if (app.requestMessagesFromDevice(device, conversation.id)) {
+                                    selectedConversation = conversation
+                                }
+                            }
+                        )
+                        PhoneDataKind.CallLog -> CallLogDataList(app.callLog, device.name, context)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Done")
+            }
+        },
+        dismissButton = {
+            if (selectedConversation != null) {
+                TextButton(onClick = { selectedConversation = null }) {
+                    Text("Back")
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun ContactsDataList(contacts: List<FfiContact>, deviceName: String, context: Context) {
+    if (contacts.isEmpty()) {
+        PhoneDataWaiting("Waiting for contacts from $deviceName.")
+        return
+    }
+
+    LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+        items(contacts, key = { it.id }) { contact ->
+            val phoneNumbers = contact.phoneNumbers.joinToString(", ") { phone ->
+                "${formatEnumName(phone.label.name)}: ${phone.number}"
+            }
+            PhoneDataRow(
+                title = contact.name,
+                details = phoneDataDetails(
+                    phoneNumbers,
+                    contact.emails.joinToString(", ")
+                ),
+                onClick = {
+                    copyTextToClipboard(context, "Contact", contactCopyValue(contact), "Copied contact")
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConversationsDataList(
+    conversations: List<FfiConversation>,
+    deviceName: String,
+    onConversationClick: (FfiConversation) -> Unit
+) {
+    if (conversations.isEmpty()) {
+        PhoneDataWaiting("Waiting for conversations from $deviceName.")
+        return
+    }
+
+    LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+        items(conversations, key = { it.id }) { conversation ->
+            val unread = if (conversation.unreadCount > 0u) {
+                "${conversation.unreadCount} unread"
+            } else {
+                null
+            }
+            PhoneDataRow(
+                title = conversationTitle(conversation),
+                details = phoneDataDetails(
+                    conversation.lastMessage,
+                    unread,
+                    formatPhoneTimestamp(conversation.lastTimestamp)
+                ),
+                onClick = { onConversationClick(conversation) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun CallLogDataList(callLog: List<FfiCallLogEntry>, deviceName: String, context: Context) {
+    if (callLog.isEmpty()) {
+        PhoneDataWaiting("Waiting for call log from $deviceName.")
+        return
+    }
+
+    LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+        items(callLog, key = { it.id }) { entry ->
+            val displayName = entry.contactName?.takeIf { it.isNotBlank() }
+                ?: entry.number.takeIf { it.isNotBlank() }
+                ?: "Unknown Number"
+            PhoneDataRow(
+                title = displayName,
+                details = phoneDataDetails(
+                    "${formatEnumName(entry.callType.name)} - ${formatDuration(entry.duration.toLong())}",
+                    formatPhoneTimestamp(entry.timestamp)
+                ),
+                onClick = { copyPhoneNumberToClipboard(context, entry.number) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConversationMessagesList(
+    device: DiscoveredDevice,
+    conversation: FfiConversation,
+    app: ConnectedApp
+) {
+    val listState = rememberLazyListState()
+    val messages = app.currentMessages.filter { message -> message.threadId == conversation.id }
+    val isCurrentThread = app.selectedConversationThreadId.value == conversation.id
+
+    LaunchedEffect(conversation.id, messages.size, isCurrentThread) {
+        if (isCurrentThread && messages.isNotEmpty()) {
+            listState.scrollToItem(messages.lastIndex)
+        }
+    }
+
+    if (!isCurrentThread || messages.isEmpty()) {
+        PhoneDataWaiting("Loading conversation history from ${device.name}.")
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.heightIn(max = 420.dp),
+        state = listState
+    ) {
+        items(messages, key = { it.id }) { message ->
+            MessageDataRow(message)
+        }
+    }
+}
+
+@Composable
+private fun MessageDataRow(message: FfiSmsMessage) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text(
+            if (message.isOutgoing) "Me" else message.contactName?.takeIf { it.isNotBlank() } ?: message.address,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            message.body,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        formatPhoneTimestamp(message.timestamp)?.let { timestamp ->
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                timestamp,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun PhoneDataWaiting(message: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun PhoneDataRow(title: String, details: String?, onClick: (() -> Unit)? = null) {
+    val modifier = if (onClick != null) {
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp)
+    } else {
+        Modifier.fillMaxWidth().padding(vertical = 8.dp)
+    }
+
+    Column(modifier = modifier) {
+        Text(
+            title,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (!details.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                details,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+private fun contactCopyValue(contact: FfiContact): String {
+    val values = mutableListOf(contact.name)
+    values.addAll(contact.phoneNumbers.map { it.number })
+    values.addAll(contact.emails)
+    return values
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString(", ")
+}
+
+private fun copyPhoneNumberToClipboard(context: Context, number: String) {
+    val trimmed = number.trim()
+    if (trimmed.isEmpty()) {
+        showToast(context, "No phone number")
+        return
+    }
+
+    copyTextToClipboard(context, "Phone Number", trimmed, "Copied $trimmed")
+}
+
+private fun copyTextToClipboard(context: Context, label: String, value: String, successMessage: String) {
+    if (value.isBlank()) {
+        showToast(context, "Nothing to copy")
+        return
+    }
+
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(label, value))
+    showToast(context, successMessage)
+}
+
+private fun showToast(context: Context, message: String) {
+    android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+}
+
+private fun conversationTitle(conversation: FfiConversation): String {
+    if (conversation.contactNames.isNotEmpty()) return conversation.contactNames.joinToString(", ")
+    if (conversation.addresses.isNotEmpty()) return conversation.addresses.joinToString(", ")
+    return conversation.id
+}
+
+private fun phoneDataDetails(vararg values: String?): String? {
+    val details = values
+        .mapNotNull { it?.takeIf { value -> value.isNotBlank() } }
+        .joinToString("\n")
+    return details.takeIf { it.isNotBlank() }
+}
+
+private fun formatPhoneTimestamp(timestamp: ULong): String? {
+    val raw = timestamp.toLong()
+    if (raw <= 0L) return null
+
+    val millis = if (raw > 10_000_000_000L) raw else raw * 1000L
+    return android.text.format.DateFormat.format("MMM d, yyyy h:mm a", millis).toString()
+}
+
+private fun formatEnumName(raw: String): String {
+    return raw.split("_").joinToString(" ") { part ->
+        val lower = part.lowercase()
+        if (lower.isEmpty()) lower else lower.substring(0, 1).uppercase() + lower.substring(1)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DeviceItem(
@@ -1750,6 +2070,7 @@ fun DeviceItem(
     val isPending = app.pendingPairing.contains(device.id)
     var showMenu by remember { mutableStateOf(false) }
     var showDetails by remember { mutableStateOf(false) }
+    var phoneDataKind by remember { mutableStateOf<PhoneDataKind?>(null) }
 
     Card(modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp).fillMaxWidth()) {
@@ -1849,6 +2170,51 @@ fun DeviceItem(
                                     }
                                 )
                                 DropdownMenuItem(
+                                    text = { Text("Request Contacts") },
+                                    leadingIcon = {
+                                        Icon(
+                                            painterResource(R.drawable.ic_contact),
+                                            contentDescription = null
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        if (app.requestContactsFromDevice(device)) {
+                                            phoneDataKind = PhoneDataKind.Contacts
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Request Conversations") },
+                                    leadingIcon = {
+                                        Icon(
+                                            painterResource(R.drawable.ic_message),
+                                            contentDescription = null
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        if (app.requestConversationsFromDevice(device)) {
+                                            phoneDataKind = PhoneDataKind.Conversations
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Request Call Log") },
+                                    leadingIcon = {
+                                        Icon(
+                                            painterResource(R.drawable.ic_call),
+                                            contentDescription = null
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        if (app.requestCallLogFromDevice(device)) {
+                                            phoneDataKind = PhoneDataKind.CallLog
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Unpair") },
                                     leadingIcon = {
                                         Icon(
@@ -1929,5 +2295,14 @@ fun DeviceItem(
                 }
             }
         }
+    }
+
+    phoneDataKind?.let { kind ->
+        PhoneDataDialog(
+            kind = kind,
+            device = device,
+            app = app,
+            onDismiss = { phoneDataKind = null }
+        )
     }
 }

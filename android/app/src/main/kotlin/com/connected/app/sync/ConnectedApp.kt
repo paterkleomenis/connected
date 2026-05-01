@@ -58,10 +58,14 @@ import uniffi.connected_ffi.registerTransferCallback
 import uniffi.connected_ffi.registerUnpairCallback
 import uniffi.connected_ffi.rejectFileTransfer
 import uniffi.connected_ffi.rejectPairing
+import uniffi.connected_ffi.requestCallLog
+import uniffi.connected_ffi.requestContactsSync
+import uniffi.connected_ffi.requestConversationsSync
 import uniffi.connected_ffi.requestDownloadFileWithProgress
 import uniffi.connected_ffi.requestDownloadFolder
 import uniffi.connected_ffi.requestGetThumbnail
 import uniffi.connected_ffi.requestListDir
+import uniffi.connected_ffi.requestMessages
 import uniffi.connected_ffi.BrowserDownloadCallback
 import uniffi.connected_ffi.sendActiveCallUpdate
 import uniffi.connected_ffi.sendCallLog
@@ -260,6 +264,7 @@ class ConnectedApp(private val context: Context) {
     val currentMessages = mutableStateListOf<FfiSmsMessage>()
     val callLog = mutableStateListOf<FfiCallLogEntry>()
     val activeCall = mutableStateOf<FfiActiveCall?>(null)
+    val selectedConversationThreadId = mutableStateOf<String?>(null)
     val isTelephonyEnabled = mutableStateOf(false)
 
     // Media Session
@@ -2263,7 +2268,7 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    // Missing Telephony methods
+    // Telephony callbacks
     private val telephonyListener = object : TelephonyProvider.TelephonyListener {
         override fun onCallStateChanged(call: FfiActiveCall?) {
             activeCall.value = call
@@ -2279,7 +2284,11 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onNewSmsReceived(message: FfiSmsMessage) {
-            currentMessages.add(message)
+            runOnMainThread {
+                if (selectedConversationThreadId.value == null || selectedConversationThreadId.value == message.threadId) {
+                    currentMessages.add(message)
+                }
+            }
             // Broadcast to connected devices if trusted
             devices.forEach { device ->
                 if (isDeviceTrusted(device)) {
@@ -2295,6 +2304,10 @@ class ConnectedApp(private val context: Context) {
     private val telephonyCallback = object : TelephonyCallback {
         override fun onContactsSyncRequest(fromDevice: String, fromIp: String, fromPort: UShort) {
             scope.launch {
+                if (!isTelephonyEnabled.value) {
+                    sendEmptyContacts(fromIp, fromPort)
+                    return@launch
+                }
                 val contacts = telephonyProvider.getContacts()
                 try {
                     sendContacts(fromIp, fromPort, contacts)
@@ -2304,6 +2317,7 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onContactsReceived(fromDevice: String, contacts: List<FfiContact>) {
+            if (!isTelephonyEnabled.value) return
             runOnMainThread {
                 this@ConnectedApp.contacts.clear()
                 this@ConnectedApp.contacts.addAll(contacts)
@@ -2312,6 +2326,10 @@ class ConnectedApp(private val context: Context) {
 
         override fun onConversationsSyncRequest(fromDevice: String, fromIp: String, fromPort: UShort) {
             scope.launch {
+                if (!isTelephonyEnabled.value) {
+                    sendEmptyConversations(fromIp, fromPort)
+                    return@launch
+                }
                 val convos = telephonyProvider.getConversations()
                 try {
                     sendConversations(fromIp, fromPort, convos)
@@ -2321,6 +2339,7 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onConversationsReceived(fromDevice: String, conversations: List<FfiConversation>) {
+            if (!isTelephonyEnabled.value) return
             runOnMainThread {
                 this@ConnectedApp.conversations.clear()
                 this@ConnectedApp.conversations.addAll(conversations)
@@ -2335,6 +2354,10 @@ class ConnectedApp(private val context: Context) {
             limit: UInt
         ) {
             scope.launch {
+                if (!isTelephonyEnabled.value) {
+                    sendEmptyMessages(fromIp, fromPort, threadId)
+                    return@launch
+                }
                 val msgs = telephonyProvider.getMessages(threadId, limit.toInt())
                 try {
                     sendMessages(fromIp, fromPort, threadId, msgs)
@@ -2344,13 +2367,22 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onMessagesReceived(fromDevice: String, threadId: String, messages: List<FfiSmsMessage>) {
+            if (!isTelephonyEnabled.value) return
             runOnMainThread {
+                selectedConversationThreadId.value = threadId
                 currentMessages.clear()
                 currentMessages.addAll(messages)
             }
         }
 
         override fun onSendSmsRequest(fromDevice: String, fromIp: String, fromPort: UShort, to: String, body: String) {
+            if (!isTelephonyEnabled.value) {
+                try {
+                    sendSmsSendResult(fromIp, fromPort, false, null, "Phone Link disabled")
+                } catch (_: Exception) {
+                }
+                return
+            }
             val result = telephonyProvider.sendSms(to, body)
             val success = result.isSuccess
             val error = result.exceptionOrNull()?.message
@@ -2361,6 +2393,7 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onSmsSendResult(success: Boolean, messageId: String?, error: String?) {
+            if (!isTelephonyEnabled.value) return
             runOnMainThread {
                 if (success) android.widget.Toast.makeText(context, "SMS Sent", android.widget.Toast.LENGTH_SHORT)
                     .show()
@@ -2370,13 +2403,20 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onNewSms(fromDevice: String, message: FfiSmsMessage) {
+            if (!isTelephonyEnabled.value) return
             runOnMainThread {
-                currentMessages.add(message)
+                if (selectedConversationThreadId.value == null || selectedConversationThreadId.value == message.threadId) {
+                    currentMessages.add(message)
+                }
             }
         }
 
         override fun onCallLogRequest(fromDevice: String, fromIp: String, fromPort: UShort, limit: UInt) {
             scope.launch {
+                if (!isTelephonyEnabled.value) {
+                    sendEmptyCallLog(fromIp, fromPort)
+                    return@launch
+                }
                 val log = telephonyProvider.getCallLog(limit.toInt())
                 try {
                     sendCallLog(fromIp, fromPort, log)
@@ -2386,6 +2426,7 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onCallLogReceived(fromDevice: String, entries: List<FfiCallLogEntry>) {
+            if (!isTelephonyEnabled.value) return
             runOnMainThread {
                 callLog.clear()
                 callLog.addAll(entries)
@@ -2393,19 +2434,50 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onInitiateCallRequest(fromDevice: String, fromIp: String, fromPort: UShort, number: String) {
+            if (!isTelephonyEnabled.value) return
             runOnMainThread {
                 telephonyProvider.initiateCall(number)
             }
         }
 
         override fun onCallActionRequest(fromDevice: String, fromIp: String, fromPort: UShort, action: CallAction) {
+            if (!isTelephonyEnabled.value) return
             runOnMainThread {
                 telephonyProvider.performCallAction(action)
             }
         }
 
         override fun onActiveCallUpdate(fromDevice: String, call: FfiActiveCall?) {
+            if (!isTelephonyEnabled.value) return
             runOnMainThread { activeCall.value = call }
+        }
+    }
+
+    private fun sendEmptyContacts(targetIp: String, targetPort: UShort) {
+        try {
+            sendContacts(targetIp, targetPort, emptyList())
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun sendEmptyConversations(targetIp: String, targetPort: UShort) {
+        try {
+            sendConversations(targetIp, targetPort, emptyList())
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun sendEmptyMessages(targetIp: String, targetPort: UShort, threadId: String) {
+        try {
+            sendMessages(targetIp, targetPort, threadId, emptyList())
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun sendEmptyCallLog(targetIp: String, targetPort: UShort) {
+        try {
+            sendCallLog(targetIp, targetPort, emptyList())
+        } catch (_: Exception) {
         }
     }
 
@@ -2475,6 +2547,117 @@ class ConnectedApp(private val context: Context) {
         } else {
             telephonyProvider.setListener(null)
             telephonyProvider.unregisterReceivers()
+            clearPhoneData()
+        }
+    }
+
+    private fun clearPhoneData() {
+        runOnMainThread {
+            contacts.clear()
+            conversations.clear()
+            currentMessages.clear()
+            callLog.clear()
+            activeCall.value = null
+            selectedConversationThreadId.value = null
+        }
+    }
+
+    fun requestContactsFromDevice(device: DiscoveredDevice): Boolean {
+        if (!canRequestPhoneData(device)) return false
+        runOnMainThread { contacts.clear() }
+        scope.launch(Dispatchers.IO) {
+            try {
+                requestContactsSync(device.ip, device.port)
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to request contacts", e)
+                showPhoneDataRequestError("contacts", e)
+            }
+        }
+        return true
+    }
+
+    fun requestConversationsFromDevice(device: DiscoveredDevice): Boolean {
+        if (!canRequestPhoneData(device)) return false
+        runOnMainThread {
+            selectedConversationThreadId.value = null
+            currentMessages.clear()
+            conversations.clear()
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                requestConversationsSync(device.ip, device.port)
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to request conversations", e)
+                showPhoneDataRequestError("conversations", e)
+            }
+        }
+        return true
+    }
+
+    fun requestMessagesFromDevice(device: DiscoveredDevice, threadId: String, limit: UInt = 100u): Boolean {
+        if (!canRequestPhoneData(device)) return false
+        runOnMainThread {
+            selectedConversationThreadId.value = threadId
+            currentMessages.clear()
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                requestMessages(device.ip, device.port, threadId, limit)
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to request messages", e)
+                showPhoneDataRequestError("messages", e)
+            }
+        }
+        return true
+    }
+
+    fun requestCallLogFromDevice(device: DiscoveredDevice, limit: UInt = 100u): Boolean {
+        if (!canRequestPhoneData(device)) return false
+        runOnMainThread { callLog.clear() }
+        scope.launch(Dispatchers.IO) {
+            try {
+                requestCallLog(device.ip, device.port, limit)
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to request call log", e)
+                showPhoneDataRequestError("call log", e)
+            }
+        }
+        return true
+    }
+
+    private fun canRequestPhoneData(device: DiscoveredDevice): Boolean {
+        if (!isTelephonyEnabled.value) {
+            runOnMainThread {
+                android.widget.Toast.makeText(
+                    context,
+                    "Enable Phone Link in Settings first",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+            return false
+        }
+
+        if (!isDeviceTrusted(device)) {
+            runOnMainThread {
+                android.widget.Toast.makeText(
+                    context,
+                    "Pair this device first",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+            return false
+        }
+
+        return true
+    }
+
+    private fun showPhoneDataRequestError(kind: String, error: Exception) {
+        runOnMainThread {
+            android.widget.Toast.makeText(
+                context,
+                "Failed to request $kind: ${error.message}",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
