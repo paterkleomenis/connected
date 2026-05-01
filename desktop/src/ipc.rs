@@ -87,10 +87,15 @@ pub fn set_wakeup_window(window: Arc<Window>) {
 }
 
 pub fn show_window(window: &Window) {
-    #[cfg(target_os = "linux")]
-    window.set_decorations(true);
-
     window.set_visible(true);
+
+    #[cfg(target_os = "linux")]
+    {
+        // Ensure the window is not minimized when restoring.
+        // Some Linux WMs might treat hidden windows as minimized.
+        window.set_minimized(false);
+        window.set_focus();
+    }
 
     #[cfg(not(target_os = "linux"))]
     window.set_focus();

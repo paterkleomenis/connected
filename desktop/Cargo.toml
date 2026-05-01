@@ -32,7 +32,7 @@ mpris-server = "0.10"
 ksni = "0.3"
 dbus = "0.9"
 mpris = "2.0"
-glib = "0.18"
+glib = "0.20"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
