@@ -1002,7 +1002,7 @@ fn spawn_event_loop(
                                                 if matches!(cmd, MediaCommand::Mute) {
                                                     let is_muted = endpoint.GetMute()?;
                                                     endpoint.SetMute(
-                                                        !is_muted,
+                                                        !is_muted.as_bool(),
                                                         &windows::core::GUID::zeroed(),
                                                     )?;
                                                 } else {

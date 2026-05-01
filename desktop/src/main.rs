@@ -1049,7 +1049,7 @@ fn App() -> Element {
         use dioxus::desktop::use_window;
 
         let window = use_window();
-        let window = window.window.clone();
+        let _window = window.window.clone();
 
         let (send_files_id, send_clipboard_id, vol_up_id, vol_down_id, mute_id, quit_id) =
             use_hook(|| {

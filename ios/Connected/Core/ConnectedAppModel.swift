@@ -1684,6 +1684,9 @@ final class ConnectedAppModel: ObservableObject {
         case .volumeUp, .volumeDown:
             infoMessage = "iOS does not allow apps to execute system volume commands."
             return false
+        case .mute:
+            infoMessage = "iOS does not allow apps to execute system mute commands."
+            return false
         }
 
         return true
