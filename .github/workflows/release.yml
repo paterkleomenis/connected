@@ -441,7 +441,7 @@ jobs:
       - name: Setup MSStore CLI
         uses: microsoft/setup-msstore-cli@v1
 
-      - name: Submit to Microsoft Store
+      - name: Configure MSStore CLI
         shell: pwsh
         run: |
           msstore --version
@@ -452,6 +452,14 @@ jobs:
             --clientId "${{ secrets.STORE_CLIENT_ID }}" `
             --clientSecret "${{ secrets.STORE_CLIENT_SECRET }}"
 
+      - name: Delete pending Microsoft Store submission
+        shell: pwsh
+        continue-on-error: true
+        run: msstore submission delete "${{ secrets.STORE_APP_ID }}" --no-confirm
+
+      - name: Submit to Microsoft Store
+        shell: pwsh
+        run: |
           Get-ChildItem -Path . -Filter *.msixupload | Format-Table Name,Length
 
           msstore publish "connected-desktop-windows.msixupload" `
