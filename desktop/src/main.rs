@@ -115,6 +115,15 @@ mod tray {
 
             let menu = vec![
                 StandardItem {
+                    label: "Open".to_string(),
+                    activate: Box::new(|_: &mut Self| {
+                        crate::ipc::send_wakeup_signal();
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+                MenuItem::Separator,
+                StandardItem {
                     label: "Send Files...".to_string(),
                     activate: Box::new(|_: &mut Self| {
                         send_action(AppAction::PickAndSendFiles);
@@ -200,7 +209,7 @@ mod tray {
                 StandardItem {
                     label: "Quit".to_string(),
                     activate: Box::new(|_: &mut Self| {
-                        std::process::exit(0);
+                        crate::ipc::quit_application();
                     }),
                     ..Default::default()
                 }
@@ -722,6 +731,9 @@ fn main() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
+    ipc::initialize_wakeup_state();
+    ipc::start_wakeup_listener();
+
     // Start the global application controller in a background thread.
     // This ensures it runs even if no UI window is open.
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -823,10 +835,14 @@ fn main() {
         config = config.with_data_directory(d);
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     {
         config = config.with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides);
     }
+
+    config = config.with_on_window(|window, _| {
+        ipc::set_wakeup_window(window);
+    });
 
     LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
@@ -855,15 +871,6 @@ impl Default for CurrentMediaUi {
 
 fn App() -> Element {
     let window = dioxus::desktop::window();
-    use_hook(move || {
-        static SPUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !SPUN.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            let window = window.clone();
-            dioxus::prelude::spawn(async move {
-                ipc::listen_for_wakeups(window).await;
-            });
-        }
-    });
 
     use_hook(|| {
         static SPUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1049,11 +1056,12 @@ fn App() -> Element {
         use dioxus::desktop::use_window;
 
         let window = use_window();
-        let _window = window.window.clone();
+        let window = window.window.clone();
 
-        let (send_files_id, send_clipboard_id, vol_up_id, vol_down_id, mute_id, quit_id) =
+        let (show_id, send_files_id, send_clipboard_id, vol_up_id, vol_down_id, mute_id, quit_id) =
             use_hook(|| {
                 let menu = Menu::new();
+                let show = MenuItem::new("Show Connected", true, None);
                 let send_files = MenuItem::new("Send Files...", true, None);
                 let send_clipboard = MenuItem::new("Send Clipboard", true, None);
                 let vol_up = MenuItem::new("Volume Up", true, None);
@@ -1062,6 +1070,8 @@ fn App() -> Element {
                 let quit = MenuItem::new("Quit", true, None);
 
                 menu.append_items(&[
+                    &show,
+                    &PredefinedMenuItem::separator(),
                     &send_files,
                     &send_clipboard,
                     &PredefinedMenuItem::separator(),
@@ -1076,6 +1086,7 @@ fn App() -> Element {
                 dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
 
                 (
+                    show.id().clone(),
                     send_files.id().clone(),
                     send_clipboard.id().clone(),
                     vol_up.id().clone(),
@@ -1088,7 +1099,9 @@ fn App() -> Element {
         // NOTE: Dioxus installs a global `muda::MenuEvent` handler. Tray menu clicks are delivered
         // through that same event stream on Windows, so `use_muda_event_handler` is the reliable hook.
         dioxus::desktop::use_muda_event_handler(move |event| {
-            if event.id == send_files_id {
+            if event.id == show_id {
+                ipc::show_window(&window);
+            } else if event.id == send_files_id {
                 send_action(AppAction::PickAndSendFiles);
             } else if event.id == send_clipboard_id {
                 if let Some(device) = crate::state::get_default_device() {
@@ -1136,7 +1149,7 @@ fn App() -> Element {
                     ));
                 }
             } else if event.id == quit_id {
-                std::process::exit(0);
+                crate::ipc::quit_application();
             }
         });
     }
@@ -1197,123 +1210,130 @@ fn App() -> Element {
 
     // UI Poller - polls state and updates UI signals
     // Uses 500ms interval (increased from 200ms) to reduce CPU usage
-    use_future(move || async move {
-        let mut last_devices_hash: u64 = 0;
-        let mut last_transfer_status_hash: u64 = 0;
+    let wake_window = window.clone();
+    use_future(move || {
+        let wake_window = wake_window.window.clone();
+        async move {
+            let mut last_devices_hash: u64 = 0;
+            let mut last_transfer_status_hash: u64 = 0;
 
-        loop {
-            // Update devices list (with change detection)
-            let mut list: Vec<DeviceInfo> = get_devices_store()
-                .lock_or_recover()
-                .values()
-                .cloned()
-                .collect();
+            loop {
+                if ipc::take_wakeup_request() {
+                    ipc::show_window(&wake_window);
+                }
 
-            // Apply pending state
-            {
-                let pending = get_pending_pairings().lock_or_recover();
-                for device in list.iter_mut() {
-                    if pending.contains(&device.id) {
-                        device.is_pending = true;
+                // Update devices list (with change detection)
+                let mut list: Vec<DeviceInfo> = get_devices_store()
+                    .lock_or_recover()
+                    .values()
+                    .cloned()
+                    .collect();
+
+                // Apply pending state
+                {
+                    let pending = get_pending_pairings().lock_or_recover();
+                    for device in list.iter_mut() {
+                        if pending.contains(&device.id) {
+                            device.is_pending = true;
+                        }
                     }
                 }
-            }
 
-            // Only update if devices changed
-            let new_devices_hash = {
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                list.len().hash(&mut hasher);
-                for d in &list {
-                    d.id.hash(&mut hasher);
-                    d.name.hash(&mut hasher);
-                    d.ip.hash(&mut hasher);
-                    d.port.hash(&mut hasher);
-                    d.is_trusted.hash(&mut hasher);
-                    d.is_pending.hash(&mut hasher);
+                // Only update if devices changed
+                let new_devices_hash = {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    list.len().hash(&mut hasher);
+                    for d in &list {
+                        d.id.hash(&mut hasher);
+                        d.name.hash(&mut hasher);
+                        d.ip.hash(&mut hasher);
+                        d.port.hash(&mut hasher);
+                        d.is_trusted.hash(&mut hasher);
+                        d.is_pending.hash(&mut hasher);
+                    }
+                    hasher.finish()
+                };
+                if new_devices_hash != last_devices_hash {
+                    last_devices_hash = new_devices_hash;
+                    devices_list.set(list);
                 }
-                hasher.finish()
-            };
-            if new_devices_hash != last_devices_hash {
-                last_devices_hash = new_devices_hash;
-                devices_list.set(list);
-            }
 
-            // Update transfer status (with change detection)
-            let status = get_transfer_status().lock_or_recover().clone();
-            let new_status_hash = match &status {
-                TransferStatus::Idle => 0,
-                TransferStatus::Pending { .. } => 3,
-                TransferStatus::Compressing {
-                    bytes_processed,
-                    total_bytes,
-                    ..
-                } => {
-                    // Use progress percentage for hash to detect changes
-                    // Use tenths of a percent for smoother updates
-                    let percent_x10 = (*bytes_processed)
-                        .saturating_mul(1000)
-                        .checked_div(*total_bytes)
-                        .unwrap_or(0);
-                    10000 + percent_x10
+                // Update transfer status (with change detection)
+                let status = get_transfer_status().lock_or_recover().clone();
+                let new_status_hash = match &status {
+                    TransferStatus::Idle => 0,
+                    TransferStatus::Pending { .. } => 3,
+                    TransferStatus::Compressing {
+                        bytes_processed,
+                        total_bytes,
+                        ..
+                    } => {
+                        // Use progress percentage for hash to detect changes
+                        // Use tenths of a percent for smoother updates
+                        let percent_x10 = (*bytes_processed)
+                            .saturating_mul(1000)
+                            .checked_div(*total_bytes)
+                            .unwrap_or(0);
+                        10000 + percent_x10
+                    }
+                    TransferStatus::Starting { .. } => 1,
+                    TransferStatus::InProgress { percent, .. } => {
+                        // Multiply by 10 to get tenths of a percent for finer granularity
+                        2 + ((*percent * 10.0) as u64)
+                    }
+                    TransferStatus::Completed { .. } => 1000,
+                    TransferStatus::Failed { .. } => 1001,
+                    TransferStatus::Cancelled { .. } => 1002,
+                };
+                if new_status_hash != last_transfer_status_hash {
+                    last_transfer_status_hash = new_status_hash;
+                    transfer_status.set(status);
                 }
-                TransferStatus::Starting { .. } => 1,
-                TransferStatus::InProgress { percent, .. } => {
-                    // Multiply by 10 to get tenths of a percent for finer granularity
-                    2 + ((*percent * 10.0) as u64)
+
+                // Update notifications
+                {
+                    let mut notifs = get_notifications().lock_or_recover();
+                    let now = std::time::Instant::now();
+                    notifs.retain(|n| now.duration_since(n.timestamp).as_secs() < 5);
                 }
-                TransferStatus::Completed { .. } => 1000,
-                TransferStatus::Failed { .. } => 1001,
-                TransferStatus::Cancelled { .. } => 1002,
-            };
-            if new_status_hash != last_transfer_status_hash {
-                last_transfer_status_hash = new_status_hash;
-                transfer_status.set(status);
-            }
+                notifications.set(get_notifications().lock_or_recover().clone());
 
-            // Update notifications
-            {
-                let mut notifs = get_notifications().lock_or_recover();
-                let now = std::time::Instant::now();
-                notifs.retain(|n| now.duration_since(n.timestamp).as_secs() < 5);
-            }
-            notifications.set(get_notifications().lock_or_recover().clone());
+                // Update Pairing Requests
+                {
+                    let reqs = get_pairing_requests().lock_or_recover().clone();
+                    pairing_requests.set(reqs);
+                }
 
-            // Update Pairing Requests
-            {
-                let reqs = get_pairing_requests().lock_or_recover().clone();
-                pairing_requests.set(reqs);
-            }
+                // Update File Transfer Requests
+                {
+                    // Cleanup old requests to prevent unbounded growth
+                    cleanup_old_transfer_requests();
 
-            // Update File Transfer Requests
-            {
-                // Cleanup old requests to prevent unbounded growth
-                cleanup_old_transfer_requests();
+                    let reqs_map = get_file_transfer_requests().lock_or_recover();
+                    let mut reqs: Vec<FileTransferRequest> = reqs_map.values().cloned().collect();
+                    reqs.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
+                    file_transfer_requests.set(reqs);
+                }
 
-                let reqs_map = get_file_transfer_requests().lock_or_recover();
-                let mut reqs: Vec<FileTransferRequest> = reqs_map.values().cloned().collect();
-                reqs.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
-                file_transfer_requests.set(reqs);
-            }
-
-            // Update Telephony State
-            phone_contacts.set(get_phone_contacts().lock_or_recover().clone());
-            phone_conversations.set(get_phone_conversations().lock_or_recover().clone());
-            phone_call_log.set(get_phone_call_log().lock_or_recover().clone());
-            active_call.set(get_active_call().lock_or_recover().clone());
-            // Update messages for selected conversation
-            if let Some(thread_id) = selected_conversation.read().clone()
-                && let Some(msgs) = get_phone_messages().lock_or_recover().get(&thread_id)
-            {
-                let new_count = msgs.len();
-                let old_count = *last_message_count.read();
-                phone_messages.set(msgs.clone());
-                // Auto-scroll when messages first load or when new messages arrive
-                if new_count > 0 && new_count != old_count {
-                    spawn(async move {
-                        // Use MutationObserver to wait for DOM update instead of fixed delay
-                        // This is more reliable across different machines and message counts
-                        let js = r#"
+                // Update Telephony State
+                phone_contacts.set(get_phone_contacts().lock_or_recover().clone());
+                phone_conversations.set(get_phone_conversations().lock_or_recover().clone());
+                phone_call_log.set(get_phone_call_log().lock_or_recover().clone());
+                active_call.set(get_active_call().lock_or_recover().clone());
+                // Update messages for selected conversation
+                if let Some(thread_id) = selected_conversation.read().clone()
+                    && let Some(msgs) = get_phone_messages().lock_or_recover().get(&thread_id)
+                {
+                    let new_count = msgs.len();
+                    let old_count = *last_message_count.read();
+                    phone_messages.set(msgs.clone());
+                    // Auto-scroll when messages first load or when new messages arrive
+                    if new_count > 0 && new_count != old_count {
+                        spawn(async move {
+                            // Use MutationObserver to wait for DOM update instead of fixed delay
+                            // This is more reliable across different machines and message counts
+                            let js = r#"
                             (function() {
                                 let el = document.getElementById('messages-container');
                                 if (!el) return;
@@ -1336,43 +1356,44 @@ fn App() -> Element {
                                 }, 500);
                             })();
                         "#;
-                        let _ = document::eval(js);
-                    });
+                            let _ = document::eval(js);
+                        });
+                    }
+                    last_message_count.set(new_count);
                 }
-                last_message_count.set(new_count);
+
+                // Update Media State
+                media_enabled.set(*get_media_enabled().lock_or_recover());
+                if let Some(media) = get_current_media().lock_or_recover().clone() {
+                    current_media.set(CurrentMediaUi {
+                        title: media
+                            .state
+                            .title
+                            .unwrap_or_else(|| "Unknown Title".to_string()),
+                        artist: media
+                            .state
+                            .artist
+                            .unwrap_or_else(|| "Unknown Artist".to_string()),
+                        playing: media.state.playing,
+                        source_device_id: media.source_device_id,
+                    });
+                } else {
+                    current_media.set(CurrentMediaUi::default());
+                }
+
+                pairing_mode.set(*get_pairing_mode_state().lock_or_recover());
+                autostart_enabled.set(get_autostart_enabled_setting());
+
+                // Update Info
+                {
+                    let info = get_update_info().lock_or_recover().clone();
+                    update_info.set(info);
+                }
+
+                // Increased from 200ms to 500ms to reduce CPU usage
+                // Most state changes are event-driven, polling is just for sync
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
-
-            // Update Media State
-            media_enabled.set(*get_media_enabled().lock_or_recover());
-            if let Some(media) = get_current_media().lock_or_recover().clone() {
-                current_media.set(CurrentMediaUi {
-                    title: media
-                        .state
-                        .title
-                        .unwrap_or_else(|| "Unknown Title".to_string()),
-                    artist: media
-                        .state
-                        .artist
-                        .unwrap_or_else(|| "Unknown Artist".to_string()),
-                    playing: media.state.playing,
-                    source_device_id: media.source_device_id,
-                });
-            } else {
-                current_media.set(CurrentMediaUi::default());
-            }
-
-            pairing_mode.set(*get_pairing_mode_state().lock_or_recover());
-            autostart_enabled.set(get_autostart_enabled_setting());
-
-            // Update Info
-            {
-                let info = get_update_info().lock_or_recover().clone();
-                update_info.set(info);
-            }
-
-            // Increased from 200ms to 500ms to reduce CPU usage
-            // Most state changes are event-driven, polling is just for sync
-            tokio::time::sleep(Duration::from_millis(500)).await;
         }
     });
 
