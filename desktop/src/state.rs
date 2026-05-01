@@ -354,6 +354,19 @@ pub struct FileTransferRequest {
 // ============================================================================
 
 static DEVICES: OnceLock<Arc<Mutex<HashMap<String, DeviceInfo>>>> = OnceLock::new();
+static ACTION_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<crate::controller::AppAction>> =
+    OnceLock::new();
+
+pub fn set_action_tx(tx: tokio::sync::mpsc::UnboundedSender<crate::controller::AppAction>) {
+    let _ = ACTION_TX.set(tx);
+}
+
+pub fn send_action(action: crate::controller::AppAction) {
+    if let Some(tx) = ACTION_TX.get() {
+        let _ = tx.send(action);
+    }
+}
+static SELECTED_DEVICE: OnceLock<Arc<Mutex<Option<DeviceInfo>>>> = OnceLock::new();
 static TRANSFER_STATUS: OnceLock<Arc<Mutex<TransferStatus>>> = OnceLock::new();
 /// Track the current active outgoing file transfer ID (for cancellation).
 static ACTIVE_OUTGOING_TRANSFER_ID: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
@@ -472,6 +485,50 @@ pub struct PreviewData {
 
 pub fn get_devices_store() -> &'static Arc<Mutex<HashMap<String, DeviceInfo>>> {
     DEVICES.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn get_selected_device() -> Option<DeviceInfo> {
+    SELECTED_DEVICE
+        .get_or_init(|| Arc::new(Mutex::new(None)))
+        .lock_or_recover()
+        .clone()
+}
+
+pub fn get_default_device() -> Option<DeviceInfo> {
+    if let Some(selected) = get_selected_device() {
+        return Some(selected);
+    }
+
+    // Fallback to the first trusted device in active stores
+    if let Some(device) = get_devices_store()
+        .lock_or_recover()
+        .values()
+        .find(|d| d.is_trusted)
+        .cloned()
+    {
+        return Some(device);
+    }
+
+    // If no active device, fallback to the first saved device from settings
+    get_saved_devices_setting()
+        .into_iter()
+        .next()
+        .map(|(id, info)| DeviceInfo {
+            id,
+            name: info.name,
+            ip: info.ip,
+            port: info.port,
+            device_type: info.device_type,
+            is_trusted: true,
+            is_pending: false,
+        })
+}
+
+pub fn set_selected_device(device: Option<DeviceInfo>) {
+    let mut guard = SELECTED_DEVICE
+        .get_or_init(|| Arc::new(Mutex::new(None)))
+        .lock_or_recover();
+    *guard = device;
 }
 
 pub fn get_transfer_status() -> &'static Arc<Mutex<TransferStatus>> {

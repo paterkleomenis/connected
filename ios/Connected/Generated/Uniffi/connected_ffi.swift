@@ -1942,6 +1942,7 @@ public enum MediaCommand: Equatable, Hashable {
     case stop
     case volumeUp
     case volumeDown
+    case mute
 
 
 
@@ -1978,6 +1979,8 @@ public struct FfiConverterTypeMediaCommand: FfiConverterRustBuffer {
         case 7: return .volumeUp
 
         case 8: return .volumeDown
+
+        case 9: return .mute
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2017,6 +2020,10 @@ public struct FfiConverterTypeMediaCommand: FfiConverterRustBuffer {
 
         case .volumeDown:
             writeInt(&buf, Int32(8))
+
+
+        case .mute:
+            writeInt(&buf, Int32(9))
 
         }
     }

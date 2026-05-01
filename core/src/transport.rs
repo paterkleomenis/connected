@@ -94,6 +94,7 @@ pub enum MediaCommand {
     Stop,
     VolumeUp,
     VolumeDown,
+    Mute,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

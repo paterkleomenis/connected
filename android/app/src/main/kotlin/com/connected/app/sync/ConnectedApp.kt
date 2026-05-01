@@ -78,7 +78,7 @@ import uniffi.connected_ffi.sendMediaState
 import uniffi.connected_ffi.sendMessages
 import uniffi.connected_ffi.sendSmsSendResult
 import uniffi.connected_ffi.sendTrustConfirmation
-import uniffi.connected_ffi.setPairingMode
+import uniffi.connected_ffi.setPairingModePersistent
 import uniffi.connected_ffi.shutdown
 import uniffi.connected_ffi.refreshDiscovery
 import uniffi.connected_ffi.renameLocalDevice
@@ -486,7 +486,7 @@ class ConnectedApp(private val context: Context) {
             manager.onPairingIntent = { deviceId ->
                 if (!pendingPairing.contains(deviceId)) {
                     try {
-                        setPairingMode(true)
+                        setPairingModePersistent(true)
                     } catch (e: Exception) {
                         Log.w("ConnectedApp", "Failed to enable pairing mode", e)
                     }
@@ -987,6 +987,13 @@ class ConnectedApp(private val context: Context) {
                     MediaCommand.VOLUME_DOWN -> {
                         audioManager.adjustVolume(
                             android.media.AudioManager.ADJUST_LOWER,
+                            android.media.AudioManager.FLAG_SHOW_UI
+                        )
+                        null
+                    }
+                    MediaCommand.MUTE -> {
+                        audioManager.adjustVolume(
+                            android.media.AudioManager.ADJUST_TOGGLE_MUTE,
                             android.media.AudioManager.FLAG_SHOW_UI
                         )
                         null
@@ -1858,7 +1865,7 @@ class ConnectedApp(private val context: Context) {
     fun sendPairRequest(device: DiscoveredDevice) {
         if (isSyntheticIp(device.ip)) {
             try {
-                setPairingMode(true)
+                setPairingModePersistent(true)
             } catch (e: Exception) {
                 Log.w("ConnectedApp", "Failed to enable pairing mode", e)
             }

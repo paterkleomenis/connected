@@ -30,8 +30,6 @@ use connected_core::update::UpdateChecker;
 use connected_core::{
     ConnectedClient, ConnectedEvent, DeviceType, MediaCommand, MediaControlMessage, MediaState,
 };
-use dioxus::prelude::*;
-use futures_util::StreamExt;
 #[cfg(target_os = "linux")]
 use mpris::PlaybackStatus;
 use once_cell::sync::Lazy;
@@ -40,6 +38,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, error, info, warn};
 
 /// Cached MPRIS player names to avoid repeated DBus ListNames queries.
@@ -213,6 +212,7 @@ pub enum AppAction {
     SetAutostart(bool),
     CheckForUpdates,
     PerformUpdate,
+    PickAndSendFiles,
 }
 
 static PROXIMITY_HANDLE: Lazy<Mutex<Option<proximity::ProximityHandle>>> =
@@ -769,6 +769,16 @@ fn spawn_event_loop(
                                                     .spawn();
                                                 return;
                                             }
+                                            MediaCommand::Mute => {
+                                                let _ = std::process::Command::new("pactl")
+                                                    .args([
+                                                        "set-sink-mute",
+                                                        "@DEFAULT_SINK@",
+                                                        "toggle",
+                                                    ])
+                                                    .spawn();
+                                                return;
+                                            }
                                             _ => {} // Playback commands need MPRIS below
                                         }
 
@@ -874,7 +884,8 @@ fn spawn_event_loop(
                                                 // Volume commands are handled above via
                                                 // pactl before the MPRIS lookup.
                                                 MediaCommand::VolumeUp
-                                                | MediaCommand::VolumeDown => Ok(()),
+                                                | MediaCommand::VolumeDown
+                                                | MediaCommand::Mute => Ok(()),
                                             };
 
                                             if let Err(e) = res {
@@ -924,7 +935,9 @@ fn spawn_event_loop(
                                                         MediaCommand::Stop => {
                                                             session.TryStopAsync()?.await?;
                                                         }
-                                                        _ => {}
+                                                        MediaCommand::VolumeUp
+                                                        | MediaCommand::VolumeDown
+                                                        | MediaCommand::Mute => {}
                                                     }
                                                 }
                                             }
@@ -986,24 +999,32 @@ fn spawn_event_loop(
                                                         CLSCTX_ALL, None,
                                                     )?;
 
-                                                let current_vol =
-                                                    endpoint.GetMasterVolumeLevelScalar()?;
+                                                if matches!(cmd, MediaCommand::Mute) {
+                                                    let is_muted = endpoint.GetMute()?;
+                                                    endpoint.SetMute(
+                                                        !is_muted,
+                                                        &windows::core::GUID::zeroed(),
+                                                    )?;
+                                                } else {
+                                                    let current_vol =
+                                                        endpoint.GetMasterVolumeLevelScalar()?;
 
-                                                let step = 0.05; // 5% volume step
-                                                let new_vol = match cmd {
-                                                    MediaCommand::VolumeUp => {
-                                                        (current_vol + step).min(1.0)
-                                                    }
-                                                    MediaCommand::VolumeDown => {
-                                                        (current_vol - step).max(0.0)
-                                                    }
-                                                    _ => current_vol,
-                                                };
+                                                    let step = 0.05; // 5% volume step
+                                                    let new_vol = match cmd {
+                                                        MediaCommand::VolumeUp => {
+                                                            (current_vol + step).min(1.0)
+                                                        }
+                                                        MediaCommand::VolumeDown => {
+                                                            (current_vol - step).max(0.0)
+                                                        }
+                                                        _ => current_vol,
+                                                    };
 
-                                                endpoint.SetMasterVolumeLevelScalar(
-                                                    new_vol,
-                                                    &windows::core::GUID::zeroed(),
-                                                )?;
+                                                    endpoint.SetMasterVolumeLevelScalar(
+                                                        new_vol,
+                                                        &windows::core::GUID::zeroed(),
+                                                    )?;
+                                                }
                                             }
 
                                             Ok(())
@@ -1327,7 +1348,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
     let mut client: Option<Arc<ConnectedClient>> = None;
     let mut clipboard_monitor: Option<tokio::task::JoinHandle<()>> = None;
 
-    while let Some(action) = rx.next().await {
+    while let Some(action) = rx.recv().await {
         match action {
             AppAction::Init => {
                 if client.is_some() {
@@ -2448,6 +2469,32 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             add_notification("Update", "No download URL found", "");
                         }
                     }
+                }
+            }
+            AppAction::PickAndSendFiles => {
+                let device = crate::state::get_default_device();
+                if let Some(device) = device {
+                    let c = client.clone();
+                    tokio::spawn(async move {
+                        if let Some(handles) = rfd::AsyncFileDialog::new()
+                            .set_title("Select files to send")
+                            .pick_files()
+                            .await
+                        {
+                            let paths: Vec<String> = handles
+                                .into_iter()
+                                .map(|h| h.path().display().to_string())
+                                .collect();
+
+                            if !paths.is_empty()
+                                && let (Some(c), Ok(ip)) = (c, device.ip.parse())
+                            {
+                                for path in paths {
+                                    let _ = c.send_file(ip, device.port, PathBuf::from(path)).await;
+                                }
+                            }
+                        }
+                    });
                 }
             }
         }

@@ -63,12 +63,12 @@ fn format_timestamp(ts: u64) -> String {
 
 #[cfg(target_os = "linux")]
 mod tray {
-    use dioxus::desktop::tao::window::Window;
-    use std::sync::Arc;
+    use crate::controller::AppAction;
+    use crate::state::{get_default_device, send_action};
+    use crate::utils::get_system_clipboard;
+    use connected_core::MediaCommand;
 
-    pub struct ConnectedTray {
-        pub window: Arc<Window>,
-    }
+    pub struct ConnectedTray {}
 
     impl ksni::Tray for ConnectedTray {
         fn id(&self) -> String {
@@ -112,21 +112,86 @@ mod tray {
 
         fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
             use ksni::menu::*;
-            vec![
+
+            let menu = vec![
                 StandardItem {
-                    label: "Show Connected".to_string(),
-                    activate: Box::new(|tray: &mut Self| {
-                        tray.window.set_visible(true);
-                        tray.window.set_minimized(false);
-                        tray.window.set_focus();
+                    label: "Send Files...".to_string(),
+                    activate: Box::new(|_: &mut Self| {
+                        send_action(AppAction::PickAndSendFiles);
                     }),
                     ..Default::default()
                 }
                 .into(),
                 StandardItem {
-                    label: "Hide Connected".to_string(),
-                    activate: Box::new(|tray: &mut Self| {
-                        tray.window.set_visible(false);
+                    label: "Send Clipboard".to_string(),
+                    activate: Box::new(|_: &mut Self| {
+                        if let Some(device) = get_default_device() {
+                            let text = get_system_clipboard();
+                            send_action(AppAction::SendClipboard {
+                                ip: device.ip,
+                                port: device.port,
+                                text,
+                            });
+                        }
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+                MenuItem::Separator,
+                StandardItem {
+                    label: "Volume Up".to_string(),
+                    activate: Box::new(|_: &mut Self| {
+                        if let Some(device) = get_default_device() {
+                            send_action(AppAction::SendMediaCommand {
+                                ip: device.ip,
+                                port: device.port,
+                                command: MediaCommand::VolumeUp,
+                            });
+                        } else {
+                            // Still control local volume even if no device
+                            send_action(AppAction::ControlRemoteMedia(MediaCommand::VolumeUp));
+                        }
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+                StandardItem {
+                    label: "Volume Down".to_string(),
+                    activate: Box::new(|_: &mut Self| {
+                        if let Some(device) = get_default_device() {
+                            send_action(AppAction::SendMediaCommand {
+                                ip: device.ip,
+                                port: device.port,
+                                command: MediaCommand::VolumeDown,
+                            });
+                        } else {
+                            send_action(AppAction::ControlRemoteMedia(MediaCommand::VolumeDown));
+                        }
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+                StandardItem {
+                    label: "Mute".to_string(),
+                    activate: Box::new(|_: &mut Self| {
+                        if let Some(device) = get_default_device() {
+                            send_action(AppAction::SendMediaCommand {
+                                ip: device.ip,
+                                port: device.port,
+                                command: MediaCommand::Mute,
+                            });
+                        } else {
+                            send_action(AppAction::ControlRemoteMedia(MediaCommand::Mute));
+                        }
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+                MenuItem::Separator,
+                StandardItem {
+                    label: "Refresh Devices".to_string(),
+                    activate: Box::new(|_: &mut Self| {
+                        send_action(AppAction::RefreshDevices);
                     }),
                     ..Default::default()
                 }
@@ -140,7 +205,9 @@ mod tray {
                     ..Default::default()
                 }
                 .into(),
-            ]
+            ];
+
+            menu
         }
     }
 }
@@ -655,6 +722,22 @@ fn main() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
+    // Start the global application controller in a background thread.
+    // This ensures it runs even if no UI window is open.
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    state::set_action_tx(tx);
+
+    std::thread::Builder::new()
+        .name("controller".into())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(app_controller(rx));
+        })
+        .expect("Failed to spawn controller thread");
+
     // Firewall rules check can take 1-3 seconds on Windows due to COM/WFP
     // enumeration.  Run it on a background thread so the window appears immediately.
     #[cfg(target_os = "windows")]
@@ -862,11 +945,18 @@ fn App() -> Element {
         IconType::Desktop
     };
 
-    // The Controller
-    let action_tx =
-        use_coroutine(
-            move |rx: UnboundedReceiver<AppAction>| async move { app_controller(rx).await },
-        );
+    // Handle to the global action controller (started in main)
+    let action_tx = use_hook(|| {
+        #[derive(Clone, Copy)]
+        struct ActionSender;
+        impl ActionSender {
+            fn send(&self, action: AppAction) {
+                crate::state::send_action(action);
+            }
+        }
+        ActionSender
+    });
+
     let (mpris_tx, mpris_rx) = std::sync::mpsc::channel();
     if mpris_server::init_mpris(mpris_tx) {
         spawn(async move {
@@ -961,29 +1051,90 @@ fn App() -> Element {
         let window = use_window();
         let window = window.window.clone();
 
-        let (show_id, hide_id, quit_id) = use_hook(|| {
-            let menu = Menu::new();
-            let show = MenuItem::new("Show Connected", true, None);
-            let hide = MenuItem::new("Hide Connected", true, None);
-            let quit = MenuItem::new("Quit", true, None);
+        let (send_files_id, send_clipboard_id, vol_up_id, vol_down_id, mute_id, quit_id) =
+            use_hook(|| {
+                let menu = Menu::new();
+                let send_files = MenuItem::new("Send Files...", true, None);
+                let send_clipboard = MenuItem::new("Send Clipboard", true, None);
+                let vol_up = MenuItem::new("Volume Up", true, None);
+                let vol_down = MenuItem::new("Volume Down", true, None);
+                let mute = MenuItem::new("Mute", true, None);
+                let quit = MenuItem::new("Quit", true, None);
 
-            menu.append_items(&[&show, &hide, &PredefinedMenuItem::separator(), &quit])
+                menu.append_items(&[
+                    &send_files,
+                    &send_clipboard,
+                    &PredefinedMenuItem::separator(),
+                    &vol_up,
+                    &vol_down,
+                    &mute,
+                    &PredefinedMenuItem::separator(),
+                    &quit,
+                ])
                 .expect("Failed to build tray menu");
 
-            dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
+                dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
 
-            (show.id().clone(), hide.id().clone(), quit.id().clone())
-        });
+                (
+                    send_files.id().clone(),
+                    send_clipboard.id().clone(),
+                    vol_up.id().clone(),
+                    vol_down.id().clone(),
+                    mute.id().clone(),
+                    quit.id().clone(),
+                )
+            });
 
         // NOTE: Dioxus installs a global `muda::MenuEvent` handler. Tray menu clicks are delivered
         // through that same event stream on Windows, so `use_muda_event_handler` is the reliable hook.
         dioxus::desktop::use_muda_event_handler(move |event| {
-            if event.id == show_id {
-                window.set_visible(true);
-                window.set_minimized(false);
-                window.set_focus();
-            } else if event.id == hide_id {
-                window.set_visible(false);
+            if event.id == send_files_id {
+                send_action(AppAction::PickAndSendFiles);
+            } else if event.id == send_clipboard_id {
+                if let Some(device) = crate::state::get_default_device() {
+                    let text = crate::utils::get_system_clipboard();
+                    send_action(AppAction::SendClipboard {
+                        ip: device.ip,
+                        port: device.port,
+                        text,
+                    });
+                }
+            } else if event.id == vol_up_id {
+                if let Some(device) = crate::state::get_default_device() {
+                    send_action(AppAction::SendMediaCommand {
+                        ip: device.ip,
+                        port: device.port,
+                        command: connected_core::MediaCommand::VolumeUp,
+                    });
+                } else {
+                    send_action(AppAction::ControlRemoteMedia(
+                        connected_core::MediaCommand::VolumeUp,
+                    ));
+                }
+            } else if event.id == vol_down_id {
+                if let Some(device) = crate::state::get_default_device() {
+                    send_action(AppAction::SendMediaCommand {
+                        ip: device.ip,
+                        port: device.port,
+                        command: connected_core::MediaCommand::VolumeDown,
+                    });
+                } else {
+                    send_action(AppAction::ControlRemoteMedia(
+                        connected_core::MediaCommand::VolumeDown,
+                    ));
+                }
+            } else if event.id == mute_id {
+                if let Some(device) = crate::state::get_default_device() {
+                    send_action(AppAction::SendMediaCommand {
+                        ip: device.ip,
+                        port: device.port,
+                        command: connected_core::MediaCommand::Mute,
+                    });
+                } else {
+                    send_action(AppAction::ControlRemoteMedia(
+                        connected_core::MediaCommand::Mute,
+                    ));
+                }
             } else if event.id == quit_id {
                 std::process::exit(0);
             }
@@ -992,16 +1143,11 @@ fn App() -> Element {
 
     #[cfg(target_os = "linux")]
     {
-        use dioxus::desktop::use_window;
         use ksni::TrayMethods;
-
-        let window = use_window();
 
         // Initialize tray icon
         use_hook(|| {
-            let tray = tray::ConnectedTray {
-                window: window.window.clone(),
-            };
+            let tray = tray::ConnectedTray {};
             // Spawn the tray service using the ksni async API
             tokio::spawn(async move {
                 match tray.spawn().await {
@@ -1017,8 +1163,10 @@ fn App() -> Element {
     }
 
     // Auto-sync phone data when a device is selected
-    use_effect(move || {
-        if let Some(ref dev) = *selected_device.read() {
+    use_effect(use_reactive(&selected_device, move |dev| {
+        let dev_val = dev.read().clone();
+        crate::state::set_selected_device(dev_val.clone());
+        if let Some(ref dev) = dev_val {
             set_phone_data_device(Some(dev.id.clone()));
             let dev_ip = dev.ip.clone();
             let dev_port = dev.port;
@@ -1045,7 +1193,7 @@ fn App() -> Element {
         } else {
             set_phone_data_device(None);
         }
-    });
+    }));
 
     // UI Poller - polls state and updates UI signals
     // Uses 500ms interval (increased from 200ms) to reduce CPU usage

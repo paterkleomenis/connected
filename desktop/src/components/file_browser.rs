@@ -2,7 +2,7 @@ use crate::components::icon::{Icon, IconType, get_file_icon_type};
 use crate::controller::AppAction;
 use crate::state::{
     DeviceInfo, LockOrRecover, PreviewData, get_current_remote_files, get_current_remote_path,
-    get_preview_data, get_remote_files_update, get_thumbnails, get_thumbnails_update,
+    get_preview_data, get_remote_files_update, get_thumbnails, get_thumbnails_update, send_action,
 };
 use crate::utils::format_file_size;
 use base64::Engine as _;
@@ -12,7 +12,6 @@ use std::collections::HashMap;
 
 #[component]
 pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
-    let action_tx = use_coroutine_handle::<AppAction>();
     let mut current_path = use_signal(|| get_current_remote_path().lock_or_recover().clone());
     let mut files = use_signal(|| Option::<Vec<FsEntry>>::None);
     let mut loading = use_signal(|| false);
@@ -27,62 +26,54 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
 
     use_effect(use_reactive(&device, move |device| {
         loading.set(true);
-        action_tx.send(AppAction::ListRemoteFiles {
+        send_action(AppAction::ListRemoteFiles {
             ip: device.ip.clone(),
             port: device.port,
             path: "/".to_string(),
         });
     }));
 
+    // Sync state from global stores
     use_future(move || async move {
         loop {
-            let global_update = *get_remote_files_update().lock_or_recover();
-            let thumbnails_ts = *get_thumbnails_update().lock_or_recover();
-            let new_files = get_current_remote_files().lock_or_recover().clone();
-            let new_path = get_current_remote_path().lock_or_recover().clone();
+            // Get data from global mutexes
+            let (global_update, thumbnails_ts, new_files, new_path, new_preview) = {
+                let files_update = *get_remote_files_update().lock_or_recover();
+                let thumbs_update = *get_thumbnails_update().lock_or_recover();
+                let files_list = get_current_remote_files().lock_or_recover().clone();
+                let path = get_current_remote_path().lock_or_recover().clone();
+                let preview = get_preview_data().lock_or_recover().clone();
+                (files_update, thumbs_update, files_list, path, preview)
+            };
 
-            let new_preview = get_preview_data().lock_or_recover().clone();
-            let current_preview_exists = preview_content.read().is_some();
-            let new_preview_exists = new_preview.is_some();
+            // Update preview if changed
+            let current_preview = preview_content.read();
+            let should_update_preview = match (current_preview.as_ref(), new_preview.as_ref()) {
+                (None, Some(_)) | (Some(_), None) => true,
+                (Some(c), Some(n)) => c.filename != n.filename,
+                (None, None) => false,
+            };
+            drop(current_preview);
 
-            if current_preview_exists != new_preview_exists {
+            if should_update_preview {
                 preview_content.set(new_preview);
-            } else if new_preview_exists {
-                let should_update = if let Some(current) = preview_content.read().as_ref() {
-                    if let Some(new_p) = new_preview.as_ref() {
-                        current.filename != new_p.filename
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-
-                if should_update {
-                    preview_content.set(new_preview);
-                }
             }
 
+            // Update files if changed
             if global_update != *last_update_seen.read() {
                 files.set(new_files);
                 last_update_seen.set(global_update);
                 loading.set(false);
             }
 
+            // Update path if changed
             if new_path != *current_path.read() {
                 current_path.set(new_path);
-                // Clear requested thumbnails for new path to allow re-requesting if revisited (or handle cleanup)
-                // Actually, caching in `state::THUMBNAILS` is persistent for the session,
-                // so we don't strictly need to clear `requested` unless we want to retry failed ones.
-                // But for simplicity, we keep `requested` to avoid spamming the same request.
             }
 
             // Sync thumbnails if updated
             if thumbnails_ts != *last_thumbnails_update.read() {
                 let thumbs_lock = get_thumbnails().lock_or_recover();
-                // We only need to convert thumbnails relevant to current files to avoid massive map
-                // But `THUMBNAILS` global store grows. For UI signal, let's just copy all for now
-                // or optimize to only what's visible? Dioxus diffing handles it well usually.
                 let mut new_thumbs = HashMap::new();
                 for (k, v) in thumbs_lock.iter() {
                     new_thumbs.insert(
@@ -105,6 +96,58 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
         }
     });
 
+    // Request thumbnails when files change
+    let eff_device = device.clone();
+    use_effect(move || {
+        let entries_opt = files.read();
+        if let Some(entries) = entries_opt.as_ref() {
+            let thumbs = current_thumbnails.read();
+            let mut to_request = Vec::new();
+
+            {
+                let requested = requested_thumbnails.read();
+                for entry in entries {
+                    let is_image = ["jpg", "jpeg", "png", "gif", "webp", "bmp"].contains(
+                        &entry
+                            .name
+                            .split('.')
+                            .next_back()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .as_str(),
+                    );
+                    if is_image
+                        && matches!(entry.entry_type, FsEntryType::File)
+                        && !thumbs.contains_key(&entry.path)
+                        && !requested.contains_key(&entry.path)
+                    {
+                        to_request.push(entry.clone());
+                    }
+                }
+            }
+
+            if !to_request.is_empty() {
+                let mut requested = requested_thumbnails.write();
+                for entry in to_request {
+                    requested.insert(entry.path.clone(), std::time::Instant::now());
+                    send_action(AppAction::GetThumbnail {
+                        ip: eff_device.ip.clone(),
+                        port: eff_device.port,
+                        path: entry.path,
+                    });
+                }
+            }
+        }
+    });
+
+    // Read signals once at the top of render to minimize borrow time
+    let current_path_val = current_path.read();
+    let files_val = files.read();
+    let loading_val = *loading.read();
+    let thumbnails_val = current_thumbnails.read();
+    let preview_val = preview_content.read();
+    let context_menu_val = context_menu.read();
+
     rsx! {
         div {
             class: "file-browser",
@@ -117,8 +160,8 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                     onclick: {
                         let ip = device.ip.clone();
                         let port = device.port;
+                        let p = current_path_val.clone();
                         move |_| {
-                            let p = current_path.read().clone();
                             if p != "/" {
                                 let parent = std::path::Path::new(&p)
                                     .parent()
@@ -131,7 +174,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                 };
 
                                 loading.set(true);
-                                action_tx.send(AppAction::ListRemoteFiles {
+                                send_action(AppAction::ListRemoteFiles {
                                     ip: ip.clone(),
                                     port,
                                     path: parent,
@@ -145,10 +188,10 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                     span { " Back" }
                 }
                 h3 { "Files on {device.name}" }
-                span { class: "path-display", "{current_path}" }
+                span { class: "path-display", "{current_path_val}" }
             }
 
-            if *loading.read() {
+            if loading_val {
                 div {
                     class: "loading",
                     div { class: "searching-indicator",
@@ -158,17 +201,17 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                     }
                     span { "Loading files..." }
                 }
-            } else if let Some(entries) = files.read().as_ref() {
+            } else if let Some(entries) = files_val.as_ref() {
                 div {
                     class: "file-list",
-                    if current_path.read().as_str() != "/" {
+                    if current_path_val.as_str() != "/" {
                         div {
                             class: "file-entry directory",
                             onclick: {
                                 let ip = device.ip.clone();
                                 let port = device.port;
+                                let p = current_path_val.clone();
                                 move |_| {
-                                    let p = current_path.read().clone();
                                     if p != "/" {
                                         let parent = std::path::Path::new(&p)
                                             .parent()
@@ -181,7 +224,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                         };
 
                                         loading.set(true);
-                                        action_tx.send(AppAction::ListRemoteFiles {
+                                        send_action(AppAction::ListRemoteFiles {
                                             ip: ip.clone(),
                                             port,
                                             path: parent,
@@ -212,26 +255,6 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                 _ => "var(--text-secondary)",
                             };
 
-                            let is_image = ["jpg", "jpeg", "png", "gif", "webp", "bmp"]
-                                .contains(&entry.name.split('.').next_back().unwrap_or("").to_lowercase().as_str());
-
-                            // Request thumbnail if needed
-                            if is_image && matches!(entry.entry_type, FsEntryType::File) {
-                                let has_thumb = current_thumbnails.read().contains_key(&entry.path);
-                                let already_requested = requested_thumbnails.read().contains_key(&entry.path);
-
-                                if !has_thumb && !already_requested {
-                                    requested_thumbnails
-                                        .write()
-                                        .insert(entry.path.clone(), std::time::Instant::now());
-                                    action_tx.send(AppAction::GetThumbnail {
-                                        ip: device.ip.clone(),
-                                        port: device.port,
-                                        path: entry.path.clone(),
-                                    });
-                                }
-                            }
-
                             rsx! {
                                 div {
                                     class: "{entry_class}",
@@ -242,13 +265,13 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                         move |_evt: Event<MouseData>| {
                                             if let FsEntryType::Directory = entry.entry_type {
                                                 loading.set(true);
-                                                action_tx.send(AppAction::ListRemoteFiles {
+                                                send_action(AppAction::ListRemoteFiles {
                                                     ip: ip.clone(),
                                                     port,
                                                     path: entry.path.clone(),
                                                 });
                                             } else {
-                                                action_tx.send(AppAction::PreviewFile {
+                                                send_action(AppAction::PreviewFile {
                                                     ip: ip.clone(),
                                                     port,
                                                     remote_path: entry.path.clone(),
@@ -274,8 +297,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     },
                                     span {
                                         class: "icon",
-                                        // Use get() directly and match on the result to avoid TOCTOU race condition
-                                        if let Some(thumbnail_data) = current_thumbnails.read().get(&entry.path).cloned() {
+                                        if let Some(thumbnail_data) = thumbnails_val.get(&entry.path) {
                                             img {
                                                 src: "data:image/jpeg;base64,{thumbnail_data}",
                                                 style: "width: 24px; height: 24px; object-fit: cover; border-radius: 4px; display: block;"
@@ -299,7 +321,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 }
             }
 
-            if let Some((path, name, x, y)) = context_menu.read().as_ref() {
+            if let Some((path, name, x, y)) = context_menu_val.as_ref() {
                 div {
                     class: "context-menu",
                     style: "top: {y}px; left: {x}px;",
@@ -313,7 +335,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                             move |evt: Event<MouseData>| {
                                 evt.stop_propagation();
                                 context_menu.set(None);
-                                action_tx.send(AppAction::DownloadFile {
+                                send_action(AppAction::DownloadFile {
                                     ip: ip.clone(),
                                     port,
                                     remote_path: path.clone(),
@@ -327,10 +349,10 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 }
             }
 
-            if let Some(data) = preview_content.read().as_ref() {
+            if let Some(data) = preview_val.as_ref() {
                 div {
                     class: "modal-overlay",
-                    onclick: move |_| action_tx.send(AppAction::ClosePreview),
+                    onclick: move |_| send_action(AppAction::ClosePreview),
                     div {
                         class: "modal-content",
                         style: "max-width: 90vw; max-height: 90vh; overflow: hidden;",
@@ -341,7 +363,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                             h2 { "{data.filename}" }
                             button {
                                 class: "dialog-close",
-                                onclick: move |_| action_tx.send(AppAction::ClosePreview),
+                                onclick: move |_| send_action(AppAction::ClosePreview),
                                 Icon { icon: IconType::Close, size: 16, color: "currentColor".to_string() }
                             }
                         }
@@ -360,14 +382,15 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     "{String::from_utf8_lossy(&data.data)}"
                                 }
                             } else {
-                                                                    div {
-                                                                    class: "empty-state",
-                                                                    Icon { icon: IconType::File, size: 48, color: "var(--text-tertiary)".to_string() }
-                                                                    p { "Preview not available for {data.mime_type}" }
-                                                                    p { class: "muted", "Size: {format_file_size(data.data.len() as u64)}" }
-                                                                }
-                                                            }
-                                                        }                    }
+                                div {
+                                    class: "empty-state",
+                                    Icon { icon: IconType::File, size: 48, color: "var(--text-tertiary)".to_string() }
+                                    p { "Preview not available for {data.mime_type}" }
+                                    p { class: "muted", "Size: {format_file_size(data.data.len() as u64)}" }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

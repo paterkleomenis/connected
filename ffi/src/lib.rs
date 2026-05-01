@@ -112,6 +112,7 @@ pub enum MediaCommand {
     Stop,
     VolumeUp,
     VolumeDown,
+    Mute,
 }
 
 impl From<MediaCommand> for connected_core::MediaCommand {
@@ -125,6 +126,7 @@ impl From<MediaCommand> for connected_core::MediaCommand {
             MediaCommand::Stop => connected_core::MediaCommand::Stop,
             MediaCommand::VolumeUp => connected_core::MediaCommand::VolumeUp,
             MediaCommand::VolumeDown => connected_core::MediaCommand::VolumeDown,
+            MediaCommand::Mute => connected_core::MediaCommand::Mute,
         }
     }
 }
@@ -140,6 +142,7 @@ impl From<connected_core::MediaCommand> for MediaCommand {
             connected_core::MediaCommand::Stop => MediaCommand::Stop,
             connected_core::MediaCommand::VolumeUp => MediaCommand::VolumeUp,
             connected_core::MediaCommand::VolumeDown => MediaCommand::VolumeDown,
+            connected_core::MediaCommand::Mute => MediaCommand::Mute,
         }
     }
 }

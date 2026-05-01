@@ -703,7 +703,6 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: var(--space-6);
-}
     padding: var(--space-2);
     animation: stagger-fade-in 0.5s ease-out;
 }
