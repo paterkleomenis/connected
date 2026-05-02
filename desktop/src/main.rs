@@ -110,6 +110,10 @@ mod tray {
             icons
         }
 
+        fn activate(&mut self, _: i32, _: i32) {
+            crate::ipc::send_wakeup_signal();
+        }
+
         fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
             use ksni::menu::*;
 
@@ -831,6 +835,12 @@ fn main() {
 
     config = config.with_disable_context_menu(true);
 
+    #[cfg(target_os = "windows")]
+    {
+        // Handle tray left-click explicitly so it matches the "Show Connected" action.
+        config = config.with_tray_icon_show_window_on_click(false);
+    }
+
     if let Some(d) = data_dir {
         config = config.with_data_directory(d);
     }
@@ -1052,11 +1062,15 @@ fn App() -> Element {
 
     #[cfg(target_os = "windows")]
     {
-        use dioxus::desktop::trayicon::menu::{Menu, MenuItem, PredefinedMenuItem};
+        use dioxus::desktop::trayicon::{
+            MouseButton, MouseButtonState, TrayIconEvent,
+            menu::{Menu, MenuItem, PredefinedMenuItem},
+        };
         use dioxus::desktop::use_window;
 
         let window = use_window();
         let window = window.window.clone();
+        let tray_click_window = window.clone();
 
         let (show_id, send_files_id, send_clipboard_id, vol_up_id, vol_down_id, mute_id, quit_id) =
             use_hook(|| {
@@ -1150,6 +1164,19 @@ fn App() -> Element {
                 }
             } else if event.id == quit_id {
                 crate::ipc::quit_application();
+            }
+        });
+
+        dioxus::desktop::use_tray_icon_event_handler(move |event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            ) {
+                ipc::show_window(&tray_click_window);
             }
         });
     }
