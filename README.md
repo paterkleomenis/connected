@@ -2,7 +2,7 @@
 
 **Connected** is a high-speed, offline, cross-platform ecosystem that bridges the gap between your devices. Built with **Rust** and **Jetpack Compose**, it aims to outperform proprietary solutions like AirDrop by utilizing cutting-edge technologies like Wi-Fi Direct DNS-SD for instant discovery and QUIC for saturating data transfer speeds.
 
-Currently available for **Linux**, **Mac**, **Windows**, and **Android**.
+Currently available for **Linux**, **Mac**, **Windows**, **iOS** and **Android**.
 
 *Note for Windows users: The desktop application requires the .NET Desktop Runtime.*
 
