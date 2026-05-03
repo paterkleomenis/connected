@@ -21,8 +21,8 @@ This Privacy Policy describes how Connected ("we", "our", or "the app") collects
 
 ### Permissions We Request
 - **Network Access**: For device discovery and communication on your local network
-- **Bluetooth**: For proximity discovery and device pairing
-- **Location**: Required by Android for Bluetooth scanning (we do not track or store your location)
+- **Nearby Wi-Fi**: For Wi-Fi Direct discovery and pairing
+- **Location**: Required on older Android versions for nearby Wi-Fi discovery (we do not track or store your location)
 - **Storage**: For reading/writing files during file transfers
 - **Notifications**: For media playback monitoring and sync notifications
 - **Phone**: For call management and SMS features
@@ -82,8 +82,8 @@ If you have any questions about this Privacy Policy, please contact us:
 |------------|---------|
 | INTERNET | Network communication with linked devices |
 | ACCESS_NETWORK_STATE | Check network connectivity status |
-| BLUETOOTH_SCAN/ADVERTISE/CONNECT | Device discovery and pairing |
-| ACCESS_COARSE/FINE_LOCATION | Required by Android for Bluetooth scanning on Android 12+ |
+| NEARBY_WIFI_DEVICES | Wi-Fi Direct discovery and pairing on Android 13+ |
+| ACCESS_COARSE/FINE_LOCATION | Required by older Android versions for nearby Wi-Fi discovery |
 | READ_CONTACTS | Display contact names during calls and messaging |
 | READ_SMS/SEND_SMS/RECEIVE_SMS | SMS synchronization between devices |
 | READ_CALL_LOG/CALL_PHONE | Call log sync and call management |

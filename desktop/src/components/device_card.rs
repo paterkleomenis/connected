@@ -55,7 +55,7 @@ pub fn DeviceCard(
                 h3 { class: "device-name", "{device.name}" }
                 p { class: "device-address",
                     if device.ip == "0.0.0.0" {
-                        "Offline (BLE)"
+                        "Offline"
                     } else {
                         "{device.ip}:{device.port}"
                     }

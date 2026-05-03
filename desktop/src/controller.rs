@@ -1,6 +1,5 @@
 use crate::fs_provider::DesktopFilesystemProvider;
 use crate::mpris_server::{MprisUpdate, send_mpris_update};
-use crate::proximity;
 use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
     SavedDeviceInfo, TransferStatus, add_actionable_notification, add_file_transfer_request,
@@ -32,10 +31,12 @@ use connected_core::{
 };
 #[cfg(target_os = "linux")]
 use mpris::PlaybackStatus;
+#[cfg(target_os = "linux")]
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -215,22 +216,7 @@ pub enum AppAction {
     PickAndSendFiles,
 }
 
-static PROXIMITY_HANDLE: Lazy<Mutex<Option<proximity::ProximityHandle>>> =
-    Lazy::new(|| Mutex::new(None));
-
 type MediaPollStateUpdate = (Option<String>, Option<String>, Option<String>, bool);
-
-fn start_proximity(client: Arc<ConnectedClient>) {
-    let handle = proximity::start(client);
-    let mut guard = PROXIMITY_HANDLE.lock_or_recover();
-    *guard = handle;
-}
-
-fn stop_proximity() {
-    if let Some(handle) = PROXIMITY_HANDLE.lock_or_recover().take() {
-        handle.stop();
-    }
-}
 
 fn spawn_clipboard_monitor(client: Arc<ConnectedClient>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -1331,9 +1317,6 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
             // Spawn event loop
             spawn_event_loop(c.clone(), c.subscribe());
 
-            // Start proximity discovery (platform-specific)
-            start_proximity(c.clone());
-
             Some(c)
         }
         Err(e) => {
@@ -2289,8 +2272,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     "Refreshed discovery due to adapter state change - performing lightweight refresh"
                 );
                 if let Some(c) = &client {
-                    stop_proximity();
-                    start_proximity(c.clone());
                     c.refresh_discovery();
 
                     let saved = get_saved_devices_setting();

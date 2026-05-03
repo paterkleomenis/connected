@@ -7,7 +7,6 @@ mod controller;
 mod fs_provider;
 mod ipc;
 mod mpris_server;
-mod proximity;
 mod state;
 mod utils;
 
@@ -998,63 +997,47 @@ fn App() -> Element {
             });
         }
 
-        // Poll for Bluetooth/Wi-Fi state changes
+        // Poll for Wi-Fi state changes
         let action_tx_clone = action_tx;
         spawn(async move {
-            // Helper to check states
-            async fn check_adapters() -> (bool, bool) {
+            // Helper to check Wi-Fi state
+            async fn check_wifi_adapter() -> bool {
                 #[cfg(target_os = "linux")]
                 {
-                    let bt_status = tokio::process::Command::new("rfkill")
-                        .arg("list")
-                        .arg("bluetooth")
-                        .output()
-                        .await;
-                    let bt_on = if let Ok(output) = bt_status {
-                        let out = String::from_utf8_lossy(&output.stdout);
-                        !out.contains("Soft blocked: yes") && !out.contains("Hard blocked: yes")
-                    } else {
-                        true
-                    };
-
                     let wifi_status = tokio::process::Command::new("nmcli")
                         .arg("radio")
                         .arg("wifi")
                         .output()
                         .await;
-                    let wifi_on = if let Ok(output) = wifi_status {
+                    if let Ok(output) = wifi_status {
                         let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
                         out == "enabled"
                     } else {
                         true
-                    };
-                    (bt_on, wifi_on)
+                    }
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    (true, true)
+                    true
                 }
             }
 
             // Init state
-            let (mut last_bt_state, mut last_wifi_state) = check_adapters().await;
+            let mut last_wifi_state = check_wifi_adapter().await;
 
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-                let (bt_on, wifi_on) = check_adapters().await;
+                let wifi_on = check_wifi_adapter().await;
 
-                let changed = bt_on != last_bt_state || wifi_on != last_wifi_state;
-
-                if changed {
+                if wifi_on != last_wifi_state {
                     debug!(
-                        "Adapter state changed (BT: {} -> {}, WiFi: {} -> {})",
-                        last_bt_state, bt_on, last_wifi_state, wifi_on
+                        "Wi-Fi adapter state changed ({} -> {})",
+                        last_wifi_state, wifi_on
                     );
                     action_tx_clone.send(AppAction::RefreshDiscovery);
                 }
 
-                last_bt_state = bt_on;
                 last_wifi_state = wifi_on;
             }
         });

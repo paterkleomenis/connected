@@ -542,8 +542,8 @@ impl DiscoveryService {
                 // If we already have a discovered endpoint with a valid IP,
                 // and the new one has an unspecified IP (0.0.0.0),
                 // we should NOT overwrite the valid IP.
-                // This happens when Proximity (BLE) detects a device but hasn't resolved IP yet,
-                // while mDNS has already found the valid IP.
+                // This can happen when a secondary discovery source reports a
+                // placeholder endpoint while mDNS has already found the valid IP.
                 if let Some(existing) = tracked.discovered.as_mut() {
                     let new_is_unspecified = device.ip == "0.0.0.0" || device.ip == "::";
                     let existing_is_valid =
