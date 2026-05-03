@@ -33,6 +33,11 @@ dbus = "0.9"
 mpris = "2.0"
 glib = "0.20"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+core-foundation = "0.10"
+libloading = "0.9"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
   "Foundation",

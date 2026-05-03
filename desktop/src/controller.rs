@@ -881,6 +881,13 @@ fn spawn_event_loop(
                                             warn!("No controllable media player found");
                                         }
                                     }
+                                    #[cfg(target_os = "macos")]
+                                    {
+                                        if let Err(e) = crate::macos_media::control_media(cmd) {
+                                            warn!("macOS Media Control Error: {}", e);
+                                            add_notification("Media Control", &e, "");
+                                        }
+                                    }
                                     #[cfg(target_os = "windows")]
                                     {
                                         use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
@@ -1037,7 +1044,11 @@ fn spawn_event_loop(
                                             add_notification("Media Control", &error_msg, "");
                                         }
                                     }
-                                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+                                    #[cfg(not(any(
+                                        target_os = "linux",
+                                        target_os = "macos",
+                                        target_os = "windows"
+                                    )))]
                                     {
                                         warn!("Media control not implemented for this OS");
                                     }
@@ -1879,95 +1890,121 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 let runtime_handle = tokio::runtime::Handle::current();
 
                                 let state_update: Option<MediaPollStateUpdate> =
-	                                    tokio::task::spawn_blocking(move || -> Option<MediaPollStateUpdate> {
-	                                    #[cfg(target_os = "linux")]
-	                                    {
-	                                        // Manual D-Bus scan to bypass broken playerctld
-	                                        use dbus::ffidisp::{BusType, Connection};
-	                                        use mpris::Player;
-
-                                        // Use cached MPRIS names to avoid repeated DBus queries
-                                        let mpris_names = match get_cached_mpris_names() {
-                                            Some(names) => names,
-                                            None => return None,
-                                        };
-
-	                                        // Find first playing, or just first one
-	                                        let mut best_candidate: Option<MediaPollStateUpdate> = None;
-
-	                                        for name in &mpris_names {
-	                                            // Player::new takes (conn, bus_name, timeout_ms)
-	                                            // We must create a new connection for each player because Player::new takes ownership
-                                            if let Ok(p_conn) =
-                                                Connection::get_private(BusType::Session)
-                                                && let Ok(player) =
-                                                    Player::new(p_conn, name.clone(), 1500)
+                                    tokio::task::spawn_blocking(
+                                        move || -> Option<MediaPollStateUpdate> {
+                                            #[cfg(target_os = "linux")]
                                             {
-                                                let _identity = player.identity().to_string();
-                                                let meta = player.get_metadata().ok();
-                                                let status = player.get_playback_status().ok();
-                                                let playing =
-                                                    matches!(status, Some(PlaybackStatus::Playing));
+                                                // Manual D-Bus scan to bypass broken playerctld
+                                                use dbus::ffidisp::{BusType, Connection};
+                                                use mpris::Player;
 
-                                                let title = meta
-                                                    .as_ref()
-                                                    .and_then(|m| m.title().map(|s| s.to_string()));
-                                                let artist = meta.as_ref().and_then(|m| {
-                                                    m.artists().map(|a| a.join(", "))
-                                                });
-                                                let album = meta.as_ref().and_then(|m| {
-	                                                    m.album_name().map(|s| s.to_string())
-	                                                });
+                                                // Use cached MPRIS names to avoid repeated DBus queries
+                                                let mpris_names = match get_cached_mpris_names() {
+                                                    Some(names) => names,
+                                                    None => return None,
+                                                };
 
-	                                                let candidate: MediaPollStateUpdate =
-	                                                    (title, artist, album, playing);
+                                                // Find first playing, or just first one
+                                                let mut best_candidate: Option<MediaPollStateUpdate> = None;
 
-	                                                if playing {
-	                                                    // Found a playing one, return immediately
-	                                                    return Some(candidate);
-                                                } else if best_candidate.is_none() {
-                                                    // Keep as fallback
-                                                    best_candidate = Some(candidate);
+                                                for name in &mpris_names {
+                                                    // Player::new takes (conn, bus_name, timeout_ms)
+                                                    // We must create a new connection for each player because Player::new takes ownership
+                                                    if let Ok(p_conn) =
+                                                        Connection::get_private(BusType::Session)
+                                                        && let Ok(player) =
+                                                            Player::new(p_conn, name.clone(), 1500)
+                                                    {
+                                                        let _identity = player.identity().to_string();
+                                                        let meta = player.get_metadata().ok();
+                                                        let status = player.get_playback_status().ok();
+                                                        let playing = matches!(
+                                                            status,
+                                                            Some(PlaybackStatus::Playing)
+                                                        );
+
+                                                        let title = meta.as_ref().and_then(|m| {
+                                                            m.title().map(|s| s.to_string())
+                                                        });
+                                                        let artist = meta.as_ref().and_then(|m| {
+                                                            m.artists().map(|a| a.join(", "))
+                                                        });
+                                                        let album = meta.as_ref().and_then(|m| {
+                                                            m.album_name().map(|s| s.to_string())
+                                                        });
+
+                                                        let candidate: MediaPollStateUpdate =
+                                                            (title, artist, album, playing);
+
+                                                        if playing {
+                                                            // Found a playing one, return immediately
+                                                            return Some(candidate);
+                                                        } else if best_candidate.is_none() {
+                                                            // Keep as fallback
+                                                            best_candidate = Some(candidate);
+                                                        }
+                                                    }
                                                 }
+
+                                                best_candidate
                                             }
-                                        }
 
-                                        best_candidate
-                                    }
-	                                    #[cfg(target_os = "windows")]
-	                                    {
-	                                        use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager, GlobalSystemMediaTransportControlsSessionPlaybackStatus};
+                                            #[cfg(target_os = "windows")]
+                                            {
+                                                use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager, GlobalSystemMediaTransportControlsSessionPlaybackStatus};
 
-	                                        async fn get_media_state_windows() -> windows::core::Result<Option<MediaPollStateUpdate>> {
-	                                            let manager: GlobalSystemMediaTransportControlsSessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
-	                                            let session = manager.GetCurrentSession()?;
+                                                async fn get_media_state_windows() -> windows::core::Result<Option<MediaPollStateUpdate>> {
+                                                    let manager: GlobalSystemMediaTransportControlsSessionManager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.await?;
+                                                    let session = manager.GetCurrentSession()?;
 
-	                                            let properties: windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties = session.TryGetMediaPropertiesAsync()?.await?;
+                                                    let properties: windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties = session.TryGetMediaPropertiesAsync()?.await?;
 
-                                            let title = properties.Title()?;
-                                            let artist = properties.Artist()?;
-                                            let album = properties.AlbumTitle()?;
+                                                    let title = properties.Title()?;
+                                                    let artist = properties.Artist()?;
+                                                    let album = properties.AlbumTitle()?;
 
-                                            // Timeline is not strictly needed for basic title/artist
-                                            // let timeline = session.GetTimelineProperties()?;
-                                            let status = session.GetPlaybackInfo()?.PlaybackStatus()?;
+                                                    // Timeline is not strictly needed for basic title/artist
+                                                    // let timeline = session.GetTimelineProperties()?;
+                                                    let status = session.GetPlaybackInfo()?.PlaybackStatus()?;
 
-                                            let playing = status == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
+                                                    let playing = status == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
 
-                                            let title_str = if !title.is_empty() { Some(title.to_string()) } else { None };
-                                            let artist_str = if !artist.is_empty() { Some(artist.to_string()) } else { None };
-                                            let album_str = if !album.is_empty() { Some(album.to_string()) } else { None };
+                                                    let title_str = if !title.is_empty() { Some(title.to_string()) } else { None };
+                                                    let artist_str = if !artist.is_empty() { Some(artist.to_string()) } else { None };
+                                                    let album_str = if !album.is_empty() { Some(album.to_string()) } else { None };
 
-	                                            Ok(Some((title_str, artist_str, album_str, playing)))
-	                                        }
+                                                    Ok(Some((title_str, artist_str, album_str, playing)))
+                                                }
 
-	                                        runtime_handle.block_on(get_media_state_windows()).unwrap_or_default()
-	                                    }
-	                                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-	                                    {
-	                                        None
-	                                    }
-                                })
+                                                runtime_handle
+                                                    .block_on(get_media_state_windows())
+                                                    .unwrap_or_default()
+                                            }
+
+                                            #[cfg(target_os = "macos")]
+                                            {
+                                                crate::macos_media::current_media_state().map(
+                                                    |state| {
+                                                        (
+                                                            state.title,
+                                                            state.artist,
+                                                            state.album,
+                                                            state.playing,
+                                                        )
+                                                    },
+                                                )
+                                            }
+
+                                            #[cfg(not(any(
+                                                target_os = "linux",
+                                                target_os = "macos",
+                                                target_os = "windows"
+                                            )))]
+                                            {
+                                                None
+                                            }
+                                        },
+                                    )
                                 .await
                                 .unwrap_or(None);
 

@@ -6,6 +6,8 @@ mod components;
 mod controller;
 mod fs_provider;
 mod ipc;
+#[cfg(target_os = "macos")]
+mod macos_media;
 mod mpris_server;
 mod state;
 mod utils;
