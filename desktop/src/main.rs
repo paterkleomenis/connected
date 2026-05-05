@@ -1652,6 +1652,9 @@ fn App() -> Element {
                                         on_pair: move |d: DeviceInfo| {
                                             action_tx.send(AppAction::PairWithDevice { ip: d.ip.clone(), port: d.port });
                                         },
+                                        on_cancel_pair: move |d: DeviceInfo| {
+                                            action_tx.send(AppAction::CancelPairing { device_id: d.id.clone() });
+                                        },
                                         on_send_file: move |d: DeviceInfo| {
                                             send_target_device.set(Some(d));
                                             show_send_dialog.set(true);

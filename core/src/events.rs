@@ -60,6 +60,7 @@ pub enum ConnectedEvent {
     PairingRejected {
         device_name: String,
         device_id: String,
+        reason: String,
     },
     /// Pairing mode enabled/disabled
     PairingModeChanged(bool),

@@ -8,6 +8,7 @@ pub fn DeviceCard(
     is_selected: bool,
     on_select: EventHandler<DeviceInfo>,
     on_pair: EventHandler<DeviceInfo>,
+    on_cancel_pair: EventHandler<DeviceInfo>,
     on_send_file: EventHandler<DeviceInfo>,
 ) -> Element {
     let device_icon = if device.device_type.trim().is_empty()
@@ -82,6 +83,19 @@ pub fn DeviceCard(
                 div {
                     class: "device-actions",
                     if device.is_pending {
+                        button {
+                            class: "action-button danger",
+                            title: "Cancel pairing request",
+                            onclick: {
+                                let device = device.clone();
+                                move |evt: Event<MouseData>| {
+                                    evt.stop_propagation();
+                                    on_cancel_pair.call(device.clone());
+                                }
+                            },
+                            Icon { icon: IconType::Close, size: 14, color: "currentColor".to_string() }
+                            span { " Cancel" }
+                        }
                         button {
                             class: "action-button pair disabled",
                             disabled: true,

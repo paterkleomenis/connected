@@ -43,6 +43,7 @@ import uniffi.connected_ffi.PairingCallback
 import uniffi.connected_ffi.TelephonyCallback
 import uniffi.connected_ffi.UnpairCallback
 import uniffi.connected_ffi.acceptFileTransfer
+import uniffi.connected_ffi.cancelPairingRequest
 import uniffi.connected_ffi.forgetDeviceById
 import uniffi.connected_ffi.getDiscoveredDevices
 import uniffi.connected_ffi.initialize
@@ -1057,14 +1058,17 @@ class ConnectedApp(private val context: Context) {
             Log.d("ConnectedApp", "Pairing mode changed: $enabled")
         }
 
-        override fun onPairingRejected(deviceName: String, deviceId: String) {
+        override fun onPairingRejected(deviceName: String, deviceId: String, reason: String) {
             runOnMainThread {
                 pendingPairing.remove(deviceId)
                 pendingPairingAwaitingIp.remove(deviceId)
+                if (pairingRequest.value?.deviceId == deviceId) {
+                    pairingRequest.value = null
+                }
                 dismissPairingNotification()
                 android.widget.Toast.makeText(
                     context,
-                    "Pairing rejected by $deviceName",
+                    "Pairing $reason by $deviceName",
                     android.widget.Toast.LENGTH_LONG
                 ).show()
             }
@@ -1888,6 +1892,29 @@ class ConnectedApp(private val context: Context) {
         pairDevice(device.ip, device.port)
         android.widget.Toast.makeText(context, "Pairing request sent", android.widget.Toast.LENGTH_SHORT).show()
         if (!pendingPairing.contains(device.id)) pendingPairing.add(device.id)
+    }
+
+    fun cancelPairing(device: DiscoveredDevice) {
+        pendingPairing.remove(device.id)
+        pendingPairingAwaitingIp.remove(device.id)
+        if (pairingRequest.value?.deviceId == device.id) {
+            pairingRequest.value = null
+        }
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                cancelPairingRequest(device.id)
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to cancel pairing with ${device.id}", e)
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Cancel pairing failed: ${e.message}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
     }
 
     fun setPendingShare(uris: List<Uri>) {

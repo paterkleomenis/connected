@@ -522,6 +522,23 @@ final class ConnectedAppModel: ObservableObject {
         }
     }
 
+    func cancelPairing(with device: DiscoveredDevice) {
+        pendingPairing.remove(device.id)
+        if pairingRequest?.deviceId == device.id {
+            pairingRequest = nil
+        }
+
+        runInBackground { [weak self] in
+            do {
+                try cancelPairingRequest(deviceId: device.id)
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.lastErrorMessage = "Cancel pairing failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     func trustCurrentPairingRequest() {
         guard let request = pairingRequest else { return }
         let device = devices.first(where: { $0.id == request.deviceId })
@@ -1513,9 +1530,12 @@ final class ConnectedAppModel: ObservableObject {
         pairingRequest = PairingPrompt(deviceName: deviceName, fingerprint: fingerprint, deviceId: deviceId)
     }
 
-    fileprivate func handlePairingRejected(deviceName: String, deviceId: String) {
+    fileprivate func handlePairingRejected(deviceName: String, deviceId: String, reason: String) {
         pendingPairing.remove(deviceId)
-        infoMessage = "Pairing rejected by \(deviceName)"
+        if pairingRequest?.deviceId == deviceId {
+            pairingRequest = nil
+        }
+        infoMessage = "Pairing \(reason) by \(deviceName)"
     }
 
     fileprivate func handlePairingModeChanged(enabled: Bool) {
@@ -2502,9 +2522,9 @@ private final class PairingBridge: PairingCallback, @unchecked Sendable {
         }
     }
 
-    func onPairingRejected(deviceName: String, deviceId: String) {
+    func onPairingRejected(deviceName: String, deviceId: String, reason: String) {
         Task { @MainActor [weak app] in
-            app?.handlePairingRejected(deviceName: deviceName, deviceId: deviceId)
+            app?.handlePairingRejected(deviceName: deviceName, deviceId: deviceId, reason: reason)
         }
     }
 

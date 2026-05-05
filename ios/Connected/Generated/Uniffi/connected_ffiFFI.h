@@ -406,7 +406,7 @@ typedef void (*UniffiCallbackInterfacePairingCallbackMethod0)(uint64_t, RustBuff
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfacePairingCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
+typedef void (*UniffiCallbackInterfacePairingCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -693,6 +693,11 @@ void uniffi_connected_ffi_fn_func_cancel_file_transfer(RustBuffer transfer_id, R
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CANCEL_INCOMING_FILE_TRANSFER
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CANCEL_INCOMING_FILE_TRANSFER
 void uniffi_connected_ffi_fn_func_cancel_incoming_file_transfer(RustBuffer transfer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CANCEL_PAIRING_REQUEST
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CANCEL_PAIRING_REQUEST
+void uniffi_connected_ffi_fn_func_cancel_pairing_request(RustBuffer device_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CHECK_FOR_UPDATES
@@ -1273,6 +1278,12 @@ uint16_t uniffi_connected_ffi_checksum_func_cancel_file_transfer(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_INCOMING_FILE_TRANSFER
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_INCOMING_FILE_TRANSFER
 uint16_t uniffi_connected_ffi_checksum_func_cancel_incoming_file_transfer(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_PAIRING_REQUEST
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_PAIRING_REQUEST
+uint16_t uniffi_connected_ffi_checksum_func_cancel_pairing_request(void
 
 );
 #endif

@@ -2245,11 +2245,23 @@ fun DeviceItem(
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Button(onClick = {
-                            app.setSelectedDeviceForFileTransfer(device)
-                            filePickerLauncher?.launch("*/*")
-                        }) {
-                            Text("Send File")
+                        if (isPending) {
+                            Button(
+                                onClick = { app.cancelPairing(device) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                    contentColor = MaterialTheme.colorScheme.onError
+                                )
+                            ) {
+                                Text("Cancel")
+                            }
+                        } else {
+                            Button(onClick = {
+                                app.setSelectedDeviceForFileTransfer(device)
+                                filePickerLauncher?.launch("*/*")
+                            }) {
+                                Text("Send File")
+                            }
                         }
 
                         Spacer(modifier = Modifier.width(8.dp))

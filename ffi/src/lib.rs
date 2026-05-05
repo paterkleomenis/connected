@@ -724,7 +724,7 @@ pub trait ClipboardCallback: Send + Sync {
 #[uniffi::export(callback_interface)]
 pub trait PairingCallback: Send + Sync {
     fn on_pairing_request(&self, device_name: String, fingerprint: String, device_id: String);
-    fn on_pairing_rejected(&self, device_name: String, device_id: String);
+    fn on_pairing_rejected(&self, device_name: String, device_id: String, reason: String);
     fn on_pairing_mode_changed(&self, enabled: bool);
 }
 
@@ -1007,9 +1007,10 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                     ConnectedEvent::PairingRejected {
                         device_name,
                         device_id,
+                        reason,
                     } => {
                         if let Some(cb) = PAIRING_CALLBACK.read().as_ref() {
-                            cb.on_pairing_rejected(device_name, device_id);
+                            cb.on_pairing_rejected(device_name, device_id, reason);
                         }
                     }
                     ConnectedEvent::DeviceUnpaired {
@@ -1435,7 +1436,12 @@ pub fn pair_device(target_ip: String, target_port: u16) -> Result<(), ConnectedF
                 info!("Pairing completed successfully with {}:{}", ip, target_port);
             }
             Err(e) => {
-                error!("Failed to pair with {}:{}: {}", ip, target_port, e);
+                let message = e.to_string();
+                if message.to_ascii_lowercase().contains("cancel") {
+                    info!("Pairing cancelled with {}:{}", ip, target_port);
+                } else {
+                    error!("Failed to pair with {}:{}: {}", ip, target_port, e);
+                }
             }
         }
     });
@@ -1521,6 +1527,14 @@ pub fn reject_pairing(device_id: String) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
     get_runtime()
         .block_on(async { client.reject_pairing(&device_id).await })
+        .map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn cancel_pairing_request(device_id: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    get_runtime()
+        .block_on(async { client.cancel_pairing(&device_id).await })
         .map_err(Into::into)
 }
 

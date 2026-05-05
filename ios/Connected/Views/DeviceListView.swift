@@ -79,6 +79,7 @@ struct DeviceListView: View {
                                     hasPendingShare: !model.pendingShareURLs.isEmpty,
                                     isMediaControlEnabled: model.isMediaControlEnabled,
                                     onPair: { model.requestPairing(with: device) },
+                                    onCancelPair: { model.cancelPairing(with: device) },
                                     onUnpair: { model.unpairDevice(device) },
                                     onForget: { model.forgetDevice(device) },
                                     onSendFile: {
@@ -246,6 +247,7 @@ private struct DeviceRow: View {
     let hasPendingShare: Bool
     let isMediaControlEnabled: Bool
     let onPair: () -> Void
+    let onCancelPair: () -> Void
     let onUnpair: () -> Void
     let onForget: () -> Void
     let onSendFile: () -> Void
@@ -302,11 +304,19 @@ private struct DeviceRow: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 } else {
-                    Button("Send File") {
-                        onSendFile()
+                    if isPending {
+                        Button("Cancel", role: .destructive) {
+                            onCancelPair()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    } else {
+                        Button("Send File") {
+                            onSendFile()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
 
                     Button(isPending ? "Waiting" : "Pair") {
                         onPair()

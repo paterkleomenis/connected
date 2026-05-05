@@ -113,6 +113,9 @@ pub enum AppAction {
         ip: String,
         port: u16,
     },
+    CancelPairing {
+        device_id: String,
+    },
     TrustDevice {
         fingerprint: String,
         name: String,
@@ -623,13 +626,17 @@ fn spawn_event_loop(
                 ConnectedEvent::PairingRejected {
                     device_name,
                     device_id,
+                    reason,
                 } => {
                     add_notification(
-                        "Pairing Rejected",
-                        &format!("{} rejected your request.", device_name),
+                        "Pairing Update",
+                        &format!("Pairing {} by {}", reason, device_name),
                         "",
                     );
                     get_pending_pairings().lock_or_recover().remove(&device_id);
+                    get_pairing_requests()
+                        .lock_or_recover()
+                        .retain(|r| r.device_id != device_id);
                 }
                 ConnectedEvent::PairingModeChanged(enabled) => {
                     info!("Pairing mode changed: {}", enabled);
@@ -1500,8 +1507,13 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 }
                                 Err(e) => {
                                     error!("Failed to send handshake: {}", e);
-                                    // Suppress notification if rejected, as ConnectedEvent::PairingRejected handles it
-                                    if !e.to_string().to_lowercase().contains("rejected") {
+                                    // Suppress notification if rejected/cancelled, as events or the local UI handle it.
+                                    let error = e.to_string();
+                                    let lower = error.to_lowercase();
+                                    if !lower.contains("rejected")
+                                        && !lower.contains("cancelled")
+                                        && !lower.contains("canceled")
+                                    {
                                         add_notification("Pairing Failed", &e.to_string(), "");
                                     }
                                     // Remove from pending on failure
@@ -1559,6 +1571,18 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             });
                         }
                     }
+                }
+            }
+            AppAction::CancelPairing { device_id } => {
+                get_pending_pairings().lock_or_recover().remove(&device_id);
+
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = c.cancel_pairing(&device_id).await {
+                            warn!("Failed to cancel pairing with {}: {}", device_id, e);
+                        }
+                    });
                 }
             }
             AppAction::RejectDevice {

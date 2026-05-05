@@ -19,7 +19,15 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 type PendingTransferSender = oneshot::Sender<bool>;
-type PendingHandshakeMap = HashMap<IpAddr, (Instant, Option<String>)>;
+#[derive(Clone)]
+struct PendingHandshake {
+    started_at: Instant,
+    fingerprint: Option<String>,
+    device_id: Option<String>,
+}
+
+type PendingHandshakeMap = HashMap<IpAddr, PendingHandshake>;
+type PendingPairingRequestMap = HashMap<String, (Instant, String)>;
 type CancelFlag = Arc<AtomicBool>;
 type OutgoingTransferEntry = (CancelFlag, Option<PathBuf>);
 
@@ -32,6 +40,7 @@ type OutgoingTransferEntry = (CancelFlag, Option<PathBuf>);
 const EVENT_CHANNEL_CAPACITY: usize = 512;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIRING_MODE_TIMEOUT: Duration = Duration::from_secs(120);
+const PENDING_PAIRING_REQUEST_TTL: Duration = Duration::from_secs(300);
 
 static RUSTLS_PROVIDER_INIT: OnceLock<bool> = OnceLock::new();
 
@@ -41,6 +50,63 @@ fn init_rustls_provider() {
         // are success cases — the provider is available either way.
         // We intentionally ignore the result since either outcome is acceptable.
         let _ = rustls::crypto::ring::default_provider().install_default();
+        true
+    });
+}
+
+fn record_pending_pairing_request(
+    pending: &Arc<RwLock<PendingPairingRequestMap>>,
+    device_id: String,
+    fingerprint: String,
+) {
+    let mut requests = pending.write();
+    requests.retain(|_, (created_at, _)| created_at.elapsed() < PENDING_PAIRING_REQUEST_TTL);
+    requests.insert(device_id, (Instant::now(), fingerprint));
+}
+
+fn has_pending_pairing_request(
+    pending: &Arc<RwLock<PendingPairingRequestMap>>,
+    device_id: &str,
+    fingerprint: &str,
+) -> bool {
+    let mut requests = pending.write();
+    requests.retain(|_, (created_at, _)| created_at.elapsed() < PENDING_PAIRING_REQUEST_TTL);
+    requests
+        .get(device_id)
+        .is_some_and(|(_, expected)| expected == fingerprint)
+}
+
+fn clear_pending_pairing_state(
+    pending_handshakes: &Arc<RwLock<PendingHandshakeMap>>,
+    pending_pairing_requests: &Arc<RwLock<PendingPairingRequestMap>>,
+    device_id: Option<&str>,
+    fingerprint: Option<&str>,
+    ip: Option<IpAddr>,
+) {
+    if let Some(device_id) = device_id {
+        pending_pairing_requests.write().remove(device_id);
+    }
+
+    if let Some(fingerprint) = fingerprint {
+        pending_pairing_requests
+            .write()
+            .retain(|_, (_, expected)| expected != fingerprint);
+    }
+
+    pending_handshakes.write().retain(|entry_ip, pending| {
+        if ip.is_some_and(|ip| ip == *entry_ip) {
+            return false;
+        }
+        if let Some(device_id) = device_id
+            && pending.device_id.as_deref() == Some(device_id)
+        {
+            return false;
+        }
+        if let Some(fingerprint) = fingerprint
+            && pending.fingerprint.as_deref() == Some(fingerprint)
+        {
+            return false;
+        }
         true
     });
 }
@@ -66,11 +132,12 @@ pub struct ConnectedClient {
     /// Track active incoming file transfers and their cancel flags.
     /// Keyed by transfer_id, stores the cancel atomic flag.
     active_incoming_transfers: Arc<RwLock<HashMap<String, CancelFlag>>>,
-    /// Track IPs we've sent handshakes to (with timestamp and expected peer fingerprint),
-    /// so we can auto-trust their acks even if pairing mode times out.
-    /// The Option<String> stores the peer's TLS fingerprint once known, to prevent
-    /// auto-trusting a different device that happens to share or spoof the same IP.
+    /// Track handshakes we've sent so matching acks can be auto-trusted.
+    /// Entries include the peer fingerprint and device ID once known so cancel/reject
+    /// can clear the actual pending relationship instead of relying on timeouts.
     pending_handshakes: Arc<RwLock<PendingHandshakeMap>>,
+    /// Track incoming pairing requests that are still valid for explicit trust.
+    pending_pairing_requests: Arc<RwLock<PendingPairingRequestMap>>,
     fs_provider: Arc<RwLock<Option<Box<dyn crate::filesystem::FilesystemProvider>>>>,
     /// Global semaphore bounding concurrent filesystem stream handlers to prevent
     /// memory exhaustion when many peers issue large read requests simultaneously.
@@ -250,6 +317,7 @@ impl ConnectedClient {
             active_outgoing_transfers: Arc::new(RwLock::new(HashMap::new())),
             active_incoming_transfers: Arc::new(RwLock::new(HashMap::new())),
             pending_handshakes: Arc::new(RwLock::new(HashMap::new())),
+            pending_pairing_requests: Arc::new(RwLock::new(HashMap::new())),
             fs_provider: Arc::new(RwLock::new(None)),
             fs_stream_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FS_STREAMS)),
         });
@@ -1021,14 +1089,32 @@ impl ConnectedClient {
     }
 
     pub async fn reject_pairing(&self, device_id: &str) -> Result<()> {
+        self.end_pairing(device_id, "rejected").await
+    }
+
+    pub async fn cancel_pairing(&self, device_id: &str) -> Result<()> {
+        self.end_pairing(device_id, "cancelled").await
+    }
+
+    async fn end_pairing(&self, device_id: &str, reason: &str) -> Result<()> {
         let target = self
             .discovery
             .get_device_by_id(device_id)
             .and_then(|d| d.ip_addr().map(|ip| (ip, d.port)));
 
+        clear_pending_pairing_state(
+            &self.pending_handshakes,
+            &self.pending_pairing_requests,
+            Some(device_id),
+            None,
+            target.map(|(ip, _)| ip),
+        );
+
         if let Some((ip, port)) = target {
             // Send explicit rejection message
-            let _ = self.send_handshake_reject(ip, port).await;
+            let _ = self
+                .send_handshake_reject(ip, port, Some(reason.to_string()))
+                .await;
 
             // Wait briefly to ensure the rejection message is transmitted before closing
             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -1036,16 +1122,21 @@ impl ConnectedClient {
             // Then invalidate connection
             let addr = SocketAddr::new(ip, port);
             self.transport
-                .invalidate_connection_with_reason(&addr, b"rejected");
+                .invalidate_connection_with_reason(&addr, reason.as_bytes());
         }
 
-        self.invalidate_connection_by_device_id_with_reason(device_id, b"rejected");
+        self.invalidate_connection_by_device_id_with_reason(device_id, reason.as_bytes());
 
-        info!("Rejected pairing request from {}", device_id);
+        info!("Ended pairing with {}: {}", device_id, reason);
         Ok(())
     }
 
-    pub async fn send_handshake_reject(&self, target_ip: IpAddr, target_port: u16) -> Result<()> {
+    pub async fn send_handshake_reject(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        reason: Option<String>,
+    ) -> Result<()> {
         let addr = SocketAddr::new(target_ip, target_port);
 
         let (mut send, _recv) = match self
@@ -1062,7 +1153,7 @@ impl ConnectedClient {
 
         let msg = Message::HandshakeReject {
             device_id: self.local_device.id.clone(),
-            reason: None,
+            reason,
         };
 
         let data = serde_json::to_vec(&msg)
@@ -1088,6 +1179,19 @@ impl ConnectedClient {
         device_id: Option<String>,
         name: String,
     ) -> Result<()> {
+        let may_trust = {
+            let ks = self.key_store.read();
+            ks.is_trusted(&fingerprint) || ks.is_unpaired(&fingerprint)
+        } || device_id.as_deref().is_some_and(|id| {
+            has_pending_pairing_request(&self.pending_pairing_requests, id, &fingerprint)
+        });
+
+        if !may_trust {
+            return Err(ConnectedError::PairingFailed(
+                "Pairing request is no longer active".to_string(),
+            ));
+        }
+
         // We don't have the device ID here usually unless we cached the handshake request.
         // For now, we trust by fingerprint. The ID can be updated later or passed if known.
         self.key_store
@@ -1121,12 +1225,30 @@ impl ConnectedClient {
             self.set_pairing_mode(true);
         }
 
+        let target_device_id = self
+            .discovery
+            .get_discovered_devices()
+            .into_iter()
+            .find(|device| device.ip_addr() == Some(target_ip) && device.port == target_port)
+            .or_else(|| {
+                self.discovery
+                    .get_discovered_devices()
+                    .into_iter()
+                    .find(|device| device.ip_addr() == Some(target_ip))
+            })
+            .map(|device| device.id);
+
         // Track this as a pending handshake so we can auto-trust acks even if pairing mode times out.
         // The fingerprint is initially None and will be filled in by send_handshake_internal
         // once the TLS connection is established and the peer's cert is available.
-        self.pending_handshakes
-            .write()
-            .insert(target_ip, (Instant::now(), None));
+        self.pending_handshakes.write().insert(
+            target_ip,
+            PendingHandshake {
+                started_at: Instant::now(),
+                fingerprint: None,
+                device_id: target_device_id,
+            },
+        );
 
         // Try to send the handshake.
         // If the connection is stale, send_handshake_internal (specifically open_stream) will likely fail.
@@ -1138,6 +1260,12 @@ impl ConnectedClient {
         let result = match result {
             Ok(()) => Ok(()),
             Err(e) => {
+                if !self.pending_handshakes.read().contains_key(&target_ip) {
+                    return Err(ConnectedError::PairingFailed(
+                        "Pairing cancelled".to_string(),
+                    ));
+                }
+
                 // Check if this is a connection/IO error that warrants a retry with a fresh connection
                 let should_retry =
                     matches!(e, ConnectedError::Connection(_) | ConnectedError::Io(_));
@@ -1199,7 +1327,7 @@ impl ConnectedClient {
         if let Some(ref fp) = peer_fingerprint
             && let Some(entry) = self.pending_handshakes.write().get_mut(&addr.ip())
         {
-            entry.1 = Some(fp.clone());
+            entry.fingerprint = Some(fp.clone());
         }
 
         let msg = Message::Handshake {
@@ -2266,7 +2394,7 @@ impl ConnectedClient {
                 let cutoff = Instant::now().checked_sub(Duration::from_secs(300));
                 let mut hs = pending_handshakes_cleanup.write();
                 let before = hs.len();
-                hs.retain(|_, (ts, _)| cutoff.is_none_or(|c| *ts > c));
+                hs.retain(|_, pending| cutoff.is_none_or(|c| pending.started_at > c));
                 let removed = before - hs.len();
                 if removed > 0 {
                     debug!("Cleaned up {} stale pending handshakes", removed);
@@ -2310,6 +2438,7 @@ impl ConnectedClient {
         let local_id = self.local_device.id.clone();
         let local_name = self.local_name.clone();
         let pending_handshakes = self.pending_handshakes.clone();
+        let pending_pairing_requests = self.pending_pairing_requests.clone();
         let discovery = self.discovery.clone();
         let transport = self.transport.clone();
 
@@ -2383,6 +2512,11 @@ impl ConnectedClient {
                                 "Received Handshake from FORGOTTEN peer (requires re-approval): {} - {}",
                                 device_name, fingerprint
                             );
+                            record_pending_pairing_request(
+                                &pending_pairing_requests,
+                                device_id.clone(),
+                                fingerprint.clone(),
+                            );
                             let _ = event_tx.send(ConnectedEvent::PairingRequest {
                                 fingerprint: fingerprint.clone(),
                                 device_name,
@@ -2395,8 +2529,10 @@ impl ConnectedClient {
                         // verify it matches this connection's fingerprint to prevent
                         // auto-trusting a different device that shares/spoofs the IP.
                         let pending_fp_matches = match &pending_entry {
-                            Some((_, Some(expected_fp))) => *expected_fp == fingerprint,
-                            Some((_, None)) => true, // No fingerprint stored yet — allow
+                            Some(pending) => pending
+                                .fingerprint
+                                .as_ref()
+                                .is_none_or(|expected_fp| *expected_fp == fingerprint),
                             None => false,
                         };
 
@@ -2469,6 +2605,11 @@ impl ConnectedClient {
                             info!(
                                 "Received Handshake from untrusted peer: {} - {} (showing pairing request)",
                                 device_name, fingerprint
+                            );
+                            record_pending_pairing_request(
+                                &pending_pairing_requests,
+                                device_id.clone(),
+                                fingerprint.clone(),
                             );
                             let _ = event_tx.send(ConnectedEvent::PairingRequest {
                                 fingerprint: fingerprint.clone(),
@@ -2567,6 +2708,11 @@ impl ConnectedClient {
                                 "Received HandshakeAck from FORGOTTEN peer (requires re-approval): {} - {}",
                                 device_name, fingerprint
                             );
+                            record_pending_pairing_request(
+                                &pending_pairing_requests,
+                                remote_device_id.clone(),
+                                fingerprint.clone(),
+                            );
                             let _ = event_tx.send(ConnectedEvent::PairingRequest {
                                 fingerprint: fingerprint.clone(),
                                 device_name,
@@ -2583,8 +2729,10 @@ impl ConnectedClient {
                             // Verify the fingerprint matches our pending handshake
                             // to prevent a different device from being auto-trusted.
                             let pending_fp_matches = match &pending_entry {
-                                Some((_, Some(expected_fp))) => *expected_fp == fingerprint,
-                                Some((_, None)) => true, // No fingerprint stored yet — allow
+                                Some(pending) => pending
+                                    .fingerprint
+                                    .as_ref()
+                                    .is_none_or(|expected_fp| *expected_fp == fingerprint),
                                 None => false,
                             };
 
@@ -2666,17 +2814,38 @@ impl ConnectedClient {
                         }
                     }
                     Message::HandshakeReject { device_id, reason } => {
+                        let reason = reason.unwrap_or_else(|| "rejected".to_string());
                         let device_name = key_store
                             .read()
                             .get_peer_name(&fingerprint)
                             .unwrap_or_else(|| device_id.clone());
 
                         info!(
-                            "Received HandshakeReject from {} ({}): {:?}",
+                            "Received HandshakeReject from {} ({}): {}",
                             device_name, device_id, reason
                         );
 
-                        pending_handshakes.write().remove(&addr.ip());
+                        let rejected_active_request = pending_pairing_requests
+                            .read()
+                            .get(&device_id)
+                            .is_some_and(|(_, expected)| expected == &fingerprint);
+
+                        clear_pending_pairing_state(
+                            &pending_handshakes,
+                            &pending_pairing_requests,
+                            Some(&device_id),
+                            Some(&fingerprint),
+                            Some(addr.ip()),
+                        );
+
+                        if rejected_active_request
+                            && let Err(e) = key_store.write().remove_peer(&fingerprint)
+                        {
+                            warn!(
+                                "Failed to roll back trust after pairing reject from {}: {}",
+                                device_id, e
+                            );
+                        }
 
                         // Invalidate connection to ensure clean state
                         transport.invalidate_connection(&addr);
@@ -2684,6 +2853,7 @@ impl ConnectedClient {
                         let _ = event_tx.send(ConnectedEvent::PairingRejected {
                             device_name,
                             device_id,
+                            reason,
                         });
                     }
                     Message::Clipboard { text } => {

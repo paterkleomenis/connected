@@ -3496,7 +3496,7 @@ public protocol PairingCallback: AnyObject, Sendable {
 
     func onPairingRequest(deviceName: String, fingerprint: String, deviceId: String)
 
-    func onPairingRejected(deviceName: String, deviceId: String)
+    func onPairingRejected(deviceName: String, deviceId: String, reason: String)
 
     func onPairingModeChanged(enabled: Bool)
 
@@ -3557,6 +3557,7 @@ fileprivate struct UniffiCallbackInterfacePairingCallback {
             uniffiHandle: UInt64,
             deviceName: RustBuffer,
             deviceId: RustBuffer,
+            reason: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -3567,7 +3568,8 @@ fileprivate struct UniffiCallbackInterfacePairingCallback {
                 }
                 return uniffiObj.onPairingRejected(
                      deviceName: try FfiConverterString.lift(deviceName),
-                     deviceId: try FfiConverterString.lift(deviceId)
+                     deviceId: try FfiConverterString.lift(deviceId),
+                     reason: try FfiConverterString.lift(reason)
                 )
             }
 
@@ -4698,6 +4700,12 @@ public func cancelIncomingFileTransfer(transferId: String)throws   {try rustCall
     )
 }
 }
+public func cancelPairingRequest(deviceId: String)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+    uniffi_connected_ffi_fn_func_cancel_pairing_request(
+        FfiConverterString.lower(deviceId),$0
+    )
+}
+}
 public func checkForUpdates(currentVersion: String, platform: String)throws  -> UpdateInfo  {
     return try  FfiConverterTypeUpdateInfo_lift(try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
     uniffi_connected_ffi_fn_func_check_for_updates(
@@ -5153,6 +5161,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_connected_ffi_checksum_func_cancel_incoming_file_transfer() != 43522) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_connected_ffi_checksum_func_cancel_pairing_request() != 53263) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_connected_ffi_checksum_func_check_for_updates() != 49782) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5399,7 +5410,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_request() != 21397) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_rejected() != 39116) {
+    if (uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_rejected() != 55004) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_mode_changed() != 4456) {
