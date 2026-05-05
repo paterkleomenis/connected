@@ -10,13 +10,16 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 mod platform {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
 
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
     const VALUE_NAME: &str = "ConnectedDesktop";
 
     pub fn is_enabled() -> bool {
         Command::new("reg")
+            .creation_flags(CREATE_NO_WINDOW)
             .args(["query", RUN_KEY, "/v", VALUE_NAME])
             .status()
             .map(|status| status.success())
@@ -30,6 +33,7 @@ mod platform {
             let value = format!("\"{}\" {}", exe.display(), super::AUTOSTART_ARG);
 
             let status = Command::new("reg")
+                .creation_flags(CREATE_NO_WINDOW)
                 .args([
                     "add", RUN_KEY, "/v", VALUE_NAME, "/t", "REG_SZ", "/d", &value, "/f",
                 ])
@@ -48,6 +52,7 @@ mod platform {
         }
 
         let status = Command::new("reg")
+            .creation_flags(CREATE_NO_WINDOW)
             .args(["delete", RUN_KEY, "/v", VALUE_NAME, "/f"])
             .status()
             .map_err(|e| format!("Failed to execute registry command: {e}"))?;

@@ -3,6 +3,9 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use tracing::{debug, warn};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 fn is_wayland() -> bool {
     std::env::var("XDG_SESSION_TYPE").unwrap_or_default() == "wayland"
 }
@@ -90,6 +93,19 @@ pub fn format_file_size(bytes: u64) -> String {
     format!("{:.1} {}", s, UNITS[i])
 }
 
+#[cfg(target_os = "windows")]
+fn hostname_output() -> std::io::Result<std::process::Output> {
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    Command::new("hostname")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hostname_output() -> std::io::Result<std::process::Output> {
+    Command::new("hostname").output()
+}
+
 pub fn get_hostname() -> String {
     if let Ok(name) = std::env::var("HOSTNAME") {
         return name;
@@ -98,7 +114,7 @@ pub fn get_hostname() -> String {
         // Windows
         return name;
     }
-    if let Ok(output) = std::process::Command::new("hostname").output()
+    if let Ok(output) = hostname_output()
         && output.status.success()
     {
         return String::from_utf8_lossy(&output.stdout).trim().to_string();

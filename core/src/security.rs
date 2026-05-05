@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 /// Restrict a file or directory so that only the current user can access it.
 ///
 /// On Unix this is handled via `chmod 0600` (files) / `chmod 0700` (dirs) elsewhere.
@@ -21,6 +24,7 @@ use tracing::{info, warn};
 /// owner-only access semantics equivalent to Unix `0600`/`0700`.
 #[cfg(windows)]
 fn restrict_path_to_current_user(path: &std::path::Path) {
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
     let whoami_exe = format!("{}\\System32\\whoami.exe", system_root);
     let icacls_exe = format!("{}\\System32\\icacls.exe", system_root);
@@ -38,7 +42,10 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
         }
     };
 
-    let username = match std::process::Command::new(&whoami_exe).output() {
+    let username = match std::process::Command::new(&whoami_exe)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
         Ok(output) if output.status.success() => {
             String::from_utf8_lossy(&output.stdout).trim().to_string()
         }
@@ -75,6 +82,7 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
     };
 
     let grant = std::process::Command::new(&icacls_exe)
+        .creation_flags(CREATE_NO_WINDOW)
         .arg(&path_str)
         .arg("/grant")
         .arg(&ace)
@@ -103,6 +111,7 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
 
     // Step 2: Now that we have an explicit ACE, safely remove inherited ACEs.
     let strip = std::process::Command::new(&icacls_exe)
+        .creation_flags(CREATE_NO_WINDOW)
         .arg(&path_str)
         .args(["/inheritance:r"])
         .stdout(std::process::Stdio::null())
@@ -134,6 +143,7 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
     };
 
     let grant_system = std::process::Command::new(&icacls_exe)
+        .creation_flags(CREATE_NO_WINDOW)
         .arg(&path_str)
         .arg("/grant")
         .arg(system_ace)

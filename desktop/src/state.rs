@@ -7,6 +7,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::panic::Location;
 use std::path::PathBuf;
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -722,7 +725,9 @@ fn open_file_with_system(path: &std::path::Path) {
 
 #[cfg(target_os = "windows")]
 fn open_file_with_system(path: &std::path::Path) {
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     if let Err(e) = std::process::Command::new("cmd")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["/C", "start", "", path.to_string_lossy().as_ref()])
         .spawn()
     {
