@@ -104,19 +104,6 @@ pub fn DeviceCard(
                         }
                     } else {
                         button {
-                            class: "action-button pair",
-                            title: "Pair with this device",
-                            onclick: {
-                                let device = device.clone();
-                                move |evt: Event<MouseData>| {
-                                    evt.stop_propagation();
-                                    on_pair.call(device.clone());
-                                }
-                            },
-                            Icon { icon: IconType::Pair, size: 14, color: "currentColor".to_string() }
-                            span { " Pair" }
-                        }
-                        button {
                             class: "action-button",
                             title: "Send a file without pairing",
                             onclick: {
@@ -128,6 +115,19 @@ pub fn DeviceCard(
                             },
                             Icon { icon: IconType::Send, size: 14, color: "currentColor".to_string() }
                             span { " Send" }
+                        }
+                        button {
+                            class: "action-button pair",
+                            title: "Pair with this device",
+                            onclick: {
+                                let device = device.clone();
+                                move |evt: Event<MouseData>| {
+                                    evt.stop_propagation();
+                                    on_pair.call(device.clone());
+                                }
+                            },
+                            Icon { icon: IconType::Pair, size: 14, color: "currentColor".to_string() }
+                            span { " Pair" }
                         }
                     }
                 }
