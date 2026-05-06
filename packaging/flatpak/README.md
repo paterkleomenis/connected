@@ -7,11 +7,11 @@ This directory contains the files necessary to build a Flatpak package for Conne
 - `flatpak`
 - `flatpak-builder`
 
-You also need the GNOME 48 SDK and Platform runtimes, along with the Rust extension:
+You also need the GNOME 50 SDK and Platform runtimes, along with the Rust extension:
 
 ```bash
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user flathub org.gnome.Sdk//48 org.gnome.Platform//48 org.freedesktop.Sdk.Extension.rust-stable//24.08
+flatpak install --user flathub org.gnome.Sdk//50 org.gnome.Platform//50 org.freedesktop.Sdk.Extension.rust-stable//24.08
 ```
 
 ## Building
