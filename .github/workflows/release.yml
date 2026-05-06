@@ -55,16 +55,10 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Build Flatpak
-        run: |
-          flatpak-builder --force-clean --repo=repo --gpg-sign=0 build-dir packaging/flatpak/com.paterkleomenis.Connected.yml
-          flatpak build-bundle repo com.paterkleomenis.Connected.flatpak com.paterkleomenis.Connected
-
-      - name: Upload Flatpak Artifact
-        uses: actions/upload-artifact@v7
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          path: com.paterkleomenis.Connected.flatpak
-          name: com.paterkleomenis.Connected.flatpak
-          archive: false
+          bundle: com.paterkleomenis.Connected.flatpak
+          manifest-path: packaging/flatpak/com.paterkleomenis.Connected.yml
 
   # -------------------------------------------------------------------------
   # Job 2: Build Windows MSIX per architecture
