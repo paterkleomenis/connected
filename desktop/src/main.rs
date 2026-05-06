@@ -226,6 +226,11 @@ mod tray {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn running_in_flatpak() -> bool {
+    std::path::Path::new("/.flatpak-info").exists() || std::env::var_os("FLATPAK_ID").is_some()
+}
+
 use image::ImageReader;
 use std::io::Cursor;
 
@@ -1173,9 +1178,16 @@ fn App() -> Element {
         // Initialize tray icon
         use_hook(|| {
             let tray = tray::ConnectedTray {};
+            let sandboxed = running_in_flatpak();
             // Spawn the tray service using the ksni async API
             tokio::spawn(async move {
-                match tray.spawn().await {
+                // Flatpak cannot own ksni's generated org.kde.StatusNotifierItem-PID-ID name.
+                match tray
+                    .disable_dbus_name(sandboxed)
+                    .assume_sni_available(sandboxed)
+                    .spawn()
+                    .await
+                {
                     Ok(_handle) => {
                         debug!("System tray initialized");
                     }

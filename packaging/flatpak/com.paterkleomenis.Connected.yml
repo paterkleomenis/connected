@@ -14,6 +14,8 @@ finish-args:
   - --filesystem=xdg-documents
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.mpris.MediaPlayer2.*
+  - --own-name=org.mpris.MediaPlayer2.connected
+  - --talk-name=org.kde.StatusNotifierWatcher
 build-options:
   build-args:
     - --share=network
