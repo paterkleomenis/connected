@@ -221,6 +221,14 @@ jobs:
             throw "Visual Studio LLVM component (clang-cl) is not installed on this runner"
           }
 
+          $msvcToolsRoot = Join-Path $vsPath "VC\Tools\MSVC"
+          if (!(Test-Path $msvcToolsRoot)) { throw "MSVC tools not found at $msvcToolsRoot" }
+          $msvcVersionDir = Get-ChildItem -Path $msvcToolsRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if ($null -eq $msvcVersionDir) { throw "Could not locate an MSVC version under $msvcToolsRoot" }
+          $msvcBinDir = Join-Path $msvcVersionDir.FullName "bin\Hostx64\arm64"
+          $linker = Join-Path $msvcBinDir "link.exe"
+          if (!(Test-Path $linker)) { throw "ARM64 linker not found at $linker" }
+
           $clangDir = Join-Path $vsPath "VC\Tools\Llvm\x64\bin"
           $clang = Join-Path $clangDir "clang-cl.exe"
           if (!(Test-Path $clang)) { throw "clang-cl.exe not found at $clang" }
@@ -232,7 +240,7 @@ jobs:
           "CC_aarch64_pc_windows_msvc=$clang" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CXX_aarch64_pc_windows_msvc=$clang" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "AR_aarch64_pc_windows_msvc=$llvmLib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=link.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
