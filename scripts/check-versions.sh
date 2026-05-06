@@ -22,15 +22,28 @@ fi
 
 echo "   Cargo.toml workspace version: $CARGO_VERSION"
 
-# Check Android derives versionName from Cargo.toml instead of hardcoding it.
+# Check Android versionName matches Cargo.toml.
 ANDROID_GRADLE_FILE="android/app/build.gradle.kts"
 if [ -f "$ANDROID_GRADLE_FILE" ]; then
-    if ! grep -q 'val workspaceVersion' "$ANDROID_GRADLE_FILE" || ! grep -q 'versionName = workspaceVersion' "$ANDROID_GRADLE_FILE"; then
-        echo -e "${RED}❌ Error: Android versionName must come from Cargo.toml via workspaceVersion${NC}"
+    ANDROID_VERSION=$(grep -E '^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"[^"]+"' "$ANDROID_GRADLE_FILE" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+
+    if [ -z "$ANDROID_VERSION" ]; then
+        echo -e "${RED}❌ Error: Could not find versionName in $ANDROID_GRADLE_FILE${NC}"
         exit 1
     fi
 
-    echo -e "${GREEN}✅ $ANDROID_GRADLE_FILE versionName derives from Cargo.toml${NC}"
+    echo "   $ANDROID_GRADLE_FILE versionName: $ANDROID_VERSION"
+
+    if [ "$CARGO_VERSION" != "$ANDROID_VERSION" ]; then
+        echo -e "${RED}❌ Error: Version mismatch!${NC}"
+        echo "   Cargo.toml: $CARGO_VERSION"
+        echo "   $ANDROID_GRADLE_FILE versionName: $ANDROID_VERSION"
+        echo ""
+        echo "   To fix, update versionName in $ANDROID_GRADLE_FILE to match Cargo.toml"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✅ $ANDROID_GRADLE_FILE versionName matches${NC}"
 else
     echo -e "${YELLOW}⚠️  Warning: $ANDROID_GRADLE_FILE not found, skipping check${NC}"
 fi

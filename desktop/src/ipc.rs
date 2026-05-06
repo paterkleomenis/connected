@@ -131,6 +131,7 @@ fn wake_current_window() {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn quit_application() -> ! {
     std::process::exit(0);
 }

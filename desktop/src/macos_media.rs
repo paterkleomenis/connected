@@ -219,9 +219,7 @@ unsafe fn dictionary_number(info: CFDictionaryRef, key: &'static str) -> Option<
 unsafe fn dictionary_value(info: CFDictionaryRef, key: &'static str) -> Option<*const c_void> {
     let key = CFString::from_static_string(key);
     let mut value = ptr::null();
-    let found = unsafe {
-        CFDictionaryGetValueIfPresent(info, key.as_CFTypeRef() as *const c_void, &mut value)
-    };
+    let found = unsafe { CFDictionaryGetValueIfPresent(info, key.as_CFTypeRef(), &mut value) };
 
     if found == 0 || value.is_null() {
         None

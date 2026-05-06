@@ -70,7 +70,7 @@ audit:
 # Pre-commit check
 [doc("Pre-commit checks")]
 pre-commit:
-    python -m pre_commit run --all-files --show-diff-on-failure
+    python3 -m pre_commit run --all-files --show-diff-on-failure
     @echo "✅ Pre-commit checks passed"
 
 # Full CI simulation (matches GitHub Actions CI)

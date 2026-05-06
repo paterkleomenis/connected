@@ -490,6 +490,7 @@ pub fn get_devices_store() -> &'static Arc<Mutex<HashMap<String, DeviceInfo>>> {
     DEVICES.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn get_selected_device() -> Option<DeviceInfo> {
     SELECTED_DEVICE
         .get_or_init(|| Arc::new(Mutex::new(None)))
@@ -497,6 +498,7 @@ pub fn get_selected_device() -> Option<DeviceInfo> {
         .clone()
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn get_default_device() -> Option<DeviceInfo> {
     if let Some(selected) = get_selected_device() {
         return Some(selected);
