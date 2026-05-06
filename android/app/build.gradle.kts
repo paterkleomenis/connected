@@ -51,8 +51,8 @@ configure<ApplicationExtension> {
         applicationId = "com.connected.app.sync"
         minSdk = 26
         targetSdk = 37
-        versionCode = 57
-        versionName = "3.0.2"
+        versionCode = 58
+        versionName = "3.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
