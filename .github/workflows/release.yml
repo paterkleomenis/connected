@@ -43,7 +43,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 1.5: Build Flatpak
+  # Job 2: Build Flatpak
   # -------------------------------------------------------------------------
   build-flatpak:
     name: Build Flatpak
@@ -61,7 +61,7 @@ jobs:
           manifest-path: packaging/flatpak/com.paterkleomenis.Connected.yml
 
   # -------------------------------------------------------------------------
-  # Job 2: Build Windows MSIX per architecture
+  # Job 3: Build Windows MSIX per architecture
   # -------------------------------------------------------------------------
   build-windows:
     name: Build Windows MSIX
@@ -161,7 +161,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 3: Bundle Windows MSIX
+  # Job 4: Bundle Windows MSIX
   # -------------------------------------------------------------------------
   bundle-windows-msix:
     name: Bundle Windows MSIX
@@ -195,7 +195,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 4: Build macOS Desktop
+  # Job 5: Build macOS Desktop
   # -------------------------------------------------------------------------
   build-macos:
     name: Build macOS
@@ -236,7 +236,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 5: Build Android APK
+  # Job 6: Build Android APK
   # -------------------------------------------------------------------------
   build-android:
     name: Build Android
@@ -292,7 +292,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 6: Build iOS IPA
+  # Job 7: Build iOS IPA
   # -------------------------------------------------------------------------
   build-ios:
     name: Build iOS
@@ -376,7 +376,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 7: Create Release
+  # Job 8: Create Release
   # -------------------------------------------------------------------------
   create-release:
     name: Create GitHub Release
@@ -417,7 +417,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # -------------------------------------------------------------------------
-  # Job 8: Update AUR
+  # Job 9: Update AUR
   # -------------------------------------------------------------------------
   update-aur:
     name: Update AUR
@@ -448,7 +448,7 @@ jobs:
             '"
 
   # -------------------------------------------------------------------------
-  # Job 9: Publish to Microsoft Store
+  # Job 10: Publish to Microsoft Store
   # -------------------------------------------------------------------------
   publish-microsoft-store:
     name: Publish to Microsoft Store
