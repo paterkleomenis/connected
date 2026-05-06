@@ -43,6 +43,30 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
+  # Job 1.5: Build Flatpak
+  # -------------------------------------------------------------------------
+  build-flatpak:
+    name: Build Flatpak
+    runs-on: ubuntu-latest
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:gnome-47
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build Flatpak
+        run: |
+          flatpak-builder --force-clean --repo=repo --gpg-sign=0 build-dir packaging/flatpak/com.paterkleomenis.Connected.yml
+          flatpak build-bundle repo com.paterkleomenis.Connected.flatpak com.paterkleomenis.Connected
+
+      - name: Upload Flatpak Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: com.paterkleomenis.Connected.flatpak
+          name: com.paterkleomenis.Connected.flatpak
+          archive: false
+
+  # -------------------------------------------------------------------------
   # Job 2: Build Windows MSIX per architecture
   # -------------------------------------------------------------------------
   build-windows:
@@ -363,7 +387,14 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs:
-      [build-linux, bundle-windows-msix, build-macos, build-android, build-ios]
+      [
+        build-linux,
+        build-flatpak,
+        bundle-windows-msix,
+        build-macos,
+        build-android,
+        build-ios,
+      ]
     runs-on: ubuntu-latest
     steps:
       - name: Download All Artifacts
@@ -380,6 +411,7 @@ jobs:
           prerelease: false
           files: |
             connected-desktop
+            com.paterkleomenis.Connected.flatpak
             target/msix/x64/connected-desktop-windows-x64.msix
             target/msix/arm64/connected-desktop-windows-arm64.msix
             target/msix/connected-desktop-windows.msixbundle

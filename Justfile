@@ -150,6 +150,11 @@ ios-generate-project:
 build-macos:
     {{ if os_family() == "windows" { "echo ERROR: This command is only available on macOS/Linux && exit /b 2" } else { "echo \"ERROR: This command is only available on macOS/Linux\"; exit 2" } }}
 
+# Build Flatpak package
+[doc("Build Flatpak package")]
+build-flatpak:
+    {{ if os_family() == "windows" { "echo ERROR: Flatpak builds are only supported on Linux && exit /b 2" } else { "flatpak-builder --force-clean build-dir packaging/flatpak/com.paterkleomenis.Connected.yml" } }}
+
 # Install pre-commit hooks
 [doc("Install pre-commit hooks")]
 install-hooks:

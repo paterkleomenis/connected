@@ -1,0 +1,47 @@
+app-id: com.paterkleomenis.Connected
+runtime: org.gnome.Platform
+runtime-version: "48"
+sdk: org.gnome.Sdk
+sdk-extensions: []
+command: connected-desktop
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --filesystem=xdg-download
+  - --filesystem=xdg-documents
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.mpris.MediaPlayer2.*
+build-options:
+  build-args:
+    - --share=network
+  env:
+    CARGO_HOME: /run/build/connected/cargo
+    RUSTUP_HOME: /run/build/connected/rustup
+modules:
+  - name: connected
+    buildsystem: simple
+    build-commands:
+      # Install Rust manually to get the latest stable version
+      - |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+        export PATH="/run/build/connected/cargo/bin:$PATH"
+
+        # Build the desktop component
+        cargo build --release -p connected-desktop
+
+      # Install the binary
+      - install -Dm755 target/release/connected-desktop /app/bin/connected-desktop
+      # Install the desktop file
+      - install -Dm644 packaging/flatpak/com.paterkleomenis.Connected.desktop /app/share/applications/com.paterkleomenis.Connected.desktop
+
+      # Install the metainfo file
+      - install -Dm644 packaging/flatpak/com.paterkleomenis.Connected.metainfo.xml /app/share/metainfo/com.paterkleomenis.Connected.metainfo.xml
+
+      # Install the icon
+      - install -Dm644 android/app/src/main/ic_launcher-playstore.png /app/share/icons/hicolor/512x512/apps/com.paterkleomenis.Connected.png
+    sources:
+      - type: dir
+        path: ../..
