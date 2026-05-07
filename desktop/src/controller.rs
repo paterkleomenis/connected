@@ -2448,6 +2448,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     tokio::spawn(async move {
                         let platform = if cfg!(target_os = "linux") {
                             "linux"
+                        } else if cfg!(target_os = "macos") {
+                            "macos"
                         } else if cfg!(target_os = "windows") {
                             "windows"
                         } else {
@@ -2501,10 +2503,29 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             #[cfg(target_os = "linux")]
                             {
                                 info!("Opening update URL: {}", url);
-                                let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                                if let Err(e) =
+                                    std::process::Command::new("xdg-open").arg(&url).spawn()
+                                {
+                                    error!("Failed to open update URL: {}", e);
+                                    add_notification("Update", "Failed to open update URL", "");
+                                }
                             }
 
-                            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+                            #[cfg(target_os = "macos")]
+                            {
+                                info!("Opening update URL: {}", url);
+                                if let Err(e) = std::process::Command::new("open").arg(&url).spawn()
+                                {
+                                    error!("Failed to open update URL: {}", e);
+                                    add_notification("Update", "Failed to open update URL", "");
+                                }
+                            }
+
+                            #[cfg(not(any(
+                                target_os = "linux",
+                                target_os = "macos",
+                                target_os = "windows"
+                            )))]
                             {
                                 info!("Opening update URL: {}", url);
                             }

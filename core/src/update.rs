@@ -86,6 +86,8 @@ impl UpdateChecker {
             "android" => Some(github_release_download_url(&tag, "connected-android.apk")),
             // Release workflow publishes this as `connected-desktop.msi`.
             "windows" => Some(github_release_download_url(&tag, "connected-desktop.msi")),
+            // Release workflow publishes this as `connected-desktop.dmg`.
+            "macos" => Some(github_release_download_url(&tag, "connected-desktop.dmg")),
             // Prefer AUR on Linux (Arch-based installs), otherwise fall back to a raw binary asset.
             "linux" => {
                 if is_arch_like() {
