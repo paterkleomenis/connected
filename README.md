@@ -137,7 +137,7 @@ Run the application:
 **Requirements:**
 
 - macOS with Xcode + iOS SDK installed
-- `xcodegen` 
+- `xcodegen`
 ```bash
 brew install xcodegen
 ```

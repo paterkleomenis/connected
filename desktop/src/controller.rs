@@ -216,7 +216,7 @@ pub enum AppAction {
     SetAutostart(bool),
     CheckForUpdates,
     PerformUpdate,
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     PickAndSendFiles,
 }
 
@@ -2535,7 +2535,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     }
                 }
             }
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
             AppAction::PickAndSendFiles => {
                 let device = crate::state::get_default_device();
                 if let Some(device) = device {

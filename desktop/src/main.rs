@@ -363,7 +363,7 @@ fn sdf_rounded_rect(px: f32, py: f32, cx: f32, cy: f32, half_w: f32, half_h: f32
     (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - r
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 fn sdf_to_alpha(distance: f32, aa: f32) -> f32 {
     ((aa - distance) / aa).clamp(0.0, 1.0)
 }
@@ -478,10 +478,57 @@ fn render_connected_tray_icon_rgba(size: u32) -> Vec<u8> {
     rgba
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(target_os = "macos")]
+fn render_connected_macos_tray_icon_rgba(size: u32) -> Vec<u8> {
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    let samples = [(0.25f32, 0.25f32), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
+    let aa = 116.0 / size as f32;
+    let center_x = 58.0;
+    let center_y = 66.0;
+
+    for y in 0..size {
+        for x in 0..size {
+            let mut alpha = 0.0f32;
+
+            for (sx, sy) in samples {
+                let ux = ((x as f32 + sx) / size as f32) * 116.0;
+                let uy = ((y as f32 + sy) / size as f32) * 116.0;
+                let dx = ux - center_x;
+                let dy = uy - center_y;
+                let dist = (dx * dx + dy * dy).sqrt();
+
+                let dot_cov = sdf_to_alpha(dist - 9.0, aa);
+                let angle = dy.atan2(dx);
+                let arc_cov = if angle > 0.608 && angle < 2.533 {
+                    0.0
+                } else {
+                    sdf_to_alpha((dist - 38.0).abs() - 8.0, aa)
+                };
+
+                alpha += dot_cov.max(arc_cov);
+            }
+
+            let i = ((y * size + x) * 4) as usize;
+            rgba[i] = 0;
+            rgba[i + 1] = 0;
+            rgba[i + 2] = 0;
+            rgba[i + 3] = (alpha / samples.len() as f32 * 255.0).round() as u8;
+        }
+    }
+
+    rgba
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn load_tray_icon() -> Option<dioxus::desktop::trayicon::Icon> {
     let size = 64;
+
+    #[cfg(target_os = "macos")]
+    let rgba = render_connected_macos_tray_icon_rgba(size);
+
+    #[cfg(target_os = "windows")]
     let rgba = render_connected_tray_icon_rgba(size);
+
     dioxus::desktop::trayicon::Icon::from_rgba(rgba, size, size).ok()
 }
 
@@ -841,9 +888,9 @@ fn main() {
 
     config = config.with_disable_context_menu(true);
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
-        // Handle tray left-click explicitly so it matches the "Show Connected" action.
+        // Handle tray left-click explicitly so it matches the "Open" action.
         config = config.with_tray_icon_show_window_on_click(false);
     }
 
@@ -1050,7 +1097,7 @@ fn App() -> Element {
         });
     });
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         use dioxus::desktop::trayicon::{
             MouseButton, MouseButtonState, TrayIconEvent,
@@ -1062,46 +1109,65 @@ fn App() -> Element {
         let window = window.window.clone();
         let tray_click_window = window.clone();
 
-        let (show_id, send_files_id, send_clipboard_id, vol_up_id, vol_down_id, mute_id, quit_id) =
-            use_hook(|| {
-                let menu = Menu::new();
-                let show = MenuItem::new("Show Connected", true, None);
-                let send_files = MenuItem::new("Send Files...", true, None);
-                let send_clipboard = MenuItem::new("Send Clipboard", true, None);
-                let vol_up = MenuItem::new("Volume Up", true, None);
-                let vol_down = MenuItem::new("Volume Down", true, None);
-                let mute = MenuItem::new("Mute", true, None);
-                let quit = MenuItem::new("Quit", true, None);
+        let (
+            show_id,
+            send_files_id,
+            send_clipboard_id,
+            vol_up_id,
+            vol_down_id,
+            mute_id,
+            refresh_devices_id,
+            quit_id,
+        ) = use_hook(|| {
+            let menu = Menu::new();
+            let show = MenuItem::new("Open", true, None);
+            let send_files = MenuItem::new("Send Files...", true, None);
+            let send_clipboard = MenuItem::new("Send Clipboard", true, None);
+            let vol_up = MenuItem::new("Volume Up", true, None);
+            let vol_down = MenuItem::new("Volume Down", true, None);
+            let mute = MenuItem::new("Mute", true, None);
+            let refresh_devices = MenuItem::new("Refresh Devices", true, None);
+            let quit = MenuItem::new("Quit", true, None);
 
-                menu.append_items(&[
-                    &show,
-                    &PredefinedMenuItem::separator(),
-                    &send_files,
-                    &send_clipboard,
-                    &PredefinedMenuItem::separator(),
-                    &vol_up,
-                    &vol_down,
-                    &mute,
-                    &PredefinedMenuItem::separator(),
-                    &quit,
-                ])
-                .expect("Failed to build tray menu");
+            menu.append_items(&[
+                &show,
+                &PredefinedMenuItem::separator(),
+                &send_files,
+                &send_clipboard,
+                &PredefinedMenuItem::separator(),
+                &vol_up,
+                &vol_down,
+                &mute,
+                &PredefinedMenuItem::separator(),
+                &refresh_devices,
+                &PredefinedMenuItem::separator(),
+                &quit,
+            ])
+            .expect("Failed to build tray menu");
 
-                dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
+            #[cfg(target_os = "macos")]
+            {
+                let tray_icon = dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
+                tray_icon.set_icon_as_template(true);
+            }
 
-                (
-                    show.id().clone(),
-                    send_files.id().clone(),
-                    send_clipboard.id().clone(),
-                    vol_up.id().clone(),
-                    vol_down.id().clone(),
-                    mute.id().clone(),
-                    quit.id().clone(),
-                )
-            });
+            #[cfg(not(target_os = "macos"))]
+            dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
+
+            (
+                show.id().clone(),
+                send_files.id().clone(),
+                send_clipboard.id().clone(),
+                vol_up.id().clone(),
+                vol_down.id().clone(),
+                mute.id().clone(),
+                refresh_devices.id().clone(),
+                quit.id().clone(),
+            )
+        });
 
         // NOTE: Dioxus installs a global `muda::MenuEvent` handler. Tray menu clicks are delivered
-        // through that same event stream on Windows, so `use_muda_event_handler` is the reliable hook.
+        // through that same event stream, so `use_muda_event_handler` is the reliable hook.
         dioxus::desktop::use_muda_event_handler(move |event| {
             if event.id == show_id {
                 ipc::show_window(&window);
@@ -1152,6 +1218,8 @@ fn App() -> Element {
                         connected_core::MediaCommand::Mute,
                     ));
                 }
+            } else if event.id == refresh_devices_id {
+                send_action(AppAction::RefreshDevices);
             } else if event.id == quit_id {
                 crate::ipc::quit_application();
             }
