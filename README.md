@@ -4,15 +4,16 @@
 
 Currently available for **Linux** (AUR, Flatpak), **Mac**, **Windows**, **iOS** and **Android**.
 
-*Note for Windows users: The desktop application requires the .NET Desktop Runtime.*
+> [!NOTE]
+> Windows users: The desktop application requires the .NET Desktop Runtime.
 
-![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)
-![Rust](https://img.shields.io/badge/rust-edition%202024-orange)
-![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Mac%20%7C%20Windows%20%7C%20iOS-green)
+![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue?style=for-the-badge&logo=refinedgithub&logoColor=white)
+[![Rust](https://img.shields.io/badge/rust-edition%202024-orange?style=for-the-badge&logo=rust)](https://doc.rust-lang.org/edition-guide/rust-2024/)
+![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Mac%20%7C%20Windows%20%7C%20iOS-green?style=for-the-badge&logo=pkgsrc&logoColor=white)
 
 ## Features
 
-- **Cross-Platform**: Seamlessly transfer files, sync clipboards, make and answer calls, and control media between Android, Linux, Mac and Windows devices.
+- **Cross-Platform**: Seamlessly transfer files, sync clipboards, make and answer calls, send and receive messages, and control media between Android, iOS, Linux, Mac and Windows devices.
 - **Offline Functionality**: You can also use it without an internet connection. Uses Wi-Fi Direct and Local Network.
 - **High Speed**: Powered by the QUIC protocol.
 - **Zero Config**: Auto-discovery via mDNS and Wi-Fi Direct DNS-SD.
@@ -83,8 +84,18 @@ just
 ### Required Tools
 
 - **Rust** (stable): [Install Rust](https://rustup.rs/)
-- **just**: Task runner (`cargo install just`)
-- **pre-commit**: Git hooks (`pip install pre-commit` or `sudo pacman -S python-pre-commit`)
+- **just**: Task runner
+```bash
+cargo install just
+```
+- **pre-commit**: Git hooks
+```bash
+pip install pre-commit
+```
+OR
+```bash
+sudo pacman -S python-pre-commit
+```
 
 ### Development Workflow
 
@@ -107,19 +118,29 @@ just run-desktop
 
 ### Android
 
+**Requirements:**
+
+- **Android Studio**: For Android development (SDK 34+ required).
+- **Cargo NDK**: Required for building the shared library for Android.
+```bash
+cargo install cargo-ndk
+```
+
+Run the application:
+
 1. Enable **Developer Options** on your Android device.
 2. Connect your device via USB.
-3. From Android Studio select the `android/` directory
+3. In Android Studio, select the `android/` directory.
 
-### iOS (Preview)
-
-The repository now includes a first iOS app scaffold under `ios/` that reuses the Rust core through UniFFI-generated Swift bindings.
+### iOS
 
 **Requirements:**
 
 - macOS with Xcode + iOS SDK installed
-- Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`
-- `xcodegen` (`brew install xcodegen`)
+- `xcodegen` 
+```bash
+brew install xcodegen
+```
 
 Build steps:
 
@@ -137,40 +158,20 @@ xcodegen generate --spec ios/project.yml
 open ios/Connected.xcodeproj
 ```
 
-Notes:
-
-- The iOS app currently includes foundations for discovery, pairing, transfers, clipboard, filesystem browsing, media/telephony message surfaces, and update checks.
-- On systems without iOS SDKs installed, Rust iOS builds will fail until Xcode command line tools/SDKs are available.
-
 ### Linux (Desktop)
 
 **Requirements:**
 
-- Rust (stable)
-- `libasound2-dev`, `libudev-dev`, `libdbus-1-dev`, `pkg-config`
+- `libasound2-dev`
+- `libudev-dev`
+- `libdbus-1-dev`
+- `pkg-config`
 
-1. Clone the repository:
+Run the desktop application:
 
-    ```bash
-    git clone https://github.com/paterkleomenis/connected.git
-    cd connected
-    ```
-
-2. Run the desktop application:
-
-    ```bash
-    cargo run -p connected-desktop
-    ```
-
-### Prerequisites
-
-- **Rust**: [Install Rust](https://rustup.rs/)
-- **Android Studio**: For Android development (SDK 34+ required).
-- **Cargo NDK**: Required for building the shared library for Android.
-
-    ```bash
-    cargo install cargo-ndk
-    ```
+```bash
+cargo run -p connected-desktop
+```
 
 ### Project Structure
 
