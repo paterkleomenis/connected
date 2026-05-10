@@ -3050,37 +3050,6 @@ fn App() -> Element {
                             }
                         }
 
-                        if cfg!(target_os = "linux") || cfg!(target_os = "windows") || cfg!(target_os = "macos") {
-                            div {
-                                class: "info-card",
-                                h3 {
-                                    Icon { icon: IconType::Desktop, size: 20, color: "currentColor".to_string() }
-                                    " Startup"
-                                }
-                                div {
-                                    class: "info-grid",
-                                    div { class: "info-label", "Launch at login" }
-                                    div {
-                                        class: "info-value",
-                                        label {
-                                            class: "toggle-switch",
-                                            input {
-                                                r#type: "checkbox",
-                                                checked: "{autostart_enabled}",
-                                                oninput: move |_| {
-                                                    let new_val = !*autostart_enabled.read();
-                                                    autostart_enabled.set(new_val);
-                                                    action_tx.send(AppAction::SetAutostart(new_val));
-                                                },
-                                            }
-                                            span { class: "slider" }
-                                        }
-                                    }
-                                }
-                                p { class: "settings-hint", "Automatically open Connected when you sign in to your computer." }
-                            }
-                        }
-
                         div {
                             class: "info-card",
                             h3 {
@@ -3142,6 +3111,37 @@ fn App() -> Element {
                                 }
                             }
                             p { class: "settings-hint", "Automatically sync phone data when opening a device. Hides manual sync buttons when enabled." }
+                        }
+
+                        if cfg!(target_os = "linux") || cfg!(target_os = "windows") || cfg!(target_os = "macos") {
+                            div {
+                                class: "info-card",
+                                h3 {
+                                    Icon { icon: IconType::Desktop, size: 20, color: "currentColor".to_string() }
+                                    " Startup"
+                                }
+                                div {
+                                    class: "info-grid",
+                                    div { class: "info-label", "Launch at login" }
+                                    div {
+                                        class: "info-value",
+                                        label {
+                                            class: "toggle-switch",
+                                            input {
+                                                r#type: "checkbox",
+                                                checked: "{autostart_enabled}",
+                                                oninput: move |_| {
+                                                    let new_val = !*autostart_enabled.read();
+                                                    autostart_enabled.set(new_val);
+                                                    action_tx.send(AppAction::SetAutostart(new_val));
+                                                },
+                                            }
+                                            span { class: "slider" }
+                                        }
+                                    }
+                                }
+                                p { class: "settings-hint", "Automatically open Connected when you sign in to your computer." }
+                            }
                         }
                     }
                 }
