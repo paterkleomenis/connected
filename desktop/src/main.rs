@@ -231,6 +231,53 @@ fn running_in_flatpak() -> bool {
     std::path::Path::new("/.flatpak-info").exists() || std::env::var_os("FLATPAK_ID").is_some()
 }
 
+#[cfg(target_os = "linux")]
+fn set_linux_tray_visible(visible: bool) {
+    use ksni::TrayMethods;
+
+    static TRAY_HANDLE: std::sync::OnceLock<
+        std::sync::Arc<std::sync::Mutex<Option<ksni::Handle<tray::ConnectedTray>>>>,
+    > = std::sync::OnceLock::new();
+
+    let tray_handle = TRAY_HANDLE
+        .get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(None)))
+        .clone();
+
+    if visible {
+        if tray_handle.lock_or_recover().is_some() {
+            return;
+        }
+
+        let sandboxed = running_in_flatpak();
+        tokio::spawn(async move {
+            let tray = tray::ConnectedTray {};
+            // Flatpak cannot own ksni's generated org.kde.StatusNotifierItem-PID-ID name.
+            match tray
+                .disable_dbus_name(sandboxed)
+                .assume_sni_available(sandboxed)
+                .spawn()
+                .await
+            {
+                Ok(handle) => {
+                    *tray_handle.lock_or_recover() = Some(handle);
+                    debug!("System tray initialized");
+                }
+                Err(e) => {
+                    tracing::error!("Failed to initialize system tray: {:?}", e);
+                }
+            }
+        });
+    } else {
+        let handle = tray_handle.lock_or_recover().take();
+        if let Some(handle) = handle {
+            tokio::spawn(async move {
+                handle.shutdown().await;
+                debug!("System tray hidden");
+            });
+        }
+    }
+}
+
 use image::ImageReader;
 use std::io::Cursor;
 
@@ -900,7 +947,12 @@ fn main() {
 
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     {
-        config = config.with_close_behaviour(dioxus::desktop::WindowCloseBehaviour::WindowHides);
+        let close_behavior = if get_show_tray_icon_setting() {
+            dioxus::desktop::WindowCloseBehaviour::WindowHides
+        } else {
+            dioxus::desktop::WindowCloseBehaviour::WindowCloses
+        };
+        config = config.with_close_behaviour(close_behavior);
     }
 
     config = config.with_on_window(|window, _| {
@@ -934,6 +986,7 @@ impl Default for CurrentMediaUi {
 
 fn App() -> Element {
     let window = dioxus::desktop::window();
+    let desktop_window = dioxus::desktop::use_window();
 
     use_hook(|| {
         static SPUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -994,6 +1047,7 @@ fn App() -> Element {
     let mut auto_sync_contacts = use_signal(get_auto_sync_contacts);
     let mut autostart_enabled = use_signal(get_autostart_enabled_setting);
     let mut notifications_enabled = use_signal(get_notifications_enabled_setting);
+    let mut show_tray_icon = use_signal(get_show_tray_icon_setting);
     let mut theme_mode = use_signal(get_theme_mode_setting);
     let mut open_mms_image = use_signal(|| None::<MmsInlineImage>);
     let mut download_directory = use_signal(|| {
@@ -1103,10 +1157,8 @@ fn App() -> Element {
             MouseButton, MouseButtonState, TrayIconEvent,
             menu::{Menu, MenuItem, PredefinedMenuItem},
         };
-        use dioxus::desktop::use_window;
 
-        let window = use_window();
-        let window = window.window.clone();
+        let window = desktop_window.window.clone();
         let tray_click_window = window.clone();
 
         let (
@@ -1118,6 +1170,7 @@ fn App() -> Element {
             mute_id,
             refresh_devices_id,
             quit_id,
+            tray_icon,
         ) = use_hook(|| {
             let menu = Menu::new();
             let show = MenuItem::new("Open", true, None);
@@ -1146,13 +1199,16 @@ fn App() -> Element {
             .expect("Failed to build tray menu");
 
             #[cfg(target_os = "macos")]
-            {
+            let tray_icon = {
                 let tray_icon = dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
                 tray_icon.set_icon_as_template(true);
-            }
+                tray_icon
+            };
 
             #[cfg(not(target_os = "macos"))]
-            dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
+            let tray_icon = dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
+
+            let _ = tray_icon.set_visible(get_show_tray_icon_setting());
 
             (
                 show.id().clone(),
@@ -1163,8 +1219,15 @@ fn App() -> Element {
                 mute.id().clone(),
                 refresh_devices.id().clone(),
                 quit.id().clone(),
+                tray_icon,
             )
         });
+
+        use_effect(use_reactive(&show_tray_icon, move |enabled| {
+            if let Err(err) = tray_icon.set_visible(*enabled.read()) {
+                tracing::warn!("Failed to update tray icon visibility: {:?}", err);
+            }
+        }));
 
         // NOTE: Dioxus installs a global `muda::MenuEvent` handler. Tray menu clicks are delivered
         // through that same event stream, so `use_muda_event_handler` is the reliable hook.
@@ -1241,30 +1304,21 @@ fn App() -> Element {
 
     #[cfg(target_os = "linux")]
     {
-        use ksni::TrayMethods;
+        use_effect(use_reactive(&show_tray_icon, move |enabled| {
+            set_linux_tray_visible(*enabled.read());
+        }));
+    }
 
-        // Initialize tray icon
-        use_hook(|| {
-            let tray = tray::ConnectedTray {};
-            let sandboxed = running_in_flatpak();
-            // Spawn the tray service using the ksni async API
-            tokio::spawn(async move {
-                // Flatpak cannot own ksni's generated org.kde.StatusNotifierItem-PID-ID name.
-                match tray
-                    .disable_dbus_name(sandboxed)
-                    .assume_sni_available(sandboxed)
-                    .spawn()
-                    .await
-                {
-                    Ok(_handle) => {
-                        debug!("System tray initialized");
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to initialize system tray: {:?}", e);
-                    }
-                }
-            });
-        });
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+    {
+        use_effect(use_reactive(&show_tray_icon, move |enabled| {
+            let close_behavior = if *enabled.read() {
+                dioxus::desktop::WindowCloseBehaviour::WindowHides
+            } else {
+                dioxus::desktop::WindowCloseBehaviour::WindowCloses
+            };
+            desktop_window.set_close_behavior(close_behavior);
+        }));
     }
 
     // Auto-sync phone data when a device is selected
@@ -3111,6 +3165,37 @@ fn App() -> Element {
                                 }
                             }
                             p { class: "settings-hint", "Automatically sync phone data when opening a device. Hides manual sync buttons when enabled." }
+                        }
+
+                        if cfg!(target_os = "linux") || cfg!(target_os = "windows") || cfg!(target_os = "macos") {
+                            div {
+                                class: "info-card",
+                                h3 {
+                                    Icon { icon: IconType::Desktop, size: 20, color: "currentColor".to_string() }
+                                    " Show in Tray"
+                                }
+                                div {
+                                    class: "info-grid",
+                                    div { class: "info-label", "Enable" }
+                                    div {
+                                        class: "info-value",
+                                        label {
+                                            class: "toggle-switch",
+                                            input {
+                                                r#type: "checkbox",
+                                                checked: "{show_tray_icon}",
+                                                oninput: move |_| {
+                                                    let new_val = !*show_tray_icon.read();
+                                                    show_tray_icon.set(new_val);
+                                                    set_show_tray_icon_setting(new_val);
+                                                },
+                                            }
+                                            span { class: "slider" }
+                                        }
+                                    }
+                                }
+                                p { class: "settings-hint", "Run Connected in the background and show in the system tray/menu bar." }
+                            }
                         }
 
                         if cfg!(target_os = "linux") || cfg!(target_os = "windows") || cfg!(target_os = "macos") {
