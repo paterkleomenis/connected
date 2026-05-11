@@ -158,8 +158,12 @@ dependencies {
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("androidx.activity:activity-compose:1.13.0")
-    implementation("androidx.media:media:1.8.0")
     implementation("androidx.documentfile:documentfile:1.1.0")
+
+    // Media3
+    val media3Version = "1.10.0"
+    implementation("androidx.media3:media3-session:$media3Version")
+    implementation("androidx.media3:media3-common:$media3Version")
 
     // Compose
     implementation(platform("androidx.compose:compose-bom:2026.05.00"))

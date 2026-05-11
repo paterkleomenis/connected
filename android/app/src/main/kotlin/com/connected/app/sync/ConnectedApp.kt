@@ -1,8 +1,8 @@
 package com.connected.app.sync
 
 import android.Manifest
-import android.content.Context
 import android.content.ClipData
+import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
@@ -10,21 +10,23 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
-import java.util.concurrent.atomic.AtomicInteger
-import androidx.core.content.FileProvider
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.content.edit
 import androidx.core.net.toUri
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
+import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaStyleNotificationHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import uniffi.connected_ffi.BrowserDownloadCallback
 import uniffi.connected_ffi.CallAction
 import uniffi.connected_ffi.ClipboardCallback
 import uniffi.connected_ffi.DiscoveredDevice
@@ -50,6 +52,7 @@ import uniffi.connected_ffi.initialize
 import uniffi.connected_ffi.isDeviceTrusted
 import uniffi.connected_ffi.notifyNewSms
 import uniffi.connected_ffi.pairDevice
+import uniffi.connected_ffi.refreshDiscovery
 import uniffi.connected_ffi.registerClipboardReceiver
 import uniffi.connected_ffi.registerFilesystemProvider
 import uniffi.connected_ffi.registerMediaControlCallback
@@ -59,6 +62,7 @@ import uniffi.connected_ffi.registerTransferCallback
 import uniffi.connected_ffi.registerUnpairCallback
 import uniffi.connected_ffi.rejectFileTransfer
 import uniffi.connected_ffi.rejectPairing
+import uniffi.connected_ffi.renameLocalDevice
 import uniffi.connected_ffi.requestCallLog
 import uniffi.connected_ffi.requestContactsSync
 import uniffi.connected_ffi.requestConversationsSync
@@ -67,7 +71,6 @@ import uniffi.connected_ffi.requestDownloadFolder
 import uniffi.connected_ffi.requestGetThumbnail
 import uniffi.connected_ffi.requestListDir
 import uniffi.connected_ffi.requestMessages
-import uniffi.connected_ffi.BrowserDownloadCallback
 import uniffi.connected_ffi.sendActiveCallUpdate
 import uniffi.connected_ffi.sendCallLog
 import uniffi.connected_ffi.sendClipboard
@@ -81,8 +84,6 @@ import uniffi.connected_ffi.sendSmsSendResult
 import uniffi.connected_ffi.sendTrustConfirmation
 import uniffi.connected_ffi.setPairingModePersistent
 import uniffi.connected_ffi.shutdown
-import uniffi.connected_ffi.refreshDiscovery
-import uniffi.connected_ffi.renameLocalDevice
 import uniffi.connected_ffi.startDiscovery
 import uniffi.connected_ffi.trustDevice
 import uniffi.connected_ffi.unpairDeviceById
@@ -92,6 +93,7 @@ import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -268,8 +270,8 @@ class ConnectedApp(private val context: Context) {
     val selectedConversationThreadId = mutableStateOf<String?>(null)
     val isTelephonyEnabled = mutableStateOf(false)
 
-    // Media Session
-    private var mediaSession: MediaSessionCompat? = null
+    // Media Session (Media3)
+    private var mediaSession: MediaSession? = null
     val currentMediaTitle = mutableStateOf("Not Playing")
     val currentMediaArtist = mutableStateOf("")
     val currentMediaPlaying = mutableStateOf(false)
@@ -967,8 +969,6 @@ class ConnectedApp(private val context: Context) {
     private val mediaCallback = object : MediaControlCallback {
         override fun onMediaCommand(fromDevice: String, command: MediaCommand) {
             runOnMainThread {
-                val wasActive = mediaSession?.isActive == true
-                if (wasActive) mediaSession?.isActive = false
                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
                 val keyEvent = when (command) {
                     MediaCommand.PLAY -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY
@@ -1006,7 +1006,6 @@ class ConnectedApp(private val context: Context) {
                     audioManager.dispatchMediaKeyEvent(down)
                     audioManager.dispatchMediaKeyEvent(up)
                 }
-                if (wasActive) mediaSession?.isActive = true
             }
         }
 
@@ -1018,7 +1017,7 @@ class ConnectedApp(private val context: Context) {
             if (isMediaControlEnabled.value) {
                 runOnMainThread {
                     initMediaSession()
-                    updateMediaSession(state)
+                    updateMediaSession()
                     updateMediaNotification(state)
                 }
             }
@@ -1091,7 +1090,7 @@ class ConnectedApp(private val context: Context) {
 
     fun initialize() {
         try {
-            // Recreate coroutine scope if it was cancelled during cleanup
+            // Recreate coroutine scope if it was canceled during cleanup
             if (scopeJob.isCancelled) {
                 scopeJob = kotlinx.coroutines.SupervisorJob()
                 scope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + scopeJob)
@@ -2154,54 +2153,28 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    // Missing Media Session methods
+    // Media Session methods (Media3)
     fun initMediaSession() {
-        if (mediaSession == null) {
-            mediaSession = MediaSessionCompat(context, "ConnectedMediaSession").apply {
-                setCallback(object : MediaSessionCompat.Callback() {
-                    override fun onPlay() {
-                        sendMediaCommand(MediaCommand.PLAY)
-                    }
+        if (mediaSession != null) return
+        try {
+            val player = RemotePlayer()
 
-                    override fun onPause() {
-                        sendMediaCommand(MediaCommand.PAUSE)
-                    }
-
-                    override fun onSkipToNext() {
-                        sendMediaCommand(MediaCommand.NEXT)
-                    }
-
-                    override fun onSkipToPrevious() {
-                        sendMediaCommand(MediaCommand.PREVIOUS)
-                    }
-
-                    override fun onStop() {
-                        sendMediaCommand(MediaCommand.STOP)
-                    }
-                })
-                isActive = true
-            }
+            mediaSession = MediaSession.Builder(context, player)
+                .setId("ConnectedMediaSession")
+                .build()
+            Log.d("ConnectedApp", "Media3 Session initialized")
+        } catch (_: Exception) {
+            Log.e("ConnectedApp", "Failed to init Media3 session")
         }
     }
 
-    fun updateMediaSession(state: MediaState) {
-        val playbackState = if (state.playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
-        mediaSession?.setPlaybackState(
-            PlaybackStateCompat.Builder()
-                .setState(playbackState, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
-                .setActions(PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS)
-                .build()
-        )
-        mediaSession?.setMetadata(
-            MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, state.title)
-                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, state.artist)
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, state.album)
-                .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
-                .build()
-        )
+    fun updateMediaSession() {
+        // In Media3, session state is primarily driven by the player.
+        // For this remote proxy case, the player mock already reflects the state.
+        (mediaSession?.player as? RemotePlayer)?.forceStateUpdate()
     }
 
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun updateMediaNotification(state: MediaState) {
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
@@ -2253,7 +2226,12 @@ class ConnectedApp(private val context: Context) {
         val artist = state.artist ?: "Unknown Artist"
         val playPauseIcon = if (state.playing) R.drawable.ic_pause else R.drawable.ic_play
 
-        val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
+        val session = mediaSession
+        if (session == null) {
+            initMediaSession()
+        }
+
+        val notificationBuilder = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setContentTitle(title)
             .setContentText(artist)
             .setSmallIcon(R.drawable.ic_notification_logo)
@@ -2265,15 +2243,17 @@ class ConnectedApp(private val context: Context) {
             .addAction(R.drawable.ic_previous, "Previous", previousPendingIntent)
             .addAction(playPauseIcon, "Play/Pause", playPausePendingIntent)
             .addAction(R.drawable.ic_next, "Next", nextPendingIntent)
-            .setStyle(
-                androidx.media.app.NotificationCompat.MediaStyle()
-                    .setShowActionsInCompactView(0, 1, 2)
-                    .setMediaSession(mediaSession?.sessionToken)
-            )
-            .build()
 
-        notificationManager.notify(MEDIA_NOTIFICATION_ID, notification)
+        mediaSession?.let {
+            notificationBuilder.setStyle(
+                MediaStyleNotificationHelper.MediaStyle(it)
+                    .setShowActionsInCompactView(0, 1, 2)
+            )
+        }
+
+        notificationManager.notify(MEDIA_NOTIFICATION_ID, notificationBuilder.build())
     }
+
 
     private fun sendMediaCommand(command: MediaCommand) {
         lastMediaSourceDevice?.let { deviceName ->
@@ -2392,9 +2372,9 @@ class ConnectedApp(private val context: Context) {
                     sendEmptyMessages(fromIp, fromPort, threadId)
                     return@launch
                 }
-                val msgs = telephonyProvider.getMessages(threadId, limit.toInt())
+                val messages = telephonyProvider.getMessages(threadId, limit.toInt())
                 try {
-                    sendMessages(fromIp, fromPort, threadId, msgs)
+                    sendMessages(fromIp, fromPort, threadId, messages)
                 } catch (_: Exception) {
                 }
             }
@@ -3551,6 +3531,76 @@ class ConnectedApp(private val context: Context) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(intent)
             }
+        }
+    }
+
+    /**
+     * Minimal Player implementation using Media3's SimpleBasePlayer.
+     * This correctly implements the Player interface without needing to manually
+     * override deprecated methods or suppress warnings.
+     */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private inner class RemotePlayer : androidx.media3.common.SimpleBasePlayer(android.os.Looper.getMainLooper()) {
+
+        fun forceStateUpdate() {
+            invalidateState()
+        }
+
+        override fun getState(): State {
+            val metadata = MediaMetadata.Builder()
+                .setTitle(currentMediaTitle.value)
+                .setArtist(currentMediaArtist.value)
+                .build()
+
+            val mediaItem = MediaItem.Builder()
+                .setMediaId("remote_media")
+                .setMediaMetadata(metadata)
+                .build()
+
+            val itemData = MediaItemData.Builder("remote")
+                .setMediaItem(mediaItem)
+                .build()
+
+            return State.Builder()
+                .setAvailableCommands(
+                    Player.Commands.Builder()
+                        .addAll(
+                            COMMAND_PLAY_PAUSE,
+                            COMMAND_SEEK_TO_NEXT,
+                            COMMAND_SEEK_TO_PREVIOUS,
+                            COMMAND_STOP
+                        )
+                        .build()
+                )
+                .setPlayWhenReady(currentMediaPlaying.value, PLAY_WHEN_READY_CHANGE_REASON_REMOTE)
+                .setPlaybackState(if (currentMediaPlaying.value) STATE_READY else STATE_IDLE)
+                .setPlaylist(listOf(itemData))
+                .build()
+        }
+
+        override fun handleSetPlayWhenReady(playWhenReady: Boolean): com.google.common.util.concurrent.ListenableFuture<*> {
+            sendMediaCommand(if (playWhenReady) MediaCommand.PLAY else MediaCommand.PAUSE)
+            return com.google.common.util.concurrent.Futures.immediateVoidFuture()
+        }
+
+        override fun handleSeek(
+            mediaItemIndex: Int,
+            positionMs: Long,
+            seekCommand: Int
+        ): com.google.common.util.concurrent.ListenableFuture<*> {
+            when (seekCommand) {
+                COMMAND_SEEK_TO_NEXT -> sendMediaCommand(MediaCommand.NEXT)
+                COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> sendMediaCommand(MediaCommand.NEXT)
+                COMMAND_SEEK_TO_PREVIOUS -> sendMediaCommand(MediaCommand.PREVIOUS)
+                COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> sendMediaCommand(MediaCommand.PREVIOUS)
+                else -> {}
+            }
+            return com.google.common.util.concurrent.Futures.immediateVoidFuture()
+        }
+
+        override fun handleStop(): com.google.common.util.concurrent.ListenableFuture<*> {
+            sendMediaCommand(MediaCommand.STOP)
+            return com.google.common.util.concurrent.Futures.immediateVoidFuture()
         }
     }
 }
