@@ -43,6 +43,31 @@ if [ -z "$ANDROID_NDK_HOME" ] && [ ! -f "local.properties" ]; then
     echo "⚠️  Warning: ANDROID_NDK_HOME not set and no local.properties found"
 fi
 
+# Check if JAVA_HOME is set, if not try to find it
+if [ -z "$JAVA_HOME" ]; then
+    echo "🔍 JAVA_HOME not set, searching for a JDK..."
+    # Check common Android Studio locations
+    for studio_path in "/opt/android-studio" "$HOME/android-studio" "/Applications/Android Studio.app/Contents"; do
+        if [ -d "$studio_path/jbr" ]; then
+            export JAVA_HOME="$studio_path/jbr"
+            export PATH="$JAVA_HOME/bin:$PATH"
+            echo "✅ Found JDK in $studio_path/jbr"
+            break
+        elif [ -d "$studio_path/jre" ]; then
+            export JAVA_HOME="$studio_path/jre"
+            export PATH="$JAVA_HOME/bin:$PATH"
+            echo "✅ Found JDK in $studio_path/jre"
+            break
+        fi
+    done
+fi
+
+# Check if Java is available now
+if ! command -v java &> /dev/null; then
+    echo "❌ Error: Java not found. Please install a JDK and set JAVA_HOME."
+    exit 1
+fi
+
 echo "✅ Prerequisites check passed"
 echo ""
 
