@@ -1,6 +1,6 @@
 # Privacy Policy for Connected App
 
-**Last updated:** April 4, 2026
+**Last updated:** May 12, 2026
 
 ## Introduction
 
@@ -30,7 +30,7 @@ This Privacy Policy describes how Connected ("we", "our", or "the app") collects
 
 ## How We Use Your Information
 
-We use the collected information solely for the following purposes:
+We use collected information only to provide app features and improve reliability:
 - Enabling file transfer and synchronization between your devices
 - Providing Phone Link functionality (calls, SMS, contact display)
 - Clipboard synchronization between devices
@@ -42,38 +42,37 @@ We use the collected information solely for the following purposes:
 
 **We do not sell, trade, or rent your personal information to third parties.**
 
-We may share information only in the following circumstances:
-- **Between Your Own Devices**: All synchronization occurs only between devices you have explicitly linked.
-- **Legal Requirements**: If required by law or in response to valid requests by public authorities.
-- **Protection of Rights**: To protect and defend our rights or the safety of our users.
+Information is shared only in these cases:
+- **Between Your Own Devices**: Synchronization occurs only between devices you explicitly linked.
+- **Legal Requirements**: If required by law or valid public authority request.
+- **Protection of Rights**: To protect rights, property, or user safety.
 
 ## Data Storage and Security
 
-- **Local Processing**: Most data processing occurs locally on your device and your linked devices.
-- **Encryption**: Communications between devices use QUIC transport encryption with rustls.
-- **No Cloud Storage**: We do not store your personal data on remote servers.
-- **Device Security**: We implement industry-standard security measures to protect your data.
+- **Local Processing**: Most data processing occurs locally on your devices.
+- **Encryption**: Communications use QUIC transport encryption with rustls.
+- **No Cloud Storage**: Personal data is not stored on remote servers by us.
+- **Device Security**: Industry-standard security measures are implemented.
 
 ## Your Rights and Choices
 
-You have the right to:
-- **Access**: View the data stored by the app on your device.
-- **Delete**: Remove all app data by clearing the app's storage in Android settings.
-- **Revoke Permissions**: Disable permissions at any time through your device settings.
-- **Unlink Devices**: Remove linked devices from the app's connection settings.
+- **Access**: View data stored by the app on your device.
+- **Delete**: Remove app data by clearing app storage in Android settings.
+- **Revoke Permissions**: Disable permissions anytime via device settings.
+- **Unlink Devices**: Remove linked devices in app connection settings.
 
 ## Children's Privacy
 
-Our app does not knowingly collect personal information from children under 13. We encourage parents and guardians to take an active role in their children's online activities.
+Our app does not knowingly collect personal information from children under 13. Parents and guardians are encouraged to monitor online activity.
 
 ## Changes to This Privacy Policy
 
-We may update this Privacy Policy from time to time. We will notify users of any material changes by posting the new policy in the app and updating the "Last updated" date.
+We may update this Privacy Policy from time to time. Material changes will be announced in the app and by updating the "Last updated" date.
 
 ## Contact Us
 
-If you have any questions about this Privacy Policy, please contact us:
-- **Email**: mclocinthegreat@gmail.com
+If you have questions about this policy, contact us:
+- **Email**: alexisbasakidze [at] gmail.com
 - **GitHub**: https://github.com/paterkleomenis/connected
 
 ## App Permissions Explained
@@ -95,4 +94,4 @@ If you have any questions about this Privacy Policy, please contact us:
 
 ---
 
-*This privacy policy is specific to the Android version of Connected. For other platforms, please refer to their respective privacy policies.*
+*This privacy policy is specific to the Android version of Connected.*

@@ -1,9 +1,9 @@
 # Play Store Permission Justification Document
 
-**App Name:** Connected
-**Package:** com.connected.app.sync
-**Version:** 3.0.4
-**Date:** April 6, 2026
+**App Name:** Connected  
+**Package:** com.connected.app.sync  
+**Version:** 3.0.4  
+**Date:** May 12, 2026
 
 ---
 
@@ -158,7 +158,7 @@ All communication happens directly between user-owned devices on the local netwo
 2. **No Cloud Servers**: We do not operate any cloud servers that process or store user data
 3. **User Consent**: All permissions are requested at runtime with clear explanations
 4. **Minimal Data Retention**: Data is processed in-memory and not persisted beyond the active sync session
-5. **Open Source**: The app's source code is available for audit at [GitHub repository]
+5. **Open Source**: The app's source code is available for audit at https://github.com/paterkleomenis/connected.
 
 ---
 
