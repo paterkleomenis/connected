@@ -8,10 +8,49 @@ finish-args:
   - --share=network
   - --share=ipc
   - --socket=fallback-x11
-  - --socket=wayland
+  # Do not expose a Wayland socket, we'll use the host's.
+  - --nosocket=wayland
+  # Sockets 0 ... 32. A reasonable amount, per the Wayland server
+  # implementation: https://wayland.freedesktop.org/docs/html/apc.html,
+  # in function wl_display_add_socket_auto.
+  - --filesystem=xdg-run/wayland-0
+  - --filesystem=xdg-run/wayland-1
+  - --filesystem=xdg-run/wayland-2
+  - --filesystem=xdg-run/wayland-3
+  - --filesystem=xdg-run/wayland-4
+  - --filesystem=xdg-run/wayland-5
+  - --filesystem=xdg-run/wayland-6
+  - --filesystem=xdg-run/wayland-7
+  - --filesystem=xdg-run/wayland-8
+  - --filesystem=xdg-run/wayland-9
+  - --filesystem=xdg-run/wayland-10
+  - --filesystem=xdg-run/wayland-11
+  - --filesystem=xdg-run/wayland-12
+  - --filesystem=xdg-run/wayland-13
+  - --filesystem=xdg-run/wayland-14
+  - --filesystem=xdg-run/wayland-15
+  - --filesystem=xdg-run/wayland-16
+  - --filesystem=xdg-run/wayland-17
+  - --filesystem=xdg-run/wayland-18
+  - --filesystem=xdg-run/wayland-19
+  - --filesystem=xdg-run/wayland-20
+  - --filesystem=xdg-run/wayland-21
+  - --filesystem=xdg-run/wayland-22
+  - --filesystem=xdg-run/wayland-23
+  - --filesystem=xdg-run/wayland-24
+  - --filesystem=xdg-run/wayland-25
+  - --filesystem=xdg-run/wayland-26
+  - --filesystem=xdg-run/wayland-27
+  - --filesystem=xdg-run/wayland-28
+  - --filesystem=xdg-run/wayland-29
+  - --filesystem=xdg-run/wayland-30
+  - --filesystem=xdg-run/wayland-31
+  - --filesystem=xdg-run/wayland-32
+  # Why, Canonical?
+  # https://canonical.com/mir/docs/stable/tutorial/write-your-first-wayland-compositor/#run-the-compositor
+  - --filesystem=xdg-run/wayland-99
   - --device=dri
-  - --filesystem=xdg-download
-  - --filesystem=xdg-documents
+  - --filesystem=host
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.mpris.MediaPlayer2.*
   - --own-name=org.mpris.MediaPlayer2.connected
@@ -35,7 +74,8 @@ modules:
         cargo build --release -p connected-desktop
 
       # Install the binary
-      - install -Dm755 target/release/connected-desktop /app/bin/connected-desktop
+      - install -Dm755 target/release/connected-desktop /app/bin/connected-desktop-bin
+      - install -Dm755 packaging/flatpak/connected-desktop-wayland-socket /app/bin/connected-desktop
       # Install the desktop file
       - install -Dm644 packaging/flatpak/com.paterkleomenis.Connected.desktop /app/share/applications/com.paterkleomenis.Connected.desktop
 

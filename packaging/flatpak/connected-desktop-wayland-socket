@@ -1,0 +1,15 @@
+#!/bin/sh
+
+# Flatpak's regular Wayland socket can hide data-control. Use the
+# directly mounted host Wayland socket instead.
+if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  for socket in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-*; do
+    if [ -S "$socket" ]; then
+      WAYLAND_DISPLAY="${socket##*/}"
+      export WAYLAND_DISPLAY
+      break
+    fi
+  done
+fi
+
+exec /app/bin/connected-desktop-bin "$@"

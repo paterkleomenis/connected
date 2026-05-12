@@ -16,7 +16,7 @@ futures-util = "0.3"
 connected-core = { path = "../core" }
 dirs = "6.0"
 rfd = "0.17"
-arboard = "3.6"
+arboard = { version = "3.6", features = ["wayland-data-control"] }
 once_cell.workspace = true
 rustls.workspace = true
 mime_guess.workspace = true
