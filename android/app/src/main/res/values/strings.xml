@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <resources>
-    <string name="app_name">Connected</string>
     <string name="discover_devices">Discover Devices</string>
     <string name="stop_discovery">Stop Discovery</string>
     <string name="no_devices_found">No devices found</string>

@@ -59,6 +59,8 @@ configure<ApplicationExtension> {
             useSupportLibrary = true
         }
 
+        resValue("string", "app_name", "Connected")
+
         ndk {
             // Target architectures for the Rust library
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
@@ -91,6 +93,7 @@ configure<ApplicationExtension> {
             // Allow debug/dev install side-by-side with production app.
             applicationIdSuffix = ".dev"
             versionNameSuffix = "-dev"
+            resValue("string", "app_name", "Connected Dev")
 
             // Use release signing for debug builds if credentials are found,
             // so developers can sync signatures across machines.
@@ -127,6 +130,7 @@ configure<ApplicationExtension> {
 
     buildFeatures {
         compose = true
+        resValues = true
     }
 
     lint {
