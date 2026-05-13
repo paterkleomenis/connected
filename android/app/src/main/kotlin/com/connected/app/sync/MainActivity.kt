@@ -227,11 +227,8 @@ class MainActivity : ComponentActivity() {
             BundleCompat.getParcelableArrayList(extras, Intent.EXTRA_STREAM, Uri::class.java)
                 ?.forEach { result.add(it) }
 
-            when (val rawExtra = extras.get(Intent.EXTRA_STREAM)) {
-                is Uri -> result.add(rawExtra)
-                is ArrayList<*> -> rawExtra.filterIsInstance<Uri>().forEach { result.add(it) }
-                is Array<*> -> rawExtra.filterIsInstance<Uri>().forEach { result.add(it) }
-            }
+            BundleCompat.getParcelableArray(extras, Intent.EXTRA_STREAM, Uri::class.java)
+                ?.forEach { (it as? Uri)?.let { uri -> result.add(uri) } }
         }
 
         intent.clipData?.let { clip ->
@@ -850,7 +847,7 @@ fun HomeScreen(
         pullOffset = 0f
         scope.launch {
             connectedApp.refreshDeviceDiscovery()
-            kotlinx.coroutines.delay(1200)
+            delay(1200)
             isRefreshing = false
         }
     }
@@ -1408,7 +1405,7 @@ fun SettingsScreen(
                                         context.stopService(intent)
                                         // Update state after a short delay to allow service to stop
                                         scope.launch {
-                                            kotlinx.coroutines.delay(500)
+                                            delay(500)
                                             isBackgroundServiceRunning = false
                                             isStoppingService = false
                                         }
@@ -1743,7 +1740,8 @@ fun SettingsScreen(
                     Button(
                         onClick = {
                             try {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/paterkleomenis/connected/issues/new"))
+                                val intent = Intent(Intent.ACTION_VIEW,
+                                    "https://github.com/paterkleomenis/connected/issues/new".toUri())
                                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 context.startActivity(intent)
                             } catch (e: Exception) {
