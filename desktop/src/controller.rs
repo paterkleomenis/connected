@@ -1662,6 +1662,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             filename: String::from("Preparing transfer..."),
                         };
                     }
+                    drop(status);
+
+                    // Set active incoming transfer ID immediately so the
+                    // cancel button works even before TransferStarting arrives.
+                    set_active_incoming_transfer_id(Some(transfer_id.clone()));
 
                     if let Err(e) = c.accept_file_transfer(&transfer_id) {
                         error!("Failed to accept file transfer: {}", e);

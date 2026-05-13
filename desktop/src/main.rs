@@ -1735,6 +1735,100 @@ fn App() -> Element {
             main {
                 class: "main-content",
 
+                // Global Transfer Status - visible regardless of device selection
+                match &*transfer_status.read() {
+                    TransferStatus::Idle => rsx! {},
+                    TransferStatus::Pending { filename, from_device, .. } => rsx! {
+                        div { class: "global-transfer",
+                            div { class: "global-transfer-icon", Icon { icon: IconType::Searching, size: 20, color: "var(--accent)".to_string() } }
+                            div { class: "global-transfer-info",
+                                span { "Receiving file from {from_device}" }
+                                span { class: "global-transfer-filename", "{filename}" }
+                            }
+                        }
+                    },
+                    TransferStatus::Starting { filename } => rsx! {
+                        div { class: "global-transfer",
+                            div { class: "global-transfer-icon", Icon { icon: IconType::Sync, size: 20, color: "var(--accent)".to_string() } }
+                            div { class: "global-transfer-info",
+                                span { "Transferring {filename}" }
+                            }
+                            button {
+                                class: "global-transfer-cancel",
+                                onclick: move |_| action_tx.send(AppAction::CancelFileTransfer),
+                                Icon { icon: IconType::Close, size: 14, color: "var(--error)".to_string() }
+                            }
+                        }
+                    },
+                    TransferStatus::InProgress { filename, percent } => rsx! {
+                        div { class: "global-transfer",
+                            div { class: "global-transfer-icon", Icon { icon: IconType::Sync, size: 20, color: "var(--accent)".to_string() } }
+                            div { class: "global-transfer-info",
+                                span { "{filename}" }
+                                div { class: "global-transfer-progress",
+                                    div { class: "global-transfer-progress-fill", style: "width: {percent}%", }
+                                }
+                            }
+                            span { class: "global-transfer-percent", "{percent:.1}%" }
+                            button {
+                                class: "global-transfer-cancel",
+                                onclick: move |_| action_tx.send(AppAction::CancelFileTransfer),
+                                Icon { icon: IconType::Close, size: 14, color: "var(--error)".to_string() }
+                            }
+                        }
+                    },
+                    TransferStatus::Compressing {
+                        filename, current_file, files_processed, total_files,
+                        bytes_processed, total_bytes, speed_bytes_per_sec: _,
+                    } => {
+                        let percent = if *total_bytes > 0 {
+                            (*bytes_processed as f32 / *total_bytes as f32) * 100.0
+                        } else { 0.0 };
+                        rsx! {
+                            div { class: "global-transfer",
+                                div { class: "global-transfer-icon", Icon { icon: IconType::Sync, size: 20, color: "var(--accent)".to_string() } }
+                                div { class: "global-transfer-info",
+                                    span { "Compressing {filename}" }
+                                    span { class: "global-transfer-filename", "{current_file} ({files_processed}/{total_files})" }
+                                    div { class: "global-transfer-progress",
+                                        div { class: "global-transfer-progress-fill", style: "width: {percent}%", }
+                                    }
+                                }
+                                span { class: "global-transfer-percent", "{percent:.1}%" }
+                                button {
+                                    class: "global-transfer-cancel",
+                                    onclick: move |_| action_tx.send(AppAction::CancelFileTransfer),
+                                    Icon { icon: IconType::Close, size: 14, color: "var(--error)".to_string() }
+                                }
+                            }
+                        }
+                    },
+                    TransferStatus::Completed { filename } => rsx! {
+                        div { class: "global-transfer global-transfer-done",
+                            div { class: "global-transfer-icon", Icon { icon: IconType::Check, size: 20, color: "var(--success)".to_string() } }
+                            div { class: "global-transfer-info",
+                                span { "Transfer complete: {filename}" }
+                            }
+                        }
+                    },
+                    TransferStatus::Failed { error } => rsx! {
+                        div { class: "global-transfer global-transfer-error",
+                            div { class: "global-transfer-icon", Icon { icon: IconType::Error, size: 20, color: "var(--error)".to_string() } }
+                            div { class: "global-transfer-info",
+                                span { "Transfer failed: {error}" }
+                            }
+                        }
+                    },
+                    TransferStatus::Cancelled { filename } => rsx! {
+                        div { class: "global-transfer global-transfer-cancelled",
+                            div { class: "global-transfer-icon", Icon { icon: IconType::Close, size: 20, color: "var(--warning)".to_string() } }
+                            div { class: "global-transfer-info",
+                                span { "Transfer cancelled: {filename}" }
+                            }
+                        }
+                    },
+                }
+
                 // Tab: Devices
                 if *active_tab.read() == "devices" && selected_device.read().is_none() {
                     div {

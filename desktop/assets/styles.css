@@ -1291,6 +1291,101 @@ body {
     font-weight: 500;
 }
 
+.global-transfer {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    margin: 0 var(--space-4) var(--space-2);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+}
+
+.global-transfer-icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    animation: spin 1.5s linear infinite;
+}
+
+.global-transfer-done .global-transfer-icon,
+.global-transfer-error .global-transfer-icon,
+.global-transfer-cancelled .global-transfer-icon {
+    animation: none;
+}
+
+.global-transfer-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+}
+
+.global-transfer-filename {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.global-transfer-progress {
+    height: 4px;
+    background: var(--bg-surface);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 2px;
+}
+
+.global-transfer-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.2s ease;
+}
+
+.global-transfer-percent {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+
+.global-transfer-cancel {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+
+.global-transfer-cancel:hover {
+    opacity: 1;
+    background: var(--bg-surface);
+}
+
+.global-transfer-done {
+    border-color: var(--success);
+}
+
+.global-transfer-error {
+    border-color: var(--error);
+}
+
+.global-transfer-cancelled {
+    border-color: var(--warning);
+}
+
 .send-file-section,
 .download-location {
     background: var(--bg-card);
