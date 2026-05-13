@@ -17,7 +17,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -110,7 +109,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.R)
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -302,7 +300,6 @@ fun isNotificationListenerEnabled(context: Context, serviceClass: Class<*>): Boo
  * Opens the notification listener settings screen.
  * Uses the proper Settings constant and handles potential exceptions.
  */
-@RequiresApi(Build.VERSION_CODES.R)
 fun openNotificationListenerSettings(context: Context) {
     try {
         val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
@@ -311,13 +308,17 @@ fun openNotificationListenerSettings(context: Context) {
     } catch (_: Exception) {
         // Fallback for devices that don't support the direct intent
         try {
-            val fallbackIntent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
-            fallbackIntent.putExtra(
-                Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
-                android.content.ComponentName(context, MediaObserverService::class.java).flattenToString()
-            )
-            fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(fallbackIntent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val fallbackIntent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                fallbackIntent.putExtra(
+                    Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                    android.content.ComponentName(context, MediaObserverService::class.java).flattenToString()
+                )
+                fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(fallbackIntent)
+            } else {
+                throw Exception("Direct settings not available")
+            }
         } catch (_: Exception) {
             // Final fallback to general notification settings
             val generalIntent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
@@ -600,7 +601,6 @@ enum class PhoneDataKind(val title: String) {
     CallLog("Call Log")
 }
 
-@RequiresApi(Build.VERSION_CODES.R)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppNavigation(
@@ -1095,7 +1095,6 @@ private fun formatDuration(seconds: Long): String {
     }
 }
 
-@RequiresApi(Build.VERSION_CODES.R)
 @SuppressLint("BatteryLife")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1627,27 +1626,29 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    Button(
-                        onClick = {
-                            if (connectedApp.isFullAccessGranted()) {
-                                connectedApp.setFullAccess()
-                            } else {
-                                pendingFullAccess = true
-                                connectedApp.requestFullAccessPermission()
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(if (connectedApp.isFullAccessGranted()) "Use Full Access" else "🔓 Grant Full Access")
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        Button(
+                            onClick = {
+                                if (connectedApp.isFullAccessGranted()) {
+                                    connectedApp.setFullAccess()
+                                } else {
+                                    pendingFullAccess = true
+                                    connectedApp.requestFullAccessPermission()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (connectedApp.isFullAccessGranted()) "Use Full Access" else "🔓 Grant Full Access")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
 
                     OutlinedButton(
                         onClick = { folderPickerLauncher?.launch(null) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Select Specific Folder")
+                        Text(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) "Select Specific Folder" else "Select Folder")
                     }
                 }
             }
