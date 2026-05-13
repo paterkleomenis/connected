@@ -1194,14 +1194,14 @@ fun SettingsScreen(
         }
     }
 
-    var showRenameDialog by remember { mutableStateOf(false) }
-    var showTelephonyDisclosureDialog by remember { mutableStateOf(false) }
-    var deviceName by remember { mutableStateOf(connectedApp.getDeviceName()) }
+    val showRenameDialog = remember { mutableStateOf(false) }
+    val showTelephonyDisclosureDialog = remember { mutableStateOf(false) }
+    val deviceName = remember { mutableStateOf(connectedApp.getDeviceName()) }
 
-    if (showTelephonyDisclosureDialog) {
+    if (showTelephonyDisclosureDialog.value) {
         AlertDialog(
             onDismissRequest = {
-                showTelephonyDisclosureDialog = false
+                showTelephonyDisclosureDialog.value = false
             },
             title = { Text("Permission Required") },
             text = {
@@ -1209,7 +1209,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                 Button(onClick = {
-                    showTelephonyDisclosureDialog = false
+                    showTelephonyDisclosureDialog.value = false
                     telephonyPermissionLauncher.launch(
                         connectedApp.telephonyProvider.getRequiredPermissions()
                     )
@@ -1219,7 +1219,7 @@ fun SettingsScreen(
             },
             dismissButton = {
                 Button(onClick = {
-                    showTelephonyDisclosureDialog = false
+                    showTelephonyDisclosureDialog.value = false
                 }) {
                     Text("Cancel")
                 }
@@ -1227,12 +1227,11 @@ fun SettingsScreen(
         )
     }
 
-    if (showRenameDialog) {
-        var newName by remember { mutableStateOf(deviceName) }
+    if (showRenameDialog.value) {
+        var newName by remember { mutableStateOf(deviceName.value) }
         AlertDialog(
             onDismissRequest = {
-                @Suppress("AssignedValueIsNeverRead")
-                showRenameDialog = false
+                showRenameDialog.value = false
             },
             title = { Text("Rename Device") },
             text = {
@@ -1250,9 +1249,8 @@ fun SettingsScreen(
                     val trimmedName = newName.trim()
                     if (trimmedName.isNotBlank()) {
                         connectedApp.renameDevice(trimmedName)
-                        deviceName = trimmedName
-                        @Suppress("AssignedValueIsNeverRead")
-                        showRenameDialog = false
+                        deviceName.value = trimmedName
+                        showRenameDialog.value = false
                     }
                 }) {
                     Text("Save")
@@ -1260,8 +1258,7 @@ fun SettingsScreen(
             },
             dismissButton = {
                 Button(onClick = {
-                    @Suppress("AssignedValueIsNeverRead")
-                    showRenameDialog = false
+                    showRenameDialog.value = false
                 }) {
                     Text("Cancel")
                 }
@@ -1301,13 +1298,12 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            deviceName,
+                            deviceName.value,
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.padding(start = 4.dp)
                         )
                         Button(onClick = {
-                            @Suppress("AssignedValueIsNeverRead")
-                            showRenameDialog = true
+                            showRenameDialog.value = true
                         }) {
                             Text("Rename")
                         }
@@ -1538,7 +1534,7 @@ fun SettingsScreen(
                             checked = connectedApp.isTelephonyEnabled.value,
                             onCheckedChange = { enabled ->
                                 if (enabled && !hasTelephonyPermissions) {
-                                    showTelephonyDisclosureDialog = true
+                                    showTelephonyDisclosureDialog.value = true
                                 } else {
                                     connectedApp.toggleTelephony()
                                 }
@@ -1579,7 +1575,7 @@ fun SettingsScreen(
                                 if (shouldOpenSettings()) {
                                     openAppPermissionSettings()
                                 } else {
-                                    showTelephonyDisclosureDialog = true
+                                    showTelephonyDisclosureDialog.value = true
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(
@@ -1631,23 +1627,21 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        Button(
-                            onClick = {
-                                if (connectedApp.isFullAccessGranted()) {
-                                    connectedApp.setFullAccess()
-                                } else {
-                                    pendingFullAccess = true
-                                    connectedApp.requestFullAccessPermission()
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(if (connectedApp.isFullAccessGranted()) "Use Full Access" else "🔓 Grant Full Access")
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            if (connectedApp.isFullAccessGranted()) {
+                                connectedApp.setFullAccess()
+                            } else {
+                                pendingFullAccess = true
+                                connectedApp.requestFullAccessPermission()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (connectedApp.isFullAccessGranted()) "Use Full Access" else "🔓 Grant Full Access")
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     OutlinedButton(
                         onClick = { folderPickerLauncher?.launch(null) },
@@ -2105,7 +2099,7 @@ fun DeviceItem(
     val isPending = app.pendingPairing.contains(device.id)
     var showMenu by remember { mutableStateOf(false) }
     var showDetails by remember { mutableStateOf(false) }
-    var phoneDataKind by remember { mutableStateOf<PhoneDataKind?>(null) }
+    val phoneDataKind = remember { mutableStateOf<PhoneDataKind?>(null) }
 
     Card(modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp).fillMaxWidth()) {
@@ -2215,7 +2209,7 @@ fun DeviceItem(
                                     onClick = {
                                         showMenu = false
                                         if (app.requestContactsFromDevice(device)) {
-                                            phoneDataKind = PhoneDataKind.Contacts
+                                            phoneDataKind.value = PhoneDataKind.Contacts
                                         }
                                     }
                                 )
@@ -2230,7 +2224,7 @@ fun DeviceItem(
                                     onClick = {
                                         showMenu = false
                                         if (app.requestConversationsFromDevice(device)) {
-                                            phoneDataKind = PhoneDataKind.Conversations
+                                            phoneDataKind.value = PhoneDataKind.Conversations
                                         }
                                     }
                                 )
@@ -2245,7 +2239,7 @@ fun DeviceItem(
                                     onClick = {
                                         showMenu = false
                                         if (app.requestCallLogFromDevice(device)) {
-                                            phoneDataKind = PhoneDataKind.CallLog
+                                            phoneDataKind.value = PhoneDataKind.CallLog
                                         }
                                     }
                                 )
@@ -2344,12 +2338,12 @@ fun DeviceItem(
         }
     }
 
-    phoneDataKind?.let { kind ->
+    phoneDataKind.value?.let { kind ->
         PhoneDataDialog(
             kind = kind,
             device = device,
             app = app,
-            onDismiss = { phoneDataKind = null }
+            onDismiss = { phoneDataKind.value = null }
         )
     }
 }
