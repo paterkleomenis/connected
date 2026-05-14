@@ -3026,6 +3026,20 @@ impl ConnectedClient {
                         "Rejected Filesystem Stream from untrusted peer: {}",
                         fingerprint
                     );
+                    // Send an error response so the peer doesn't hang
+                    if let Err(e) = crate::file_transfer::send_message(
+                        &mut send,
+                        &crate::filesystem::FilesystemMessage::Error {
+                            message: format!(
+                                "Filesystem access denied: peer {} is not trusted",
+                                fingerprint
+                            ),
+                        },
+                    )
+                    .await
+                    {
+                        warn!("Failed to send FS rejection: {}", e);
+                    }
                     continue;
                 }
 
