@@ -287,7 +287,7 @@ fn spawn_event_loop(
     fn check_disk_space(size: u64) -> Result<(), String> {
         let download_dir = get_download_directory_setting()
             .map(std::path::PathBuf::from)
-            .or_else(|| dirs::download_dir())
+            .or_else(dirs::download_dir)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         match fs2::available_space(&download_dir) {
             Ok(available) if available < size => {
@@ -632,22 +632,17 @@ fn spawn_event_loop(
                             || err_lower.contains("refused")
                             || err_lower.contains("unreachable")
                             || err_lower.contains("aborted");
-                        if is_connection_error {
-                            if let Some(path) = remove_transfer_path(&id) {
-                                // The retry will happen via DeviceFound handler — store by IP
-                                // We use "pending_retry" keyed by device IP which gets sent
-                                // when the device reconnects. For now use the id as placeholder.
-                                // The actual IP lookup happens in the app_controller at send time.
-                                // We store by "0.0.0.0" as a fallback catcher.
-                                pending_retry
-                                    .entry("0.0.0.0".to_string())
-                                    .or_default()
-                                    .push((path, String::new()));
-                                info!(
-                                    "Queued transfer {} for auto-retry on reconnect (error: {})",
-                                    id, error
-                                );
-                            }
+                        if is_connection_error
+                            && let Some(path) = remove_transfer_path(&id)
+                        {
+                            pending_retry
+                                .entry("0.0.0.0".to_string())
+                                .or_default()
+                                .push((path, String::new()));
+                            info!(
+                                "Queued transfer {} for auto-retry on reconnect (error: {})",
+                                id, error
+                            );
                         }
                     }
 
