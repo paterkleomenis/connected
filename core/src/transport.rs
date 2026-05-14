@@ -312,12 +312,8 @@ impl QuicTransport {
         let client_config_allow_unknown = Self::create_client_config(&key_store, true)?;
 
         #[cfg(not(target_os = "ios"))]
-        let mut endpoint = Endpoint::server(server_config, bind_addr).map_err(|e| {
-            ConnectedError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
+        let mut endpoint = Endpoint::server(server_config, bind_addr)
+            .map_err(|e| ConnectedError::Io(std::io::Error::other(e.to_string())))?;
 
         #[cfg(target_os = "ios")]
         let mut endpoint = {
@@ -343,10 +339,7 @@ impl QuicTransport {
                             // with exponential backoff so we succeed as soon as the
                             // user taps "Allow".
                             tokio::time::sleep(delay).await;
-                            delay = std::cmp::min(
-                                delay * 2,
-                                std::time::Duration::from_secs(4),
-                            );
+                            delay = std::cmp::min(delay * 2, std::time::Duration::from_secs(4));
                             continue;
                         }
                         return Err(ConnectedError::Io(std::io::Error::new(

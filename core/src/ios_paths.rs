@@ -59,14 +59,10 @@ pub fn documents_dir() -> PathBuf {
 pub fn temp_dir() -> PathBuf {
     match IOS_CACHE_DIR.get() {
         Some(cache) => cache.join("connected").join("tmp"),
-        None if cfg!(target_os = "ios") => {
-            std::env::temp_dir().join("connected").join("tmp")
-        }
-        None => {
-            dirs::config_dir()
-                .unwrap_or_else(std::env::temp_dir)
-                .join("connected")
-                .join("tmp")
-        }
+        None if cfg!(target_os = "ios") => std::env::temp_dir().join("connected").join("tmp"),
+        None => dirs::config_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("connected")
+            .join("tmp"),
     }
 }
