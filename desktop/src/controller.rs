@@ -632,9 +632,7 @@ fn spawn_event_loop(
                             || err_lower.contains("refused")
                             || err_lower.contains("unreachable")
                             || err_lower.contains("aborted");
-                        if is_connection_error
-                            && let Some(path) = remove_transfer_path(&id)
-                        {
+                        if is_connection_error && let Some(path) = remove_transfer_path(&id) {
                             pending_retry
                                 .entry("0.0.0.0".to_string())
                                 .or_default()
