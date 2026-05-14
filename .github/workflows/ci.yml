@@ -66,23 +66,29 @@ jobs:
           - name: Linux
             os: ubuntu-latest
             components: rustfmt clippy
-            targets: >-
-              x86_64-unknown-linux-gnu,
-              x86_64-linux-android, aarch64-linux-android,
-              armv7-linux-androideabi, i686-linux-android
+            targets:
+              - x86_64-unknown-linux-gnu
+              - x86_64-linux-android
+              - aarch64-linux-android
+              - armv7-linux-androideabi
+              - i686-linux-android
 
           - name: Windows
             os: windows-latest
             components: clippy
-            targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+            targets:
+              - x86_64-pc-windows-msvc
+              - aarch64-pc-windows-msvc
 
           - name: macOS
             os: macos-latest
             components: clippy
-            targets: >-
-              x86_64-apple-darwin, aarch64-apple-darwin,
-              x86_64-apple-ios, aarch64-apple-ios,
-              aarch64-apple-ios-sim
+            targets:
+              - x86_64-apple-darwin
+              - aarch64-apple-darwin
+              - x86_64-apple-ios
+              - aarch64-apple-ios
+              - aarch64-apple-ios-sim
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -99,7 +105,7 @@ jobs:
         with:
           toolchain: stable
           components: ${{ matrix.components }}
-          targets: ${{ matrix.targets }}
+          targets: ${{ join(matrix.targets, ',') }}
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -121,9 +127,7 @@ jobs:
       - name: Lint with Clippy
         shell: bash
         run: |
-          IFS=',' read -ra targets <<< "${{ matrix.targets }}"
-          for target in "${targets[@]}"; do
-            target="${target#"${target%%[! ]*}"}"
+          for target in ${{ join(matrix.targets, ' ') }}; do
             echo "::group::clippy ($target)"
             case "$target" in
               *android*)
