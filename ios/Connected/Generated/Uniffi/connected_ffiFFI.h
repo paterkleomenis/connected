@@ -961,6 +961,11 @@ void uniffi_connected_ffi_fn_func_send_unpair_notification(RustBuffer target_ip,
 void uniffi_connected_ffi_fn_func_set_download_directory(RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SET_IOS_PATHS
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SET_IOS_PATHS
+void uniffi_connected_ffi_fn_func_set_ios_paths(RustBuffer cache_dir, RustBuffer documents_dir, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SET_PAIRING_MODE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SET_PAIRING_MODE
 void uniffi_connected_ffi_fn_func_set_pairing_mode(int8_t enabled, RustCallStatus *_Nonnull out_status
@@ -1590,6 +1595,12 @@ uint16_t uniffi_connected_ffi_checksum_func_send_unpair_notification(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_DOWNLOAD_DIRECTORY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_DOWNLOAD_DIRECTORY
 uint16_t uniffi_connected_ffi_checksum_func_set_download_directory(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_IOS_PATHS
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SET_IOS_PATHS
+uint16_t uniffi_connected_ffi_checksum_func_set_ios_paths(void
 
 );
 #endif

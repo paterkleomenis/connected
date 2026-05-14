@@ -5088,6 +5088,25 @@ public func setDownloadDirectory(path: String)throws   {try rustCallWithError(Ff
     )
 }
 }
+/**
+ * Initialize iOS sandbox-compliant path resolution.
+ *
+ * **Must be called before `initialize`** on iOS (safe no-op on other platforms).
+ * The paths must be the **real** iOS sandbox paths obtained from
+ * `FileManager.urls(for:in:)` — the `dirs` crate resolves paths that lie
+ * outside the sandbox and cause `EPERM` on file operations.
+ *
+ * # Arguments
+ * * `cache_dir` — `NSCachesDirectory` path (used for temporary archives).
+ * * `documents_dir` — `NSDocumentDirectory` path (used for user-facing files).
+ */
+public func setIosPaths(cacheDir: String, documentsDir: String)  {try! rustCall() {
+    uniffi_connected_ffi_fn_func_set_ios_paths(
+        FfiConverterString.lower(cacheDir),
+        FfiConverterString.lower(documentsDir),$0
+    )
+}
+}
 public func setPairingMode(enabled: Bool)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
     uniffi_connected_ffi_fn_func_set_pairing_mode(
         FfiConverterBool.lower(enabled),$0
@@ -5315,6 +5334,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_set_download_directory() != 56242) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_connected_ffi_checksum_func_set_ios_paths() != 6737) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_set_pairing_mode() != 47523) {
