@@ -78,7 +78,30 @@ pub enum DiscoveryEvent {
 
 impl DiscoveryService {
     pub fn new(local_device: Device) -> Result<Self> {
-        let daemon = ServiceDaemon::new()?;
+        let daemon = match ServiceDaemon::new() {
+            Ok(d) => d,
+            Err(e) => {
+                #[cfg(target_os = "windows")]
+                error!(
+                    "mDNS ServiceDaemon failed to start. \
+                     This usually means Windows Firewall or another security \
+                     product is blocking UDP port 5353. \
+                     Run the following in an admin PowerShell to add the required rules:\n\
+                     netsh advfirewall firewall add rule name=\"Connected (mDNS-In)\" \
+                       dir=in protocol=udp localport=5353 action=allow\n\
+                     netsh advfirewall firewall add rule name=\"Connected (mDNS-Out)\" \
+                       dir=out protocol=udp remoteport=5353 action=allow\n\
+                     Error: {}",
+                    e
+                );
+                return Err(ConnectedError::Discovery(format!(
+                    "mDNS daemon failed: {}. \
+                     On Windows, ensure firewall allows UDP port 5353 \
+                     (run Connected Desktop once as admin to auto-configure).",
+                    e
+                )));
+            }
+        };
 
         // Disable virtual network interfaces that can interfere with mDNS multicast
         // This is especially important on Windows where VMware, VirtualBox, Hyper-V,

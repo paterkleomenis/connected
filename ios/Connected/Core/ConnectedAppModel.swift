@@ -106,6 +106,12 @@ final class ConnectedAppModel: ObservableObject {
     @Published private(set) var downloadDirectoryDisplayName = "Downloads"
     @Published private(set) var sharedDirectoryDisplayName = "Shared"
     @Published private(set) var contactsPermissionGranted = false
+
+    /// Temp files copied to sandbox for async Rust file transfers.
+    /// Keyed by transfer ID; cleaned up after transfer completes/fails.
+    /// Rust's tokio tasks read files asynchronously, so security-scoped
+    /// URLs would expire before the read happens — we copy to sandbox instead.
+    private var pendingTransferTempFiles: [String: URL] = [:]
     @Published private(set) var mediaLibraryPermissionGranted = false
     @Published private(set) var notificationsPermissionGranted = false
 
@@ -134,6 +140,7 @@ final class ConnectedAppModel: ObservableObject {
 
     private let discoveryBridge: DiscoveryBridge
     private let transferBridge: TransferBridge
+    private let bonjourPublisher = BonjourPublisher()
     private let clipboardBridge: ClipboardBridge
     private let pairingBridge: PairingBridge
     private let unpairBridge: UnpairBridge
@@ -278,6 +285,7 @@ final class ConnectedAppModel: ObservableObject {
 
 #if compiler(>=6.2)
     nonisolated deinit {
+        bonjourPublisher.stop()
 #if canImport(UIKit)
         if let observer = clipboardObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -298,6 +306,7 @@ final class ConnectedAppModel: ObservableObject {
     }
 #else
     deinit {
+        bonjourPublisher.stop()
 #if canImport(UIKit)
         if let observer = clipboardObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -398,6 +407,19 @@ final class ConnectedAppModel: ObservableObject {
                     self.pairingModeEnabled = pairingMode
                     self.localDevice = localDevice
                     self.localFingerprint = localFingerprint
+
+                    // Start iOS-native Bonjour publisher — mdns-sd raw sockets
+                    // cannot send outgoing multicast on iOS without a special
+                    // entitlement, so we use NSNetService (system mDNSResponder).
+                    if let dev = localDevice {
+                        self.bonjourPublisher.publish(
+                            name: currentName,
+                            port: Int32(dev.port),
+                            deviceId: dev.id,
+                            txt: ["type": "ios", "version": "1"]
+                        )
+                    }
+
                     self.mergeDevices(discovered)
                     self.infoMessage = "Connected core initialized"
                     self.lastErrorMessage = nil
@@ -422,6 +444,15 @@ final class ConnectedAppModel: ObservableObject {
 
         if !isDiscoveryActive {
             setDiscoveryActive(true)
+        } else if isInitialized, let dev = localDevice {
+            // Re-publish Bonjour — iOS may have suspended the NSNetService
+            // while the app was in the background.
+            bonjourPublisher.publish(
+                name: deviceName,
+                port: Int32(dev.port),
+                deviceId: dev.id,
+                txt: ["type": "ios", "version": "1"]
+            )
         }
     }
 
@@ -438,6 +469,8 @@ final class ConnectedAppModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         deviceName = trimmed
         defaults.set(trimmed, forKey: defaultsDeviceNameKey)
+        // Update Bonjour TXT record so peers see the new name immediately
+        bonjourPublisher.updateTxt(name: trimmed, txt: ["type": "ios", "version": "1"])
         infoMessage = "Saved device name. Reopen the app if peers still show the old name."
     }
 
@@ -475,6 +508,17 @@ final class ConnectedAppModel: ObservableObject {
         guard active != isDiscoveryActive else { return }
 
         if active {
+            // Re-publish iOS-native Bonjour (NSNetService survives background
+            // but may be dropped by the system over time).
+            if let dev = localDevice {
+                bonjourPublisher.publish(
+                    name: deviceName,
+                    port: Int32(dev.port),
+                    deviceId: dev.id,
+                    txt: ["type": "ios", "version": "1"]
+                )
+            }
+
             let discovery = discoveryBridge
             runInBackground { [weak self] in
                 do {
@@ -497,6 +541,7 @@ final class ConnectedAppModel: ObservableObject {
                 }
             }
         } else {
+            bonjourPublisher.stop()
             runInBackground { [weak self] in
                 stopDiscovery()
                 Task { @MainActor [weak self] in
@@ -633,25 +678,43 @@ final class ConnectedAppModel: ObservableObject {
 
     func sendFileToDevice(at fileURL: URL, to device: DiscoveredDevice) {
         runInBackground { [weak self] in
-            let didOpen = fileURL.startAccessingSecurityScopedResource()
-            defer {
-                if didOpen {
-                    fileURL.stopAccessingSecurityScopedResource()
+            guard let self else { return }
+
+            // Copy the file into our sandbox so the Rust async reader won't
+            // hit EPERM when the security-scoped resource expires.
+            let sandboxURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(fileURL.pathExtension)
+
+            do {
+                let didOpen = fileURL.startAccessingSecurityScopedResource()
+                defer {
+                    if didOpen { fileURL.stopAccessingSecurityScopedResource() }
                 }
+                // APFS reflinks/clones within the same volume — no actual copy I/O
+                try FileManager.default.copyItem(at: fileURL, to: sandboxURL)
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.lastErrorMessage = "Failed to prepare file: \(error.localizedDescription)"
+                }
+                return
             }
 
             do {
                 let transferId = try sendFile(
                     targetIp: device.ip,
                     targetPort: device.port,
-                    filePath: fileURL.path
+                    filePath: sandboxURL.path
                 )
 
+                // Register for cleanup when the transfer completes
                 Task { @MainActor [weak self] in
+                    self?.pendingTransferTempFiles[transferId] = sandboxURL
                     self?.activeTransferId = transferId
                     self?.transferStatus = "Sending \(fileURL.lastPathComponent)"
                 }
             } catch {
+                try? FileManager.default.removeItem(at: sandboxURL)
                 Task { @MainActor [weak self] in
                     self?.lastErrorMessage = "Send file failed: \(error.localizedDescription)"
                 }
@@ -1628,6 +1691,7 @@ final class ConnectedAppModel: ObservableObject {
     }
 
     fileprivate func handleTransferCompleted(filename: String, totalSize: UInt64) {
+        let tid = activeTransferId
         activeTransferId = nil
         lastTransferNotificationProgressBucket = nil
         transferStatus = "Completed \(filename)"
@@ -1639,9 +1703,11 @@ final class ConnectedAppModel: ObservableObject {
             sound: true,
             requiresAcknowledgment: true
         )
+        cleanupTempFile(transferId: tid)
     }
 
     fileprivate func handleTransferFailed(_ error: String) {
+        let tid = activeTransferId
         activeTransferId = nil
         lastTransferNotificationProgressBucket = nil
         transferStatus = "Transfer failed"
@@ -1652,13 +1718,21 @@ final class ConnectedAppModel: ObservableObject {
             sound: true,
             requiresAcknowledgment: true
         )
+        cleanupTempFile(transferId: tid)
+    }
+
+    private func cleanupTempFile(transferId: String?) {
+        guard let tid = transferId, let url = pendingTransferTempFiles.removeValue(forKey: tid) else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     fileprivate func handleTransferCancelled() {
+        let tid = activeTransferId
         activeTransferId = nil
         lastTransferNotificationProgressBucket = nil
         transferStatus = "Transfer cancelled"
         clearTransferNotification()
+        cleanupTempFile(transferId: tid)
     }
 
     fileprivate func handleCompressionProgress(filename: String, currentFile: String, filesProcessed: UInt64, totalFiles: UInt64) {

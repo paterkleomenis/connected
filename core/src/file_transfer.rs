@@ -249,6 +249,15 @@ impl FileTransfer {
                 if is_temp_file {
                     let _ = tokio::fs::remove_file(&path).await;
                 }
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    error!(
+                        "EPERM opening file for send: {:?}. \
+                         On iOS: ensure set_ios_paths() was called before initialize() \
+                         and the file is within the app sandbox. \
+                         On Windows: check antivirus real-time scanning.",
+                        path
+                    );
+                }
                 return Err(ConnectedError::Io(e));
             }
         };
