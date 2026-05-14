@@ -44,12 +44,6 @@ jobs:
       - name: Install pre-commit
         run: pip install pre-commit
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-
       - name: Cache pre-commit hooks
         uses: actions/cache@v5
         with:
@@ -63,13 +57,39 @@ jobs:
   # Job 2: Code Quality (formatting, linting, typos)
   # -------------------------------------------------------------------------
   quality:
-    name: Code Quality
-    runs-on: ubuntu-latest
+    name: Code Quality (${{ matrix.name }})
     if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            components: rustfmt clippy
+            targets: >-
+              x86_64-unknown-linux-gnu,
+              x86_64-linux-android, aarch64-linux-android,
+              armv7-linux-androideabi, i686-linux-android
+
+          - name: Windows
+            os: windows-latest
+            components: clippy
+            targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+
+          - name: macOS
+            os: macos-latest
+            components: clippy
+            targets: >-
+              x86_64-apple-darwin, aarch64-apple-darwin,
+              x86_64-apple-ios, aarch64-apple-ios,
+              aarch64-apple-ios-sim
+
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
 
       - name: Install system dependencies
+        if: matrix.name == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libudev-dev pkg-config libdbus-1-dev libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libglib2.0-dev
@@ -78,26 +98,49 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: ${{ matrix.components }}
+          targets: ${{ matrix.targets }}
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "quality"
+          shared-key: quality-${{ matrix.name }}
 
       - name: Install cargo tools
-        run: cargo install typos-cli taplo-cli --locked
+        if: matrix.name == 'Linux'
+        run: cargo install typos-cli taplo-cli cargo-ndk --locked
 
       - name: Check formatting
+        if: matrix.name == 'Linux'
         run: cargo fmt -- --check
 
       - name: Check TOML formatting
+        if: matrix.name == 'Linux'
         run: taplo fmt --check
 
       - name: Lint with Clippy
-        run: cargo clippy --workspace -- -D warnings
+        shell: bash
+        run: |
+          IFS=',' read -ra targets <<< "${{ matrix.targets }}"
+          for target in "${targets[@]}"; do
+            target="${target#"${target%%[! ]*}"}"
+            echo "::group::clippy ($target)"
+            case "$target" in
+              *android*)
+                cargo ndk -t "$target" clippy -p connected-core -p connected-ffi -- -D warnings
+                ;;
+              *apple-ios*)
+                cargo clippy -p connected-core -p connected-ffi --target "$target" -- -D warnings
+                ;;
+              *)
+                cargo clippy --workspace --target "$target" -- -D warnings
+                ;;
+            esac
+            echo "::endgroup::"
+          done
 
       - name: Check typos
+        if: matrix.name == 'Linux'
         run: typos
 
   # -------------------------------------------------------------------------
@@ -150,7 +193,6 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
-          components: rustfmt, clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -227,7 +269,6 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
-          components: rustfmt, clippy
           targets: ${{ matrix.target }}
 
       - name: Configure ARM64 Windows C toolchain
