@@ -179,7 +179,7 @@ dependencies {
 
     // Material Components (Required for Theme.MaterialComponents in themes.xml)
     implementation("androidx.appcompat:appcompat:1.7.1")
-    implementation("com.google.android.material:material:1.13.0")
+    implementation("com.google.android.material:material:1.14.0")
 
     // JNA for UniFFI bindings
     implementation("net.java.dev.jna:jna:5.18.1@aar")
