@@ -806,6 +806,22 @@ pub trait TelephonyCallback: Send + Sync {
 // Exported Functions
 // ============================================================================
 
+/// Initialize iOS sandbox-compliant path resolution.
+///
+/// **Must be called before `initialize`** on iOS (safe no-op on other platforms).
+/// The paths must be the **real** iOS sandbox paths obtained from
+/// `FileManager.urls(for:in:)` — the `dirs` crate resolves paths that lie
+/// outside the sandbox and cause `EPERM` on file operations.
+///
+/// # Arguments
+/// * `cache_dir` — `NSCachesDirectory` path (used for temporary archives).
+/// * `documents_dir` — `NSDocumentDirectory` path (used for user-facing files).
+#[uniffi::export]
+pub fn set_ios_paths(cache_dir: String, documents_dir: String) {
+    connected_core::ios_paths::set_cache_dir(std::path::PathBuf::from(cache_dir));
+    connected_core::ios_paths::set_documents_dir(std::path::PathBuf::from(documents_dir));
+}
+
 #[uniffi::export]
 pub fn initialize(
     device_name: String,

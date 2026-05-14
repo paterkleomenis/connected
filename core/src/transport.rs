@@ -311,7 +311,58 @@ impl QuicTransport {
         let client_config = Self::create_client_config(&key_store, false)?;
         let client_config_allow_unknown = Self::create_client_config(&key_store, true)?;
 
-        let mut endpoint = Endpoint::server(server_config, bind_addr)?;
+        #[cfg(not(target_os = "ios"))]
+        let mut endpoint = Endpoint::server(server_config, bind_addr).map_err(|e| {
+            ConnectedError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })?;
+
+        #[cfg(target_os = "ios")]
+        let mut endpoint = {
+            let start = std::time::Instant::now();
+            let max_wait = std::time::Duration::from_secs(30);
+            let mut delay = std::time::Duration::from_millis(500);
+            loop {
+                match Endpoint::server(server_config.clone(), bind_addr) {
+                    Ok(ep) => break ep,
+                    Err(e) => {
+                        let is_permission_denied = match &e {
+                            quinn::EndpointError::Socket(io_err)
+                                if io_err.kind() == std::io::ErrorKind::PermissionDenied =>
+                            {
+                                true
+                            }
+                            _ => false,
+                        };
+                        if is_permission_denied && start.elapsed() < max_wait {
+                            // iOS Local Network permission not yet granted.
+                            // The system shows the permission dialog asynchronously
+                            // when it detects the first UDP bind attempt.  Retry
+                            // with exponential backoff so we succeed as soon as the
+                            // user taps "Allow".
+                            tokio::time::sleep(delay).await;
+                            delay = std::cmp::min(
+                                delay * 2,
+                                std::time::Duration::from_secs(4),
+                            );
+                            continue;
+                        }
+                        return Err(ConnectedError::Io(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            format!(
+                                "Failed to bind QUIC socket on iOS. \
+                                 Grant Local Network permission in Settings, \
+                                 or restart the app and accept the permission prompt. \
+                                 Underlying error: {}",
+                                e
+                            ),
+                        )));
+                    }
+                }
+            }
+        };
         endpoint.set_default_client_config(client_config.clone());
 
         info!("QUIC transport listening on {}", bind_addr);

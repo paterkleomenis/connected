@@ -38,15 +38,28 @@
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
+
+    <!-- File Sharing: received files visible in iOS Files app -->
+    <key>UIFileSharingEnabled</key>
+    <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+    <key>UISupportsDocumentBrowser</key>
+    <true/>
+
+    <!-- Local Network Privacy -->
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Connected needs local network access to discover and connect to nearby devices.</string>
+    <string>Connected needs local network access to discover and connect to nearby devices for syncing clipboard, files, and more.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_connected._udp</string>
+        <string>_connected._tcp</string>
+    </array>
+
+    <!-- Other Privacy Descriptions -->
     <key>NSContactsUsageDescription</key>
     <string>Connected uses your contacts to sync names and phone numbers with trusted paired devices.</string>
     <key>NSAppleMusicUsageDescription</key>
     <string>Connected uses Apple Music access to execute supported media playback commands from trusted paired devices.</string>
-    <key>NSBonjourServices</key>
-    <array>
-        <string>_connected._udp</string>
-    </array>
 </dict>
 </plist>

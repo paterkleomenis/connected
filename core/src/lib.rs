@@ -1,3 +1,5 @@
+pub mod ios_paths;
+
 pub mod client;
 pub mod device;
 pub mod discovery;

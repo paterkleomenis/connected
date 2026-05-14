@@ -333,7 +333,10 @@ final class ConnectedAppModel: ObservableObject {
         guard !isInitialized else { return }
 
         let currentName = deviceName
+        let fileManager = FileManager.default
         let storagePath = storageRoot.path
+        let cachePath = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("Connected", isDirectory: true).path
         let downloadPath = downloadRoot.path
         let pairingMode = pairingModeEnabled
         let discovery = discoveryBridge
@@ -349,6 +352,11 @@ final class ConnectedAppModel: ObservableObject {
             guard let self else { return }
 
             do {
+                // iOS sandbox path registration — must precede initialize().
+                // The Rust dirs crate resolves paths outside the app sandbox on iOS,
+                // causing EPERM on all file operations. These are the real paths.
+                setIosPaths(cacheDir: cachePath, documentsDir: storagePath)
+
                 do {
                     try initialize(deviceName: currentName, deviceType: "ios", bindPort: 0, storagePath: storagePath)
                 } catch let error as ConnectedFfiError {

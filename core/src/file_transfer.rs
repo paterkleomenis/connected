@@ -132,9 +132,7 @@ impl FileTransfer {
                     // L1: Use a user-private temp directory instead of the shared
                     // system temp dir to prevent local attackers from reading or
                     // racing to replace the archive before it is sent.
-                    let temp_dir = dirs::config_dir()
-                        .map(|d| d.join("connected").join("tmp"))
-                        .unwrap_or_else(std::env::temp_dir);
+                    let temp_dir = crate::ios_paths::temp_dir();
                     std::fs::create_dir_all(&temp_dir)?;
 
                     // Restrict directory permissions to owner-only on Unix
