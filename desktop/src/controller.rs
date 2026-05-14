@@ -19,6 +19,7 @@ use crate::state::{
     set_download_directory_setting, set_last_remote_clipboard_content, set_pairing_mode_state,
     set_phone_call_log, set_phone_contacts, set_phone_conversations, set_phone_messages,
     set_sdk_initialized, set_transfer_status,
+    store_transfer_path, remove_transfer_path,
 };
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -218,6 +219,7 @@ pub enum AppAction {
     PerformUpdate,
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     PickAndSendFiles,
+    Shutdown,
 }
 
 type MediaPollStateUpdate = (Option<String>, Option<String>, Option<String>, bool);
@@ -283,6 +285,29 @@ fn spawn_event_loop(
         lower.contains("cancelled") || lower.contains("canceled")
     }
 
+    fn check_disk_space(size: u64) -> Result<(), String> {
+        let download_dir = get_download_directory_setting()
+            .map(std::path::PathBuf::from)
+            .or_else(|| dirs::download_dir())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        match fs2::available_space(&download_dir) {
+            Ok(available) if available < size => {
+                let needed_mb = size as f64 / 1_048_576.0;
+                let avail_mb = available as f64 / 1_048_576.0;
+                Err(format!(
+                    "Not enough disk space. Need {:.0} MB but only {:.0} MB available in {}",
+                    needed_mb, avail_mb,
+                    download_dir.display()
+                ))
+            }
+            Ok(_) => Ok(()),
+            Err(e) => {
+                warn!("Failed to check disk space: {}", e);
+                Ok(())
+            }
+        }
+    }
+
     let c_clone = c.clone();
     tokio::spawn(async move {
         #[cfg(target_os = "linux")]
@@ -293,6 +318,13 @@ fn spawn_event_loop(
         let mut outgoing_transfers: std::collections::HashMap<String, (String, f32)> =
             std::collections::HashMap::new();
         let mut incoming_transfers: std::collections::HashMap<String, (String, f32)> =
+            std::collections::HashMap::new();
+        // Track total file sizes per transfer for aggregate progress calculation
+        let mut transfer_sizes: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        // Queue of outgoing transfers that failed due to connection loss, keyed by device IP.
+        // When the device reconnects (DeviceFound), these are automatically retried.
+        let mut pending_retry: std::collections::HashMap<String, Vec<(std::path::PathBuf, String)>> =
             std::collections::HashMap::new();
 
         loop {
@@ -314,6 +346,9 @@ fn spawn_event_loop(
             };
             match event {
                 ConnectedEvent::DeviceFound(d) => {
+                    let dev_ip = d.ip.clone();
+                    let dev_port = d.port;
+                    let dev_name = d.name.clone();
                     let mut info: DeviceInfo = d.clone().into();
                     info.is_trusted = c_clone.is_device_trusted(&d.id);
 
@@ -324,6 +359,49 @@ fn spawn_event_loop(
 
                     let mut store = get_devices_store().lock_or_recover();
                     store.insert(info.id.clone(), info);
+
+                    // Auto-retry any transfers that failed due to connection loss
+                    let retry_paths: Vec<std::path::PathBuf> = {
+                        let by_ip = pending_retry.remove(&dev_ip).unwrap_or_default();
+                        let by_fallback = pending_retry.remove("0.0.0.0").unwrap_or_default();
+                        by_ip.into_iter().chain(by_fallback).map(|(p, _)| p).collect()
+                    };
+                    if !retry_paths.is_empty() {
+                        info!(
+                            "Device {} reconnected — retrying {} failed transfer(s)",
+                            dev_name,
+                            retry_paths.len()
+                        );
+                        let c = c_clone.clone();
+                        let ip = dev_ip.clone();
+                        let port = dev_port;
+                        let dname = dev_name.clone();
+                        tokio::spawn(async move {
+                            let mut retried = 0usize;
+                            if let Ok(ip_addr) = ip.parse::<std::net::IpAddr>() {
+                                for path in retry_paths {
+                                    match c.send_file(ip_addr, port, path.clone()).await {
+                                        Ok(transfer_id) => {
+                                            store_transfer_path(transfer_id.clone(), path);
+                                            set_active_outgoing_transfer_id(Some(transfer_id));
+                                            retried += 1;
+                                        }
+                                        Err(e) => {
+                                            error!("Auto-retry failed for {}: {}", path.display(), e);
+                                        }
+                                    }
+                                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                }
+                            }
+                            if retried > 0 {
+                                add_notification(
+                                    "Retrying Transfer",
+                                    &format!("Retrying {} file(s) to {}", retried, dname),
+                                    "",
+                                );
+                            }
+                        });
+                    }
 
                     if d.ip != "0.0.0.0" {
                         save_device_to_settings(
@@ -364,26 +442,27 @@ fn spawn_event_loop(
                     filename,
                     direction,
                     id,
+                    total_size,
                     ..
                 } => {
                     use connected_core::events::TransferDirection;
+                    transfer_sizes.insert(id.clone(), total_size);
                     if direction == TransferDirection::Incoming {
                         incoming_transfers.insert(id.clone(), (filename.clone(), 0.0));
                         set_active_incoming_transfer_id(Some(id.clone()));
-                        *get_transfer_status().lock_or_recover() = TransferStatus::Starting {
-                            filename: filename.clone(),
-                        };
+                    } else {
+                        outgoing_transfers.insert(id.clone(), (filename.clone(), 0.0));
+                        set_active_outgoing_transfer_id(Some(id.clone()));
+                    }
+                    *get_transfer_status().lock_or_recover() = TransferStatus::Starting {
+                        filename: filename.clone(),
+                    };
+                    if direction == TransferDirection::Incoming {
                         add_notification(
                             "Transfer Starting",
                             &format!("Receiving {}", filename),
                             "",
                         );
-                    } else {
-                        outgoing_transfers.insert(id.clone(), (filename.clone(), 0.0));
-                        set_active_outgoing_transfer_id(Some(id));
-                        *get_transfer_status().lock_or_recover() = TransferStatus::Starting {
-                            filename: filename.clone(),
-                        };
                     }
                 }
                 ConnectedEvent::TransferProgress {
@@ -391,41 +470,64 @@ fn spawn_event_loop(
                     bytes_transferred,
                     total_size,
                 } => {
+                    transfer_sizes.insert(id.clone(), total_size);
                     let percent = if total_size > 0 {
                         (bytes_transferred as f32 / total_size as f32) * 100.0
                     } else {
                         0.0
                     };
 
-                    // Prefer filename tracked for this specific outgoing transfer id.
-                    if let Some((filename, last_percent)) = outgoing_transfers.get_mut(&id) {
+                    if let Some((_, last_percent)) = outgoing_transfers.get_mut(&id) {
                         *last_percent = percent;
-                        set_active_outgoing_transfer_id(Some(id));
+                        set_active_outgoing_transfer_id(Some(id.clone()));
+                    } else if let Some((_, last_percent)) = incoming_transfers.get_mut(&id) {
+                        *last_percent = percent;
+                        set_active_incoming_transfer_id(Some(id.clone()));
+                    }
+
+                    // Show multi-file aggregate when multiple transfers are active
+                    let total_count = outgoing_transfers.len() + incoming_transfers.len();
+                    let all_transfers: Vec<(&String, &(String, f32))> = outgoing_transfers
+                        .iter()
+                        .chain(incoming_transfers.iter())
+                        .collect();
+
+                    if total_count > 1 {
+                        let total_bytes: u64 = all_transfers.iter()
+                            .filter_map(|(id, _)| transfer_sizes.get(*id))
+                            .sum();
+                        let total_sent: u64 = all_transfers.iter()
+                            .filter_map(|(id, (_, p))| {
+                                transfer_sizes.get(*id).map(|s| (*s as f64 * (*p as f64 / 100.0)) as u64)
+                            })
+                            .sum();
+                        let aggregate_percent = if total_bytes > 0 {
+                            (total_sent as f32 / total_bytes as f32) * 100.0
+                        } else {
+                            0.0
+                        };
+
+                        let (current_filename, _) = &all_transfers[0].1;
+                        let label = format!(
+                            "{}  (file {}/{})",
+                            current_filename,
+                            all_transfers.iter().position(|(i, _)| *i == &id).unwrap_or(0) + 1,
+                            total_count
+                        );
+
                         *get_transfer_status().lock_or_recover() = TransferStatus::InProgress {
-                            filename: filename.clone(),
+                            filename: label,
+                            percent: aggregate_percent,
+                        };
+                    } else if let Some((filename, _)) = all_transfers.first() {
+                        *get_transfer_status().lock_or_recover() = TransferStatus::InProgress {
+                            filename: filename.to_string(),
                             percent,
                         };
-                    } else if let Some((filename, last_percent)) = incoming_transfers.get_mut(&id) {
-                        *last_percent = percent;
-                        set_active_incoming_transfer_id(Some(id));
-                        *get_transfer_status().lock_or_recover() = TransferStatus::InProgress {
-                            filename: filename.clone(),
-                            percent,
-                        };
-                    } else {
-                        // Fallback for incoming/protocols that don't carry direction in progress events.
-                        let mut status = get_transfer_status().lock_or_recover();
-                        let current_filename = match &*status {
-                            TransferStatus::Starting { filename } => Some(filename.clone()),
-                            TransferStatus::InProgress { filename, .. } => Some(filename.clone()),
-                            _ => None,
-                        };
-                        if let Some(filename) = current_filename {
-                            *status = TransferStatus::InProgress { filename, percent };
-                        }
                     }
                 }
                 ConnectedEvent::TransferCompleted { filename, id, .. } => {
+                    transfer_sizes.remove(&id);
                     let was_outgoing = outgoing_transfers.remove(&id).is_some();
                     let was_incoming = incoming_transfers.remove(&id).is_some();
 
@@ -494,14 +596,38 @@ fn spawn_event_loop(
                     }
                 }
                 ConnectedEvent::TransferFailed { error, id, .. } => {
-                    // Remove pending request if it still exists
+                    transfer_sizes.remove(&id);
                     remove_file_transfer_request(&id);
 
-                    // Check if this was a cancellation
                     let is_cancelled = is_cancelled_error(&error);
 
                     let was_outgoing = outgoing_transfers.remove(&id).is_some();
                     let was_incoming = incoming_transfers.remove(&id).is_some();
+
+                    // Queue outgoing transfers that failed due to connection loss for auto-retry
+                    if was_outgoing && !is_cancelled {
+                        let err_lower = error.to_lowercase();
+                        let is_connection_error = err_lower.contains("timeout")
+                            || err_lower.contains("eof")
+                            || err_lower.contains("connection")
+                            || err_lower.contains("reset")
+                            || err_lower.contains("refused")
+                            || err_lower.contains("unreachable")
+                            || err_lower.contains("aborted");
+                        if is_connection_error {
+                            if let Some(path) = remove_transfer_path(&id) {
+                                // The retry will happen via DeviceFound handler — store by IP
+                                // We use "pending_retry" keyed by device IP which gets sent
+                                // when the device reconnects. For now use the id as placeholder.
+                                // The actual IP lookup happens in the app_controller at send time.
+                                // We store by "0.0.0.0" as a fallback catcher.
+                                pending_retry.entry("0.0.0.0".to_string())
+                                    .or_default()
+                                    .push((path, String::new()));
+                                info!("Queued transfer {} for auto-retry on reconnect (error: {})", id, error);
+                            }
+                        }
+                    }
 
                     if was_outgoing || was_incoming {
                         // Keep active transfer ids aligned with live transfer maps
@@ -571,6 +697,7 @@ fn spawn_event_loop(
                 } => {
                     if !*get_pairing_mode_state().lock_or_recover()
                         && !c_clone.is_device_trusted(&device_id)
+                        && !c_clone.is_device_forgotten(&fingerprint)
                     {
                         info!(
                             "Auto-rejecting pairing request while pairing mode is disabled: {} ({})",
@@ -687,6 +814,15 @@ fn spawn_event_loop(
                     from_device,
                     from_fingerprint,
                 } => {
+                    // Check disk space before accepting
+                    if let Err(msg) = check_disk_space(size) {
+                        warn!("Rejecting transfer {} from {}: {}", filename, from_device, msg);
+                        let _ = c_clone.reject_file_transfer(&id);
+                        add_notification("Transfer Rejected", &msg, "");
+                        *get_transfer_status().lock_or_recover() = TransferStatus::Idle;
+                        continue;
+                    }
+
                     if is_auto_accept_enabled(&from_fingerprint) {
                         info!("Auto-accepting transfer {} from {}", filename, from_device);
                         if let Err(e) = c_clone.accept_file_transfer(&id) {
@@ -1407,18 +1543,20 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         continue;
                     }
                     let c = c.clone();
+                    let ip_clone = ip.clone();
                     tokio::spawn(async move {
-                        if let Ok(ip_addr) = ip.parse() {
+                        if let Ok(ip_addr) = ip_clone.parse() {
                             for path in paths {
-                                match c.send_file(ip_addr, port, PathBuf::from(path)).await {
+                                let path_buf = PathBuf::from(&path);
+                                match c.send_file(ip_addr, port, path_buf.clone()).await {
                                     Ok(transfer_id) => {
+                                        store_transfer_path(transfer_id.clone(), path_buf);
                                         set_active_outgoing_transfer_id(Some(transfer_id));
                                     }
                                     Err(e) => {
                                         error!("Failed to start file transfer: {}", e);
                                     }
                                 }
-                                // Small delay between multiple files to avoid overwhelming the receiver/UI
                                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                             }
                         }
@@ -1701,40 +1839,35 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::CancelFileTransfer => {
                 if let Some(c) = &client {
-                    // Try to cancel outgoing transfer first
                     let outgoing_id = get_active_outgoing_transfer_id().lock_or_recover().clone();
                     if let Some(id) = outgoing_id {
-                        match c.cancel_file_transfer(&id) {
-                            Ok(()) => {
-                                add_notification(
-                                    "Transfer Cancelled",
-                                    "Outgoing file transfer has been cancelled",
-                                    "",
-                                );
-                                continue;
-                            }
-                            Err(e) => {
-                                warn!("Failed to cancel outgoing file transfer: {}", e);
-                            }
-                        }
+                        let _ = c.cancel_file_transfer(&id);
+                        set_active_outgoing_transfer_id(None);
+                        remove_file_transfer_request(&id);
+                        set_transfer_status(TransferStatus::Cancelled {
+                            filename: String::from("File transfer"),
+                        });
+                        add_notification(
+                            "Transfer Cancelled",
+                            "Outgoing file transfer has been cancelled",
+                            "",
+                        );
+                        continue;
                     }
 
-                    // Try to cancel incoming transfer
                     let incoming_id = get_active_incoming_transfer_id().lock_or_recover().clone();
                     if let Some(id) = incoming_id {
-                        match c.cancel_incoming_file_transfer(&id) {
-                            Ok(()) => {
-                                add_notification(
-                                    "Transfer Cancelled",
-                                    "Incoming file transfer has been cancelled",
-                                    "",
-                                );
-                                set_active_incoming_transfer_id(None);
-                            }
-                            Err(e) => {
-                                warn!("Failed to cancel incoming file transfer: {}", e);
-                            }
-                        }
+                        let _ = c.cancel_incoming_file_transfer(&id);
+                        set_active_incoming_transfer_id(None);
+                        remove_file_transfer_request(&id);
+                        set_transfer_status(TransferStatus::Cancelled {
+                            filename: String::from("File transfer"),
+                        });
+                        add_notification(
+                            "Transfer Cancelled",
+                            "Incoming file transfer has been cancelled",
+                            "",
+                        );
                     }
                 }
             }
@@ -2566,6 +2699,16 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         }
                     });
                 }
+            }
+            AppAction::Shutdown => {
+                info!("Shutdown requested — cancelling active transfers");
+                if let Some(c) = &client {
+                    c.cancel_all_file_transfers();
+                }
+                set_active_outgoing_transfer_id(None);
+                set_active_incoming_transfer_id(None);
+                set_transfer_status(TransferStatus::Idle);
+                break;
             }
         }
     }

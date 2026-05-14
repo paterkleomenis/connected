@@ -217,6 +217,9 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    /** Public check used by ConnectedService to decide whether to keep the process alive. */
+    fun hasActiveTransfers(): Boolean = hasAnyActiveTransfers()
+
     private fun markTransferFinished(transferId: String) {
         synchronized(transferTrackingLock) {
             activeOutgoingTransferIds.remove(transferId)
@@ -296,6 +299,11 @@ class ConnectedApp(private val context: Context) {
     private val lastRemoteClipboard = AtomicReference("")
 
     private val isAppInForeground = AtomicBoolean(false)
+
+    /** Tracks whether the currently active file transfer is outgoing (upload) or incoming (download).
+     *  Used by onTransferProgress to show the correct notification title. */
+    private var isCurrentTransferOutgoing = false
+
     private var scopeJob = kotlinx.coroutines.SupervisorJob()
     private var scope =
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO + scopeJob)
@@ -688,13 +696,16 @@ class ConnectedApp(private val context: Context) {
                 if (isOutgoing) {
                     activeOutgoingTransferIds.add(transferId)
                     activeTransferId = transferId
+                    isCurrentTransferOutgoing = true
                 } else {
                     activeIncomingTransferIds.add(transferId)
                     activeIncomingTransferId = transferId
+                    isCurrentTransferOutgoing = false
                 }
             }
             transferStatus.value = "Starting transfer: $filename"
-            showProgressNotification(filename, 0, totalSize.toLong())
+            val notificationTitle = if (isOutgoing) "Uploading: $filename" else filename
+            showProgressNotification(notificationTitle, 0, totalSize.toLong())
         }
 
         override fun onTransferProgress(
@@ -705,10 +716,12 @@ class ConnectedApp(private val context: Context) {
             val percent =
                 if (totalSize > 0u) (bytesTransferred.toLong() * 100 / totalSize.toLong()) else 0
             transferStatus.value = "Transferring: $percent%"
-            showProgressNotification("Downloading...", bytesTransferred.toLong(), totalSize.toLong())
+            val notificationTitle = if (isCurrentTransferOutgoing) "Uploading..." else "Downloading..."
+            showProgressNotification(notificationTitle, bytesTransferred.toLong(), totalSize.toLong())
         }
 
         override fun onTransferCompleted(transferId: String, filename: String, totalSize: ULong) {
+            isCurrentTransferOutgoing = false
             markTransferFinished(transferId)
             val hasMoreTransfers = hasAnyActiveTransfers()
             transferStatus.value = if (hasMoreTransfers) {
@@ -721,10 +734,8 @@ class ConnectedApp(private val context: Context) {
             Log.d("ConnectedApp", "Completed transfer URI for $filename: $openUri")
             showCompletionNotification(filename, openUri?.toString(), getMimeType(filename))
 
-            // IMPORTANT: with concurrent transfers, cleaning temp files here can
-            // delete files still being sent by another active transfer and cause
-            // unexpected EOF on the receiver.
             if (!hasMoreTransfers) {
+                ConnectedService.restoreDefaultForegroundNotification()
                 cleanupAllPendingTempFiles()
                 cleanupStreamingTempDirectory()
                 cleanupOrphanedCacheZipFiles()
@@ -739,6 +750,7 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onTransferFailed(transferId: String, errorMsg: String) {
+            isCurrentTransferOutgoing = false
             markTransferFinished(transferId)
             val hasMoreTransfers = hasAnyActiveTransfers()
             transferStatus.value = if (hasMoreTransfers) {
@@ -748,8 +760,8 @@ class ConnectedApp(private val context: Context) {
             }
             showErrorNotification(errorMsg)
 
-            // Same concurrency guard as onTransferCompleted.
             if (!hasMoreTransfers) {
+                ConnectedService.restoreDefaultForegroundNotification()
                 cleanupAllPendingTempFiles()
                 cleanupStreamingTempDirectory()
                 cleanupOrphanedCacheZipFiles()
@@ -757,6 +769,7 @@ class ConnectedApp(private val context: Context) {
         }
 
         override fun onTransferCancelled(transferId: String) {
+            isCurrentTransferOutgoing = false
             markTransferFinished(transferId)
             val hasMoreTransfers = hasAnyActiveTransfers()
             transferStatus.value = if (hasMoreTransfers) "Transferring..." else "Cancelled"
@@ -767,6 +780,7 @@ class ConnectedApp(private val context: Context) {
             }
 
             if (!hasMoreTransfers) {
+                ConnectedService.restoreDefaultForegroundNotification()
                 cleanupAllPendingTempFiles()
                 cleanupStreamingTempDirectory()
             }
@@ -1185,7 +1199,25 @@ class ConnectedApp(private val context: Context) {
     fun cleanup() {
         Log.d("ConnectedApp", "Cleaning up resources")
 
-        // Cancel all coroutines first to stop ongoing operations
+        // Cancel active file transfers gracefully so the peer receives a
+        // Cancel message and can clean up partial data.
+        cancelFileTransfer()
+
+        // Wait for cancellation to propagate (up to 3 seconds).
+        // The Rust transfer task needs time to detect the flag, send Cancel
+        // to the peer, and clean up. If we shut down the transport before
+        // that, the peer gets a connection drop instead of a clean cancel.
+        try {
+            var waited = 0
+            while (hasAnyActiveTransfers() && waited < 3000) {
+                Thread.sleep(100)
+                waited += 100
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+
+        // Cancel all coroutines to stop ongoing operations
         try {
             scopeJob.cancel()
         } catch (e: Exception) {
@@ -1462,6 +1494,16 @@ class ConnectedApp(private val context: Context) {
             context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         val channelId = "connected_transfer_channel"
 
+        // Ensure channel exists (needed for outgoing transfers that skip showTransferNotification)
+        try {
+            val channel = android.app.NotificationChannel(
+                channelId,
+                "File Transfers",
+                android.app.NotificationManager.IMPORTANCE_LOW
+            )
+            notificationManager.createNotificationChannel(channel)
+        } catch (_: Exception) { }
+
         val cancelIntent = Intent(context, TransferActionReceiver::class.java).apply {
             action = ACTION_CANCEL_TRANSFER
         }
@@ -1480,15 +1522,22 @@ class ConnectedApp(private val context: Context) {
             .setOnlyAlertOnce(true)
             .addAction(R.drawable.ic_close, "Cancel", cancelPendingIntent)
 
+        val percent: Int
         if (total > 0) {
             val safeCurrent = current.coerceIn(0L, total)
-            val percent = ((safeCurrent * 100L) / total).coerceIn(0L, 100L).toInt()
+            percent = ((safeCurrent * 100L) / total).coerceIn(0L, 100L).toInt()
             builder.setProgress(100, percent, false)
             builder.setContentText("$percent%")
         } else {
+            percent = -1
             builder.setProgress(0, 0, true)
         }
         notificationManager.notify(NOTIFICATION_ID_PROGRESS, builder.build())
+
+        // Also update the foreground service notification so the transfer
+        // progress stays visible even if the user closes the app.
+        val serviceTitle = if (percent >= 0) "Connected - $percent%" else "Connected"
+        ConnectedService.updateForegroundNotification(serviceTitle, title, percent)
     }
 
     private fun showCompletionNotification(filename: String, openUriString: String?, mimeType: String) {

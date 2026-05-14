@@ -33,7 +33,7 @@ const MAX_TOTAL_CONNECTIONS: usize = 200;
 // LAN-optimized transport parameters for WiFi 5/6 (802.11ac/ax)
 // These values are tuned for 2.4GHz and 5GHz WiFi with typical RTT of 5-20ms
 const INITIAL_RTT_MS: u64 = 5; // Lower initial RTT for faster startup on LAN
-const MAX_IDLE_TIMEOUT_SECS: u64 = 60;
+const MAX_IDLE_TIMEOUT_SECS: u64 = 20;
 const KEEP_ALIVE_INTERVAL_SECS: u64 = 15;
 const MAX_CONCURRENT_BIDI_STREAMS: u32 = 256; // Increased for better parallelism
 const MAX_CONCURRENT_UNI_STREAMS: u32 = 256; // Increased for better parallelism

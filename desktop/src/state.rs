@@ -7,7 +7,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::panic::Location;
 use std::path::PathBuf;
-
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -390,6 +389,8 @@ static FILE_TRANSFER_REQUESTS: OnceLock<Arc<Mutex<HashMap<String, FileTransferRe
     OnceLock::new();
 static AUTO_ACCEPT_FINGERPRINTS: OnceLock<Arc<Mutex<HashMap<String, std::time::Instant>>>> =
     OnceLock::new();
+static TRANSFER_FILE_PATHS: OnceLock<Arc<Mutex<HashMap<String, std::path::PathBuf>>>> =
+    OnceLock::new();
 static REMOTE_FILES: OnceLock<Arc<Mutex<Option<Vec<FsEntry>>>>> = OnceLock::new();
 static REMOTE_PATH: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 static REMOTE_FILES_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
@@ -691,6 +692,8 @@ pub fn add_notification(title: &str, message: &str, icon: &'static str) {
                 if let Err(e) = notify_rust::Notification::new()
                     .summary(&summary)
                     .body(&body)
+                    .urgency(notify_rust::Urgency::Critical)
+                    .timeout(notify_rust::Timeout::Never)
                     .show()
                 {
                     tracing::warn!("Failed to show system notification: {}", e);
@@ -764,6 +767,8 @@ pub fn add_open_file_notification(
                 match notify_rust::Notification::new()
                     .summary(&summary)
                     .body(&body)
+                    .urgency(notify_rust::Urgency::Critical)
+                    .timeout(notify_rust::Timeout::Never)
                     .action("default", "Open file")
                     .show()
                 {
@@ -851,6 +856,8 @@ pub fn add_actionable_notification(title: &str, message: &str, icon: &'static st
                 match notify_rust::Notification::new()
                     .summary(&summary)
                     .body(&body)
+                    .urgency(notify_rust::Urgency::Critical)
+                    .timeout(notify_rust::Timeout::Never)
                     .action("default", "Open Connected")
                     .show()
                 {
@@ -878,6 +885,8 @@ pub fn add_actionable_notification(title: &str, message: &str, icon: &'static st
                 if let Err(e) = notify_rust::Notification::new()
                     .summary(&summary)
                     .body(&body)
+                    .urgency(notify_rust::Urgency::Critical)
+                    .timeout(notify_rust::Timeout::Never)
                     .show()
                 {
                     tracing::warn!("Failed to show system notification: {}", e);
@@ -1137,6 +1146,24 @@ pub fn get_download_directory_setting() -> Option<String> {
 
 pub fn set_download_directory_setting(path: Option<String>) {
     update_setting(|s| s.download_directory = path);
+}
+
+pub fn get_transfer_file_paths() -> &'static Arc<Mutex<HashMap<String, PathBuf>>> {
+    TRANSFER_FILE_PATHS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn store_transfer_path(transfer_id: String, path: PathBuf) {
+    if let Ok(mut map) = get_transfer_file_paths().lock() {
+        map.insert(transfer_id, path);
+    }
+}
+
+pub fn remove_transfer_path(transfer_id: &str) -> Option<PathBuf> {
+    if let Ok(mut map) = get_transfer_file_paths().lock() {
+        map.remove(transfer_id)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

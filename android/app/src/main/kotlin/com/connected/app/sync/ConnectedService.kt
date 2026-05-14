@@ -14,6 +14,17 @@ class ConnectedService : Service() {
         @Volatile
         var isRunning = false
             private set
+
+        @Volatile
+        private var activeInstance: ConnectedService? = null
+
+        fun updateForegroundNotification(title: String, content: String, percent: Int) {
+            activeInstance?.updateNotification(title, content, percent)
+        }
+
+        fun restoreDefaultForegroundNotification() {
+            activeInstance?.restoreDefaultNotification()
+        }
     }
 
     lateinit var connectedApp: ConnectedApp
@@ -23,11 +34,9 @@ class ConnectedService : Service() {
         super.onCreate()
         Log.d("ConnectedService", "Creating service")
         isRunning = true
+        activeInstance = this
 
-        // Initialize the app logic with Application Context via Singleton
         connectedApp = ConnectedApp.getInstance(applicationContext)
-        // We generally expect the app to be initialized, but if the service starts fresh (e.g. boot),
-        // we must ensure it's initialized. initialize() should be idempotent-ish.
         connectedApp.initialize()
 
         startForegroundService()
@@ -35,7 +44,6 @@ class ConnectedService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("ConnectedService", "Service started")
-        // If the system kills the service, recreate it
         return START_STICKY
     }
 
@@ -44,14 +52,27 @@ class ConnectedService : Service() {
     }
 
     override fun onDestroy() {
-        Log.d("ConnectedService", "Destroying service - starting async cleanup")
+        Log.d("ConnectedService", "Destroying service")
         isRunning = false
+        activeInstance = null
 
-        // Stop foreground notification immediately
+        // Always cancel active transfers first so the peer receives a
+        // Cancel message even if the process gets killed afterwards.
+        if (connectedApp.hasActiveTransfers()) {
+            Log.d("ConnectedService", "Active transfers in progress — cancelling transfers")
+            connectedApp.cancelFileTransfer()
+        }
+
+        // If there are still active transfers after cancellation, keep the
+        // process alive so they can complete in the background.
+        if (connectedApp.hasActiveTransfers()) {
+            Log.d("ConnectedService", "Transfers still active — keeping foreground alive")
+            updateNotification("Connected", "Transfer in progress...", -1)
+            return
+        }
+
+        // No active transfers — normal cleanup
         stopForeground(STOP_FOREGROUND_REMOVE)
-
-        // Run cleanup in a background thread to prevent UI freeze
-        // The shutdown process can take 2-3 seconds, so we don't block the main thread
         Thread {
             try {
                 connectedApp.cleanup()
@@ -60,8 +81,6 @@ class ConnectedService : Service() {
                 Log.e("ConnectedService", "Error during cleanup: ${e.message}", e)
             }
         }.start()
-
-        // Call super.onDestroy immediately so the service can stop
         super.onDestroy()
     }
 
@@ -80,13 +99,43 @@ class ConnectedService : Service() {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(channel)
 
+        restoreDefaultNotification()
+    }
+
+    private fun updateNotification(title: String, content: String, percent: Int) {
+        val channelId = "connected_service_channel"
+        val builder = NotificationCompat.Builder(this, channelId)
+            .setContentTitle(title)
+            .setContentText(content)
+            .setSmallIcon(R.drawable.ic_notification_logo)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setShowWhen(false)
+            .setOngoing(true)
+            .setColorized(true)
+            .setColor(0xFFFFFFFF.toInt())
+
+        if (percent >= 0) {
+            builder.setProgress(100, percent, false)
+        }
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        }
+
+        try {
+            startForeground(1, builder.build())
+        } catch (_: Exception) { }
+    }
+
+    private fun restoreDefaultNotification() {
+        val channelId = "connected_service_channel"
         val shareIntent = Intent(this, ClipboardHelperActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
         val sharePendingIntent = android.app.PendingIntent.getActivity(
-            this,
-            0,
-            shareIntent,
+            this, 0, shareIntent,
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -99,17 +148,16 @@ class ConnectedService : Service() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setShowWhen(false)
             .setContentIntent(sharePendingIntent)
-            .setColorized(true)
-            .setColor(0xFFFFFFFF.toInt()) // white
             .setOngoing(true)
+            .setColorized(true)
+            .setColor(0xFFFFFFFF.toInt())
 
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         }
 
-        val notification = builder.build()
-
-        // ID must be non-zero
-        startForeground(1, notification)
+        try {
+            startForeground(1, builder.build())
+        } catch (_: Exception) { }
     }
 }

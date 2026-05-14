@@ -17,6 +17,9 @@ const STREAM_TYPE_FILE: u8 = 2;
 // 2MB chunks keep throughput high while making cancellation noticeably more
 // responsive than very large (16MB) writes on slower links.
 const BUFFER_SIZE: usize = 2 * 1024 * 1024;
+/// Timeout for receiving a data chunk during file transfer (30 seconds).
+/// If no data is received within this window, the peer is considered disconnected.
+const READ_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Maximum allowed incoming file size (100 GB). Transfers exceeding this are rejected.
 const MAX_INCOMING_FILE_SIZE: u64 = 100 * 1024 * 1024 * 1024;
 
@@ -765,12 +768,34 @@ impl FileTransfer {
             }
 
             let max_len = std::cmp::min(remaining, BUFFER_SIZE as u64) as usize;
-            let Some(chunk) = recv.read_chunk(max_len, true).await? else {
-                let _ = tokio::fs::remove_file(&save_path).await;
-                return Err(ConnectedError::Io(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "unexpected EOF while receiving file data",
-                )));
+            let chunk = match tokio::time::timeout(
+                READ_CHUNK_TIMEOUT,
+                recv.read_chunk(max_len, true),
+            )
+            .await
+            {
+                Ok(Ok(Some(chunk))) => chunk,
+                Ok(Ok(None)) => {
+                    let _ = tokio::fs::remove_file(&save_path).await;
+                    return Err(ConnectedError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "unexpected EOF while receiving file data",
+                    )));
+                }
+                Ok(Err(e)) => {
+                    let _ = tokio::fs::remove_file(&save_path).await;
+                    return Err(ConnectedError::Io(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionAborted,
+                        format!("connection error while receiving file data: {}", e),
+                    )));
+                }
+                Err(_) => {
+                    let _ = tokio::fs::remove_file(&save_path).await;
+                    return Err(ConnectedError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "read timed out while receiving file data - peer disconnected",
+                    )));
+                }
             };
 
             let bytes = chunk.bytes;
@@ -799,8 +824,22 @@ impl FileTransfer {
         // pages would leave a truncated/corrupt file despite a successful Ack.
         writer.sync_all().await?;
 
-        // Read Completion Message
-        let complete: FileTransferMessage = recv_message(&mut recv).await?;
+        // Read Completion Message (with timeout for disconnected peers)
+        let complete: FileTransferMessage =
+            match tokio::time::timeout(READ_CHUNK_TIMEOUT, recv_message(&mut recv)).await {
+                Ok(Ok(msg)) => msg,
+                Ok(Err(e)) => {
+                    let _ = tokio::fs::remove_file(&save_path).await;
+                    return Err(e);
+                }
+                Err(_) => {
+                    let _ = tokio::fs::remove_file(&save_path).await;
+                    return Err(ConnectedError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "timed out waiting for completion message - peer disconnected",
+                    )));
+                }
+            };
         match complete {
             FileTransferMessage::Complete { checksum } => {
                 let our_checksum = hasher.finalize().to_string();

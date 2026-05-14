@@ -2057,6 +2057,30 @@ impl ConnectedClient {
         }
     }
 
+    /// Cancel all active file transfers (both outgoing and incoming).
+    /// Used during graceful shutdown to ensure peers receive Cancel messages.
+    pub fn cancel_all_file_transfers(&self) {
+        let outgoing_ids: Vec<String> = self
+            .active_outgoing_transfers
+            .write()
+            .keys()
+            .cloned()
+            .collect();
+        for id in &outgoing_ids {
+            let _ = self.cancel_file_transfer(id);
+        }
+
+        let incoming_ids: Vec<String> = self
+            .active_incoming_transfers
+            .write()
+            .keys()
+            .cloned()
+            .collect();
+        for id in &incoming_ids {
+            let _ = self.cancel_incoming_file_transfer(id);
+        }
+    }
+
     /// Cancel an active incoming file transfer by its transfer_id.
     /// This sets the cancellation flag, which will send a Cancel message to the sender
     /// and clean up the partial file.
@@ -2123,9 +2147,6 @@ impl ConnectedClient {
     /// The device will need to go through full pairing request flow again.
     /// This is what the UI "Forget" action should call.
     pub async fn forget_device(&self, fingerprint: &str) -> Result<()> {
-        // Explicitly disable pairing mode to prevent auto-reconnection loops
-        self.set_pairing_mode(false);
-
         let (device_id, device_name, target) = {
             let ks = self.key_store.read();
             let info = ks.get_peer_info(fingerprint);
@@ -2178,9 +2199,6 @@ impl ConnectedClient {
 
     /// Forget a device by its device_id - completely removes trust.
     pub async fn forget_device_by_id(&self, device_id: &str) -> Result<()> {
-        // Explicitly disable pairing mode to prevent auto-reconnection loops
-        self.set_pairing_mode(false);
-
         let (fingerprint, device_name, target) = {
             let ks = self.key_store.read();
             let peers = ks.get_all_known_peers();
@@ -2257,9 +2275,6 @@ impl ConnectedClient {
     /// The device can reconnect automatically anytime (no re-pairing needed).
     /// This is what the UI "Unpair" action should call.
     pub async fn unpair_device(&self, fingerprint: &str) -> Result<()> {
-        // Explicitly disable pairing mode to prevent auto-reconnection loops
-        self.set_pairing_mode(false);
-
         let (device_id, device_name, target) = {
             let ks = self.key_store.read();
             let info = ks.get_peer_info(fingerprint);
@@ -2313,9 +2328,6 @@ impl ConnectedClient {
 
     /// Unpair a device by its device_id - disconnects but keeps trust intact.
     pub async fn unpair_device_by_id(&self, device_id: &str) -> Result<()> {
-        // Explicitly disable pairing mode to prevent auto-reconnection loops
-        self.set_pairing_mode(false);
-
         let (fingerprint, device_name, target) = {
             let ks = self.key_store.read();
             let peers = ks.get_all_known_peers();

@@ -133,6 +133,8 @@ fn wake_current_window() {
 
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub fn quit_application() -> ! {
+    crate::state::send_action(crate::controller::AppAction::Shutdown);
+    std::thread::sleep(std::time::Duration::from_millis(500));
     std::process::exit(0);
 }
 
