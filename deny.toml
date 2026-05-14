@@ -5,7 +5,20 @@
 # Graph - Target configuration
 # =============================================================================
 [graph]
-targets = [{ triple = "x86_64-unknown-linux-gnu" }]
+targets = [
+  { triple = "x86_64-unknown-linux-gnu" },
+  { triple = "x86_64-pc-windows-msvc" },
+  { triple = "aarch64-pc-windows-msvc" },
+  { triple = "x86_64-apple-darwin" },
+  { triple = "aarch64-apple-darwin" },
+  { triple = "x86_64-linux-android" },
+  { triple = "aarch64-linux-android" },
+  { triple = "armv7-linux-androideabi" },
+  { triple = "i686-linux-android" },
+  { triple = "x86_64-apple-ios" },
+  { triple = "aarch64-apple-ios" },
+  { triple = "aarch64-apple-ios-sim" },
+]
 
 # =============================================================================
 # Advisory Database
@@ -32,6 +45,8 @@ ignore = [
   "RUSTSEC-2024-0436",
   # proc-macro-error unmaintained - transitive dep from gtk
   "RUSTSEC-2024-0370",
+  # fxhash no longer maintained - transitive dep via wry/dioxus-desktop
+  "RUSTSEC-2025-0057",
 ]
 
 # =============================================================================
@@ -52,6 +67,7 @@ allow = [
   "MPL-2.0",
   "CC0-1.0",
   "Unlicense",
+  "BSL-1.0",
 ]
 
 # Confidence threshold for license detection
@@ -86,4 +102,4 @@ skip = [
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+allow-git = ["https://github.com/WLBF/single-instance"]
