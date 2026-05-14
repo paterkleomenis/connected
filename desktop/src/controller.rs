@@ -13,13 +13,12 @@ use crate::state::{
     get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
     get_remote_files_update, get_saved_devices_setting, get_transfer_status,
     is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced, mark_messages_synced,
-    remove_device_from_settings, remove_file_transfer_request, save_device_to_settings,
-    set_active_call, set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
-    set_autostart_enabled_setting, set_device_name_setting, set_discovery_active,
-    set_download_directory_setting, set_last_remote_clipboard_content, set_pairing_mode_state,
-    set_phone_call_log, set_phone_contacts, set_phone_conversations, set_phone_messages,
-    set_sdk_initialized, set_transfer_status,
-    store_transfer_path, remove_transfer_path,
+    remove_device_from_settings, remove_file_transfer_request, remove_transfer_path,
+    save_device_to_settings, set_active_call, set_active_incoming_transfer_id,
+    set_active_outgoing_transfer_id, set_autostart_enabled_setting, set_device_name_setting,
+    set_discovery_active, set_download_directory_setting, set_last_remote_clipboard_content,
+    set_pairing_mode_state, set_phone_call_log, set_phone_contacts, set_phone_conversations,
+    set_phone_messages, set_sdk_initialized, set_transfer_status, store_transfer_path,
 };
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -296,7 +295,8 @@ fn spawn_event_loop(
                 let avail_mb = available as f64 / 1_048_576.0;
                 Err(format!(
                     "Not enough disk space. Need {:.0} MB but only {:.0} MB available in {}",
-                    needed_mb, avail_mb,
+                    needed_mb,
+                    avail_mb,
                     download_dir.display()
                 ))
             }
@@ -324,8 +324,10 @@ fn spawn_event_loop(
             std::collections::HashMap::new();
         // Queue of outgoing transfers that failed due to connection loss, keyed by device IP.
         // When the device reconnects (DeviceFound), these are automatically retried.
-        let mut pending_retry: std::collections::HashMap<String, Vec<(std::path::PathBuf, String)>> =
-            std::collections::HashMap::new();
+        let mut pending_retry: std::collections::HashMap<
+            String,
+            Vec<(std::path::PathBuf, String)>,
+        > = std::collections::HashMap::new();
 
         loop {
             let event = match events.recv().await {
@@ -364,7 +366,11 @@ fn spawn_event_loop(
                     let retry_paths: Vec<std::path::PathBuf> = {
                         let by_ip = pending_retry.remove(&dev_ip).unwrap_or_default();
                         let by_fallback = pending_retry.remove("0.0.0.0").unwrap_or_default();
-                        by_ip.into_iter().chain(by_fallback).map(|(p, _)| p).collect()
+                        by_ip
+                            .into_iter()
+                            .chain(by_fallback)
+                            .map(|(p, _)| p)
+                            .collect()
                     };
                     if !retry_paths.is_empty() {
                         info!(
@@ -387,7 +393,11 @@ fn spawn_event_loop(
                                             retried += 1;
                                         }
                                         Err(e) => {
-                                            error!("Auto-retry failed for {}: {}", path.display(), e);
+                                            error!(
+                                                "Auto-retry failed for {}: {}",
+                                                path.display(),
+                                                e
+                                            );
                                         }
                                     }
                                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -493,12 +503,16 @@ fn spawn_event_loop(
                         .collect();
 
                     if total_count > 1 {
-                        let total_bytes: u64 = all_transfers.iter()
+                        let total_bytes: u64 = all_transfers
+                            .iter()
                             .filter_map(|(id, _)| transfer_sizes.get(*id))
                             .sum();
-                        let total_sent: u64 = all_transfers.iter()
+                        let total_sent: u64 = all_transfers
+                            .iter()
                             .filter_map(|(id, (_, p))| {
-                                transfer_sizes.get(*id).map(|s| (*s as f64 * (*p as f64 / 100.0)) as u64)
+                                transfer_sizes
+                                    .get(*id)
+                                    .map(|s| (*s as f64 * (*p as f64 / 100.0)) as u64)
                             })
                             .sum();
                         let aggregate_percent = if total_bytes > 0 {
@@ -511,7 +525,11 @@ fn spawn_event_loop(
                         let label = format!(
                             "{}  (file {}/{})",
                             current_filename,
-                            all_transfers.iter().position(|(i, _)| *i == &id).unwrap_or(0) + 1,
+                            all_transfers
+                                .iter()
+                                .position(|(i, _)| *i == &id)
+                                .unwrap_or(0)
+                                + 1,
                             total_count
                         );
 
@@ -621,10 +639,14 @@ fn spawn_event_loop(
                                 // when the device reconnects. For now use the id as placeholder.
                                 // The actual IP lookup happens in the app_controller at send time.
                                 // We store by "0.0.0.0" as a fallback catcher.
-                                pending_retry.entry("0.0.0.0".to_string())
+                                pending_retry
+                                    .entry("0.0.0.0".to_string())
                                     .or_default()
                                     .push((path, String::new()));
-                                info!("Queued transfer {} for auto-retry on reconnect (error: {})", id, error);
+                                info!(
+                                    "Queued transfer {} for auto-retry on reconnect (error: {})",
+                                    id, error
+                                );
                             }
                         }
                     }
@@ -816,7 +838,10 @@ fn spawn_event_loop(
                 } => {
                     // Check disk space before accepting
                     if let Err(msg) = check_disk_space(size) {
-                        warn!("Rejecting transfer {} from {}: {}", filename, from_device, msg);
+                        warn!(
+                            "Rejecting transfer {} from {}: {}",
+                            filename, from_device, msg
+                        );
                         let _ = c_clone.reject_file_transfer(&id);
                         add_notification("Transfer Rejected", &msg, "");
                         *get_transfer_status().lock_or_recover() = TransferStatus::Idle;
