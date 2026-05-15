@@ -15,10 +15,6 @@ use tokio::runtime::Runtime;
 use tracing::{error, info, warn};
 
 #[cfg(target_os = "android")]
-use jni::EnvUnowned;
-#[cfg(target_os = "android")]
-use jni::objects::JObject;
-#[cfg(target_os = "android")]
 static ANDROID_LOGGER_INIT: OnceLock<()> = OnceLock::new();
 
 #[cfg(target_os = "android")]
@@ -35,26 +31,6 @@ fn init_android_logging() {
 
 #[cfg(not(target_os = "android"))]
 fn init_android_logging() {}
-
-// ============================================================================
-// Android TLS init (rustls-platform-verifier)
-// ============================================================================
-
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-pub extern "C" fn Java_com_connected_app_RustlsPlatformVerifier_init(
-    mut unowned_env: EnvUnowned,
-    _this: JObject,
-    context: JObject,
-) {
-    init_android_logging();
-    let _ = unowned_env.with_env(|env| -> Result<(), jni::errors::Error> {
-        if let Err(err) = rustls_platform_verifier::android::init_with_env(env, context) {
-            log::error!("rustls-platform-verifier init failed: {}", err);
-        }
-        Ok(())
-    });
-}
 
 // ============================================================================
 // Global State (The "Singleton" for FFI)

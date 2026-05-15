@@ -184,9 +184,6 @@ dependencies {
     // JNA for UniFFI bindings
     implementation("net.java.dev.jna:jna:5.18.1@aar")
 
-    // Android verifier component for rustls-platform-verifier
-    implementation("rustls:rustls-platform-verifier:0.1.1")
-
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
