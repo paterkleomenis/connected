@@ -148,7 +148,7 @@ ios-generate-project:
 # Build macOS App and DMG
 [doc("Build macOS .app bundle and DMG installer")]
 build-macos:
-    {{ if os_family() == "windows" { "echo ERROR: This command is only available on macOS/Linux && exit /b 2" } else { "echo \"ERROR: This command is only available on macOS/Linux\"; exit 2" } }}
+    {{ if os_family() == "windows" { "echo ERROR: This command is only available on macOS/Linux && exit /b 2" } else { "packaging/macos/build-macos.sh" } }}
 
 # Build Flatpak package
 [doc("Build Flatpak package")]

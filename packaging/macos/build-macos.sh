@@ -60,6 +60,7 @@ mkdir -p "$UNIVERSAL_DIR"
 
 # Step 1: Build universal binary
 echo "🔨 Building universal binary..."
+export MACOSX_DEPLOYMENT_TARGET=10.15
 cargo build --target aarch64-apple-darwin $CARGO_PROFILE --verbose
 cargo build --target x86_64-apple-darwin $CARGO_PROFILE --verbose
 

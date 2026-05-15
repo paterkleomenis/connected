@@ -81,7 +81,7 @@ jobs:
               - aarch64-pc-windows-msvc
 
           - name: macOS
-            os: macos-latest
+            os: macos-26
             components: clippy
             targets:
               - x86_64-apple-darwin
@@ -408,7 +408,7 @@ jobs:
   # -------------------------------------------------------------------------
   build-macos:
     name: macOS Build
-    runs-on: macos-latest
+    runs-on: macos-26
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
     steps:
@@ -504,7 +504,7 @@ jobs:
   # -------------------------------------------------------------------------
   build-ios:
     name: Build iOS IPA
-    runs-on: macos-latest
+    runs-on: macos-26
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
     env:
