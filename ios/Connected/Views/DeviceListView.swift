@@ -23,7 +23,6 @@ struct DeviceListView: View {
     }
 
     @EnvironmentObject private var model: ConnectedAppModel
-    @State private var clipboardDraft = ""
     @State private var showingFileImporter = false
     @State private var selectedFileTarget: DiscoveredDevice?
     @State private var phoneDataRoute: PhoneDataRoute?
@@ -41,6 +40,10 @@ struct DeviceListView: View {
                             systemImage: "tray.full",
                             text: "\(model.pendingShareURLs.count) shared item(s) queued"
                         )
+                    }
+
+                    if model.isClipboardSectionVisible {
+                        pasteAndShareControl
                     }
 
                     DeviceSectionCard(title: "Discovery", subtitle: "Find nearby devices and refresh trust state.") {
@@ -107,7 +110,6 @@ struct DeviceListView: View {
                         }
                     }
 
-                    clipboardCard
                     if model.transferStatus != "Idle" {
                         transferCard
                     }
@@ -148,31 +150,6 @@ struct DeviceListView: View {
         }
     }
 
-    private var clipboardCard: some View {
-        DeviceSectionCard(title: "Clipboard", subtitle: "Send custom text or use iOS Paste & Share.") {
-            VStack(alignment: .leading, spacing: 12) {
-                pasteAndShareControl
-
-                TextField("Type text to send", text: $clipboardDraft, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-
-                HStack(spacing: 10) {
-                    Button("Use Last Received") {
-                        clipboardDraft = model.clipboardContent
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("Send to All") {
-                        model.sendClipboardTextToAllTrusted(clipboardDraft)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!model.hasTrustedDevices || clipboardDraft.isEmpty)
-                }
-
-            }
-        }
-    }
-
     private var pasteAndShareControl: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -192,7 +169,7 @@ struct DeviceListView: View {
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
                     .joined(separator: "\n")
-                model.sendClipboardTextToAllTrusted(text)
+                model.sendClipboardTextToAllTrusted(text, hideClipboardSectionOnSuccess: true)
             }
             .controlSize(.large)
             .tint(.accentColor)

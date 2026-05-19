@@ -99,6 +99,7 @@ final class ConnectedAppModel: ObservableObject {
     @Published var pairingModeEnabled = true
     @Published var isInitialized = false
     @Published var isDiscoveryActive = false
+    @Published var isClipboardSectionVisible = false
     @Published var shouldHighlightPasteAndShare = false
     @Published var infoMessage: String?
     @Published var lastErrorMessage: String?
@@ -974,6 +975,8 @@ final class ConnectedAppModel: ObservableObject {
             refreshNotificationAuthorizationStatus()
             infoMessage = "Clipboard Sync will share new clipboard changes while Connected is active."
         } else {
+            isClipboardSectionVisible = false
+            shouldHighlightPasteAndShare = false
             cancelClipboardShareNotification()
         }
     }
@@ -1498,7 +1501,7 @@ final class ConnectedAppModel: ObservableObject {
 #endif
     }
 
-    func sendClipboardTextToAllTrusted(_ text: String) {
+    func sendClipboardTextToAllTrusted(_ text: String, hideClipboardSectionOnSuccess: Bool = false) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             infoMessage = "Clipboard is empty."
             return
@@ -1512,13 +1515,17 @@ final class ConnectedAppModel: ObservableObject {
 
         clipboardContent = text
         shouldHighlightPasteAndShare = false
+        if hideClipboardSectionOnSuccess {
+            isClipboardSectionVisible = false
+        }
         for device in targets {
             sendClipboardText(text, to: device)
         }
     }
 
-    func requestPasteAndShareFocus() {
+    private func showClipboardSectionFromNotification() {
         selectedRootTab = .devices
+        isClipboardSectionVisible = true
         shouldHighlightPasteAndShare = true
         infoMessage = "Tap Paste & Share to send the current clipboard."
     }
@@ -2278,7 +2285,7 @@ final class ConnectedAppModel: ObservableObject {
 
     fileprivate func handleClipboardNotificationAction() {
         initializeIfNeeded()
-        requestPasteAndShareFocus()
+        showClipboardSectionFromNotification()
     }
 
     private func refreshNotificationAuthorizationStatus() {

@@ -232,12 +232,9 @@ struct SettingsView: View {
     private var backgroundClipboardCard: some View {
         SettingsCard(title: "Background Clipboard", subtitle: "iOS only lets apps read clipboard while active. Connected can post a helper notification while backgrounded.") {
             VStack(alignment: .leading, spacing: 12) {
-                Button("Open Paste & Share") {
-                    model.requestPasteAndShareFocus()
-                }
-                .buttonStyle(.borderedProminent)
-                .frame(maxWidth: .infinity)
-                .disabled(!model.hasTrustedDevices)
+                Text("Open Connected from the helper notification to show Paste & Share, or click on device options and Share Clipboard.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
 
                 if model.notificationsPermissionGranted {
                     Label("Notification helper enabled", systemImage: "checkmark.seal")
