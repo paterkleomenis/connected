@@ -6,7 +6,7 @@ on:
     branches: ["main", "master"]
   push:
     branches: ["main", "master"]
-    tags-ignore: ['*']
+    tags-ignore: ["*"]
   schedule:
     # Run security audit daily at 5 AM UTC
     - cron: "0 5 * * *"
@@ -58,7 +58,6 @@ jobs:
   # -------------------------------------------------------------------------
   quality:
     name: Code Quality (${{ matrix.name }})
-    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +90,7 @@ jobs:
               - aarch64-apple-ios-sim
 
     runs-on: ${{ matrix.os }}
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v6
 
