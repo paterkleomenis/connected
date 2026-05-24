@@ -25,7 +25,7 @@ image = "0.25"
 uuid = { workspace = true }
 notify-rust = "4.11"
 fs2 = "0.4"
-single-instance = { git = "https://github.com/WLBF/single-instance", version = "0.3" }
+single-instance = { git = "https://github.com/WLBF/single-instance", version = "0.3", rev = "b3fae2c90a24f4a53e5944fc2ab828c1c35944cb" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris-server = "0.10"
