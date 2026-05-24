@@ -669,6 +669,7 @@ pub trait FileTransferCallback: Send + Sync {
     fn on_transfer_completed(&self, transfer_id: String, filename: String, total_size: u64);
     fn on_transfer_failed(&self, transfer_id: String, error_msg: String);
     fn on_transfer_cancelled(&self, transfer_id: String);
+    #[allow(clippy::too_many_arguments)]
     fn on_compression_progress(
         &self,
         filename: String,

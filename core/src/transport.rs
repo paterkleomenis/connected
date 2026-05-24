@@ -1233,7 +1233,7 @@ impl QuicTransport {
                 return None;
             }
         };
-        let certs = match identity.downcast_ref::<Vec<rustls::pki_types::CertificateDer>>() {
+        let certs = match identity.downcast_ref::<Vec<rustls::pki_types::CertificateDer<'_>>>() {
             Some(c) => c,
             None => {
                 debug!("Could not downcast peer identity to certificate chain");
