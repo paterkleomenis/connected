@@ -192,6 +192,11 @@ class MainActivity : ComponentActivity() {
             ) {
                 missing.add(Manifest.permission.ACCESS_FINE_LOCATION)
             }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                missing.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
         }
 
         if (missing.isEmpty()) {
