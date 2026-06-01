@@ -92,6 +92,7 @@ jobs:
       - name: Upload AppImage Artifact
         uses: actions/upload-artifact@v7
         with:
+          name: connected-appimage
           path: |
             target/connected-desktop-x86_64.AppImage
             target/connected-desktop-x86_64.AppImage.zsync
@@ -471,12 +472,10 @@ jobs:
           files: |
             connected-desktop
             com.paterkleomenis.Connected.flatpak
-            target/connected-desktop-x86_64.AppImage
-            target/connected-desktop-x86_64.AppImage.zsync
-            target/msix/x64/connected-desktop-windows-x64.msix
-            target/msix/arm64/connected-desktop-windows-arm64.msix
-            target/msix/connected-desktop-windows.msixbundle
-            target/msix/connected-desktop-windows.msixupload
+            connected-desktop-x86_64.AppImage
+            connected-desktop-x86_64.AppImage.zsync
+            connected-desktop-windows-x64.msix
+            connected-desktop-windows-arm64.msix
             connected-android.apk
             connected-ios.ipa
             connected-desktop.dmg
