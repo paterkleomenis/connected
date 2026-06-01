@@ -133,20 +133,34 @@ pub fn DeviceCard(
                 }
             }
 
-            if device.is_trusted && *is_hovered.read() {
+            if device.is_trusted {
                 div {
                     class: "device-actions",
                     button {
                         class: "action-button",
-                        title: "Open device",
+                        title: "Send a file",
                         onclick: {
                             let device = device.clone();
                             move |evt: Event<MouseData>| {
                                 evt.stop_propagation();
-                                on_select.call(device.clone());
+                                on_send_file.call(device.clone());
                             }
                         },
-                        Icon { icon: IconType::ArrowRight, size: 16, color: "currentColor".to_string() }
+                        Icon { icon: IconType::Send, size: 14, color: "currentColor".to_string() }
+                    }
+                    if *is_hovered.read() {
+                        button {
+                            class: "action-button",
+                            title: "Open device",
+                            onclick: {
+                                let device = device.clone();
+                                move |evt: Event<MouseData>| {
+                                    evt.stop_propagation();
+                                    on_select.call(device.clone());
+                                }
+                            },
+                            Icon { icon: IconType::ArrowRight, size: 16, color: "currentColor".to_string() }
+                        }
                     }
                 }
             }
