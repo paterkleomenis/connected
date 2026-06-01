@@ -10,7 +10,6 @@ mod ipc;
 mod macos_media;
 mod mpris_server;
 mod state;
-#[cfg(target_os = "linux")]
 mod titlebar;
 mod utils;
 
