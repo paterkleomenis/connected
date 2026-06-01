@@ -8,12 +8,14 @@
 #
 # This script creates:
 #   target/connected-desktop-x86_64.AppImage
+#   target/connected-desktop-x86_64.AppImage.zsync
 #
 # Usage:
 #   ./build-appimage.sh [--release]
 #
 # Environment:
-#   DEBUG=1   print every command as it runs (bash -x style)
+#   DEBUG=1                         print every command as it runs (bash -x style)
+#   APPIMAGE_UPDATE_INFORMATION=... override embedded AppImage update information
 
 set -euo pipefail
 
@@ -126,7 +128,9 @@ if ! "$LINUXDEPLOY" \
 fi
 
 OUTPUT="$PROJECT_ROOT/target/connected-desktop-x86_64.AppImage"
-rm -f "$OUTPUT"
+ZSYNC_OUTPUT="$OUTPUT.zsync"
+UPDATE_INFORMATION="${APPIMAGE_UPDATE_INFORMATION:-gh-releases-zsync|paterkleomenis|connected|latest|connected-desktop-x86_64.AppImage.zsync}"
+rm -f "$OUTPUT" "$ZSYNC_OUTPUT"
 
 echo "Packaging AppDir into AppImage..."
 cd "$PROJECT_ROOT"
@@ -134,8 +138,17 @@ cd "$PROJECT_ROOT"
 # appimagetool auto-detects the architecture; set it explicitly to be safe.
 export ARCH=x86_64
 
+if ! command -v zsyncmake >/dev/null 2>&1; then
+    echo "Error: zsyncmake is required to generate $ZSYNC_OUTPUT" >&2
+    echo "Install the zsync package and re-run this script." >&2
+    exit 1
+fi
+
+echo "Embedding AppImage update information: $UPDATE_INFORMATION"
+
 if ! "$APPIMAGETOOL" \
     --no-appstream \
+    --updateinformation "$UPDATE_INFORMATION" \
     "$APPDIR" \
     "$OUTPUT" \
     2>&1 | tee -a "$APPIMAGETOOL_LOG"; then
@@ -151,6 +164,13 @@ if [[ ! -s "$OUTPUT" ]]; then
     exit 1
 fi
 
+if [[ ! -s "$ZSYNC_OUTPUT" ]]; then
+    echo "Error: zsync metadata at $ZSYNC_OUTPUT is missing or empty" >&2
+    exit 1
+fi
+
 echo ""
 echo "AppImage created: $OUTPUT"
 echo "Size: $(du -h "$OUTPUT" | cut -f1)"
+echo "zsync metadata created: $ZSYNC_OUTPUT"
+echo "zsync size: $(du -h "$ZSYNC_OUTPUT" | cut -f1)"
