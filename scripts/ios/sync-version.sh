@@ -17,7 +17,7 @@ BUILD_NUMBER="${IOS_BUILD_NUMBER:-1}"
 
 if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
     echo "Invalid iOS build number: $BUILD_NUMBER" >&2
-    echo "CURRENT_PROJECT_VERSION must be one to three period-separated integers, such as 1, 2.1, or 3.1.2." >&2
+    echo "CURRENT_PROJECT_VERSION must be one to three period-separated integers, such as 1, 2.1, or 3.1.3." >&2
     exit 1
 fi
 
