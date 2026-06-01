@@ -101,7 +101,7 @@ SKIP_DESKTOP_FILE_INSTALL=1 \
     --appdir "$APPDIR" \
     --desktop-file "$APPDIR/usr/share/applications/connected-desktop.desktop" \
     --icon-file "$APPDIR/usr/share/icons/hicolor/512x512/apps/connected-desktop.png" \
-    --plugin gtk \
+    --plugin "$GTK_PLUGIN" \
     --output appimage
 
 # Rename output to consistent name
