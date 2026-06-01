@@ -70,16 +70,17 @@ mkdir -p "$TOOLS_DIR"
 # linuxdeploy is distributed as an AppImage. On CI (no FUSE) we must extract it first.
 LINUXDEPLOY_APPIMAGE="$TOOLS_DIR/linuxdeploy-x86_64.AppImage"
 LINUXDEPLOY_EXTRACTED="$TOOLS_DIR/linuxdeploy"
-if [[ ! -f "$LINUXDEPLOY_EXTRACTED/usr/bin/linuxdeploy" ]]; then
+if [[ ! -d "$LINUXDEPLOY_EXTRACTED" ]]; then
     if [[ ! -f "$LINUXDEPLOY_APPIMAGE" ]]; then
         echo "Downloading linuxdeploy..."
         curl -fSL "$LINUXDEPLOY_URL" -o "$LINUXDEPLOY_APPIMAGE"
         chmod +x "$LINUXDEPLOY_APPIMAGE"
     fi
     echo "Extracting linuxdeploy..."
-    mkdir -p "$LINUXDEPLOY_EXTRACTED"
-    cd "$LINUXDEPLOY_EXTRACTED"
+    cd "$TOOLS_DIR"
     "$LINUXDEPLOY_APPIMAGE" --appimage-extract > /dev/null 2>&1
+    # --appimage-extract creates squashfs-root/; rename it
+    mv squashfs-root linuxdeploy
     cd "$PROJECT_ROOT"
 fi
 LINUXDEPLOY="$LINUXDEPLOY_EXTRACTED/usr/bin/linuxdeploy"
