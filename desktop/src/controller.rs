@@ -26,6 +26,10 @@ use connected_core::telephony::{CallLogEntry, CallType};
 use connected_core::transport::UnpairReason;
 #[cfg(not(target_os = "windows"))]
 use connected_core::update::UpdateChecker;
+#[cfg(target_os = "linux")]
+use connected_core::update::install_linux_appimage_update;
+#[cfg(target_os = "macos")]
+use connected_core::update::install_macos_update;
 use connected_core::{
     ConnectedClient, ConnectedEvent, DeviceType, MediaCommand, MediaControlMessage, MediaState,
 };
@@ -2656,24 +2660,51 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     let info_opt = crate::state::get_update_info().lock_or_recover().clone();
                     if let Some(info) = info_opt {
                         if let Some(url) = info.download_url {
-                            #[cfg(target_os = "linux")]
-                            {
-                                info!("Opening update URL: {}", url);
-                                if let Err(e) =
-                                    std::process::Command::new("xdg-open").arg(&url).spawn()
-                                {
-                                    error!("Failed to open update URL: {}", e);
-                                    add_notification("Update", "Failed to open update URL", "");
-                                }
-                            }
-
                             #[cfg(target_os = "macos")]
                             {
-                                info!("Opening update URL: {}", url);
-                                if let Err(e) = std::process::Command::new("open").arg(&url).spawn()
-                                {
-                                    error!("Failed to open update URL: {}", e);
-                                    add_notification("Update", "Failed to open update URL", "");
+                                add_notification("Updates", "Downloading update…", "");
+                                let url_clone = url.clone();
+                                tokio::spawn(async move {
+                                    match install_macos_update(&url_clone).await {
+                                        Ok(()) => {
+                                            info!("macOS update installed, restarting…");
+                                        }
+                                        Err(e) => {
+                                            error!("macOS update failed: {}", e);
+                                            add_notification("Update Failed", &e.to_string(), "");
+                                        }
+                                    }
+                                });
+                            }
+
+                            #[cfg(target_os = "linux")]
+                            {
+                                if std::env::var("APPIMAGE").is_ok() {
+                                    add_notification("Updates", "Downloading update…", "");
+                                    let url_clone = url.clone();
+                                    tokio::spawn(async move {
+                                        match install_linux_appimage_update(&url_clone).await {
+                                            Ok(()) => {
+                                                info!("AppImage update installed, restarting…");
+                                            }
+                                            Err(e) => {
+                                                error!("AppImage update failed: {}", e);
+                                                add_notification(
+                                                    "Update Failed",
+                                                    &e.to_string(),
+                                                    "",
+                                                );
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    info!("Opening update URL: {}", url);
+                                    if let Err(e) =
+                                        std::process::Command::new("xdg-open").arg(&url).spawn()
+                                    {
+                                        error!("Failed to open update URL: {}", e);
+                                        add_notification("Update", "Failed to open update URL", "");
+                                    }
                                 }
                             }
 

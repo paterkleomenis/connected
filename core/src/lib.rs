@@ -28,4 +28,7 @@ pub use telephony::{
 pub use transport::{
     MediaCommand, MediaControlMessage, MediaState, Message, QuicTransport, UnpairReason,
 };
-pub use update::{UpdateChecker, UpdateInfo, download_to_file};
+pub use update::{
+    UpdateChecker, UpdateInfo, download_to_file, install_linux_appimage_update,
+    install_macos_update,
+};

@@ -155,6 +155,11 @@ build-macos:
 build-flatpak:
     {{ if os_family() == "windows" { "echo ERROR: Flatpak builds are only supported on Linux && exit /b 2" } else { "flatpak-builder --force-clean build-dir packaging/flatpak/com.paterkleomenis.Connected.yml" } }}
 
+# Build AppImage package
+[doc("Build AppImage package (Linux only)")]
+build-appimage:
+    {{ if os_family() == "windows" { "echo ERROR: AppImage builds are only supported on Linux && exit /b 2" } else { "packaging/linux/build-appimage.sh --release" } }}
+
 # Install pre-commit hooks
 [doc("Install pre-commit hooks")]
 install-hooks:
