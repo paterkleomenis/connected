@@ -95,7 +95,7 @@ jobs:
           path: |
             target/connected-desktop-x86_64.AppImage
             target/connected-desktop-x86_64.AppImage.zsync
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # -------------------------------------------------------------------------
   # Job 4: Build Windows MSIX per architecture
