@@ -57,7 +57,6 @@ cp "$PROJECT_ROOT/packaging/connected-desktop.desktop" "$APPDIR/usr/share/applic
 cp "$PROJECT_ROOT/packaging/flatpak/com.paterkleomenis.Connected.png" \
    "$APPDIR/usr/share/icons/hicolor/512x512/apps/connected-desktop.png"
 
-# The .desktop file Exec line must match the binary name in usr/bin/
 sed -i 's|^Exec=.*|Exec=connected-desktop|' "$APPDIR/usr/share/applications/connected-desktop.desktop"
 sed -i 's|^Icon=.*|Icon=connected-desktop|' "$APPDIR/usr/share/applications/connected-desktop.desktop"
 
@@ -67,10 +66,10 @@ LINUXDEPLOY_GTK_URL="https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-p
 TOOLS_DIR="$PROJECT_ROOT/target/appimage-tools"
 mkdir -p "$TOOLS_DIR"
 
-# linuxdeploy is distributed as an AppImage. On CI (no FUSE) we must extract it first.
+# linuxdeploy is an AppImage; on CI (no FUSE) we must extract it first.
 LINUXDEPLOY_APPIMAGE="$TOOLS_DIR/linuxdeploy-x86_64.AppImage"
-LINUXDEPLOY_EXTRACTED="$TOOLS_DIR/linuxdeploy"
-if [[ ! -d "$LINUXDEPLOY_EXTRACTED" ]]; then
+LINUXDEPLOY_DIR="$TOOLS_DIR/linuxdeploy-extracted"
+if [[ ! -d "$LINUXDEPLOY_DIR" ]]; then
     if [[ ! -f "$LINUXDEPLOY_APPIMAGE" ]]; then
         echo "Downloading linuxdeploy..."
         curl -fSL "$LINUXDEPLOY_URL" -o "$LINUXDEPLOY_APPIMAGE"
@@ -79,11 +78,10 @@ if [[ ! -d "$LINUXDEPLOY_EXTRACTED" ]]; then
     echo "Extracting linuxdeploy..."
     cd "$TOOLS_DIR"
     "$LINUXDEPLOY_APPIMAGE" --appimage-extract > /dev/null 2>&1
-    # --appimage-extract creates squashfs-root/; rename it
-    mv squashfs-root linuxdeploy
+    mv squashfs-root "$LINUXDEPLOY_DIR"
     cd "$PROJECT_ROOT"
 fi
-LINUXDEPLOY="$LINUXDEPLOY_EXTRACTED/usr/bin/linuxdeploy"
+LINUXDEPLOY="$LINUXDEPLOY_DIR/usr/bin/linuxdeploy"
 
 GTK_PLUGIN="$TOOLS_DIR/linuxdeploy-plugin-gtk.sh"
 if [[ ! -f "$GTK_PLUGIN" ]]; then
@@ -94,17 +92,18 @@ fi
 
 OUTPUT="$PROJECT_ROOT/target/connected-desktop-x86_64.AppImage"
 
-echo "Creating AppImage..."
+echo "Bundling GTK dependencies..."
 cd "$PROJECT_ROOT"
+LINUXDEPLOY="$LINUXDEPLOY" "$GTK_PLUGIN" --appdir "$APPDIR"
+
+echo "Creating AppImage..."
 SKIP_DESKTOP_FILE_INSTALL=1 \
     "$LINUXDEPLOY" \
     --appdir "$APPDIR" \
     --desktop-file "$APPDIR/usr/share/applications/connected-desktop.desktop" \
     --icon-file "$APPDIR/usr/share/icons/hicolor/512x512/apps/connected-desktop.png" \
-    --plugin "$GTK_PLUGIN" \
     --output appimage
 
-# Rename output to consistent name
 BUILT=$(find "$PROJECT_ROOT" -maxdepth 1 -name 'Connected-*-x86_64.AppImage' -print -quit 2>/dev/null)
 if [[ -n "$BUILT" ]]; then
     mv "$BUILT" "$OUTPUT"
