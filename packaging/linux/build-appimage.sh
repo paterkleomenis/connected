@@ -67,12 +67,22 @@ LINUXDEPLOY_GTK_URL="https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-p
 TOOLS_DIR="$PROJECT_ROOT/target/appimage-tools"
 mkdir -p "$TOOLS_DIR"
 
-LINUXDEPLOY="$TOOLS_DIR/linuxdeploy-x86_64.AppImage"
-if [[ ! -f "$LINUXDEPLOY" ]]; then
-    echo "Downloading linuxdeploy..."
-    curl -fSL "$LINUXDEPLOY_URL" -o "$LINUXDEPLOY"
-    chmod +x "$LINUXDEPLOY"
+# linuxdeploy is distributed as an AppImage. On CI (no FUSE) we must extract it first.
+LINUXDEPLOY_APPIMAGE="$TOOLS_DIR/linuxdeploy-x86_64.AppImage"
+LINUXDEPLOY_EXTRACTED="$TOOLS_DIR/linuxdeploy"
+if [[ ! -f "$LINUXDEPLOY_EXTRACTED/usr/bin/linuxdeploy" ]]; then
+    if [[ ! -f "$LINUXDEPLOY_APPIMAGE" ]]; then
+        echo "Downloading linuxdeploy..."
+        curl -fSL "$LINUXDEPLOY_URL" -o "$LINUXDEPLOY_APPIMAGE"
+        chmod +x "$LINUXDEPLOY_APPIMAGE"
+    fi
+    echo "Extracting linuxdeploy..."
+    mkdir -p "$LINUXDEPLOY_EXTRACTED"
+    cd "$LINUXDEPLOY_EXTRACTED"
+    "$LINUXDEPLOY_APPIMAGE" --appimage-extract > /dev/null 2>&1
+    cd "$PROJECT_ROOT"
 fi
+LINUXDEPLOY="$LINUXDEPLOY_EXTRACTED/usr/bin/linuxdeploy"
 
 GTK_PLUGIN="$TOOLS_DIR/linuxdeploy-plugin-gtk.sh"
 if [[ ! -f "$GTK_PLUGIN" ]]; then
