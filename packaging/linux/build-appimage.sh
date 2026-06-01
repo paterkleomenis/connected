@@ -94,7 +94,7 @@ SKIP_DESKTOP_FILE_INSTALL=1 \
     --output appimage
 
 # Rename output to consistent name
-BUILT=$(ls -1 "$PROJECT_ROOT"/Connected-*-x86_64.AppImage 2>/dev/null | head -1)
+BUILT=$(find "$PROJECT_ROOT" -maxdepth 1 -name 'Connected-*-x86_64.AppImage' -print -quit 2>/dev/null)
 if [[ -n "$BUILT" ]]; then
     mv "$BUILT" "$OUTPUT"
 fi
