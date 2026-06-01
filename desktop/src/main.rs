@@ -10,6 +10,8 @@ mod ipc;
 mod macos_media;
 mod mpris_server;
 mod state;
+#[cfg(target_os = "linux")]
+mod titlebar;
 mod utils;
 
 use state::{
@@ -869,11 +871,8 @@ fn main() {
     let launched_from_autostart = std::env::args().any(|a| a == autostart::AUTOSTART_ARG);
 
     // Platform-specific window settings
-    let decorations = cfg!(any(
-        target_os = "windows",
-        target_os = "macos",
-        target_os = "linux"
-    ));
+    // On Linux/Wayland, use a custom titlebar to avoid GTK decoration issues
+    let decorations = cfg!(any(target_os = "windows", target_os = "macos"));
     let transparent = !decorations;
 
     let data_dir = dirs::data_local_dir().map(|d| d.join("connected"));
@@ -1582,7 +1581,14 @@ fn App() -> Element {
         style { {include_str!("../assets/styles.css")} }
 
         div {
-            class: "{app_theme_class}",
+            class: "app-root",
+
+            if cfg!(target_os = "linux") {
+                titlebar::Titlebar {}
+            }
+
+            div {
+                class: "{app_theme_class}",
 
             // Sidebar
             aside {
@@ -3740,6 +3746,7 @@ fn App() -> Element {
                     }
                 }
             }
+        }
         }
     }
 }

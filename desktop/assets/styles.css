@@ -204,11 +204,95 @@ body {
    App Layout
    ============================================================================ */
 
-.app-container {
+.app-root {
     display: flex;
+    flex-direction: column;
     height: 100vh;
     overflow: hidden;
+}
+
+.app-container {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
     background: var(--bg-primary);
+}
+
+/* ============================================================================
+   Custom Titlebar (Linux)
+   ============================================================================ */
+
+.custom-titlebar {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    background: var(--bg-sidebar-solid);
+    border-bottom: 1px solid var(--border-light);
+    user-select: none;
+    flex-shrink: 0;
+    z-index: 100;
+}
+
+.titlebar-drag-area {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    flex: 1;
+    height: 100%;
+    -webkit-app-region: drag;
+    cursor: default;
+}
+
+.titlebar-logo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.titlebar-title {
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--text-primary);
+    letter-spacing: 0.01em;
+}
+
+.titlebar-controls {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    -webkit-app-region: no-drag;
+    flex-shrink: 0;
+}
+
+.titlebar-btn {
+    width: 36px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0;
+    transition: background var(--transition-fast), color var(--transition-fast);
+    outline: none;
+}
+
+.titlebar-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.titlebar-btn.close:hover {
+    background: var(--error);
+    color: #fff;
+}
+
+.titlebar-btn:active {
+    opacity: 0.7;
 }
 
 /* ============================================================================
