@@ -3,7 +3,8 @@
 #
 # Prerequisites:
 # - Rust toolchain with x86_64-unknown-linux-gnu target
-# - linuxdeploy and linuxdeploy-plugin-gtk (downloaded automatically if missing)
+# - linuxdeploy, linuxdeploy-plugin-gtk, appimagetool
+#   (all downloaded automatically if missing)
 #
 # This script creates:
 #   target/connected-desktop-x86_64.AppImage
@@ -66,6 +67,7 @@ cp "$PROJECT_ROOT/packaging/flatpak/com.paterkleomenis.Connected.png" \
 
 LINUXDEPLOY_URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
 LINUXDEPLOY_GTK_URL="https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh"
+APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
 
 TOOLS_DIR="$PROJECT_ROOT/target/appimage-tools"
 mkdir -p "$TOOLS_DIR"
@@ -86,10 +88,20 @@ if [[ ! -f "$GTK_PLUGIN" ]]; then
 fi
 chmod +x "$GTK_PLUGIN"
 
-OUTPUT="$PROJECT_ROOT/target/connected-desktop-x86_64.AppImage"
-rm -f "$OUTPUT"
+APPIMAGETOOL="$TOOLS_DIR/appimagetool-x86_64.AppImage"
+if [[ ! -f "$APPIMAGETOOL" ]]; then
+    echo "Downloading appimagetool..."
+    curl -fSL "$APPIMAGETOOL_URL" -o "$APPIMAGETOOL"
+fi
+chmod +x "$APPIMAGETOOL"
 
-echo "Bundling dependencies and creating AppImage..."
+# Build the AppDir (bundles the binary, icons, .desktop, and all GTK/GDK
+# dependencies via the gtk plugin). We do NOT pass --output appimage here:
+# we'll package the AppDir into an AppImage ourselves with appimagetool so
+# that we can capture a clean error if packaging fails.
+APPIMAGETOOL_LOG="$PROJECT_ROOT/target/appimagetool.log"
+
+echo "Bundling dependencies into AppDir..."
 cd "$PROJECT_ROOT"
 
 # Force the AppImage runtime to extract on the fly instead of mounting via FUSE.
@@ -102,22 +114,37 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 # already stripped by the Rust profile.
 export NO_STRIP=1
 
-"$LINUXDEPLOY" \
+if ! "$LINUXDEPLOY" \
     --appdir "$APPDIR" \
     --desktop-file "$APPDIR/usr/share/applications/connected-desktop.desktop" \
     --icon-file "$APPDIR/usr/share/icons/hicolor/512x512/apps/connected-desktop.png" \
     --plugin gtk \
-    --output appimage
+    2>&1 | tee "$APPIMAGETOOL_LOG"; then
+    echo "Error: linuxdeploy failed to build the AppDir" >&2
+    echo "Log: $APPIMAGETOOL_LOG" >&2
+    exit 1
+fi
 
-BUILT=$(find "$PROJECT_ROOT" -maxdepth 1 -name 'Connected-*-x86_64.AppImage' -print -quit 2>/dev/null)
-if [[ -z "$BUILT" ]]; then
-    echo "Error: linuxdeploy did not produce an AppImage in $PROJECT_ROOT" >&2
+OUTPUT="$PROJECT_ROOT/target/connected-desktop-x86_64.AppImage"
+rm -f "$OUTPUT"
+
+echo "Packaging AppDir into AppImage..."
+cd "$PROJECT_ROOT"
+
+# appimagetool auto-detects the architecture; set it explicitly to be safe.
+export ARCH=x86_64
+
+if ! "$APPIMAGETOOL" \
+    --no-appstream \
+    "$APPDIR" \
+    "$OUTPUT" \
+    2>&1 | tee -a "$APPIMAGETOOL_LOG"; then
+    echo "Error: appimagetool failed to package the AppImage" >&2
+    echo "Log: $APPIMAGETOOL_LOG" >&2
     echo "AppDir contents:" >&2
     find "$APPDIR" -maxdepth 4 -print >&2
     exit 1
 fi
-
-mv "$BUILT" "$OUTPUT"
 
 if [[ ! -s "$OUTPUT" ]]; then
     echo "Error: AppImage at $OUTPUT is missing or empty" >&2
