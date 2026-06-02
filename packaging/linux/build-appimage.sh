@@ -127,6 +127,28 @@ if ! "$LINUXDEPLOY" \
     exit 1
 fi
 
+# Bundle WebKit2GTK
+
+WEBKIT_DIR="$(pkg-config --variable=libdir webkit2gtk-4.1)/webkit2gtk-4.1"
+
+if [[ ! -d "$WEBKIT_DIR" ]]; then
+    echo "Error: Could not find webkit2gtk-4.1. Install webkit2gtk-4.1 and re-run." >&2
+    exit 1
+fi
+
+WEBKIT_TARGET="$APPDIR/lib/webkit2gtk-4.1"
+mkdir -p "$WEBKIT_TARGET/injected-bundle"
+cp "$WEBKIT_DIR"/WebKit*Process "$WEBKIT_TARGET/"
+cp "$WEBKIT_DIR"/injected-bundle/libwebkit2gtkinjectedbundle.so "$WEBKIT_TARGET/injected-bundle/"
+
+# Patch libwebkit and libjavascriptcore: "/usr" → "././" (same byte count).
+# This makes the hardcoded install paths relative to the AppImage mount point.
+for f in "$APPDIR/usr/lib"/lib{webkit2gtk,javascriptcoregtk}-4.1*.so*; do
+    [[ -f "$f" ]] && sed -i 's|/usr|././|g' "$f"
+done
+
+sed -i "/^exec .*AppRun\.wrapped/i cd \"\$this_dir\"" "$APPDIR/AppRun"
+
 OUTPUT="$PROJECT_ROOT/target/connected-desktop-x86_64.AppImage"
 ZSYNC_OUTPUT="$OUTPUT.zsync"
 UPDATE_INFORMATION="${APPIMAGE_UPDATE_INFORMATION:-gh-releases-zsync|paterkleomenis|connected|latest|connected-desktop-x86_64.AppImage.zsync}"

@@ -60,6 +60,7 @@ Thumbs.db
 *.dylib
 *.dll
 *.a
+*.zsync
 
 # Test coverage
 *.profraw
