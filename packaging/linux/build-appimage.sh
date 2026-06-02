@@ -165,6 +165,11 @@ if [[ ! -s "$OUTPUT" ]]; then
 fi
 
 if [[ ! -s "$ZSYNC_OUTPUT" ]]; then
+    echo "Generating zsync metadata..."
+    zsyncmake -o "$ZSYNC_OUTPUT" "$OUTPUT" 2>&1 | tee -a "$APPIMAGETOOL_LOG"
+fi
+
+if [[ ! -s "$ZSYNC_OUTPUT" ]]; then
     echo "Error: zsync metadata at $ZSYNC_OUTPUT is missing or empty" >&2
     exit 1
 fi
