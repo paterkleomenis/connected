@@ -182,7 +182,7 @@ dependencies {
     implementation("com.google.android.material:material:1.14.0")
 
     // JNA for UniFFI bindings
-    implementation("net.java.dev.jna:jna:5.18.1@aar")
+    implementation("net.java.dev.jna:jna:5.19.0@aar")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
