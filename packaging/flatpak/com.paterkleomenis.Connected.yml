@@ -52,6 +52,7 @@ finish-args:
   - --device=dri
   - --filesystem=host
   - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.Flatpak
   - --talk-name=org.mpris.MediaPlayer2.*
   - --own-name=org.mpris.MediaPlayer2.connected
   - --talk-name=org.kde.StatusNotifierWatcher

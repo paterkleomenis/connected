@@ -136,7 +136,7 @@ if [[ ! -d "$WEBKIT_DIR" ]]; then
     exit 1
 fi
 
-WEBKIT_TARGET="$APPDIR/lib/webkit2gtk-4.1"
+WEBKIT_TARGET="$APPDIR/${WEBKIT_DIR#/usr/}"
 mkdir -p "$WEBKIT_TARGET/injected-bundle"
 cp "$WEBKIT_DIR"/WebKit*Process "$WEBKIT_TARGET/"
 cp "$WEBKIT_DIR"/injected-bundle/libwebkit2gtkinjectedbundle.so "$WEBKIT_TARGET/injected-bundle/"

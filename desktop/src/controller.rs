@@ -26,10 +26,13 @@ use connected_core::telephony::{CallLogEntry, CallType};
 use connected_core::transport::UnpairReason;
 #[cfg(not(target_os = "windows"))]
 use connected_core::update::UpdateChecker;
-#[cfg(target_os = "linux")]
-use connected_core::update::install_linux_appimage_update;
 #[cfg(target_os = "macos")]
 use connected_core::update::install_macos_update;
+#[cfg(target_os = "linux")]
+use connected_core::update::{
+    install_linux_appimage_update, install_linux_flatpak_update, is_installed_via_flatpak,
+    is_running_as_appimage,
+};
 use connected_core::{
     ConnectedClient, ConnectedEvent, DeviceType, MediaCommand, MediaControlMessage, MediaState,
 };
@@ -2679,16 +2682,26 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                             #[cfg(target_os = "linux")]
                             {
-                                if std::env::var("APPIMAGE").is_ok() {
+                                if is_running_as_appimage() || is_installed_via_flatpak() {
+                                    let label = if is_running_as_appimage() {
+                                        "AppImage"
+                                    } else {
+                                        "Flatpak"
+                                    };
                                     add_notification("Updates", "Downloading update…", "");
                                     let url_clone = url.clone();
                                     tokio::spawn(async move {
-                                        match install_linux_appimage_update(&url_clone).await {
+                                        let result = if is_running_as_appimage() {
+                                            install_linux_appimage_update(&url_clone).await
+                                        } else {
+                                            install_linux_flatpak_update(&url_clone).await
+                                        };
+                                        match result {
                                             Ok(()) => {
-                                                info!("AppImage update installed, restarting…");
+                                                info!("{} update installed, restarting…", label);
                                             }
                                             Err(e) => {
-                                                error!("AppImage update failed: {}", e);
+                                                error!("{} update failed: {}", label, e);
                                                 add_notification(
                                                     "Update Failed",
                                                     &e.to_string(),

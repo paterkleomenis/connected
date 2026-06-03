@@ -88,17 +88,22 @@ impl UpdateChecker {
             "windows" => Some(github_release_download_url(&tag, "connected-desktop.msi")),
             // Release workflow publishes this as `connected-desktop.dmg`.
             "macos" => Some(github_release_download_url(&tag, "connected-desktop.dmg")),
-            // Prefer AUR on Linux (Arch-based installs), otherwise the AppImage asset.
+            // On Linux, determine the update source based on how the app was installed.
             "linux" => {
-                if is_arch_like() {
-                    // Prefer the AUR binary package; the -git variant exists for bleeding edge.
-                    Some("https://aur.archlinux.org/packages/connected-desktop-bin".to_string())
-                } else {
-                    // Release workflow publishes the Linux AppImage.
+                if is_running_as_appimage() {
                     Some(github_release_download_url(
                         &tag,
                         "connected-desktop-x86_64.AppImage",
                     ))
+                } else if is_installed_via_flatpak() {
+                    Some(github_release_download_url(
+                        &tag,
+                        "com.paterkleomenis.Connected.flatpak",
+                    ))
+                } else if is_installed_via_aur() {
+                    Some("https://aur.archlinux.org/packages/connected-desktop-bin".to_string())
+                } else {
+                    Some(github_release_download_url(&tag, "connected-desktop"))
                 }
             }
             _ => Some(html_url),
@@ -141,44 +146,37 @@ fn github_release_download_url(tag: &str, asset_name: &str) -> String {
     )
 }
 
-fn is_arch_like() -> bool {
-    // Best-effort detection so we can prefer AUR without breaking other distros.
-    // Properly parse /etc/os-release as KEY=VALUE pairs per the freedesktop spec
-    // instead of fragile substring matching that could false-positive on unrelated
-    // values (e.g. a PRETTY_NAME containing "arch" in another word).
-    let Ok(contents) = std::fs::read_to_string("/etc/os-release") else {
-        return false;
-    };
+/// Detect whether the app is running as an AppImage.
+///
+/// AppImage sets the `APPIMAGE` environment variable to the path of the
+/// running AppImage file.
+pub fn is_running_as_appimage() -> bool {
+    std::env::var("APPIMAGE").is_ok()
+}
 
-    for line in contents.lines() {
-        let line = line.trim();
-        let Some((key, raw_value)) = line.split_once('=') else {
-            continue;
-        };
+/// Detect whether the app is installed as a Flatpak.
+///
+/// Checks for the presence of `/.flatpak-info` (created inside every Flatpak
+/// sandbox) or the `FLATPAK_ID` environment variable.
+pub fn is_installed_via_flatpak() -> bool {
+    std::path::Path::new("/.flatpak-info").exists() || std::env::var("FLATPAK_ID").is_ok()
+}
 
-        // Strip optional quotes around the value (single or double).
-        let value = raw_value
-            .trim_matches('"')
-            .trim_matches('\'')
-            .to_lowercase();
-
-        match key {
-            "ID" | "id" if value == "arch" || value == "archlinux" => {
-                return true;
-            }
-            "ID_LIKE" | "id_like" => {
-                // ID_LIKE can be a space-separated list of distro identifiers.
-                for token in value.split_whitespace() {
-                    if token == "arch" || token == "archlinux" {
-                        return true;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    false
+/// Detect whether the app is installed via the AUR.
+///
+/// Runs `pacman -Q connected-desktop` and checks the exit code. If the
+/// package is installed, pacman exits 0.
+///
+/// Since the checks for AppImage and Flatpak run first, we can reasonably assume
+/// that if the AUR check succeeds, it is the intended choice for updating.
+pub fn is_installed_via_aur() -> bool {
+    std::process::Command::new("pacman")
+        .args(["-Q", "connected-desktop"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Download an update asset to a local file path (streamed; avoids buffering the full payload).
@@ -509,5 +507,83 @@ pub async fn install_linux_appimage_update(url: &str) -> Result<()> {
     let _ = tokio::process::Command::new(&appimage).spawn();
 
     // Exit the current process.
+    std::process::exit(0);
+}
+
+/// Install a Linux Flatpak update.
+///
+/// Downloads the Flatpak bundle, installs it matching the current installation
+/// type (system-wide installation or user), relaunches and terminates the old app.
+pub async fn install_linux_flatpak_update(url: &str) -> Result<()> {
+    let downloads_dir = dirs::download_dir().unwrap_or_else(|| {
+        PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
+    });
+    let bundle_path =
+        downloads_dir.join(format!("connected-update-{}.flatpak", std::process::id()));
+
+    download_to_file(url, &bundle_path).await?;
+
+    let bundle_str = bundle_path.to_str().unwrap_or_default();
+
+    let is_system_installation = std::process::Command::new("flatpak-spawn")
+        .args([
+            "--host",
+            "flatpak",
+            "info",
+            "--system",
+            "com.paterkleomenis.Connected",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    // System installs need pkexec for polkit authentication
+    let install_status = if is_system_installation {
+        tokio::process::Command::new("flatpak-spawn")
+            .args([
+                "--host",
+                "pkexec",
+                "flatpak",
+                "install",
+                "--system",
+                "--reinstall",
+                "--bundle",
+                "-y",
+                bundle_str,
+            ])
+            .status()
+            .await
+            .map_err(ConnectedError::Io)?
+    } else {
+        tokio::process::Command::new("flatpak-spawn")
+            .args([
+                "--host",
+                "flatpak",
+                "install",
+                "--user",
+                "--reinstall",
+                "--bundle",
+                "-y",
+                bundle_str,
+            ])
+            .status()
+            .await
+            .map_err(ConnectedError::Io)?
+    };
+
+    let _ = tokio::fs::remove_file(&bundle_path).await;
+
+    if !install_status.success() {
+        return Err(ConnectedError::Network(
+            "Flatpak install failed".to_string(),
+        ));
+    }
+
+    let _ = tokio::process::Command::new("flatpak-spawn")
+        .args(["--host", "flatpak", "run", "com.paterkleomenis.Connected"])
+        .spawn();
+
     std::process::exit(0);
 }
