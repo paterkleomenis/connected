@@ -147,7 +147,7 @@ for f in "$APPDIR/usr/lib"/lib{webkit2gtk,javascriptcoregtk}-4.1*.so*; do
     [[ -f "$f" ]] && sed -i 's|/usr|././|g' "$f"
 done
 
-sed -i "/^exec .*AppRun\.wrapped/i cd \"\$this_dir\"" "$APPDIR/AppRun"
+sed -i "/^exec .*AppRun\.wrapped/i export LD_LIBRARY_PATH=\"\$APPDIR/usr/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}\"\ncd \"\$this_dir\"" "$APPDIR/AppRun"
 
 OUTPUT="$PROJECT_ROOT/target/connected-desktop-x86_64.AppImage"
 ZSYNC_OUTPUT="$OUTPUT.zsync"
