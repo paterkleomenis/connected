@@ -244,15 +244,18 @@ tasks.register<Exec>("stripRustJniLibs") {
     description = "Strip debug symbols from the jniLibs copies of libconnected_ffi.so."
     group = "build-setup"
     val soFiles = abiList.map { File(jniLibsDir, "$it/libconnected_ffi.so") }
+    val llvmStripPath = llvmStrip.absolutePath
     inputs.files(soFiles)
     outputs.files(soFiles)
-    // Filter at config time so we don't try to strip files that don't exist
-    // (e.g. when running this task standalone before buildRustRelease).
-    commandLine(
-        llvmStrip.absolutePath,
-        "--strip-unneeded",
-        *soFiles.filter { it.exists() }.map { it.absolutePath }.toTypedArray(),
-    )
+    // The .so files are produced by buildRustRelease, which runs before
+    // this finalizer but after configuration. Resolve the file list at
+    // execution time so a clean build (where nothing exists at config
+    // time) still strips the freshly-built artifacts.
+    executable = llvmStripPath
+    onlyIf { soFiles.any { it.exists() } }
+    doFirst {
+        setArgs(listOf("--strip-unneeded") + soFiles.filter { it.exists() }.map { it.absolutePath })
+    }
 }
 
 // Once uniffi-bindgen has extracted the FFI metadata from the target/
@@ -267,13 +270,18 @@ tasks.register<Exec>("stripRustTarget") {
             File(cargoTargetDir, "$triple/$profile/libconnected_ffi.so")
         }
     }
+    val llvmStripPath = llvmStrip.absolutePath
     inputs.files(soFiles)
     outputs.files(soFiles)
-    commandLine(
-        llvmStrip.absolutePath,
-        "--strip-unneeded",
-        *soFiles.filter { it.exists() }.map { it.absolutePath }.toTypedArray(),
-    )
+    // Resolve the file list at execution time: on a clean build the .so
+    // files are created by buildRust{Debug,Release} -> generateBindings*
+    // and don't exist at configuration time, so a config-time filter is
+    // always empty and llvm-strip errors with "no input file specified".
+    executable = llvmStripPath
+    onlyIf { soFiles.any { it.exists() } }
+    doFirst {
+        setArgs(listOf("--strip-unneeded") + soFiles.filter { it.exists() }.map { it.absolutePath })
+    }
 }
 
 // Generate UniFFI Kotlin bindings (using bundled uniffi-bindgen)
