@@ -221,6 +221,61 @@ tasks.register<Exec>("buildRustRelease") {
     )
 }
 
+// The connected-ffi package keeps its debug symbols (see
+// [profile.release.package.connected-ffi] in the workspace Cargo.toml) so
+// that uniffi-bindgen can extract the FFI metadata at build time. Those
+// symbols inflate the .so files in jniLibs by ~30-50% which is unnecessary
+// at runtime. Once generateBindingsRelease has read the metadata, we strip
+// the jniLibs copies so the APK ships the smallest possible binaries while
+// the target/ copies (used only by the build) stay intact.
+val llvmStrip = File(ndkDir, "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip")
+val jniLibsDir = file("${project.projectDir}/src/main/jniLibs")
+val cargoTargetDir = file("${project.rootDir}/../target")
+// Mapping from Android ABI name to cargo target triple (used in target/).
+val abiToTargetTriple = mapOf(
+    "arm64-v8a" to "aarch64-linux-android",
+    "armeabi-v7a" to "armv7-linux-androideabi",
+    "x86_64" to "x86_64-linux-android",
+    "x86" to "i686-linux-android",
+)
+val abiList = abiToTargetTriple.keys.toList()
+
+tasks.register<Exec>("stripRustJniLibs") {
+    description = "Strip debug symbols from the jniLibs copies of libconnected_ffi.so."
+    group = "build-setup"
+    val soFiles = abiList.map { File(jniLibsDir, "$it/libconnected_ffi.so") }
+    inputs.files(soFiles)
+    outputs.files(soFiles)
+    // Filter at config time so we don't try to strip files that don't exist
+    // (e.g. when running this task standalone before buildRustRelease).
+    commandLine(
+        llvmStrip.absolutePath,
+        "--strip-unneeded",
+        *soFiles.filter { it.exists() }.map { it.absolutePath }.toTypedArray(),
+    )
+}
+
+// Once uniffi-bindgen has extracted the FFI metadata from the target/
+// copies of libconnected_ffi.so, those copies are no longer needed for the
+// build and can be stripped to reclaim ~24 MB of disk on the build machine.
+// This has no effect on the APK (which uses the jniLibs copies).
+tasks.register<Exec>("stripRustTarget") {
+    description = "Strip debug symbols from the target/ copies of libconnected_ffi.so after uniffi-bindgen has run."
+    group = "build-setup"
+    val soFiles = abiToTargetTriple.values.flatMap { triple ->
+        listOf("release", "debug").map { profile ->
+            File(cargoTargetDir, "$triple/$profile/libconnected_ffi.so")
+        }
+    }
+    inputs.files(soFiles)
+    outputs.files(soFiles)
+    commandLine(
+        llvmStrip.absolutePath,
+        "--strip-unneeded",
+        *soFiles.filter { it.exists() }.map { it.absolutePath }.toTypedArray(),
+    )
+}
+
 // Generate UniFFI Kotlin bindings (using bundled uniffi-bindgen)
 // We use the library built for x86_64 (emulator) or arm64 as a reference for generation.
 // It doesn't matter which architecture, as long as the API is the same.
@@ -242,6 +297,42 @@ tasks.register<Exec>("generateBindings") {
     dependsOn("buildRustDebug")
 }
 
+// UniFFI-generated bindings reference the integrity/lib objects purely for
+// class-loader side effects, which the Kotlin compiler flags as
+// "Expression is unused". A wide variety of other IDE/compiler warnings
+// (redundant public modifier, redundant Unit return, snake_case FFI symbol
+// names, etc.) are also emitted by the generator. The :app:cleanUniffiBindings
+// task runs scripts/clean_uniffi_bindings.py after every regen, applying
+// the safe in-place transforms that don't touch the FFI ABI (drops `public`,
+// drops `: Unit`, drops `kotlin.` qualifiers, strips redundant backticks,
+// simplifies `{ -> }` zero-arg lambdas, removes redundant `Unit` statements,
+// etc.) and prepending a comprehensive @file:Suppress(...) header that
+// covers everything that can't be fixed in-place (FFI symbol names, unused
+// FFI stubs, false-positive spell-checker hits on "uniffi", class-naming
+// conventions, etc.).
+//
+// It is registered as a finalizer of the generateBindings tasks below so
+// the cleanup runs automatically after every regen. The task is an Exec
+// task (no inline doLast closures) so the build stays compatible with
+// Gradle's configuration cache.
+val generatedBindingsFile =
+    file("${project.projectDir}/src/main/kotlin/uniffi/connected_ffi/connected_ffi.kt")
+val uniffiCleanerScript = file("${project.rootDir}/../scripts/clean_uniffi_bindings.py")
+
+tasks.register<Exec>("cleanUniffiBindings") {
+    description = "Clean the UniFFI-generated Kotlin bindings and prepend a comprehensive @file:Suppress header."
+    group = "build-setup"
+    // The task only ever runs as a finalizer of generateBindings{,Release},
+    // so the bindings file is guaranteed to exist by the time we get here.
+    // No onlyIf guard is used because File-derived predicates are not
+    // serializable into the configuration cache.
+    commandLine(
+        "python3",
+        uniffiCleanerScript.absolutePath,
+        generatedBindingsFile.absolutePath,
+    )
+}
+
 tasks.register<Exec>("generateBindingsRelease") {
     workingDir = file("${project.rootDir}/..")
     // Use the aarch64 release lib for generation
@@ -259,10 +350,23 @@ tasks.register<Exec>("generateBindingsRelease") {
 }
 
 afterEvaluate {
+    tasks.matching { it.name == "generateBindings" || it.name == "generateBindingsRelease" }
+        .configureEach {
+            finalizedBy("cleanUniffiBindings", "stripRustTarget")
+        }
     tasks.matching { it.name == "preDebugBuild" }.configureEach {
         dependsOn("generateBindings")
     }
     tasks.matching { it.name == "preReleaseBuild" }.configureEach {
         dependsOn("generateBindingsRelease")
+    }
+    // The release Rust build copies unstripped .so files into jniLibs (the
+    // symbols are needed by uniffi-bindgen via the target/ copy, not jniLibs).
+    // After the build, strip the jniLibs copies so the APK ships the smallest
+    // possible binaries. Done as a finalizer so it runs after cargo ndk
+    // copies the artifacts, and is skipped on incremental builds where the
+    // .so files haven't changed.
+    tasks.matching { it.name == "buildRustRelease" }.configureEach {
+        finalizedBy("stripRustJniLibs")
     }
 }
