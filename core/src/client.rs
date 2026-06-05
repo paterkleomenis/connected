@@ -142,6 +142,8 @@ pub struct ConnectedClient {
     /// Global semaphore bounding concurrent filesystem stream handlers to prevent
     /// memory exhaustion when many peers issue large read requests simultaneously.
     fs_stream_semaphore: Arc<tokio::sync::Semaphore>,
+    /// Active/approved batch transfers on this receiver, mapping batch_id -> download directory.
+    pub(crate) approved_batches: Arc<RwLock<HashMap<String, PathBuf>>>,
 }
 
 impl ConnectedClient {
@@ -320,6 +322,7 @@ impl ConnectedClient {
             pending_pairing_requests: Arc::new(RwLock::new(HashMap::new())),
             fs_provider: Arc::new(RwLock::new(None)),
             fs_stream_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FS_STREAMS)),
+            approved_batches: Arc::new(RwLock::new(HashMap::new())),
         });
 
         // 5. Start Background Tasks
@@ -2039,6 +2042,148 @@ impl ConnectedClient {
         Ok(transfer_id)
     }
 
+    /// Send a batch of files sequentially over a single stream
+    pub async fn send_files(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        file_paths: Vec<PathBuf>,
+    ) -> Result<String> {
+        if file_paths.is_empty() {
+            return Err(ConnectedError::InitializationError(
+                "No files specified for batch transfer".to_string(),
+            ));
+        }
+
+        for path in &file_paths {
+            if !path.exists() {
+                return Err(ConnectedError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("File not found: {:?}", path),
+                )));
+            }
+        }
+
+        let addr = SocketAddr::new(target_ip, target_port);
+        let connection = self.transport.connect_allow_unknown(addr).await?;
+
+        let event_tx = self.event_tx.clone();
+        let transfer_id = uuid::Uuid::new_v4().to_string();
+        let peer_name = target_ip.to_string();
+
+        // Create cancel flag for this transfer
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.active_outgoing_transfers
+            .write()
+            .insert(transfer_id.clone(), (cancel_flag.clone(), None));
+
+        let active_transfers = self.active_outgoing_transfers.clone();
+        let tid_for_cleanup = transfer_id.clone();
+
+        tokio::spawn(async move {
+            let (progress_tx, progress_rx) = mpsc::unbounded_channel();
+            let mut progress_rx = progress_rx;
+
+            // Bridge internal progress to public event bus
+            let tid = tid_for_cleanup.clone();
+            let p_peer = peer_name.clone();
+            let p_tx = event_tx.clone();
+
+            tokio::spawn(async move {
+                while let Some(progress) = progress_rx.recv().await {
+                    let event = match progress {
+                        TransferProgress::Pending { .. } => {
+                            continue;
+                        }
+                        TransferProgress::CompressionProgress {
+                            filename,
+                            current_file,
+                            files_processed,
+                            total_files,
+                            bytes_processed,
+                            total_bytes,
+                            speed_bytes_per_sec,
+                        } => ConnectedEvent::CompressionProgress {
+                            filename,
+                            current_file,
+                            files_processed,
+                            total_files,
+                            bytes_processed,
+                            total_bytes,
+                            speed_bytes_per_sec,
+                        },
+                        TransferProgress::Starting {
+                            filename,
+                            total_size,
+                        } => ConnectedEvent::TransferStarting {
+                            id: tid.clone(),
+                            filename,
+                            total_size,
+                            peer_device: p_peer.clone(),
+                            direction: TransferDirection::Outgoing,
+                        },
+                        TransferProgress::Progress {
+                            bytes_transferred,
+                            total_size,
+                        } => ConnectedEvent::TransferProgress {
+                            id: tid.clone(),
+                            bytes_transferred,
+                            total_size,
+                        },
+                        TransferProgress::Completed { filename, .. } => {
+                            ConnectedEvent::TransferCompleted {
+                                id: tid.clone(),
+                                filename,
+                            }
+                        }
+                        TransferProgress::Failed { error } => ConnectedEvent::TransferFailed {
+                            id: tid.clone(),
+                            error,
+                        },
+                        TransferProgress::Cancelled => ConnectedEvent::TransferFailed {
+                            id: tid.clone(),
+                            error: "Cancelled".into(),
+                        },
+                    };
+                    let _ = p_tx.send(event);
+                }
+            });
+
+            let file_transfer = FileTransfer::new(connection);
+            let result = file_transfer
+                .send_batch(
+                    "Batch Transfer",
+                    &file_paths,
+                    Some(progress_tx),
+                    Some(cancel_flag),
+                )
+                .await;
+
+            // Clean up the transfer from active transfers
+            active_transfers.write().remove(&tid_for_cleanup);
+
+            if let Err(e) = result {
+                let is_cancelled = matches!(
+                    &e,
+                    ConnectedError::TransferFailed(msg)
+                        if msg.eq_ignore_ascii_case("cancelled")
+                            || msg.eq_ignore_ascii_case("cancelled by receiver")
+                );
+
+                if is_cancelled {
+                    return;
+                }
+
+                let _ = event_tx.send(ConnectedEvent::TransferFailed {
+                    id: tid_for_cleanup,
+                    error: e.to_string(),
+                });
+            }
+        });
+
+        Ok(transfer_id)
+    }
+
     /// Cancel an active outgoing file transfer by its transfer_id.
     /// This sets the cancellation flag, which will be checked by the transfer task,
     /// causing it to stop and clean up any temporary files.
@@ -3179,9 +3324,9 @@ impl ConnectedClient {
         let event_tx = self.event_tx.clone();
         let download_dir_lock = self.download_dir.clone();
         let key_store_files = self.key_store.clone();
-
         let pending_transfers = self.pending_transfers.clone();
         let active_incoming_transfers = self.active_incoming_transfers.clone();
+        let approved_batches = self.approved_batches.clone();
         tokio::spawn(async move {
             let key_store = key_store_files;
             while let Some((fingerprint, send, recv)) = file_rx.recv().await {
@@ -3196,6 +3341,7 @@ impl ConnectedClient {
                 let event_tx = event_tx.clone();
                 let download_dir = download_dir_lock.read().clone();
                 let fingerprint_clone = fingerprint.clone();
+                let approved_batches_clone = approved_batches.clone();
                 // Paired (trusted) devices auto-accept file transfers;
                 // unpaired devices get an accept/decline prompt.
                 let should_auto_accept = is_trusted;
@@ -3320,6 +3466,7 @@ impl ConnectedClient {
                         should_auto_accept,
                         accept_rx,
                         Some(cancel_flag),
+                        Some(approved_batches_clone),
                     )
                     .await;
 

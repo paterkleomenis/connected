@@ -230,7 +230,6 @@ tasks.register<Exec>("buildRustRelease") {
 // the target/ copies (used only by the build) stay intact.
 val hostTag = run {
     val os = System.getProperty("os.name").lowercase()
-    val arch = System.getProperty("os.arch").lowercase()
     when {
         os.contains("mac") -> "darwin-x86_64"
         os.contains("linux") -> "linux-x86_64"
@@ -264,7 +263,7 @@ tasks.register<Exec>("stripRustJniLibs") {
     executable = llvmStripPath
     onlyIf { soFiles.any { it.exists() } }
     doFirst {
-        setArgs(listOf("--strip-unneeded") + soFiles.filter { it.exists() }.map { it.absolutePath })
+        args = listOf("--strip-unneeded") + soFiles.filter { it.exists() }.map { it.absolutePath }
     }
 }
 
@@ -290,7 +289,7 @@ tasks.register<Exec>("stripRustTarget") {
     executable = llvmStripPath
     onlyIf { soFiles.any { it.exists() } }
     doFirst {
-        setArgs(listOf("--strip-unneeded") + soFiles.filter { it.exists() }.map { it.absolutePath })
+        args = listOf("--strip-unneeded") + soFiles.filter { it.exists() }.map { it.absolutePath }
     }
 }
 

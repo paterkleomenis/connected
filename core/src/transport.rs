@@ -312,7 +312,19 @@ impl QuicTransport {
         let client_config_allow_unknown = Self::create_client_config(&key_store, true)?;
 
         #[cfg(not(target_os = "ios"))]
-        let mut endpoint = Endpoint::server(server_config, bind_addr)?;
+        let mut endpoint = {
+            let socket = std::net::UdpSocket::bind(bind_addr)?;
+            let sock = socket2::Socket::from(socket);
+            let _ = sock.set_send_buffer_size(4 * 1024 * 1024);
+            let _ = sock.set_recv_buffer_size(4 * 1024 * 1024);
+            let socket: std::net::UdpSocket = sock.into();
+            Endpoint::new(
+                quinn::EndpointConfig::default(),
+                Some(server_config),
+                socket,
+                Arc::new(quinn::TokioRuntime),
+            )?
+        };
 
         #[cfg(target_os = "ios")]
         let mut endpoint = {
@@ -320,8 +332,24 @@ impl QuicTransport {
             let max_wait = std::time::Duration::from_secs(30);
             let mut delay = std::time::Duration::from_millis(500);
             loop {
-                match Endpoint::server(server_config.clone(), bind_addr) {
-                    Ok(ep) => break ep,
+                match std::net::UdpSocket::bind(bind_addr) {
+                    Ok(socket) => {
+                        let sock = socket2::Socket::from(socket);
+                        let _ = sock.set_send_buffer_size(4 * 1024 * 1024);
+                        let _ = sock.set_recv_buffer_size(4 * 1024 * 1024);
+                        let socket: std::net::UdpSocket = sock.into();
+                        match Endpoint::new(
+                            quinn::EndpointConfig::default(),
+                            Some(server_config.clone()),
+                            socket,
+                            Arc::new(quinn::TokioRuntime),
+                        ) {
+                            Ok(ep) => break ep,
+                            Err(e) => {
+                                return Err(ConnectedError::Io(e));
+                            }
+                        }
+                    }
                     Err(e)
                         if e.kind() == std::io::ErrorKind::PermissionDenied
                             && start.elapsed() < max_wait =>
@@ -413,7 +441,7 @@ impl QuicTransport {
         transport.send_window(SEND_WINDOW);
         transport.datagram_receive_buffer_size(None);
         transport.ack_frequency_config(None);
-        transport.initial_mtu(1400);
+        transport.initial_mtu(1450);
         transport.min_mtu(1200);
         transport.mtu_discovery_config(Some(Default::default()));
 

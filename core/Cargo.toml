@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 tokio.workspace = true
 quinn.workspace = true
+socket2 = "0.6"
 rustls.workspace = true
 rcgen.workspace = true
 bytes.workspace = true
