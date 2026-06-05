@@ -228,7 +228,17 @@ tasks.register<Exec>("buildRustRelease") {
 // at runtime. Once generateBindingsRelease has read the metadata, we strip
 // the jniLibs copies so the APK ships the smallest possible binaries while
 // the target/ copies (used only by the build) stay intact.
-val llvmStrip = File(ndkDir, "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip")
+val hostTag = run {
+    val os = System.getProperty("os.name").lowercase()
+    val arch = System.getProperty("os.arch").lowercase()
+    when {
+        os.contains("mac") -> "darwin-x86_64"
+        os.contains("linux") -> "linux-x86_64"
+        os.contains("win") -> "windows-x86_64"
+        else -> "linux-x86_64"
+    }
+}
+val llvmStrip = File(ndkDir, "toolchains/llvm/prebuilt/$hostTag/bin/llvm-strip")
 val jniLibsDir = file("${project.projectDir}/src/main/jniLibs")
 val cargoTargetDir = file("${project.rootDir}/../target")
 // Mapping from Android ABI name to cargo target triple (used in target/).
@@ -377,4 +387,8 @@ afterEvaluate {
     tasks.matching { it.name == "buildRustRelease" }.configureEach {
         finalizedBy("stripRustJniLibs")
     }
+    tasks.matching { it.name == "mergeReleaseJniLibFolders" || it.name == "mergeDebugJniLibFolders" }
+        .configureEach {
+            dependsOn("stripRustJniLibs")
+        }
 }

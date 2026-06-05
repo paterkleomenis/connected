@@ -51,7 +51,7 @@ final class IOSFilesystemProvider: FilesystemProviderCallback, @unchecked Sendab
             throw filesystemError("Not a file: \(path)")
         }
 
-        let maxChunkSize: UInt64 = 4 * 1024 * 1024
+        let maxChunkSize: UInt64 = 16 * 1024 * 1024
         let desired = min(size, maxChunkSize)
         let count = Int(desired)
 

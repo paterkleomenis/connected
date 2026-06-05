@@ -114,8 +114,8 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
             return try {
                 file.inputStream().use { input ->
                     if (!skipFully(input, offset.toLong())) return ByteArray(0)
-                    // Limit read size to prevent OOM (max 4MB per request)
-                    val maxReadSize = minOf(size.toLong(), 4 * 1024 * 1024L)
+                    // Limit read size to prevent OOM (max 16MB per request)
+                    val maxReadSize = minOf(size.toLong(), 16 * 1024 * 1024L)
                     val buffer = ByteArray(maxReadSize.toInt())
                     val read = input.read(buffer)
                     if (read == -1) ByteArray(0)
@@ -133,8 +133,8 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
 
             return inputStream.use { input ->
                 if (!skipFully(input, offset.toLong())) return ByteArray(0)
-                // Limit read size to prevent OOM (max 4MB per request)
-                val maxReadSize = minOf(size.toLong(), 4 * 1024 * 1024L)
+                // Limit read size to prevent OOM (max 16MB per request)
+                val maxReadSize = minOf(size.toLong(), 16 * 1024 * 1024L)
                 val buffer = ByteArray(maxReadSize.toInt())
                 val read = input.read(buffer)
                 if (read == -1) ByteArray(0)

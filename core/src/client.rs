@@ -552,8 +552,8 @@ impl ConnectedClient {
             .map_err(ConnectedError::Io)?;
 
         let mut offset = 0u64;
-        // Keep chunk size within the strictest known provider limit (desktop: 4MB).
-        let chunk_size = 4 * 1024 * 1024; // 4MB chunks
+        // Use 16MB chunks for high-speed LAN transfers (optimized for WiFi 5/6)
+        let chunk_size = 16 * 1024 * 1024; // 16MB chunks
 
         while offset < file_size {
             let size = std::cmp::min(chunk_size, file_size - offset);
@@ -647,8 +647,8 @@ impl ConnectedClient {
             .map_err(ConnectedError::Io)?;
 
         let mut offset = 0u64;
-        // Keep chunk size within the strictest known provider limit (desktop: 4MB).
-        let chunk_size = 4 * 1024 * 1024; // 4MB chunks
+        // Use 16MB chunks for high-speed LAN transfers (optimized for WiFi 5/6)
+        let chunk_size = 16 * 1024 * 1024; // 16MB chunks
 
         while offset < file_size {
             let size = std::cmp::min(chunk_size, file_size - offset);
@@ -933,8 +933,8 @@ impl ConnectedClient {
             .map_err(ConnectedError::Io)?;
 
         let mut offset = 0u64;
-        // Keep chunk size within the strictest known provider limit (desktop: 4MB).
-        let chunk_size = 4 * 1024 * 1024; // 4MB chunks
+        // Use 16MB chunks for high-speed LAN transfers (optimized for WiFi 5/6)
+        let chunk_size = 16 * 1024 * 1024; // 16MB chunks
 
         while offset < file_size {
             let size = std::cmp::min(chunk_size, file_size - offset);

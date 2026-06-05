@@ -9,7 +9,7 @@ pub struct DesktopFilesystemProvider {
     root_canonical: PathBuf,
 }
 
-const MAX_FS_READ_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_FS_READ_BYTES: u64 = 16 * 1024 * 1024;
 
 impl DesktopFilesystemProvider {
     pub fn new() -> Self {
