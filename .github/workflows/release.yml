@@ -518,7 +518,7 @@ jobs:
   # -------------------------------------------------------------------------
   publish-play-store:
     name: Publish to Google Play
-    needs: [build-android]
+    needs: [create-release]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     steps:
@@ -546,7 +546,7 @@ jobs:
   # -------------------------------------------------------------------------
   publish-microsoft-store:
     name: Publish to Microsoft Store
-    needs: [bundle-windows-msix]
+    needs: [create-release]
     runs-on: windows-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     steps:
