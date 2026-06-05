@@ -221,7 +221,47 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 5: Flatpak Build
+  # Job 5: AppImage Build
+  # -------------------------------------------------------------------------
+  build-appimage:
+    name: AppImage Build
+    runs-on: ubuntu-latest
+    needs: [pre-commit, quality, security]
+    if: github.event_name != 'schedule'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "linux-build"
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config libdbus-1-dev libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev fuse libfuse2 zsync
+
+      - name: Build AppImage
+        run: |
+          chmod +x packaging/linux/build-appimage.sh
+          packaging/linux/build-appimage.sh
+
+      - name: Upload AppImage Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: connected-appimage
+          path: |
+            target/connected-desktop-x86_64.AppImage
+            target/connected-desktop-x86_64.AppImage.zsync
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # Job 6: Flatpak Build
   # -------------------------------------------------------------------------
   build-flatpak:
     name: Flatpak Build
@@ -241,7 +281,7 @@ jobs:
           manifest-path: packaging/flatpak/com.paterkleomenis.Connected.yml
 
   # -------------------------------------------------------------------------
-  # Job 6: Windows Build
+  # Job 7: Windows Build
   # -------------------------------------------------------------------------
   build-windows:
     name: Windows Build
@@ -353,7 +393,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 7: Bundle Windows MSIX
+  # Job 8: Bundle Windows MSIX
   # -------------------------------------------------------------------------
   bundle-windows-msix:
     name: Bundle Windows MSIX
@@ -404,7 +444,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 8: macOS Build
+  # Job 9: macOS Build
   # -------------------------------------------------------------------------
   build-macos:
     name: macOS Build
@@ -450,7 +490,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 9: Build Android App
+  # Job 10: Build Android App
   # -------------------------------------------------------------------------
   build-android:
     name: Android Build
@@ -500,7 +540,7 @@ jobs:
           archive: false
 
   # -------------------------------------------------------------------------
-  # Job 10: Build iOS IPA
+  # Job 11: Build iOS IPA
   # -------------------------------------------------------------------------
   build-ios:
     name: Build iOS IPA
