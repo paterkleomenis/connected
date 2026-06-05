@@ -10,6 +10,31 @@
 [target.aarch64-linux-android]
 # ar = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
 # linker = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang"
+# Enable AArch64 hardware crypto extensions. These tell rustc that it may
+# emit hardware AES/SHA/PMULL/CRC instructions during codegen, so any code
+# written against `core::arch::aarch64` intrinsics (or hand-written
+# assembly using these features) can use the hardware path.
+#
+# Note: `+crypto` is an LLVM umbrella feature that the rustc target-feature
+# parser does not recognize — use the individual sub-features instead:
+#   +aes     — AESE/AESD/AESMC/AESIMC (AES-128/192/256) AND PMULL/PMULL2
+#              (carryless multiply, used by GCM mode). The `+aes` feature
+#              bundles both because PMULL is defined as part of the AES
+#              crypto extension in the ARMv8.0-A spec; there is no
+#              separate `+pmull` feature in rustc.
+#   +sha2    — SHA1H/SHA1SU/SHA256H/SHA256H2/SHA256SU (SHA-1 and SHA-2)
+#   +crc     — CRC32 instructions (ARMv8.1-A+, accelerates QUIC frame checksums)
+# `+aes`, `+sha2`, `+pmull` are baseline ARMv8.0-A so every Android 8.0+
+# device supports them (matches our minSdk = 26). `+crc` is ARMv8.1-A+
+# (2018+); in practice devices that old no longer receive security
+# updates, so it is safe, but remove it here if you need to support them.
+#
+# Caveat: rustls/quinn get their AES/SHA-256 acceleration from the `ring`
+# crate's own hand-written AArch64 assembly (auto-detected at ring's
+# build time), independent of this flag. The flag's main effect is for
+# any rustc-codegened AES/SHA-2 code, which connected-core doesn't
+# currently have.
+rustflags = ["-C", "target-feature=+aes,+sha2,+crc"]
 
 [target.armv7-linux-androideabi]
 # ar = "path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
