@@ -86,8 +86,11 @@ impl UpdateChecker {
             "android" => Some(github_release_download_url(&tag, "connected-android.apk")),
             // Release workflow publishes this as `connected-desktop.msi`.
             "windows" => Some(github_release_download_url(&tag, "connected-desktop.msi")),
-            // Release workflow publishes this as `connected-desktop.dmg`.
-            "macos" => Some(github_release_download_url(&tag, "connected-desktop.dmg")),
+            // Release workflow publishes this as `connected-desktop-macos.dmg`.
+            "macos" => Some(github_release_download_url(
+                &tag,
+                "connected-desktop-macos.dmg",
+            )),
             // On Linux, determine the update source based on how the app was installed.
             "linux" => {
                 let arch = std::env::consts::ARCH;

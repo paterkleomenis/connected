@@ -45,12 +45,12 @@ jobs:
         run: cargo build --release --verbose
 
       - name: Rename binary
-        run: mv target/release/connected-desktop target/release/connected-desktop-${{ matrix.arch }}
+        run: mv target/release/connected-desktop target/release/connected-desktop-linux-${{ matrix.arch }}
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v7
         with:
-          path: target/release/connected-desktop-${{ matrix.arch }}
+          path: target/release/connected-desktop-linux-${{ matrix.arch }}
           archive: false
 
   # -------------------------------------------------------------------------
@@ -309,12 +309,12 @@ jobs:
           APPLE_DEVELOPER_ID_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_ID_TEAM_ID }}
 
       - name: Prepare macOS artifact
-        run: cp target/macos-build/Connected-*.dmg connected-desktop.dmg
+        run: cp target/macos-build/Connected-*.dmg connected-desktop-macos.dmg
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v7
         with:
-          path: connected-desktop.dmg
+          path: connected-desktop-macos.dmg
           archive: false
 
   # -------------------------------------------------------------------------
@@ -518,7 +518,7 @@ jobs:
             connected-desktop-windows-arm64.msix
             connected-android.apk
             connected-ios.ipa
-            connected-desktop.dmg
+            connected-desktop-macos.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
