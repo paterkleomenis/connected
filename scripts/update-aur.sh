@@ -38,11 +38,11 @@ hash_url() {
 }
 
 count_sources() {
-  awk 'BEGIN{c=0} /^source=\(/ {block=1} block { if ($0 ~ /\)/) {block=0} if ($0 ~ /"/) c++ } END{print c}' "$1"
+  awk 'BEGIN{c=0} /^source(_x86_64|_aarch64)?=\(/ {block=1} block { if ($0 ~ /\)/) {block=0} if ($0 ~ /"/) c++ } END{print c}' "$1"
 }
 
 count_sums() {
-  awk 'BEGIN{c=0} /^sha256sums=\(/ {block=1} block { if ($0 ~ /\)/) {block=0} if ($0 ~ /'\''/) c++ } END{print c}' "$1"
+  awk 'BEGIN{c=0} /^sha256sums(_x86_64|_aarch64)?=\(/ {block=1} block { if ($0 ~ /\)/) {block=0} if ($0 ~ /'\''/) c++ } END{print c}' "$1"
 }
 
 resolve_latest_version() {
@@ -54,16 +54,20 @@ resolve_latest_version() {
 }
 
 # Extract sha256sums from a PKGBUILD file into an indexed bash array
-# Usage: extract_pkgbuild_sums <pkgbuild_path>
-# Sets global array PKGBUILD_SUMS
+# Usage: extract_pkgbuild_sums <pkgbuild_path> [arch]
+# Appends to global array PKGBUILD_SUMS
 extract_pkgbuild_sums() {
   local pkgbuild="$1"
-  PKGBUILD_SUMS=()
+  local arch="${2:-}"
   local in_block=0
+  local pattern="^sha256sums=\("
+  [ -n "$arch" ] && pattern="^sha256sums_${arch}=\("
+
   while IFS= read -r line; do
-    if [[ "$line" =~ ^sha256sums= ]]; then
+    if [[ "$line" =~ $pattern ]]; then
       in_block=1
     fi
+
     if [ "$in_block" -eq 1 ]; then
       # Extract hash values between single quotes
       while [[ "$line" =~ \'([a-fA-F0-9]{64}|SKIP)\' ]]; do
@@ -78,17 +82,21 @@ extract_pkgbuild_sums() {
 }
 
 # Extract source URLs from a PKGBUILD file
-# Usage: extract_pkgbuild_sources <pkgbuild_path> <pkgver>
-# Sets global array PKGBUILD_SOURCES
+# Usage: extract_pkgbuild_sources <pkgbuild_path> <pkgver> [arch]
+# Appends to global array PKGBUILD_SOURCES
 extract_pkgbuild_sources() {
   local pkgbuild="$1"
   local pkgver="$2"
-  PKGBUILD_SOURCES=()
+  local arch="${3:-}"
   local in_block=0
+  local pattern="^source=\("
+  [ -n "$arch" ] && pattern="^source_${arch}=\("
+
   while IFS= read -r line; do
-    if [[ "$line" =~ ^source= ]]; then
+    if [[ "$line" =~ $pattern ]]; then
       in_block=1
     fi
+
     if [ "$in_block" -eq 1 ]; then
       # Extract URLs between double quotes
       while [[ "$line" =~ \"([^\"]+)\" ]]; do
@@ -115,7 +123,16 @@ extract_pkgbuild_sources() {
 verify_pkgbuild_hashes() {
   local pkgbuild="$1"
   local ver="$2"
-  local source_names=("connected-desktop-${ver}" "connected-desktop.desktop" "ic_launcher-playstore.png" "LICENSE-MIT" "LICENSE-APACHE")
+  local source_names=("connected-desktop-${ver}-x86_64" "connected-desktop-${ver}-aarch64" "connected-desktop.desktop" "ic_launcher-playstore.png" "LICENSE-MIT" "LICENSE-APACHE")
+
+  PKGBUILD_SOURCES=()
+  PKGBUILD_SUMS=()
+
+  extract_pkgbuild_sums "$pkgbuild" "x86_64"
+  extract_pkgbuild_sources "$pkgbuild" "$ver" "x86_64"
+
+  extract_pkgbuild_sums "$pkgbuild" "aarch64"
+  extract_pkgbuild_sources "$pkgbuild" "$ver" "aarch64"
 
   extract_pkgbuild_sums "$pkgbuild"
   extract_pkgbuild_sources "$pkgbuild" "$ver"
@@ -163,11 +180,7 @@ verify_pkgbuild_hashes() {
     fi
   done
 
-  if [ "$all_ok" -eq 1 ]; then
-    return 0
-  else
-    return 1
-  fi
+  [ "$all_ok" -eq 1 ]
 }
 
 # Clean cached source/build files from the AUR directory
@@ -309,20 +322,25 @@ sed -i "s/^pkgver=.*/pkgver=${version}/" "$PKGBUILD"
 sed -i "s/^pkgrel=.*/pkgrel=1/" "$PKGBUILD"
 
 # Build source URLs (must stay in sync with PKGBUILD)
-bin_url="https://github.com/paterkleomenis/connected/releases/download/${version}/connected-desktop"
+bin_url_x86_64="https://github.com/paterkleomenis/connected/releases/download/${version}/connected-desktop-linux-x86_64"
+bin_url_aarch64="https://github.com/paterkleomenis/connected/releases/download/${version}/connected-desktop-linux-aarch64"
 desktop_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/packaging/connected-desktop.desktop"
 icon_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/android/app/src/main/ic_launcher-playstore.png"
 license_mit_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/LICENSE-MIT"
 license_apache_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/LICENSE-APACHE"
 
-# Decide whether to hash binary or keep SKIP
+# Decide whether to hash binaries or keep SKIP
 if [ "$hash_bin" -eq 1 ]; then
-  echo "Hashing binary asset..."
-  bin_sum="$(hash_url "$bin_url")"
-  echo "  Binary hash: ${bin_sum}"
+  echo "Hashing x86_64 binary asset..."
+  bin_sum_x86_64="$(hash_url "$bin_url_x86_64")"
+  echo "  x86_64 binary hash: ${bin_sum_x86_64}"
+  echo "Hashing aarch64 binary asset..."
+  bin_sum_aarch64="$(hash_url "$bin_url_aarch64")"
+  echo "  aarch64 binary hash: ${bin_sum_aarch64}"
 else
-  bin_sum="SKIP"
-  echo "  Binary hash: SKIP"
+  bin_sum_x86_64="SKIP"
+  bin_sum_aarch64="SKIP"
+  echo "  Binary hashes: SKIP"
 fi
 
 echo "Hashing auxiliary sources..."
@@ -337,16 +355,17 @@ echo "  LICENSE-APACHE: ${license_apache_sum:0:16}..."
 
 SHA_BLOCK_FILE="${AUR_DIR}/.sha256sums.tmp"
 cat > "$SHA_BLOCK_FILE" <<EOF
-sha256sums=('${bin_sum}'
-            '${desktop_sum}'
+sha256sums=('${desktop_sum}'
             '${icon_sum}'
             '${license_mit_sum}'
             '${license_apache_sum}')
+sha256sums_x86_64=('${bin_sum_x86_64}')
+sha256sums_aarch64=('${bin_sum_aarch64}')
 EOF
 
 # Replace or append sha256sums block
 export SHA_BLOCK_FILE
-perl -0777 -i -pe 'BEGIN{ local $/; open my $fh, "<", $ENV{SHA_BLOCK_FILE} or die $!; $b=<$fh>; $b =~ s/\n$//; } if (s/sha256sums=\([^)]*\)/$b/s) { } else { $_ .= "\n\n$b\n"; }' "$PKGBUILD"
+perl -0777 -i -pe 'BEGIN{ local $/; open my $fh, "<", $ENV{SHA_BLOCK_FILE} or die $!; $b=<$fh>; $b =~ s/\n$//; } if (s/(?:sha256sums(_x86_64|_aarch64)?=\([^)]*\)\n?)+/$b\n/s) { } else { $_ .= "\n\n$b\n"; }' "$PKGBUILD"
 rm -f "$SHA_BLOCK_FILE"
 
 src_count="$(count_sources "$PKGBUILD")"

@@ -2,16 +2,16 @@
 # Build Linux AppImage
 #
 # Prerequisites:
-# - Rust toolchain with x86_64-unknown-linux-gnu target
+# - Rust toolchain with the target architecture available
 # - linuxdeploy, linuxdeploy-plugin-gtk, appimagetool
 #   (all downloaded automatically if missing)
 #
 # This script creates:
-#   target/connected-desktop-x86_64.AppImage
-#   target/connected-desktop-x86_64.AppImage.zsync
+#   target/connected-desktop-${ARCH}.AppImage
+#   target/connected-desktop-${ARCH}.AppImage.zsync
 #
 # Usage:
-#   ./build-appimage.sh [--release]
+#   ./build-appimage.sh [--release] [--arch x86_64|aarch64]
 #
 # Environment:
 #   DEBUG=1                         print every command as it runs (bash -x style)
@@ -25,6 +25,7 @@ fi
 
 BUILD_TYPE="debug"
 CARGO_PROFILE=""
+ARCH="x86_64"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --release)
@@ -32,12 +33,28 @@ while [[ $# -gt 0 ]]; do
             CARGO_PROFILE="--release"
             shift
             ;;
+        --arch)
+            ARCH="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1" >&2
             exit 1
             ;;
     esac
 done
+
+# Validate architecture
+case "$ARCH" in
+    x86_64|aarch64)
+        ;;
+    *)
+        echo "Error: unsupported architecture '$ARCH'. Use x86_64 or aarch64." >&2
+        exit 1
+        ;;
+esac
+
+RUST_TARGET="${ARCH}-unknown-linux-gnu"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -48,7 +65,7 @@ if [[ -z "$VERSION" ]]; then
     exit 1
 fi
 
-echo "Building Connected AppImage $BUILD_TYPE (version: $VERSION)"
+echo "Building Connected AppImage $BUILD_TYPE (version: $VERSION, arch: $ARCH)"
 
 APPDIR="$PROJECT_ROOT/target/appdir"
 rm -rf "$APPDIR"
@@ -57,9 +74,9 @@ mkdir -p "$APPDIR/usr/share/applications"
 mkdir -p "$APPDIR/usr/share/icons/hicolor/512x512/apps"
 
 echo "Building release binary..."
-cargo build $CARGO_PROFILE --verbose -p connected-desktop
+cargo build $CARGO_PROFILE --target "$RUST_TARGET" --verbose -p connected-desktop
 
-cp "$PROJECT_ROOT/target/$BUILD_TYPE/connected-desktop" "$APPDIR/usr/bin/connected-desktop"
+cp "$PROJECT_ROOT/target/$RUST_TARGET/$BUILD_TYPE/connected-desktop" "$APPDIR/usr/bin/connected-desktop"
 chmod +x "$APPDIR/usr/bin/connected-desktop"
 
 cp "$PROJECT_ROOT/packaging/connected-desktop.desktop" "$APPDIR/usr/share/applications/connected-desktop.desktop"
@@ -67,14 +84,14 @@ cp "$PROJECT_ROOT/packaging/connected-desktop.desktop" "$APPDIR/usr/share/applic
 cp "$PROJECT_ROOT/packaging/flatpak/com.paterkleomenis.Connected.png" \
    "$APPDIR/usr/share/icons/hicolor/512x512/apps/connected-desktop.png"
 
-LINUXDEPLOY_URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+LINUXDEPLOY_URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${ARCH}.AppImage"
 LINUXDEPLOY_GTK_URL="https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh"
-APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage"
 
 TOOLS_DIR="$PROJECT_ROOT/target/appimage-tools"
 mkdir -p "$TOOLS_DIR"
 
-LINUXDEPLOY="$TOOLS_DIR/linuxdeploy-x86_64.AppImage"
+LINUXDEPLOY="$TOOLS_DIR/linuxdeploy-${ARCH}.AppImage"
 if [[ ! -f "$LINUXDEPLOY" ]]; then
     echo "Downloading linuxdeploy..."
     curl -fSL "$LINUXDEPLOY_URL" -o "$LINUXDEPLOY"
@@ -90,7 +107,7 @@ if [[ ! -f "$GTK_PLUGIN" ]]; then
 fi
 chmod +x "$GTK_PLUGIN"
 
-APPIMAGETOOL="$TOOLS_DIR/appimagetool-x86_64.AppImage"
+APPIMAGETOOL="$TOOLS_DIR/appimagetool-${ARCH}.AppImage"
 if [[ ! -f "$APPIMAGETOOL" ]]; then
     echo "Downloading appimagetool..."
     curl -fSL "$APPIMAGETOOL_URL" -o "$APPIMAGETOOL"
@@ -149,16 +166,16 @@ done
 
 sed -i "/^exec .*AppRun\.wrapped/i export LD_LIBRARY_PATH=\"\$APPDIR/usr/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}\"\ncd \"\$this_dir\"" "$APPDIR/AppRun"
 
-OUTPUT="$PROJECT_ROOT/target/connected-desktop-x86_64.AppImage"
+OUTPUT="$PROJECT_ROOT/target/connected-desktop-${ARCH}.AppImage"
 ZSYNC_OUTPUT="$OUTPUT.zsync"
-UPDATE_INFORMATION="${APPIMAGE_UPDATE_INFORMATION:-gh-releases-zsync|paterkleomenis|connected|latest|connected-desktop-x86_64.AppImage.zsync}"
+UPDATE_INFORMATION="${APPIMAGE_UPDATE_INFORMATION:-gh-releases-zsync|paterkleomenis|connected|latest|connected-desktop-${ARCH}.AppImage.zsync}"
 rm -f "$OUTPUT" "$ZSYNC_OUTPUT"
 
 echo "Packaging AppDir into AppImage..."
 cd "$PROJECT_ROOT"
 
 # appimagetool auto-detects the architecture; set it explicitly to be safe.
-export ARCH=x86_64
+export ARCH=$ARCH
 
 if ! command -v zsyncmake >/dev/null 2>&1; then
     echo "Error: zsyncmake is required to generate $ZSYNC_OUTPUT" >&2
