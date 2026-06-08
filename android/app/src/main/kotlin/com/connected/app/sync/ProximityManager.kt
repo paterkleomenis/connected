@@ -142,13 +142,22 @@ class ProximityManager(private val context: Context) {
     private var groupCreateRetryAttempts = 0
 
     var onPairingIntent: ((String) -> Unit)? = null
+    var onWifiDirectConnected: ((peerId: String, ip: String, port: Int) -> Unit)? = null
     var hasIdeallyDiscoveredDevice: ((String) -> Boolean)? = null
 
     @SuppressLint("MissingPermission")
     private val retryDiscoveryRunnable = Runnable { discoverNearby(force = true) }
 
     @SuppressLint("MissingPermission")
-    private val retryConnectRunnable = Runnable { discoverNearby(force = true) }
+    private val retryConnectRunnable = Runnable {
+        val targetId = pendingPeerId ?: pairingTargetId
+        val peer = targetId?.let { peersById[it] }
+        if (peer != null) {
+            maybeConnectWifiDirect(peer, force = true)
+        } else {
+            discoverNearby(force = true)
+        }
+    }
 
     @SuppressLint("MissingPermission")
     private val retryGroupCreateRunnable = Runnable { createGroupIfNeeded(force = true) }
@@ -191,21 +200,22 @@ class ProximityManager(private val context: Context) {
     )
     fun requestConnect(deviceId: String) {
         val peer = peersById[deviceId]
-        if (peer == null) {
-            Log.d(TAG, "No proximity peer for device id $deviceId")
-            discoverNearby(force = true)
-            return
-        }
 
-        Log.d(TAG, "Proximity connect requested for ${peer.matchName} ($deviceId)")
+        Log.d(TAG, "Proximity connect requested for ${peer?.matchName ?: deviceId} ($deviceId)")
         pairingActiveUntil = SystemClock.elapsedRealtime() + PAIR_INTENT_TTL_MS
         pairingTargetId = deviceId
         pendingPeerId = deviceId
-        pendingPeerName = peer.matchName
+        pendingPeerName = peer?.matchName ?: deviceId
         pendingPreferGroupOwner = shouldBeGroupOwner(deviceId)
 
         refreshLocalService(force = true)
         handler.postDelayed({ refreshLocalService(force = true) }, PAIR_INTENT_TTL_MS + 100)
+
+        if (peer == null) {
+            Log.d(TAG, "No proximity peer for device id $deviceId yet; waiting for discovery")
+            discoverNearby(force = true)
+            return
+        }
 
         maybeConnectWifiDirect(peer, force = true)
         discoverNearby(force = true)
@@ -290,7 +300,9 @@ class ProximityManager(private val context: Context) {
                     }
 
                     WifiP2pManager.WIFI_P2P_DISCOVERY_CHANGED_ACTION -> {
-                        discoverNearby(force = true)
+                        if (!p2pConnected && !p2pActionInFlight) {
+                            discoverNearby(force = true)
+                        }
                     }
                 }
             }
@@ -976,6 +988,12 @@ class ProximityManager(private val context: Context) {
                             if (peer != null && !groupOwnerIp.isNullOrEmpty()) {
                                 p2pIpById[peer.deviceId] = groupOwnerIp
                                 injectPeer(peer.copy(ip = groupOwnerIp, lastSeenAtMs = SystemClock.elapsedRealtime()))
+
+                                val port = peer.port
+                                val resolvedDeviceId = peer.deviceId
+                                handler.post {
+                                    onWifiDirectConnected?.invoke(resolvedDeviceId, groupOwnerIp, port)
+                                }
                             }
                         }
                     } else {

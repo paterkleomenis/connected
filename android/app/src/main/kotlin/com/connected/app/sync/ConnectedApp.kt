@@ -511,6 +511,16 @@ class ConnectedApp(private val context: Context) {
                     }
                 }
             }
+            manager.onWifiDirectConnected = { peerId, ip, port ->
+                if (pendingPairingAwaitingIp.remove(peerId) || pendingPairing.contains(peerId)) {
+                    val device = devices.find { it.id == peerId }
+                    if (device != null) {
+                        val updated = DiscoveredDevice(device.id, device.name, ip, port.toUShort(), device.deviceType)
+                        devices[devices.indexOfFirst { it.id == peerId }] = updated
+                        sendPairRequest(updated)
+                    }
+                }
+            }
             if (hasProximityPermissions()) {
                 try {
                     manager.start()
@@ -1892,7 +1902,7 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    fun isSyntheticIp(ip: String) = ip == "0.0.0.0"
+    fun isSyntheticIp(ip: String) = ip == "0.0.0.0" || ip.startsWith("198.18.")
 
     fun copyDocumentFileToLocal(source: androidx.documentfile.provider.DocumentFile, dest: File): Boolean {
         if (source.isDirectory) {
