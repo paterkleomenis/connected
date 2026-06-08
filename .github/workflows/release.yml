@@ -13,17 +13,15 @@ jobs:
   # Job 1: Build Linux Desktop
   # -------------------------------------------------------------------------
   build-linux:
-    name: Build Linux
+    name: Build Linux (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
             runner: ubuntu-latest
-            artifact: connected-desktop-linux-x86_64
           - arch: aarch64
             runner: ubuntu-24.04-arm
-            artifact: connected-desktop-linux-aarch64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -46,28 +44,28 @@ jobs:
       - name: Build Release
         run: cargo build --release --verbose
 
+      - name: Rename binary
+        run: mv target/release/connected-desktop target/release/connected-desktop-${{ matrix.arch }}
+
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
-          path: target/release/connected-desktop
+          path: target/release/connected-desktop-${{ matrix.arch }}
           archive: false
 
   # -------------------------------------------------------------------------
   # Job 2: Build Flatpak
   # -------------------------------------------------------------------------
   build-flatpak:
-    name: Build Flatpak
+    name: Build Flatpak (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
             runner: ubuntu-latest
-            bundle: com.paterkleomenis.Connected-x86_64.flatpak
           - arch: aarch64
             runner: ubuntu-24.04-arm
-            bundle: com.paterkleomenis.Connected-aarch64.flatpak
     runs-on: ${{ matrix.runner }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
@@ -78,7 +76,7 @@ jobs:
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: ${{ matrix.bundle }}
+          bundle: com.paterkleomenis.Connected.flatpak
           manifest-path: packaging/flatpak/com.paterkleomenis.Connected.yml
           arch: ${{ matrix.arch }}
 
@@ -86,7 +84,7 @@ jobs:
   # Job 3: Build AppImage
   # -------------------------------------------------------------------------
   build-appimage:
-    name: Build AppImage
+    name: Build AppImage (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
@@ -136,12 +134,16 @@ jobs:
   # Job 4: Build Windows MSIX per architecture
   # -------------------------------------------------------------------------
   build-windows:
-    name: Build Windows MSIX
+    name: Build Windows MSIX (${{ matrix.arch }})
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x86_64
+          - target: aarch64-pc-windows-msvc
+            arch: aarch64
     steps:
       - uses: actions/checkout@v6
 

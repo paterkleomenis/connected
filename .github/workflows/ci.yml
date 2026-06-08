@@ -186,7 +186,7 @@ jobs:
   # Job 4: Linux Build
   # -------------------------------------------------------------------------
   build-linux:
-    name: Linux Build
+    name: Linux Build (${{ matrix.arch }})
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
     strategy:
@@ -195,10 +195,8 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-latest
-            artifact: connected-desktop-linux-x86_64
           - arch: aarch64
             runner: ubuntu-24.04-arm
-            artifact: connected-desktop-linux-aarch64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -224,18 +222,20 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --verbose
 
+      - name: Rename binary
+        run: mv target/debug/connected-desktop target/debug/connected-desktop-${{ matrix.arch }}
+
       - name: Upload Linux Build
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
-          path: target/debug/connected-desktop
+          path: target/debug/connected-desktop-${{ matrix.arch }}
           archive: false
 
   # -------------------------------------------------------------------------
   # Job 5: AppImage Build
   # -------------------------------------------------------------------------
   build-appimage:
-    name: AppImage Build
+    name: AppImage Build (${{ matrix.arch }})
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
     strategy:
@@ -287,7 +287,7 @@ jobs:
   # Job 6: Flatpak Build
   # -------------------------------------------------------------------------
   build-flatpak:
-    name: Flatpak Build
+    name: Flatpak Build (${{ matrix.arch }})
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
     strategy:
@@ -296,10 +296,8 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-latest
-            bundle: com.paterkleomenis.Connected-x86_64.flatpak
           - arch: aarch64
             runner: ubuntu-24.04-arm
-            bundle: com.paterkleomenis.Connected-aarch64.flatpak
     runs-on: ${{ matrix.runner }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
@@ -310,7 +308,7 @@ jobs:
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: ${{ matrix.bundle }}
+          bundle: com.paterkleomenis.Connected.flatpak
           manifest-path: packaging/flatpak/com.paterkleomenis.Connected.yml
           arch: ${{ matrix.arch }}
 
@@ -318,14 +316,18 @@ jobs:
   # Job 7: Windows Build
   # -------------------------------------------------------------------------
   build-windows:
-    name: Windows Build
+    name: Windows Build (${{ matrix.arch }})
     runs-on: windows-latest
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x86_64
+          - target: aarch64-pc-windows-msvc
+            arch: aarch64
     steps:
       - uses: actions/checkout@v6
 
