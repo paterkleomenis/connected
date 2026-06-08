@@ -13,8 +13,16 @@ jobs:
   # Job 1: Build Linux Desktop
   # -------------------------------------------------------------------------
   build-linux:
-    name: Build Linux
-    runs-on: ubuntu-latest
+    name: Build Linux (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
 
@@ -26,7 +34,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "linux-build"
+          shared-key: "linux-build-${{ matrix.arch }}"
 
       - name: Install Linux dependencies
         run: |
@@ -36,18 +44,29 @@ jobs:
       - name: Build Release
         run: cargo build --release --verbose
 
+      - name: Rename binary
+        run: mv target/release/connected-desktop target/release/connected-desktop-linux-${{ matrix.arch }}
+
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v7
         with:
-          path: target/release/connected-desktop
+          path: target/release/connected-desktop-linux-${{ matrix.arch }}
           archive: false
 
   # -------------------------------------------------------------------------
   # Job 2: Build Flatpak
   # -------------------------------------------------------------------------
   build-flatpak:
-    name: Build Flatpak
-    runs-on: ubuntu-latest
+    name: Build Flatpak (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       options: --privileged
@@ -59,13 +78,26 @@ jobs:
         with:
           bundle: com.paterkleomenis.Connected.flatpak
           manifest-path: packaging/flatpak/com.paterkleomenis.Connected.yml
+          arch: ${{ matrix.arch }}
 
   # -------------------------------------------------------------------------
   # Job 3: Build AppImage
   # -------------------------------------------------------------------------
   build-appimage:
-    name: Build AppImage
-    runs-on: ubuntu-latest
+    name: Build AppImage (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            artifact: connected-appimage-x86_64
+            build-args: "--arch x86_64"
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            artifact: connected-appimage-aarch64
+            build-args: "--arch aarch64"
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
 
@@ -77,7 +109,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "linux-build"
+          shared-key: "linux-build-${{ matrix.arch }}"
 
       - name: Install Linux dependencies
         run: |
@@ -87,27 +119,31 @@ jobs:
       - name: Build AppImage
         run: |
           chmod +x packaging/linux/build-appimage.sh
-          packaging/linux/build-appimage.sh --release
+          packaging/linux/build-appimage.sh --release ${{ matrix.build-args }}
 
       - name: Upload AppImage Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: connected-appimage
+          name: ${{ matrix.artifact }}
           path: |
-            target/connected-desktop-x86_64.AppImage
-            target/connected-desktop-x86_64.AppImage.zsync
+            target/connected-desktop-${{ matrix.arch }}.AppImage
+            target/connected-desktop-${{ matrix.arch }}.AppImage.zsync
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
   # Job 4: Build Windows MSIX per architecture
   # -------------------------------------------------------------------------
   build-windows:
-    name: Build Windows MSIX
+    name: Build Windows MSIX (${{ matrix.arch }})
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x86_64
+          - target: aarch64-pc-windows-msvc
+            arch: aarch64
     steps:
       - uses: actions/checkout@v6
 
@@ -273,12 +309,12 @@ jobs:
           APPLE_DEVELOPER_ID_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_ID_TEAM_ID }}
 
       - name: Prepare macOS artifact
-        run: cp target/macos-build/Connected-*.dmg connected-desktop.dmg
+        run: cp target/macos-build/Connected-*.dmg connected-desktop-macos.dmg
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v7
         with:
-          path: connected-desktop.dmg
+          path: connected-desktop-macos.dmg
           archive: false
 
   # -------------------------------------------------------------------------
@@ -470,15 +506,19 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            connected-desktop
-            com.paterkleomenis.Connected.flatpak
+            connected-desktop-linux-x86_64
+            connected-desktop-linux-aarch64
+            com.paterkleomenis.Connected-x86_64.flatpak
+            com.paterkleomenis.Connected-aarch64.flatpak
             connected-desktop-x86_64.AppImage
             connected-desktop-x86_64.AppImage.zsync
+            connected-desktop-aarch64.AppImage
+            connected-desktop-aarch64.AppImage.zsync
             connected-desktop-windows-x64.msix
             connected-desktop-windows-arm64.msix
             connected-android.apk
             connected-ios.ipa
-            connected-desktop.dmg
+            connected-desktop-macos.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

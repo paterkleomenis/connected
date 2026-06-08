@@ -86,24 +86,31 @@ impl UpdateChecker {
             "android" => Some(github_release_download_url(&tag, "connected-android.apk")),
             // Release workflow publishes this as `connected-desktop.msi`.
             "windows" => Some(github_release_download_url(&tag, "connected-desktop.msi")),
-            // Release workflow publishes this as `connected-desktop.dmg`.
-            "macos" => Some(github_release_download_url(&tag, "connected-desktop.dmg")),
+            // Release workflow publishes this as `connected-desktop-macos.dmg`.
+            "macos" => Some(github_release_download_url(
+                &tag,
+                "connected-desktop-macos.dmg",
+            )),
             // On Linux, determine the update source based on how the app was installed.
             "linux" => {
+                let arch = std::env::consts::ARCH;
                 if is_running_as_appimage() {
                     Some(github_release_download_url(
                         &tag,
-                        "connected-desktop-x86_64.AppImage",
+                        &format!("connected-desktop-{arch}.AppImage"),
                     ))
                 } else if is_installed_via_flatpak() {
                     Some(github_release_download_url(
                         &tag,
-                        "com.paterkleomenis.Connected.flatpak",
+                        &format!("com.paterkleomenis.Connected-{arch}.flatpak"),
                     ))
                 } else if is_installed_via_aur() {
                     Some("https://aur.archlinux.org/packages/connected-desktop-bin".to_string())
                 } else {
-                    Some(github_release_download_url(&tag, "connected-desktop"))
+                    Some(github_release_download_url(
+                        &tag,
+                        &format!("connected-desktop-linux-{arch}"),
+                    ))
                 }
             }
             _ => Some(html_url),

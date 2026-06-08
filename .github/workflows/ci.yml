@@ -186,10 +186,18 @@ jobs:
   # Job 4: Linux Build
   # -------------------------------------------------------------------------
   build-linux:
-    name: Linux Build
-    runs-on: ubuntu-latest
+    name: Linux Build (${{ matrix.arch }})
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
 
@@ -201,7 +209,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "linux-build"
+          shared-key: "linux-build-${{ matrix.arch }}"
 
       - name: Install Linux dependencies
         run: |
@@ -214,20 +222,35 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --verbose
 
+      - name: Rename binary
+        run: mv target/debug/connected-desktop target/debug/connected-desktop-linux-${{ matrix.arch }}
+
       - name: Upload Linux Build
         uses: actions/upload-artifact@v7
         with:
-          path: target/debug/connected-desktop
+          path: target/debug/connected-desktop-linux-${{ matrix.arch }}
           archive: false
 
   # -------------------------------------------------------------------------
   # Job 5: AppImage Build
   # -------------------------------------------------------------------------
   build-appimage:
-    name: AppImage Build
-    runs-on: ubuntu-latest
+    name: AppImage Build (${{ matrix.arch }})
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            artifact: connected-appimage-x86_64
+            build-args: "--arch x86_64"
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            artifact: connected-appimage-aarch64
+            build-args: "--arch aarch64"
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
 
@@ -239,7 +262,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "linux-build"
+          shared-key: "linux-build-${{ matrix.arch }}"
 
       - name: Install Linux dependencies
         run: |
@@ -249,25 +272,33 @@ jobs:
       - name: Build AppImage
         run: |
           chmod +x packaging/linux/build-appimage.sh
-          packaging/linux/build-appimage.sh
+          packaging/linux/build-appimage.sh ${{ matrix.build-args }}
 
       - name: Upload AppImage Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: connected-appimage
+          name: ${{ matrix.artifact }}
           path: |
-            target/connected-desktop-x86_64.AppImage
-            target/connected-desktop-x86_64.AppImage.zsync
+            target/connected-desktop-${{ matrix.arch }}.AppImage
+            target/connected-desktop-${{ matrix.arch }}.AppImage.zsync
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
   # Job 6: Flatpak Build
   # -------------------------------------------------------------------------
   build-flatpak:
-    name: Flatpak Build
-    runs-on: ubuntu-latest
+    name: Flatpak Build (${{ matrix.arch }})
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       options: --privileged
@@ -279,19 +310,24 @@ jobs:
         with:
           bundle: com.paterkleomenis.Connected.flatpak
           manifest-path: packaging/flatpak/com.paterkleomenis.Connected.yml
+          arch: ${{ matrix.arch }}
 
   # -------------------------------------------------------------------------
   # Job 7: Windows Build
   # -------------------------------------------------------------------------
   build-windows:
-    name: Windows Build
+    name: Windows Build (${{ matrix.arch }})
     runs-on: windows-latest
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x86_64
+          - target: aarch64-pc-windows-msvc
+            arch: aarch64
     steps:
       - uses: actions/checkout@v6
 
@@ -481,12 +517,12 @@ jobs:
         run: cargo test --workspace --verbose
 
       - name: Prepare macOS artifact
-        run: cp target/macos-build/Connected-*.dmg connected-desktop.dmg
+        run: cp target/macos-build/Connected-*.dmg connected-desktop-macos.dmg
 
       - name: Upload macOS Build
         uses: actions/upload-artifact@v7
         with:
-          path: connected-desktop.dmg
+          path: connected-desktop-macos.dmg
           archive: false
 
   # -------------------------------------------------------------------------
@@ -543,7 +579,7 @@ jobs:
   # Job 11: Build iOS IPA
   # -------------------------------------------------------------------------
   build-ios:
-    name: Build iOS IPA
+    name: iOS Build
     runs-on: macos-26
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
