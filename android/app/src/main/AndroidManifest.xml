@@ -59,6 +59,9 @@
     <!-- For posting notifications (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- For installing app updates from APK -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Telephony permissions for Phone Link feature -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission
@@ -172,6 +175,12 @@
                 <action
                     android:name="com.connected.app.sync.ACTION_MEDIA_PREVIOUS"
                 />
+            </intent-filter>
+        </receiver>
+
+        <receiver android:name=".UpdateReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
             </intent-filter>
         </receiver>
 

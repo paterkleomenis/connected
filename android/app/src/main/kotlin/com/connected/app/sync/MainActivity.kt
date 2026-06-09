@@ -1116,6 +1116,24 @@ fun SettingsScreen(
         mutableStateOf(ConnectedService.isRunning)
     }
 
+    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+    var isCheckingUpdate by remember { mutableStateOf(false) }
+    val currentVersion = remember { 
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "Unknown"
+        } catch (e: Exception) {
+            "Unknown"
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!AppUpdater.isPlayStoreInstall(context) && currentVersion != "Unknown") {
+            isCheckingUpdate = true
+            updateInfo = AppUpdater.checkForUpdate(currentVersion)
+            isCheckingUpdate = false
+        }
+    }
+
     // Battery Optimization
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
     var isIgnoringBatteryOptimizations by remember {
@@ -1732,11 +1750,36 @@ fun SettingsScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("About", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Help us improve the application",
-                        style = MaterialTheme.typography.bodySmall,
+                        "App Version: $currentVersion",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(12.dp))
+
+                    if (updateInfo != null) {
+                        Button(
+                            onClick = {
+                                updateInfo?.let {
+                                    AppUpdater.downloadUpdate(context, it.downloadUrl, it.versionName)
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Update to ${updateInfo!!.versionName}")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    } else if (isCheckingUpdate) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Checking for updates...", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
 
                     Button(
                         onClick = {
