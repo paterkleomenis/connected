@@ -358,7 +358,7 @@ jobs:
 
       - name: Build Release APK
         working-directory: android
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleStandaloneRelease
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -366,14 +366,14 @@ jobs:
 
       - name: Build Release AAB
         working-directory: android
-        run: ./gradlew bundleRelease
+        run: ./gradlew bundlePlayRelease
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Prepare Android APK artifact
-        run: cp android/app/build/outputs/apk/release/app-release.apk connected-android.apk
+        run: cp android/app/build/outputs/apk/standalone/release/app-standalone-release.apk connected-android.apk
 
       # Using v7 with archive: false means NO 'name:' key
       - name: Upload Android APK Artifact
@@ -383,7 +383,7 @@ jobs:
           archive: false
 
       - name: Prepare Android AAB artifact
-        run: cp android/app/build/outputs/bundle/release/app-release.aab connected-android.aab
+        run: cp android/app/build/outputs/bundle/playRelease/app-play-release.aab connected-android.aab
 
       # Using v7 with archive: false means NO 'name:' key
       - name: Upload Android AAB Artifact

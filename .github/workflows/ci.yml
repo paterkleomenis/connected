@@ -564,10 +564,10 @@ jobs:
 
       - name: Build with Gradle
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleStandaloneDebug
 
       - name: Prepare Android artifact
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk connected-android.apk
+        run: cp android/app/build/outputs/apk/standalone/debug/app-standalone-debug.apk connected-android.apk
 
       - name: Upload Android Build
         uses: actions/upload-artifact@v7

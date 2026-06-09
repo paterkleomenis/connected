@@ -74,6 +74,16 @@ configure<ApplicationExtension> {
         envFile.inputStream().use { env.load(it) }
     }
 
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("play") {
+            dimension = "distribution"
+        }
+        create("standalone") {
+            dimension = "distribution"
+        }
+    }
+
     signingConfigs {
         create("release") {
             val keystorePath = env.getProperty("ANDROID_KEYSTORE_PATH")
