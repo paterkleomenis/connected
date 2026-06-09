@@ -381,10 +381,10 @@ afterEvaluate {
         .configureEach {
             finalizedBy("cleanUniffiBindings", "stripRustTarget")
         }
-    tasks.matching { it.name == "preDebugBuild" }.configureEach {
+    tasks.matching { it.name.startsWith("pre") && it.name.endsWith("DebugBuild") }.configureEach {
         dependsOn("generateBindings")
     }
-    tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    tasks.matching { it.name.startsWith("pre") && it.name.endsWith("ReleaseBuild") }.configureEach {
         dependsOn("generateBindingsRelease")
     }
     // The release Rust build copies unstripped .so files into jniLibs (the
@@ -396,7 +396,7 @@ afterEvaluate {
     tasks.matching { it.name == "buildRustRelease" }.configureEach {
         finalizedBy("stripRustJniLibs")
     }
-    tasks.matching { it.name == "mergeReleaseJniLibFolders" || it.name == "mergeDebugJniLibFolders" }
+    tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
         .configureEach {
             dependsOn("stripRustJniLibs")
         }
