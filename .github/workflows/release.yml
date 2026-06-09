@@ -498,6 +498,22 @@ jobs:
         with:
           merge-multiple: true
 
+      - name: Download x86_64 Flatpak
+        uses: actions/download-artifact@v8
+        with:
+          name: com.paterkleomenis.Connected-x86_64.flatpak
+
+      - name: Rename x86_64 Flatpak
+        run: mv com.paterkleomenis.Connected.flatpak com.paterkleomenis.Connected-x86_64.flatpak
+
+      - name: Download aarch64 Flatpak
+        uses: actions/download-artifact@v8
+        with:
+          name: com.paterkleomenis.Connected-aarch64.flatpak
+
+      - name: Rename aarch64 Flatpak
+        run: mv com.paterkleomenis.Connected.flatpak com.paterkleomenis.Connected-aarch64.flatpak
+
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
