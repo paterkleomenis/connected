@@ -45,7 +45,7 @@ object AppUpdater {
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
-            
+
             if (connection.responseCode == HttpURLConnection.HTTP_OK) {
                 val reader = BufferedReader(InputStreamReader(connection.inputStream))
                 val response = StringBuilder()
@@ -105,7 +105,7 @@ object AppUpdater {
     }
 
     /**
-     * Simple version comparison: 3.1.7 vs 3.2.0
+     * Simple version comparison: 3.1.8 vs 3.2.0
      * Returns true if `latestVersion` > `currentVersion`
      */
     private fun isNewerVersion(currentVersion: String, latestVersion: String): Boolean {
