@@ -45,4 +45,3 @@ struct ConnectedIOSApp: App {
 }
 
 ConnectedIOSApp.main()
-        
