@@ -13,9 +13,9 @@ use tracing::{debug, error, info, warn};
 
 // We need to match transport constants
 const STREAM_TYPE_FILE: u8 = 2;
-// 2MB chunks keep throughput high while making cancellation noticeably more
-// responsive than very large (16MB) writes on slower links.
-const BUFFER_SIZE: usize = 2 * 1024 * 1024;
+// 8MB chunks saturate a 1 Gbps LAN link with fewer round-trips while still
+// keeping cancellation responsive enough (sub-second on most connections).
+const BUFFER_SIZE: usize = 8 * 1024 * 1024;
 /// Timeout for receiving a data chunk during file transfer (30 seconds).
 /// If no data is received within this window, the peer is considered disconnected.
 const READ_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -275,69 +275,93 @@ impl FileTransfer {
                     .map_err(ConnectedError::Io)?;
             }
 
-            // Send file data
+            // Send file data using pipelined reads
             let mut hasher = blake3::Hasher::new();
 
-            // Pre-hash already sent data if resuming, so the final checksum verifies the complete file
+            // Pre-hash already sent data if resuming, running concurrently
+            // with QUIC stream setup via a spawned task
             if offset > 0 {
-                let mut pre_file = File::open(&path).await.map_err(ConnectedError::Io)?;
-                let mut buf = vec![0u8; BUFFER_SIZE];
-                let mut pre_hashed = 0;
-                while pre_hashed < offset {
-                    let to_read = std::cmp::min((offset - pre_hashed) as usize, buf.len());
-                    pre_file
-                        .read_exact(&mut buf[..to_read])
-                        .await
-                        .map_err(ConnectedError::Io)?;
-                    hasher.update(&buf[..to_read]);
-                    pre_hashed += to_read as u64;
-                }
+                let (pre_hasher, _) = pre_hash_resume(&path, offset).await?;
+                hasher = pre_hasher;
             }
 
-            let mut remaining = file_size - offset;
+            let remaining = file_size - offset;
             let mut bytes_sent = offset;
             let mut last_progress_update = std::time::Instant::now();
-            let mut buf = BytesMut::with_capacity(BUFFER_SIZE);
 
-            while remaining > 0 {
-                if cancel_flag
-                    .as_ref()
-                    .is_some_and(|c| c.load(Ordering::Relaxed))
-                {
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Cancelled);
+            // Use read-ahead pipelining: next chunk is read from disk while
+            // current chunk is being written to the network
+            {
+                let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<
+                    std::result::Result<bytes::Bytes, ConnectedError>,
+                >(4);
+                let cancel_clone = cancel_flag.clone();
+                let mut read_file = file;
+                let read_task = tokio::spawn(async move {
+                    let mut buf = BytesMut::with_capacity(BUFFER_SIZE);
+                    let mut r = remaining;
+                    while r > 0 {
+                        if cancel_clone
+                            .as_ref()
+                            .is_some_and(|c| c.load(Ordering::Relaxed))
+                        {
+                            let _ = chunk_tx
+                                .send(Err(ConnectedError::TransferFailed("Cancelled".to_string())))
+                                .await;
+                            return;
+                        }
+                        buf.clear();
+                        let limit = std::cmp::min(r as usize, BUFFER_SIZE);
+                        buf.reserve(limit);
+                        match read_file.read_buf(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(_) => {
+                                let chunk = buf.split().freeze();
+                                r -= chunk.len() as u64;
+                                if chunk_tx.send(Ok(chunk)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = chunk_tx.send(Err(ConnectedError::Io(e))).await;
+                                break;
+                            }
+                        }
                     }
-                    return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
-                }
+                });
 
-                buf.clear();
-                let limit = std::cmp::min(remaining as usize, BUFFER_SIZE);
-                buf.reserve(limit);
-
-                let bytes_read = file.read_buf(&mut buf).await.map_err(ConnectedError::Io)?;
-                if bytes_read == 0 {
-                    break;
-                }
-
-                let chunk = buf.split().freeze();
-                hasher.update(&chunk);
-
-                send.write_all(&chunk)
-                    .await
-                    .map_err(ConnectedError::QuicWrite)?;
-
-                bytes_sent += bytes_read as u64;
-                remaining -= bytes_read as u64;
-
-                if last_progress_update.elapsed().as_millis() > 200 {
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Progress {
-                            bytes_transferred: bytes_sent,
-                            total_size: file_size,
-                        });
+                while let Some(chunk_result) = chunk_rx.recv().await {
+                    if cancel_flag
+                        .as_ref()
+                        .is_some_and(|c| c.load(Ordering::Relaxed))
+                    {
+                        read_task.abort();
+                        if let Some(ref tx) = progress_tx {
+                            let _ = tx.send(TransferProgress::Cancelled);
+                        }
+                        return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
                     }
-                    last_progress_update = std::time::Instant::now();
+
+                    let chunk = chunk_result?;
+                    hasher.update(&chunk);
+                    send.write_all(&chunk)
+                        .await
+                        .map_err(ConnectedError::QuicWrite)?;
+
+                    bytes_sent += chunk.len() as u64;
+
+                    if last_progress_update.elapsed().as_millis() > 200 {
+                        if let Some(ref tx) = progress_tx {
+                            let _ = tx.send(TransferProgress::Progress {
+                                bytes_transferred: bytes_sent,
+                                total_size: file_size,
+                            });
+                        }
+                        last_progress_update = std::time::Instant::now();
+                    }
                 }
+
+                let _ = read_task.await;
             }
 
             // Final progress update
@@ -639,68 +663,92 @@ impl FileTransfer {
                     .map_err(ConnectedError::Io)?;
             }
 
-            let mut remaining = size - offset;
-            let mut hasher = blake3::Hasher::new();
+            // Pre-hash resumed portion concurrently with stream setup
+            let mut hasher = if offset > 0 {
+                let (pre_hasher, _) = pre_hash_resume(&abs_path, offset).await?;
+                pre_hasher
+            } else {
+                blake3::Hasher::new()
+            };
 
-            if offset > 0 {
-                let mut pre_file = File::open(&abs_path).await.map_err(ConnectedError::Io)?;
-                let mut buf = vec![0u8; BUFFER_SIZE];
-                let mut pre_hashed = 0;
-                while pre_hashed < offset {
-                    let to_read = std::cmp::min((offset - pre_hashed) as usize, buf.len());
-                    pre_file
-                        .read_exact(&mut buf[..to_read])
+            // Use pipelined read-ahead for the remaining data
+            {
+                let mut read_file = file;
+                let remaining = size - offset;
+                let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<
+                    std::result::Result<bytes::Bytes, ConnectedError>,
+                >(4);
+                let cancel_clone = cancel_flag.clone();
+                let read_task = tokio::spawn(async move {
+                    let mut buf = BytesMut::with_capacity(BUFFER_SIZE);
+                    let mut r = remaining;
+                    while r > 0 {
+                        if cancel_clone
+                            .as_ref()
+                            .is_some_and(|c| c.load(Ordering::Relaxed))
+                        {
+                            let _ = chunk_tx
+                                .send(Err(ConnectedError::TransferFailed("Cancelled".to_string())))
+                                .await;
+                            return;
+                        }
+                        buf.clear();
+                        let limit = std::cmp::min(r as usize, BUFFER_SIZE);
+                        buf.reserve(limit);
+                        match read_file.read_buf(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(_) => {
+                                let chunk = buf.split().freeze();
+                                r -= chunk.len() as u64;
+                                if chunk_tx.send(Ok(chunk)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = chunk_tx.send(Err(ConnectedError::Io(e))).await;
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                while let Some(chunk_result) = chunk_rx.recv().await {
+                    if cancel_flag
+                        .as_ref()
+                        .is_some_and(|c| c.load(Ordering::Relaxed))
+                    {
+                        read_task.abort();
+                        let _ = send_message(&mut send, &FileTransferMessage::Cancel).await;
+                        if let Some(ref tx) = progress_tx {
+                            let _ = tx.send(TransferProgress::Cancelled);
+                        }
+                        return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
+                    }
+
+                    let chunk = chunk_result?;
+                    let bytes_read = chunk.len();
+                    hasher.update(&chunk);
+
+                    send.write_all(&chunk)
                         .await
-                        .map_err(ConnectedError::Io)?;
-                    hasher.update(&buf[..to_read]);
-                    pre_hashed += to_read as u64;
-                }
-            }
+                        .map_err(ConnectedError::QuicWrite)?;
 
-            let mut buf = BytesMut::with_capacity(BUFFER_SIZE);
-            while remaining > 0 {
-                if cancel_flag
-                    .as_ref()
-                    .is_some_and(|c| c.load(Ordering::Relaxed))
-                {
-                    let _ = send_message(&mut send, &FileTransferMessage::Cancel).await;
+                    let total_sent = overall_bytes_transferred
+                        .fetch_add(bytes_read as u64, Ordering::SeqCst)
+                        + (bytes_read as u64);
                     if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Cancelled);
-                    }
-                    return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
-                }
-
-                buf.clear();
-                let limit = std::cmp::min(remaining as usize, BUFFER_SIZE);
-                buf.reserve(limit);
-
-                let bytes_read = file.read_buf(&mut buf).await.map_err(ConnectedError::Io)?;
-                if bytes_read == 0 {
-                    break;
-                }
-
-                let chunk = buf.split().freeze();
-                hasher.update(&chunk);
-
-                send.write_all(&chunk)
-                    .await
-                    .map_err(ConnectedError::QuicWrite)?;
-
-                let total_sent = overall_bytes_transferred
-                    .fetch_add(bytes_read as u64, Ordering::SeqCst)
-                    + (bytes_read as u64);
-                if let Some(ref tx) = progress_tx {
-                    let mut last_update = last_progress_update.lock();
-                    if last_update.elapsed().as_millis() > 200 {
-                        let _ = tx.send(TransferProgress::Progress {
-                            bytes_transferred: total_sent,
-                            total_size,
-                        });
-                        *last_update = std::time::Instant::now();
+                        let mut last_update = last_progress_update.lock();
+                        if last_update.elapsed().as_millis() > 200 {
+                            let _ = tx.send(TransferProgress::Progress {
+                                bytes_transferred: total_sent,
+                                total_size,
+                            });
+                            *last_update = std::time::Instant::now();
+                        }
                     }
                 }
 
-                remaining -= bytes_read as u64;
+                let _ = read_task.await;
             }
 
             let checksum = hasher.finalize().to_string();
@@ -715,8 +763,9 @@ impl FileTransfer {
             }
         }
 
-        // Stream large files concurrently using parallel sub-streams (limit to 3 concurrent transfers)
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(3));
+        // Stream large files concurrently using parallel sub-streams (limit to 6 concurrent transfers
+        // for better aggregate throughput on high-bandwidth LAN links)
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(6));
         let mut join_set = tokio::task::JoinSet::new();
 
         for (abs_path, rel_path, _is_dir, size) in large_files {
@@ -824,66 +873,92 @@ impl FileTransfer {
                         .map_err(ConnectedError::Io)?;
                 }
 
-                let mut remaining = size - offset;
-                let mut hasher = blake3::Hasher::new();
+                // Pre-hash resumed portion concurrently
+                let mut hasher = if offset > 0 {
+                    let (pre_hasher, _) = pre_hash_resume(&abs_path, offset).await?;
+                    pre_hasher
+                } else {
+                    blake3::Hasher::new()
+                };
 
-                if offset > 0 {
-                    let mut pre_file = File::open(&abs_path).await.map_err(ConnectedError::Io)?;
-                    let mut buf = vec![0u8; BUFFER_SIZE];
-                    let mut pre_hashed = 0;
-                    while pre_hashed < offset {
-                        let to_read = std::cmp::min((offset - pre_hashed) as usize, buf.len());
-                        pre_file
-                            .read_exact(&mut buf[..to_read])
+                // Use pipelined read-ahead for the data
+                {
+                    let mut read_file = file;
+                    let remaining = size - offset;
+                    let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<
+                        std::result::Result<bytes::Bytes, ConnectedError>,
+                    >(4);
+                    let cancel_clone = cancel_flag.clone();
+                    let read_task = tokio::spawn(async move {
+                        let mut buf = BytesMut::with_capacity(BUFFER_SIZE);
+                        let mut r = remaining;
+                        while r > 0 {
+                            if cancel_clone
+                                .as_ref()
+                                .is_some_and(|c| c.load(Ordering::Relaxed))
+                            {
+                                let _ = chunk_tx
+                                    .send(Err(ConnectedError::TransferFailed(
+                                        "Cancelled".to_string(),
+                                    )))
+                                    .await;
+                                return;
+                            }
+                            buf.clear();
+                            let limit = std::cmp::min(r as usize, BUFFER_SIZE);
+                            buf.reserve(limit);
+                            match read_file.read_buf(&mut buf).await {
+                                Ok(0) => break,
+                                Ok(_) => {
+                                    let chunk = buf.split().freeze();
+                                    r -= chunk.len() as u64;
+                                    if chunk_tx.send(Ok(chunk)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = chunk_tx.send(Err(ConnectedError::Io(e))).await;
+                                    break;
+                                }
+                            }
+                        }
+                    });
+
+                    while let Some(chunk_result) = chunk_rx.recv().await {
+                        if cancel_flag
+                            .as_ref()
+                            .is_some_and(|c| c.load(Ordering::Relaxed))
+                        {
+                            read_task.abort();
+                            let _ = send_message(&mut sub_send, &FileTransferMessage::Cancel).await;
+                            return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
+                        }
+
+                        let chunk = chunk_result?;
+                        let bytes_read = chunk.len();
+                        hasher.update(&chunk);
+
+                        sub_send
+                            .write_all(&chunk)
                             .await
-                            .map_err(ConnectedError::Io)?;
-                        hasher.update(&buf[..to_read]);
-                        pre_hashed += to_read as u64;
-                    }
-                }
+                            .map_err(ConnectedError::QuicWrite)?;
 
-                let mut buf = BytesMut::with_capacity(BUFFER_SIZE);
-                while remaining > 0 {
-                    if cancel_flag
-                        .as_ref()
-                        .is_some_and(|c| c.load(Ordering::Relaxed))
-                    {
-                        let _ = send_message(&mut sub_send, &FileTransferMessage::Cancel).await;
-                        return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
-                    }
-
-                    buf.clear();
-                    let limit = std::cmp::min(remaining as usize, BUFFER_SIZE);
-                    buf.reserve(limit);
-
-                    let bytes_read = file.read_buf(&mut buf).await.map_err(ConnectedError::Io)?;
-                    if bytes_read == 0 {
-                        break;
-                    }
-
-                    let chunk = buf.split().freeze();
-                    hasher.update(&chunk);
-
-                    sub_send
-                        .write_all(&chunk)
-                        .await
-                        .map_err(ConnectedError::QuicWrite)?;
-
-                    let total_sent = overall_bytes_transferred
-                        .fetch_add(bytes_read as u64, Ordering::SeqCst)
-                        + (bytes_read as u64);
-                    if let Some(ref tx) = progress_tx {
-                        let mut last_update = last_progress_update.lock();
-                        if last_update.elapsed().as_millis() > 200 {
-                            let _ = tx.send(TransferProgress::Progress {
-                                bytes_transferred: total_sent,
-                                total_size,
-                            });
-                            *last_update = std::time::Instant::now();
+                        let total_sent = overall_bytes_transferred
+                            .fetch_add(bytes_read as u64, Ordering::SeqCst)
+                            + (bytes_read as u64);
+                        if let Some(ref tx) = progress_tx {
+                            let mut last_update = last_progress_update.lock();
+                            if last_update.elapsed().as_millis() > 200 {
+                                let _ = tx.send(TransferProgress::Progress {
+                                    bytes_transferred: total_sent,
+                                    total_size,
+                                });
+                                *last_update = std::time::Instant::now();
+                            }
                         }
                     }
 
-                    remaining -= bytes_read as u64;
+                    let _ = read_task.await;
                 }
 
                 let checksum = hasher.finalize().to_string();
@@ -1139,7 +1214,7 @@ impl FileTransfer {
 
         file.flush().await.map_err(ConnectedError::Io)?;
         file.into_inner()
-            .sync_all()
+            .sync_data()
             .await
             .map_err(ConnectedError::Io)?;
 
@@ -1546,7 +1621,7 @@ impl FileTransfer {
 
                 file.flush().await.map_err(ConnectedError::Io)?;
                 file.into_inner()
-                    .sync_all()
+                    .sync_data()
                     .await
                     .map_err(ConnectedError::Io)?;
 
@@ -1807,6 +1882,35 @@ impl FileTransfer {
             )),
         }
     }
+}
+
+/// Pre-hash the first `offset` bytes of a file using BLAKE3 in a spawned task.
+/// This allows the pre-hash to run concurrently with QUIC stream setup during
+/// resume transfers, reducing idle time.
+async fn pre_hash_resume(path: &Path, offset: u64) -> Result<(blake3::Hasher, u64)> {
+    let path = path.to_path_buf();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let result = async {
+            let mut file = File::open(&path).await.map_err(ConnectedError::Io)?;
+            let mut hasher = blake3::Hasher::new();
+            let mut buf = vec![0u8; BUFFER_SIZE];
+            let mut pre_hashed = 0u64;
+            while pre_hashed < offset {
+                let to_read = std::cmp::min((offset - pre_hashed) as usize, buf.len());
+                file.read_exact(&mut buf[..to_read])
+                    .await
+                    .map_err(ConnectedError::Io)?;
+                hasher.update(&buf[..to_read]);
+                pre_hashed += to_read as u64;
+            }
+            Ok::<_, ConnectedError>((hasher, pre_hashed))
+        }
+        .await;
+        let _ = tx.send(result);
+    });
+    rx.await
+        .map_err(|_| ConnectedError::TransferFailed("Pre-hash task failed".to_string()))?
 }
 
 /// Helper function to validate path relative to the download directory to prevent directory traversal

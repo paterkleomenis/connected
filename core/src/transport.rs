@@ -37,9 +37,9 @@ const MAX_IDLE_TIMEOUT_SECS: u64 = 20;
 const KEEP_ALIVE_INTERVAL_SECS: u64 = 15;
 const MAX_CONCURRENT_BIDI_STREAMS: u32 = 256; // Increased for better parallelism
 const MAX_CONCURRENT_UNI_STREAMS: u32 = 256; // Increased for better parallelism
-const STREAM_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024; // 64MB per stream (doubled for high-speed WiFi)
-const CONNECTION_RECEIVE_WINDOW: u32 = 256 * 1024 * 1024; // 256MB per connection (doubled)
-const SEND_WINDOW: u64 = 64 * 1024 * 1024; // 64MB send window (doubled for high-speed WiFi)
+const STREAM_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024; // 64MB per stream
+const CONNECTION_RECEIVE_WINDOW: u32 = 256 * 1024 * 1024; // 256MB per connection
+const SEND_WINDOW: u64 = 128 * 1024 * 1024; // 128MB send window for high-speed LAN
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
@@ -315,8 +315,8 @@ impl QuicTransport {
         let mut endpoint = {
             let socket = std::net::UdpSocket::bind(bind_addr)?;
             let sock = socket2::Socket::from(socket);
-            let _ = sock.set_send_buffer_size(4 * 1024 * 1024);
-            let _ = sock.set_recv_buffer_size(4 * 1024 * 1024);
+            let _ = sock.set_send_buffer_size(8 * 1024 * 1024);
+            let _ = sock.set_recv_buffer_size(8 * 1024 * 1024);
             let socket: std::net::UdpSocket = sock.into();
             Endpoint::new(
                 quinn::EndpointConfig::default(),
@@ -335,8 +335,8 @@ impl QuicTransport {
                 match std::net::UdpSocket::bind(bind_addr) {
                     Ok(socket) => {
                         let sock = socket2::Socket::from(socket);
-                        let _ = sock.set_send_buffer_size(4 * 1024 * 1024);
-                        let _ = sock.set_recv_buffer_size(4 * 1024 * 1024);
+                        let _ = sock.set_send_buffer_size(8 * 1024 * 1024);
+                        let _ = sock.set_recv_buffer_size(8 * 1024 * 1024);
                         let socket: std::net::UdpSocket = sock.into();
                         match Endpoint::new(
                             quinn::EndpointConfig::default(),
