@@ -11,6 +11,7 @@ struct SettingsView: View {
     }
 
     @EnvironmentObject private var model: ConnectedAppModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var editableName = ""
     @State private var pairingMode = false
     @State private var showingFolderPicker = false
@@ -30,8 +31,8 @@ struct SettingsView: View {
                 }
                 .padding(16)
             }
-            .background(screenBackground.ignoresSafeArea())
-            .navigationTitle("Settings")
+            .glassBackground()
+            .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 editableName = model.deviceName
                 pairingMode = model.pairingModeEnabled
@@ -67,39 +68,43 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Identity Card
     private var identityCard: some View {
-        SettingsCard(title: "Device Name", subtitle: "This name will be visible to other devices.") {
+        GlassSettingsCard(
+            title: "Device Name",
+            subtitle: "This name will be visible to other devices.",
+            icon: "person.circle"
+        ) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
                     TextField("Device name", text: $editableName)
                         .textFieldStyle(.roundedBorder)
+                        .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
 
                     Button("Save") {
                         model.setDeviceName(editableName)
                     }
-                    .buttonStyle(.borderedProminent)
-                }
-
-                if let local = model.localDevice {
-                    InfoRow(label: "Local ID", value: local.id)
-                    InfoRow(label: "Address", value: "\(local.ip):\(local.port)")
-                }
-
-                if !model.localFingerprint.isEmpty {
-                    InfoRow(label: "Fingerprint", value: model.localFingerprint)
+                    .glassButtonProminent()
                 }
             }
         }
     }
 
+    // MARK: - Pairing Card
     private var pairingCard: some View {
-        SettingsCard(title: "Pairing", subtitle: "Control whether new devices can request trust.") {
+        GlassSettingsCard(
+            title: "Pairing",
+            subtitle: "Control whether new devices can request trust.",
+            icon: "checkmark.shield"
+        ) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Label("Pairing mode", systemImage: "checkmark.shield")
+                        .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
                     Spacer()
                     Toggle("", isOn: $pairingMode)
                         .labelsHidden()
+                        .toggleStyle(MonochromeToggleStyle())
                         .onChangeCompat(of: pairingMode) { enabled in
                             model.updatePairingMode(enabled: enabled)
                         }
@@ -108,95 +113,107 @@ struct SettingsView: View {
                 Button("Refresh Discovery") {
                     model.refreshDiscoveryNow()
                 }
-                .buttonStyle(.borderedProminent)
-                .frame(maxWidth: .infinity)
+                .glassButtonProminent()
             }
         }
     }
 
+    // MARK: - Download Location Card
     private var receivedFilesCard: some View {
-        SettingsCard(title: "Download Location", subtitle: "Choose where received files are saved.") {
+        GlassSettingsCard(
+            title: "Download Location",
+            subtitle: "Choose where received files are saved.",
+            icon: "arrow.down.circle"
+        ) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
                     Text(model.downloadDirectoryDisplayName)
                         .lineLimit(1)
+                        .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
                     Spacer()
                     Button("Browse") {
                         folderPickerTarget = .downloads
                         showingFolderPicker = true
                     }
-                    .buttonStyle(.borderedProminent)
+                    .glassButtonProminent()
                 }
 
                 if model.downloadRoot.path != model.defaultDownloadRoot.path {
                     Button("Reset to Default", role: .destructive) {
                         model.resetDownloadDirectoryToDefault()
                     }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
+                    .glassButton()
                 }
-
-                Text(model.downloadRoot.path)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
 
                 if let progress = model.browserDownloadProgress {
                     ProgressView(value: progress.fractionCompleted)
                     Text(progress.currentFile)
                         .font(.caption)
+                        .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                 }
             }
         }
     }
 
+    // MARK: - Shared Folder Card
     private var sharedFolderCard: some View {
-        SettingsCard(title: "Shared Folder", subtitle: "Choose which local folder peers can browse.") {
+        GlassSettingsCard(
+            title: "Shared Folder",
+            subtitle: "Choose which local folder peers can browse.",
+            icon: "folder"
+        ) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
                     Text(model.sharedDirectoryDisplayName)
                         .lineLimit(1)
+                        .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
                     Spacer()
                     Button("Browse") {
                         folderPickerTarget = .shared
                         showingFolderPicker = true
                     }
-                    .buttonStyle(.borderedProminent)
+                    .glassButtonProminent()
                 }
 
                 if model.sharedRoot.path != model.defaultSharedRoot.path {
                     Button("Reset to Default", role: .destructive) {
                         model.resetSharedDirectoryToDefault()
                     }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
+                    .glassButton()
                 }
-
-                Text(model.sharedRoot.path)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
             }
         }
     }
 
+    // MARK: - Preferences Card
     private var preferencesCard: some View {
-        SettingsCard(title: "Preferences", subtitle: "Tune local behavior and appearance.") {
+        GlassSettingsCard(
+            title: "Preferences",
+            subtitle: "Tune local behavior and appearance.",
+            icon: "slider.horizontal.3"
+        ) {
             VStack(alignment: .leading, spacing: 14) {
-                Picker(
-                    "Theme",
-                    selection: Binding(
-                        get: { model.themeMode },
-                        set: { model.setThemeMode($0) }
-                    )
-                ) {
-                    Text("System").tag(ConnectedAppModel.ThemeMode.system)
-                    Text("Light").tag(ConnectedAppModel.ThemeMode.light)
-                    Text("Dark").tag(ConnectedAppModel.ThemeMode.dark)
-                }
-                .pickerStyle(.segmented)
+                // Theme Picker
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Appearance")
+                        .font(.subheadline)
+                        .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
 
-                ToggleRow(
+                    Picker(
+                        "Theme",
+                        selection: Binding(
+                            get: { model.themeMode },
+                            set: { model.setThemeMode($0) }
+                        )
+                    ) {
+                        Text("System").tag(ConnectedAppModel.ThemeMode.system)
+                        Text("Light").tag(ConnectedAppModel.ThemeMode.light)
+                        Text("Dark").tag(ConnectedAppModel.ThemeMode.dark)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                GlassToggleRow(
                     title: "Clipboard Sync",
                     subtitle: "Send clipboard changes while Connected is active.",
                     systemImage: "doc.on.clipboard",
@@ -206,7 +223,7 @@ struct SettingsView: View {
                     )
                 )
 
-                ToggleRow(
+                GlassToggleRow(
                     title: "Media Control",
                     subtitle: "Allow trusted devices to control supported playback.",
                     systemImage: "play.circle",
@@ -216,7 +233,7 @@ struct SettingsView: View {
                     )
                 )
 
-                ToggleRow(
+                GlassToggleRow(
                     title: "Telephony",
                     subtitle: "Expose supported contact and call surfaces.",
                     systemImage: "phone",
@@ -229,147 +246,141 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Background Clipboard Card
     private var backgroundClipboardCard: some View {
-        SettingsCard(title: "Background Clipboard", subtitle: "iOS only lets apps read clipboard while active. Connected can post a helper notification while backgrounded.") {
+        GlassSettingsCard(
+            title: "Background Clipboard",
+            subtitle: "iOS only lets apps read clipboard while active.",
+            icon: "bell"
+        ) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Open Connected from the helper notification to show Paste & Share, or click on device options and Share Clipboard.")
+                Text("Connected can post a helper notification while backgrounded. Open Connected from the helper notification to show Paste & Share, or click on device options and Share Clipboard.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
 
                 if model.notificationsPermissionGranted {
                     Label("Notification helper enabled", systemImage: "checkmark.seal")
                         .font(.footnote)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(GlassTheme.success)
                 } else {
                     Button("Enable Notification Helper") {
                         model.requestClipboardNotificationPermission()
                     }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
+                    .glassButton()
                 }
             }
         }
     }
 
+    // MARK: - Permissions Card
     private var permissionsCard: some View {
-        SettingsCard(title: "Permissions", subtitle: "Grant access for optional platform features.") {
+        GlassSettingsCard(
+            title: "Permissions",
+            subtitle: "Grant access for optional platform features.",
+            icon: "lock.shield"
+        ) {
             VStack(alignment: .leading, spacing: 12) {
                 if model.contactsPermissionGranted {
                     Label("Contacts access granted", systemImage: "checkmark.seal")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(GlassTheme.success)
                 } else {
                     Button("Request Contacts Access") {
                         model.requestContactsPermission()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity)
+                    .glassButtonProminent()
                 }
 
                 if model.mediaLibraryPermissionGranted {
                     Label("Apple Music access granted", systemImage: "checkmark.seal")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(GlassTheme.success)
                 } else {
                     Button("Request Apple Music Access") {
                         model.requestMediaLibraryPermission()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity)
+                    .glassButtonProminent()
                 }
 
                 Text("iOS can report Apple Music/system music player metadata. It cannot read now-playing metadata from arbitrary third-party apps.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
             }
         }
     }
-
-    private var screenBackground: Color {
-#if canImport(UIKit)
-        Color(uiColor: .systemGroupedBackground)
-#else
-        Color.clear
-#endif
-    }
 }
 
-private struct SettingsCard<Content: View>: View {
+// MARK: - Glass Settings Card
+private struct GlassSettingsCard<Content: View>: View {
     let title: String
     let subtitle: String?
+    let icon: String
     let content: Content
 
-    init(title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+    @Environment(\.colorScheme) private var colorScheme
+
+    init(title: String, subtitle: String? = nil, icon: String = "gearshape", @ViewBuilder content: () -> Content) {
         self.title = title
         self.subtitle = subtitle
+        self.icon = icon
         self.content = content()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline)
-                if let subtitle, !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+            // Header with icon (matching Android card style)
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.body)
+                    .foregroundStyle(GlassTheme.primary(for: colorScheme))
+                    .frame(width: 24, height: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.footnote)
+                            .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
+                    }
                 }
             }
+
             content
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-
-    private var cardBackground: Color {
-#if canImport(UIKit)
-        Color(uiColor: .secondarySystemGroupedBackground)
-#else
-        Color.clear
-#endif
+        .glassCard()
     }
 }
 
-private struct InfoRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 12)
-            Text(value)
-                .font(.caption)
-                .multilineTextAlignment(.trailing)
-                .lineLimit(2)
-        }
-    }
-}
-
-private struct ToggleRow: View {
+// MARK: - Glass Toggle Row
+private struct GlassToggleRow: View {
     let title: String
     let subtitle: String
     let systemImage: String
     @Binding var isOn: Bool
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: systemImage)
-                .foregroundStyle(.tint)
-                .frame(width: 24)
+                .font(.body)
+                .foregroundStyle(GlassTheme.primary(for: colorScheme))
+                .frame(width: 24, height: 24)
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.body)
+                    .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
             }
+
             Spacer()
+
             Toggle(title, isOn: $isOn)
                 .labelsHidden()
+                .toggleStyle(MonochromeToggleStyle())
         }
     }
 }

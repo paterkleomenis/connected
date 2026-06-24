@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConnectedRootView: View {
     @EnvironmentObject private var model: ConnectedAppModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Group {
@@ -18,23 +19,80 @@ struct ConnectedRootView: View {
         } message: {
             Text(model.lastErrorMessage ?? "Unknown error")
         }
-        .alert("Pairing Request", isPresented: pairingPresented, presenting: model.pairingRequest) { request in
-            Button("Trust") {
-                model.trustCurrentPairingRequest()
+        .overlay {
+            if let request = model.pairingRequest {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        model.rejectCurrentPairingRequest()
+                    }
+
+                VStack(spacing: 0) {
+                    Text("Pairing Request")
+                        .font(.title3.bold())
+                        .padding(.top, 24)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("A device wants to connect to your iPhone.")
+                            .font(.body)
+
+                        Divider()
+
+                        HStack {
+                            Text("Device:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(request.deviceName)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+
+                        HStack {
+                            Text("ID:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(String(request.fingerprint.prefix(16)) + "...")
+                                .font(.caption)
+                                .monospaced()
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+
+                    Divider()
+                        .padding(.top, 16)
+
+                    Button {
+                        model.trustCurrentPairingRequest()
+                    } label: {
+                        Text("Trust")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        model.rejectCurrentPairingRequest()
+                    } label: {
+                        Text("Reject")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                }
+                .background(.regularMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, 40)
             }
-            Button("Reject", role: .destructive) {
-                model.rejectCurrentPairingRequest()
-            }
-            Button("Later", role: .cancel) {
-                model.pairingRequest = nil
-            }
-        } message: { request in
-            Text("\(request.deviceName) wants to pair.\nFingerprint: \(request.fingerprint)")
         }
         .alert("Incoming Transfer", isPresented: transferPresented, presenting: model.transferRequest) { request in
             Button("Accept") {
                 model.acceptCurrentTransferRequest()
             }
+            .glassButtonProminent()
+
             Button("Reject", role: .destructive) {
                 model.rejectCurrentTransferRequest()
             }
@@ -58,6 +116,8 @@ struct ConnectedRootView: View {
                 }
                 .tag(ConnectedAppModel.RootTab.settings)
         }
+        .glassTabBar()
+        .tint(colorScheme == .dark ? .white : .black)
     }
 
     private var errorPresented: Binding<Bool> {

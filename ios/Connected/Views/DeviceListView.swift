@@ -23,6 +23,7 @@ struct DeviceListView: View {
     }
 
     @EnvironmentObject private var model: ConnectedAppModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showingFileImporter = false
     @State private var selectedFileTarget: DiscoveredDevice?
     @State private var phoneDataRoute: PhoneDataRoute?
@@ -31,12 +32,8 @@ struct DeviceListView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    if let info = model.infoMessage {
-                        StatusCard(systemImage: "info.circle", text: info)
-                    }
-
                     if !model.pendingShareURLs.isEmpty {
-                        StatusCard(
+                        GlassStatusCard(
                             systemImage: "tray.full",
                             text: "\(model.pendingShareURLs.count) shared item(s) queued"
                         )
@@ -46,31 +43,21 @@ struct DeviceListView: View {
                         pasteAndShareControl
                     }
 
-                    DeviceSectionCard(title: "Discovery", subtitle: "Find nearby devices and refresh trust state.") {
-                        HStack(spacing: 10) {
-                            Button(model.isDiscoveryActive ? "Stop" : "Start") {
-                                model.setDiscoveryActive(!model.isDiscoveryActive)
-                            }
-                            .buttonStyle(.bordered)
-
-                            Button("Refresh") {
-                                model.refreshDiscoveryNow()
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                    }
-
                     if model.devices.isEmpty {
-                        DeviceSectionCard(title: "Devices", subtitle: "Waiting for nearby peers.") {
-                            VStack(spacing: 8) {
+                        GlassSectionCard(title: "Devices", subtitle: "Waiting for nearby peers.") {
+                            VStack(spacing: 12) {
                                 Image(systemName: "dot.radiowaves.left.and.right")
-                                    .font(.title2)
-                                    .foregroundStyle(.secondary)
+                                    .font(.system(size: 32))
+                                    .foregroundStyle(GlassTheme.primary(for: colorScheme).opacity(0.5))
                                 Text("No devices yet")
                                     .font(.headline)
+                                    .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
+                                Text("Pull to refresh or start discovery")
+                                    .font(.caption)
+                                    .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                             }
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                            .padding(.vertical, 20)
                         }
                     } else {
                         LazyVStack(spacing: 10) {
@@ -116,8 +103,11 @@ struct DeviceListView: View {
                 }
                 .padding(16)
             }
-            .background(screenBackground.ignoresSafeArea())
-            .navigationTitle("Connected")
+            .refreshable {
+                model.refreshDiscoveryNow()
+            }
+            .glassBackground()
+            .toolbar(.hidden, for: .navigationBar)
             .fileImporter(
                 isPresented: $showingFileImporter,
                 allowedContentTypes: [UTType.data],
@@ -152,15 +142,21 @@ struct DeviceListView: View {
 
     private var pasteAndShareControl: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: "doc.on.clipboard.fill")
-                    .foregroundStyle(.tint)
+                    .font(.title3)
+                    .foregroundStyle(GlassTheme.primary(for: colorScheme))
+                    .frame(width: 28, height: 28)
+                    .background(GlassTheme.primary(for: colorScheme).opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Paste & Share")
                         .font(.headline)
+                        .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
                     Text("Paste through iOS and send to every trusted device.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                 }
             }
 
@@ -172,51 +168,42 @@ struct DeviceListView: View {
                 model.sendClipboardTextToAllTrusted(text, hideClipboardSectionOnSuccess: true)
             }
             .controlSize(.large)
-            .tint(.accentColor)
             .disabled(!model.hasTrustedDevices)
 
             if !model.hasTrustedDevices {
                 Text("Pair and trust a device to enable Paste & Share.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.accentColor.opacity(model.shouldHighlightPasteAndShare ? 0.16 : 0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+        .glassCard()
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(
-                    model.shouldHighlightPasteAndShare ? Color.accentColor : Color.accentColor.opacity(0.2),
-                    lineWidth: model.shouldHighlightPasteAndShare ? 2 : 1
+                    model.shouldHighlightPasteAndShare
+                        ? GlassTheme.accent(for: colorScheme)
+                        : Color.clear,
+                    lineWidth: model.shouldHighlightPasteAndShare ? 2 : 0
                 )
-        }
+        )
     }
 
     private var transferCard: some View {
-        DeviceSectionCard(title: "Transfer", subtitle: model.transferStatus) {
+        GlassSectionCard(title: "Transfer", subtitle: model.transferStatus) {
             HStack(spacing: 10) {
                 if model.activeTransferId != nil {
                     Button("Cancel", role: .destructive) {
                         model.cancelActiveTransfer()
                     }
-                    .buttonStyle(.bordered)
+                    .glassButton()
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
-
-    private var screenBackground: Color {
-#if canImport(UIKit)
-        Color(uiColor: .systemGroupedBackground)
-#else
-        Color.clear
-#endif
-    }
 }
 
+// MARK: - Device Row (Matching Android DeviceItem)
 private struct DeviceRow: View {
     let device: DiscoveredDevice
     let isTrusted: Bool
@@ -236,148 +223,233 @@ private struct DeviceRow: View {
     let onRequestCallLog: () -> Void
     let onMediaCommand: (MediaCommand) -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var showDetails = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
+            // Top row: Device info and action buttons (matching Android DeviceItem)
+            HStack(spacing: 12) {
+                // Device icon
                 Image(systemName: iconName(for: device.deviceType))
                     .font(.title3)
-                    .foregroundStyle(.tint)
-                    .frame(width: 24)
+                    .foregroundStyle(GlassTheme.primary(for: colorScheme))
+                    .frame(width: 24, height: 24)
 
+                // Device info
                 VStack(alignment: .leading, spacing: 3) {
                     Text(device.name)
                         .font(.body)
+                        .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
                         .lineLimit(1)
-                    Text("\(device.ip):\(device.port)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    statusLabel
+
+                    if showDetails {
+                        Text("\(device.ip):\(device.port)")
+                            .font(.caption)
+                            .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
+                    }
+
+                    if isTrusted {
+                        Label("Trusted", systemImage: "checkmark.shield.fill")
+                            .font(.caption2)
+                            .foregroundStyle(GlassTheme.success)
+                    }
+                }
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showDetails.toggle()
+                    }
                 }
 
                 Spacer(minLength: 8)
 
+                // Action buttons (matching Android)
                 if isTrusted {
-                    Button("Send File") {
-                        onSendFile()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-
-                    Menu {
-                        if hasPendingShare {
-                            Button("Send Queued Share", action: onSendPendingShare)
-                        }
-                        Button("Share Clipboard", action: onShareClipboard)
-                        Button("Browse Files", action: onBrowse)
-                        Button("Request Contacts", action: onRequestContacts)
-                        Button("Request Conversations", action: onRequestConversations)
-                        Button("Request Call Log", action: onRequestCallLog)
-                        Button("Unpair", role: .destructive, action: onUnpair)
-                        Button("Forget", role: .destructive, action: onForget)
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                } else {
-                    if isPending {
-                        Button("Cancel", role: .destructive) {
-                            onCancelPair()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    } else {
-                        Button("Send File") {
+                    HStack(spacing: 4) {
+                        // Send file button
+                        Button {
                             onSendFile()
+                        } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.title)
+                                .frame(width: 56, height: 56)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(GlassTheme.primary(for: colorScheme))
 
-                    Button(isPending ? "Waiting" : "Pair") {
-                        onPair()
+                        // Menu button
+                        Menu {
+                            if hasPendingShare {
+                                Button("Send Queued Share", action: onSendPendingShare)
+                            }
+                            Button("Share Clipboard", action: onShareClipboard)
+                            Button("Browse Files", action: onBrowse)
+                            Button("Request Contacts", action: onRequestContacts)
+                            Button("Request Conversations", action: onRequestConversations)
+                            Button("Request Call Log", action: onRequestCallLog)
+                            Button("Unpair", role: .destructive, action: onUnpair)
+                            Button("Forget", role: .destructive, action: onForget)
+                        } label: {
+                            Image(systemName: "ellipsis.circle.fill")
+                                .font(.title)
+                                .frame(width: 56, height: 56)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(GlassTheme.primary(for: colorScheme))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(isPending)
+                } else {
+                    HStack(spacing: 12) {
+                        if isPending {
+                            Button {
+                                onCancelPair()
+                            } label: {
+                                Text("Cancel")
+                                    .font(.subheadline)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 40)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.red)
+                        } else {
+                            Button {
+                                onSendFile()
+                            } label: {
+                                Text("Send File")
+                                    .font(.subheadline)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 40)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if isPending {
+                            Button {
+                            } label: {
+                                Text("Waiting...")
+                                    .font(.subheadline)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 40)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(true)
+                        } else {
+                            Button {
+                                onPair()
+                            } label: {
+                                Text("Pair")
+                                    .font(.subheadline)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 40)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.black)
+                        }
+                    }
                 }
             }
+            .padding(.vertical, 12)
 
+            // Media Controls row (below device info) for trusted devices
             if isTrusted && isMediaControlEnabled {
-                MediaCommandRow(onCommand: onMediaCommand)
+                Divider()
+                    .overlay(GlassTheme.outlineVariant(for: colorScheme).opacity(0.5))
+
+                HStack {
+                    mediaButton(systemImage: "speaker.minus.fill", label: "Volume Down", command: .volumeDown)
+                    Spacer()
+                    mediaButton(systemImage: "backward.end.fill", label: "Previous", command: .previous)
+                    Spacer()
+                    mediaButton(systemImage: "playpause.fill", label: "Play/Pause", command: .playPause)
+                    Spacer()
+                    mediaButton(systemImage: "forward.end.fill", label: "Next", command: .next)
+                    Spacer()
+                    mediaButton(systemImage: "speaker.plus.fill", label: "Volume Up", command: .volumeUp)
+                }
+                .padding(.top, 8)
+                .padding(.bottom, 4)
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    @ViewBuilder
-    private var statusLabel: some View {
-        if isTrusted {
-            Label("Trusted", systemImage: "checkmark.shield")
-                .font(.caption2)
-                .foregroundStyle(.tint)
-        } else if isPending {
-            Label("Pending", systemImage: "hourglass")
-                .font(.caption2)
-                .foregroundStyle(.orange)
-        }
-    }
-
-    private var cardBackground: Color {
-#if canImport(UIKit)
-        Color(uiColor: .secondarySystemGroupedBackground)
-#else
-        Color.clear
-#endif
-    }
-
-    private func iconName(for type: String) -> String {
-        let normalized = type.lowercased()
-        if normalized.contains("android") { return "iphone.gen3.radiowaves.left.and.right" }
-        if normalized.contains("ios") || normalized.contains("iphone") { return "iphone" }
-        if normalized.contains("ipad") { return "ipad" }
-        if normalized.contains("mac") { return "laptopcomputer" }
-        if normalized.contains("windows") { return "desktopcomputer" }
-        if normalized.contains("linux") { return "terminal" }
-        return "display"
-    }
-}
-
-private struct MediaCommandRow: View {
-    let onCommand: (MediaCommand) -> Void
-
-    var body: some View {
-        HStack {
-            mediaButton(systemImage: "speaker.minus.fill", label: "Volume Down", command: .volumeDown)
-            Spacer()
-            mediaButton(systemImage: "backward.end.fill", label: "Previous", command: .previous)
-            Spacer()
-            mediaButton(systemImage: "playpause.fill", label: "Play/Pause", command: .playPause)
-            Spacer()
-            mediaButton(systemImage: "forward.end.fill", label: "Next", command: .next)
-            Spacer()
-            mediaButton(systemImage: "speaker.plus.fill", label: "Volume Up", command: .volumeUp)
-        }
-        .padding(.top, 4)
+        .glassCard(padding: 12)
     }
 
     private func mediaButton(systemImage: String, label: String, command: MediaCommand) -> some View {
         Button {
-            onCommand(command)
+            onMediaCommand(command)
         } label: {
             Image(systemName: systemImage)
-                .frame(width: 32, height: 32)
+                .font(.title3)
+                .frame(width: 48, height: 48)
+                .background(GlassTheme.primary(for: colorScheme).opacity(0.12))
+                .clipShape(Circle())
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
+        .buttonStyle(.plain)
+        .foregroundStyle(GlassTheme.primary(for: colorScheme))
         .accessibilityLabel(label)
+    }
+
+    private func iconName(for type: String) -> String {
+        deviceIconName(for: type)
     }
 }
 
+// MARK: - Glass Section Card
+private struct GlassSectionCard<Content: View>: View {
+    let title: String
+    let subtitle: String?
+    let content: Content
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    init(title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
+                }
+            }
+            content
+        }
+        .glassCard()
+    }
+}
+
+// MARK: - Glass Status Card
+private struct GlassStatusCard: View {
+    let systemImage: String
+    let text: String
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.body)
+                .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
+                .frame(width: 20, height: 20)
+
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
+                .lineLimit(2)
+
+            Spacer()
+        }
+        .glassCard(padding: 12)
+    }
+}
+
+// MARK: - Phone Data Sheet
 private struct PhoneDataSheet: View {
     enum Kind {
         case contacts
@@ -394,6 +466,7 @@ private struct PhoneDataSheet: View {
     }
 
     @EnvironmentObject private var model: ConnectedAppModel
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @State private var toastMessage: String?
     @State private var callLogLimit: UInt32 = 100
@@ -407,7 +480,7 @@ private struct PhoneDataSheet: View {
                 Section {
                     Text(device.name)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                 }
 
                 switch kind {
@@ -420,19 +493,22 @@ private struct PhoneDataSheet: View {
                 }
             }
             .navigationTitle(kind.title)
-#if os(iOS)
+            .background(GlassTheme.background(for: colorScheme).ignoresSafeArea())
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-#endif
+            #endif
             .toolbar {
-#if os(iOS)
+                #if os(iOS)
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
+                        .foregroundStyle(GlassTheme.primary(for: colorScheme))
                 }
-#else
+                #else
                 ToolbarItem(placement: .automatic) {
                     Button("Done") { dismiss() }
+                        .foregroundStyle(GlassTheme.primary(for: colorScheme))
                 }
-#endif
+                #endif
             }
             .overlay(alignment: .bottom) {
                 if let toastMessage {
@@ -463,16 +539,16 @@ private struct PhoneDataSheet: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(contact.name)
                                 .font(.body)
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
                             if !contact.phoneNumbers.isEmpty {
                                 Text(contact.phoneNumbers.map(\.number).joined(separator: ", "))
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                             }
                             if !contact.emails.isEmpty {
                                 Text(contact.emails.joined(separator: ", "))
                                     .font(.caption)
-                                .foregroundStyle(.secondary)
+                                    .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -497,11 +573,11 @@ private struct PhoneDataSheet: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(conversationTitle(conversation))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
                             if let last = conversation.lastMessage, !last.isEmpty {
                                 Text(last)
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                                     .lineLimit(2)
                             }
                         }
@@ -522,12 +598,13 @@ private struct PhoneDataSheet: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(entry.contactName ?? entry.number)
                             .font(.body)
+                            .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
                         Text("\(String(describing: entry.callType).capitalized) • \(formatDuration(entry.duration))")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                         Text(formatTimestamp(entry.timestamp))
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -561,12 +638,12 @@ private struct PhoneDataSheet: View {
             return
         }
 
-#if canImport(UIKit)
+        #if canImport(UIKit)
         UIPasteboard.general.string = value
         showToast("Copied contact")
-#else
+        #else
         showToast("Clipboard unavailable")
-#endif
+        #endif
     }
 
     private func copyCallLogNumber(_ number: String) {
@@ -576,12 +653,12 @@ private struct PhoneDataSheet: View {
             return
         }
 
-#if canImport(UIKit)
+        #if canImport(UIKit)
         UIPasteboard.general.string = trimmed
         showToast("Copied \(trimmed)")
-#else
+        #else
         showToast("Clipboard unavailable")
-#endif
+        #endif
     }
 
     private func showToast(_ message: String) {
@@ -597,8 +674,9 @@ private struct PhoneDataSheet: View {
         Section {
             HStack(spacing: 10) {
                 ProgressView()
+                    .tint(GlassTheme.primary(for: colorScheme))
                 Text(message)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
             }
         }
     }
@@ -626,8 +704,10 @@ private struct PhoneDataSheet: View {
     }
 }
 
+// MARK: - Conversation History View
 private struct ConversationHistoryView: View {
     @EnvironmentObject private var model: ConnectedAppModel
+    @Environment(\.colorScheme) private var colorScheme
 
     let device: DiscoveredDevice
     let conversation: FfiConversation
@@ -639,8 +719,9 @@ private struct ConversationHistoryView: View {
                     Section {
                         HStack(spacing: 10) {
                             ProgressView()
+                                .tint(GlassTheme.primary(for: colorScheme))
                             Text("Loading conversation history.")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                         }
                     }
                 }
@@ -650,13 +731,13 @@ private struct ConversationHistoryView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(message.isOutgoing ? "Me" : (message.contactName ?? message.address))
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                             Text(message.body)
                                 .font(.body)
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
                             Text(formatTimestamp(message.timestamp))
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .id(message.id)
@@ -664,9 +745,10 @@ private struct ConversationHistoryView: View {
                 }
             }
             .navigationTitle(conversationTitle(conversation))
-#if os(iOS)
+            .background(GlassTheme.background(for: colorScheme).ignoresSafeArea())
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-#endif
+            #endif
             .onAppear {
                 if model.selectedConversationThreadId != conversation.id {
                     model.requestMessages(for: conversation, from: device)
@@ -708,69 +790,25 @@ private struct ConversationHistoryView: View {
     }
 }
 
-private struct DeviceSectionCard<Content: View>: View {
-    let title: String
-    let subtitle: String?
-    let content: Content
-
-    init(title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.subtitle = subtitle
-        self.content = content()
+// MARK: - Glass Button Styles
+extension View {
+    func glassButton() -> some View {
+        self
+            .buttonStyle(.bordered)
+            .clipShape(Capsule())
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline)
-                if let subtitle, !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            content
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    func glassButtonProminent() -> some View {
+        self
+            .buttonStyle(.borderedProminent)
+            .tint(.black)
+            .clipShape(Capsule())
     }
 
-    private var cardBackground: Color {
-#if canImport(UIKit)
-        Color(uiColor: .secondarySystemGroupedBackground)
-#else
-        Color.clear
-#endif
-    }
-}
-
-private struct StatusCard: View {
-    let systemImage: String
-    let text: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-            Text(text)
-                .font(.footnote)
-                .lineLimit(2)
-            Spacer()
-        }
-        .foregroundStyle(.secondary)
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private var cardBackground: Color {
-#if canImport(UIKit)
-        Color(uiColor: .secondarySystemGroupedBackground)
-#else
-        Color.clear
-#endif
+    func glassButtonDestructive() -> some View {
+        self
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .clipShape(Capsule())
     }
 }
