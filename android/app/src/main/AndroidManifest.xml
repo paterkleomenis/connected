@@ -14,8 +14,14 @@
         android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"
     />
 
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission
+        android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="32"
+    />
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32"
+    />
 
     <!-- Declare telephony as optional for tablets/ChromeOS -->
     <uses-feature
@@ -29,10 +35,11 @@
         android:required="false"
     />
 
-    <!-- For local network device discovery (Android 12+) -->
+    <!-- For local network device discovery (Android 13+) -->
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
-        tools:targetApi="31"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="33"
     />
 
     <!-- For reading/writing files (pre-Android 13) -->

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
@@ -107,6 +108,7 @@ class ConnectedApp(private val context: Context) {
                     Manifest.permission.NEARBY_WIFI_DEVICES
                 ) != PackageManager.PERMISSION_GRANTED
             ) return false
+            return true
         }
         if (ContextCompat.checkSelfPermission(
                 context,
@@ -115,6 +117,21 @@ class ConnectedApp(private val context: Context) {
         ) return false
         return true
     }
+
+    private fun isLocationEnabled(): Boolean {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            ?: return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            locationManager.isLocationEnabled
+        } else {
+            @Suppress("DEPRECATION")
+            locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+        }
+    }
+
+    private fun requiresLocationToggleForProximity(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
 
     companion object {
         private const val NOTIFICATION_ID_REQUEST = 1001
@@ -497,6 +514,13 @@ class ConnectedApp(private val context: Context) {
         if (!ConnectedWifiAwareManager.isSupported(context)) {
             Log.d("ConnectedApp", "WiFi Aware service not supported on this device")
             return
+        }
+        if (requiresLocationToggleForProximity() && !isLocationEnabled()) {
+            Log.d("ConnectedApp", "Location is disabled; WiFi Aware proximity discovery is paused")
+            return
+        }
+        if (!isLocationEnabled()) {
+            Log.d("ConnectedApp", "Location is disabled on Android 13+; trying WiFi Aware with Nearby Devices permission")
         }
         Log.d("ConnectedApp", "WiFi Aware supported, using NAN for proximity")
         wifiAwareManager = ConnectedWifiAwareManager(context).also { manager ->
@@ -2007,6 +2031,18 @@ class ConnectedApp(private val context: Context) {
                 (isWifiAwareIp(device.ip) && wifiAwareManager?.isConnected(device.id) != true)
 
         if (needsAwareConnect) {
+            if (requiresLocationToggleForProximity() && !isLocationEnabled()) {
+                runOnMainThread {
+                    android.widget.Toast
+                        .makeText(
+                            context,
+                            "Turn on Location to connect nearby devices",
+                            android.widget.Toast.LENGTH_SHORT
+                        )
+                        .show()
+                }
+                return
+            }
             try {
                 setPairingModePersistent(true)
             } catch (e: Exception) {

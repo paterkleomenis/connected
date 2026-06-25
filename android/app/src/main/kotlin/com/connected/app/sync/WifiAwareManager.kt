@@ -304,7 +304,12 @@ class ConnectedWifiAwareManager(private val context: Context) {
 
         session?.close()
         session = null
-        manager.attach(attachCallback, handler)
+        try {
+            manager.attach(attachCallback, handler)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "WiFi Aware attach blocked by permission or Location state", e)
+            scheduleAttachRetry("WiFi Aware attach blocked, retrying...")
+        }
     }
 
     private fun scheduleAttachRetry(message: String) {
@@ -349,7 +354,11 @@ class ConnectedWifiAwareManager(private val context: Context) {
             .setServiceSpecificInfo(serviceInfo)
             .build()
 
-        s.publish(config, publishCallback, handler)
+        try {
+            s.publish(config, publishCallback, handler)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "WiFi Aware publish blocked by permission or Location state", e)
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -366,7 +375,11 @@ class ConnectedWifiAwareManager(private val context: Context) {
             .setSubscribeType(SubscribeConfig.SUBSCRIBE_TYPE_ACTIVE)
             .build()
 
-        s.subscribe(config, subscribeCallback, handler)
+        try {
+            s.subscribe(config, subscribeCallback, handler)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "WiFi Aware subscribe blocked by permission or Location state", e)
+        }
     }
 
     private fun buildServiceInfo(
