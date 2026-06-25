@@ -105,7 +105,7 @@ object AppUpdater {
     }
 
     /**
-     * Simple version comparison: 3.1.9 vs 3.2.0
+     * Simple version comparison: 3.2.0 vs 3.2.0
      * Returns true if `latestVersion` > `currentVersion`
      */
     private fun isNewerVersion(currentVersion: String, latestVersion: String): Boolean {
