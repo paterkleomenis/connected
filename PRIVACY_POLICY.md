@@ -21,7 +21,7 @@ This Privacy Policy describes how Connected ("we", "our", or "the app") collects
 
 ### Permissions We Request
 - **Network Access**: For device discovery and communication on your local network
-- **Nearby Wi-Fi**: For Wi-Fi Direct discovery and pairing
+- **Nearby Wi-Fi**: For WiFi Aware discovery and pairing
 - **Location**: Required on older Android versions for nearby Wi-Fi discovery (we do not track or store your location)
 - **Storage**: For reading/writing files during file transfers
 - **Notifications**: For media playback monitoring and sync notifications
@@ -81,7 +81,7 @@ If you have questions about this policy, contact us:
 |------------|---------|
 | INTERNET | Network communication with linked devices |
 | ACCESS_NETWORK_STATE | Check network connectivity status |
-| NEARBY_WIFI_DEVICES | Wi-Fi Direct discovery and pairing on Android 13+ |
+| NEARBY_WIFI_DEVICES | WiFi Aware discovery and pairing on Android 13+ |
 | ACCESS_COARSE/FINE_LOCATION | Required by older Android versions for nearby Wi-Fi discovery |
 | READ_CONTACTS | Display contact names during calls and messaging |
 | READ_SMS/SEND_SMS/RECEIVE_SMS | SMS synchronization between devices |

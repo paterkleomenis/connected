@@ -126,7 +126,7 @@ class MainActivity : ComponentActivity() {
             ActivityResultContracts.RequestMultiplePermissions()
         ) {
             proximityPermissionsInFlight = false
-            connectedApp.startProximityManager()
+            connectedApp.startWifiAwareManager()
         }
 
         requestProximityPermissionsIfNeeded()
@@ -186,21 +186,21 @@ class MainActivity : ComponentActivity() {
             ) {
                 missing.add(Manifest.permission.NEARBY_WIFI_DEVICES)
             }
-        } else {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                missing.add(Manifest.permission.ACCESS_FINE_LOCATION)
-            }
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                missing.add(Manifest.permission.ACCESS_COARSE_LOCATION)
-            }
+        }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            missing.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            missing.add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
 
         if (missing.isEmpty()) {
-            connectedApp.startProximityManager()
+            connectedApp.startWifiAwareManager()
             return
         }
 

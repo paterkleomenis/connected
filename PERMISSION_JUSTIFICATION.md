@@ -110,16 +110,16 @@ All communication happens directly between user-owned devices on the local netwo
 
 ### 7. Location Permissions (`ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`)
 
-**Core Feature:** Wi-Fi Direct Device Discovery
+**Core Feature:** WiFi Aware Device Discovery
 
 **Why needed:**
-- Android requires fine location permissions for Wi-Fi Direct (P2P) service discovery and group creation
+- Android requires fine location permissions for WiFi Aware service discovery on older Android versions
 - Used ONLY for discovering nearby devices for pairing independent of local network infrastructure
 - We do not collect, store, or transmit location data
 
 **How users benefit:** Enables automatic discovery of nearby devices for pairing without manual IP entry, even when no shared Wi-Fi network is available.
 
-**Alternative considered:** Manual IP entry is available as a fallback, but automatic discovery significantly improves user experience. Android does not provide a way to use Wi-Fi Direct discovery without location permissions.
+**Alternative considered:** Manual IP entry is available as a fallback, but automatic discovery significantly improves user experience. Android does not provide a way to use nearby Wi-Fi discovery on older Android versions without location permissions.
 
 ---
 

@@ -10,8 +10,9 @@ use quinn::{
 use rustls::DistinguishedName;
 use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -289,6 +290,9 @@ impl Drop for ConnectingGuard {
 
 pub struct QuicTransport {
     endpoint: Endpoint,
+    /// WiFi Aware (NAN) endpoint for IPv6 link-local connections
+    aware_endpoint: RwLock<Option<Endpoint>>,
+    aware_scopes: RwLock<HashMap<Ipv6Addr, u32>>,
     local_id: String,
     client_config: ClientConfig,
     client_config_allow_unknown: ClientConfig,
@@ -302,6 +306,24 @@ pub struct QuicTransport {
 }
 
 impl QuicTransport {
+    fn bind_udp_socket(bind_addr: SocketAddr) -> std::io::Result<std::net::UdpSocket> {
+        let domain = if bind_addr.is_ipv4() {
+            Domain::IPV4
+        } else {
+            Domain::IPV6
+        };
+        let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+        socket.set_reuse_address(true)?;
+        #[cfg(unix)]
+        {
+            let _ = socket.set_reuse_port(true);
+        }
+        let _ = socket.set_send_buffer_size(8 * 1024 * 1024);
+        let _ = socket.set_recv_buffer_size(8 * 1024 * 1024);
+        socket.bind(&SockAddr::from(bind_addr))?;
+        Ok(socket.into())
+    }
+
     pub async fn new(
         bind_addr: SocketAddr,
         local_id: String,
@@ -313,11 +335,7 @@ impl QuicTransport {
 
         #[cfg(not(target_os = "ios"))]
         let mut endpoint = {
-            let socket = std::net::UdpSocket::bind(bind_addr)?;
-            let sock = socket2::Socket::from(socket);
-            let _ = sock.set_send_buffer_size(8 * 1024 * 1024);
-            let _ = sock.set_recv_buffer_size(8 * 1024 * 1024);
-            let socket: std::net::UdpSocket = sock.into();
+            let socket = Self::bind_udp_socket(bind_addr)?;
             Endpoint::new(
                 quinn::EndpointConfig::default(),
                 Some(server_config),
@@ -332,12 +350,8 @@ impl QuicTransport {
             let max_wait = std::time::Duration::from_secs(30);
             let mut delay = std::time::Duration::from_millis(500);
             loop {
-                match std::net::UdpSocket::bind(bind_addr) {
+                match Self::bind_udp_socket(bind_addr) {
                     Ok(socket) => {
-                        let sock = socket2::Socket::from(socket);
-                        let _ = sock.set_send_buffer_size(8 * 1024 * 1024);
-                        let _ = sock.set_recv_buffer_size(8 * 1024 * 1024);
-                        let socket: std::net::UdpSocket = sock.into();
                         match Endpoint::new(
                             quinn::EndpointConfig::default(),
                             Some(server_config.clone()),
@@ -384,6 +398,8 @@ impl QuicTransport {
 
         Ok(Self {
             endpoint,
+            aware_endpoint: RwLock::new(None),
+            aware_scopes: RwLock::new(HashMap::new()),
             local_id,
             client_config,
             client_config_allow_unknown,
@@ -392,6 +408,246 @@ impl QuicTransport {
             key_store: key_store.clone(),
             connecting: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         })
+    }
+
+    /// Set the WiFi Aware endpoint for IPv6 link-local connections.
+    /// This endpoint is used when connecting to fe80:: addresses from NAN.
+    pub fn set_aware_endpoint(
+        &self,
+        socket: std::net::UdpSocket,
+        peer_ipv6: Option<Ipv6Addr>,
+        peer_scope_id: u32,
+    ) -> Result<()> {
+        if let Some(peer_ipv6) = peer_ipv6
+            && peer_scope_id != 0
+        {
+            self.aware_scopes.write().insert(peer_ipv6, peer_scope_id);
+            debug!(
+                "Registered WiFi Aware scope {} for peer {}",
+                peer_scope_id, peer_ipv6
+            );
+        }
+
+        let (server_config, _) = Self::create_server_config(&self.key_store)?;
+        let mut endpoint = Endpoint::new(
+            quinn::EndpointConfig::default(),
+            Some(server_config),
+            socket,
+            Arc::new(quinn::TokioRuntime),
+        )?;
+        endpoint.set_default_client_config(self.client_config.clone());
+        info!("WiFi Aware endpoint created");
+        if let Some(old_endpoint) = self.aware_endpoint.write().replace(endpoint.clone()) {
+            old_endpoint.close(VarInt::from_u32(0), b"aware-replaced");
+        }
+        self.spawn_aware_accept_loop(endpoint);
+        Ok(())
+    }
+
+    fn scoped_addr_for_aware(&self, addr: SocketAddr) -> SocketAddr {
+        let SocketAddr::V6(v6) = addr else {
+            return addr;
+        };
+        if !v6.ip().is_unicast_link_local() || v6.scope_id() != 0 {
+            return SocketAddr::V6(v6);
+        }
+
+        let Some(scope_id) = self.aware_scopes.read().get(v6.ip()).copied() else {
+            return SocketAddr::V6(v6);
+        };
+
+        let scoped = SocketAddr::V6(SocketAddrV6::new(
+            *v6.ip(),
+            v6.port(),
+            v6.flowinfo(),
+            scope_id,
+        ));
+        debug!(
+            "Scoped WiFi Aware link-local address {} -> {}",
+            addr, scoped
+        );
+        scoped
+    }
+
+    fn spawn_aware_accept_loop(&self, endpoint: Endpoint) {
+        let handlers = { self.handlers.read().clone() };
+        let Some(handlers) = handlers else {
+            debug!("WiFi Aware endpoint registered before transport handlers; listener deferred");
+            return;
+        };
+
+        let local_id = self.local_id.clone();
+        let connection_cache = self.connection_cache.clone();
+        let key_store = self.key_store.clone();
+        tokio::spawn(async move {
+            info!("WiFi Aware QUIC server started, waiting for connections");
+            Self::accept_loop(
+                endpoint,
+                handlers.message_tx,
+                handlers.file_stream_tx,
+                handlers.fs_stream_tx,
+                local_id,
+                connection_cache,
+                key_store,
+            )
+            .await;
+        });
+    }
+
+    /// Check if an address is an IPv6 link-local address (WiFi Aware).
+    fn is_link_local(addr: &SocketAddr) -> bool {
+        match addr.ip() {
+            std::net::IpAddr::V6(v6) => v6.is_unicast_link_local(),
+            _ => false,
+        }
+    }
+
+    /// Get the appropriate endpoint for a given address.
+    /// Returns the WiFi Aware endpoint for IPv6 link-local addresses, or the main endpoint otherwise.
+    fn get_endpoint_for_addr(&self, addr: &SocketAddr) -> Endpoint {
+        if Self::is_link_local(addr) {
+            if let Some(ep) = self.aware_endpoint.read().clone() {
+                return ep;
+            }
+            warn!(
+                "IPv6 link-local address but no WiFi Aware endpoint configured, falling back to main endpoint"
+            );
+        }
+        self.endpoint.clone()
+    }
+
+    /// Shared accept loop for both main and WiFi Aware endpoints.
+    async fn accept_loop(
+        endpoint: Endpoint,
+        message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message, Option<SendStream>)>,
+        file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
+        fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
+        local_id: String,
+        connection_cache: Arc<RwLock<ConnectionCache>>,
+        key_store: Arc<RwLock<KeyStore>>,
+    ) {
+        // M7: Per-IP connection counts for rate-limiting
+        let ip_connection_counts: Arc<RwLock<std::collections::HashMap<IpAddr, usize>>> =
+            Arc::new(RwLock::new(std::collections::HashMap::new()));
+        let total_connections: Arc<std::sync::atomic::AtomicUsize> =
+            Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        while let Some(incoming) = endpoint.accept().await {
+            let remote_ip = incoming.remote_address().ip();
+
+            // M7: Enforce global connection cap
+            let current_total = total_connections.load(std::sync::atomic::Ordering::Relaxed);
+            if current_total >= MAX_TOTAL_CONNECTIONS {
+                warn!(
+                    "Global connection limit reached ({}), rejecting connection from {}",
+                    current_total, remote_ip
+                );
+                incoming.refuse();
+                continue;
+            }
+
+            // M7: Enforce per-IP connection limit
+            {
+                let counts = ip_connection_counts.read();
+                if let Some(&count) = counts.get(&remote_ip)
+                    && count >= MAX_CONNECTIONS_PER_IP
+                {
+                    warn!(
+                        "Per-IP connection limit reached ({}) for {}, rejecting",
+                        count, remote_ip
+                    );
+                    incoming.refuse();
+                    continue;
+                }
+            }
+
+            // Increment counters
+            {
+                let mut counts = ip_connection_counts.write();
+                *counts.entry(remote_ip).or_insert(0) += 1;
+            }
+            total_connections.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            let tx = message_tx.clone();
+            let f_tx = file_stream_tx.clone();
+            let fs_tx = fs_stream_tx.clone();
+            let id = local_id.clone();
+            let cache = connection_cache.clone();
+            let ks = key_store.clone();
+            let ip_counts = ip_connection_counts.clone();
+            let total_conns = total_connections.clone();
+
+            tokio::spawn(async move {
+                // Manual drop guard to decrement counters when this task finishes
+                struct ConnectionGuard {
+                    ip: IpAddr,
+                    ip_counts: Arc<RwLock<std::collections::HashMap<IpAddr, usize>>>,
+                    total: Arc<std::sync::atomic::AtomicUsize>,
+                }
+                impl Drop for ConnectionGuard {
+                    fn drop(&mut self) {
+                        {
+                            let mut counts = self.ip_counts.write();
+                            if let Some(count) = counts.get_mut(&self.ip) {
+                                *count = count.saturating_sub(1);
+                                if *count == 0 {
+                                    counts.remove(&self.ip);
+                                }
+                            }
+                        }
+                        self.total
+                            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                let _guard = ConnectionGuard {
+                    ip: remote_ip,
+                    ip_counts,
+                    total: total_conns,
+                };
+
+                match incoming.accept() {
+                    Ok(connecting) => match connecting.await {
+                        Ok(connection) => {
+                            let remote_addr = connection.remote_address();
+
+                            debug!(
+                                "Accepted connection from {} (RTT: {:?})",
+                                remote_addr,
+                                connection.rtt()
+                            );
+
+                            // Cache the incoming connection so we can reuse it for outgoing requests
+                            {
+                                let mut c = cache.write();
+                                c.insert(remote_addr, connection.clone());
+                            }
+
+                            if let Err(e) = Self::handle_connection(
+                                connection,
+                                remote_addr,
+                                tx,
+                                f_tx,
+                                fs_tx,
+                                id,
+                                ks,
+                            )
+                            .await
+                            {
+                                warn!("Connection handler error: {}", e);
+                            }
+                        }
+
+                        Err(e) => {
+                            warn!("Failed to complete connection: {}", e);
+                        }
+                    },
+
+                    Err(e) => {
+                        warn!("Failed to accept connection: {}", e);
+                    }
+                }
+            });
+        }
     }
 
     fn spawn_connection_handler(&self, connection: Connection, remote_addr: SocketAddr) {
@@ -519,6 +775,7 @@ impl QuicTransport {
     }
 
     pub async fn connect(&self, addr: SocketAddr) -> Result<Connection> {
+        let addr = self.scoped_addr_for_aware(addr);
         let canonical = ConnectionCache::canonicalize_addr(&addr);
 
         // Fast path: reuse a cached connection.
@@ -571,9 +828,9 @@ impl QuicTransport {
 
         info!("Establishing new QUIC connection to {}", addr);
 
+        let endpoint = self.get_endpoint_for_addr(&addr);
         let connecting =
-            self.endpoint
-                .connect_with(self.client_config.clone(), addr, "connected.local")?;
+            endpoint.connect_with(self.client_config.clone(), addr, "connected.local")?;
 
         let connection = timeout(CONNECT_TIMEOUT, connecting)
             .await
@@ -602,6 +859,7 @@ impl QuicTransport {
     }
 
     pub async fn connect_allow_unknown(&self, addr: SocketAddr) -> Result<Connection> {
+        let addr = self.scoped_addr_for_aware(addr);
         let canonical = ConnectionCache::canonicalize_addr(&addr);
 
         // Fast path: reuse a cached connection.
@@ -662,7 +920,8 @@ impl QuicTransport {
             addr
         );
 
-        let connecting = self.endpoint.connect_with(
+        let endpoint = self.get_endpoint_for_addr(&addr);
+        let connecting = endpoint.connect_with(
             self.client_config_allow_unknown.clone(),
             addr,
             "connected.local",
@@ -703,8 +962,9 @@ impl QuicTransport {
     }
 
     pub fn invalidate_connection_with_reason(&self, addr: &SocketAddr, reason: &[u8]) {
+        let addr = self.scoped_addr_for_aware(*addr);
         let mut cache = self.connection_cache.write();
-        match cache.remove(addr) {
+        match cache.remove(&addr) {
             Some(connection) => {
                 // Close the QUIC connection gracefully
                 connection.close(VarInt::from_u32(0), reason);
@@ -754,6 +1014,7 @@ impl QuicTransport {
     }
 
     pub async fn get_connection_fingerprint(&self, addr: SocketAddr) -> Option<String> {
+        let addr = self.scoped_addr_for_aware(addr);
         let cache = self.connection_cache.read();
         let key = ConnectionCache::canonicalize_addr(&addr);
         if let Some(cached) = cache.connections.get(&key) {
@@ -924,131 +1185,23 @@ impl QuicTransport {
         let connection_cache = self.connection_cache.clone();
         let key_store = self.key_store.clone();
 
+        // Also spawn a listener on the WiFi Aware endpoint if it was configured before startup.
+        if let Some(aware_ep) = self.aware_endpoint.read().clone() {
+            self.spawn_aware_accept_loop(aware_ep);
+        }
+
         tokio::spawn(async move {
             info!("QUIC server started, waiting for connections");
-
-            // M7: Per-IP connection counts for rate-limiting
-            let ip_connection_counts: Arc<RwLock<std::collections::HashMap<IpAddr, usize>>> =
-                Arc::new(RwLock::new(std::collections::HashMap::new()));
-            let total_connections: Arc<std::sync::atomic::AtomicUsize> =
-                Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-            while let Some(incoming) = endpoint.accept().await {
-                let remote_ip = incoming.remote_address().ip();
-
-                // M7: Enforce global connection cap
-                let current_total = total_connections.load(std::sync::atomic::Ordering::Relaxed);
-                if current_total >= MAX_TOTAL_CONNECTIONS {
-                    warn!(
-                        "Global connection limit reached ({}), rejecting connection from {}",
-                        current_total, remote_ip
-                    );
-                    incoming.refuse();
-                    continue;
-                }
-
-                // M7: Enforce per-IP connection limit
-                {
-                    let counts = ip_connection_counts.read();
-                    if let Some(&count) = counts.get(&remote_ip)
-                        && count >= MAX_CONNECTIONS_PER_IP
-                    {
-                        warn!(
-                            "Per-IP connection limit reached ({}) for {}, rejecting",
-                            count, remote_ip
-                        );
-                        incoming.refuse();
-                        continue;
-                    }
-                }
-
-                // Increment counters
-                {
-                    let mut counts = ip_connection_counts.write();
-                    *counts.entry(remote_ip).or_insert(0) += 1;
-                }
-                total_connections.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-                let tx = message_tx.clone();
-                let f_tx = file_stream_tx.clone();
-                let fs_tx = fs_stream_tx.clone();
-                let id = local_id.clone();
-                let cache = connection_cache.clone();
-                let ks = key_store.clone();
-                let ip_counts = ip_connection_counts.clone();
-                let total_conns = total_connections.clone();
-
-                tokio::spawn(async move {
-                    // Manual drop guard to decrement counters when this task finishes
-                    struct ConnectionGuard {
-                        ip: IpAddr,
-                        ip_counts: Arc<RwLock<std::collections::HashMap<IpAddr, usize>>>,
-                        total: Arc<std::sync::atomic::AtomicUsize>,
-                    }
-                    impl Drop for ConnectionGuard {
-                        fn drop(&mut self) {
-                            {
-                                let mut counts = self.ip_counts.write();
-                                if let Some(count) = counts.get_mut(&self.ip) {
-                                    *count = count.saturating_sub(1);
-                                    if *count == 0 {
-                                        counts.remove(&self.ip);
-                                    }
-                                }
-                            }
-                            self.total
-                                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                        }
-                    }
-                    let _guard = ConnectionGuard {
-                        ip: remote_ip,
-                        ip_counts,
-                        total: total_conns,
-                    };
-
-                    match incoming.accept() {
-                        Ok(connecting) => match connecting.await {
-                            Ok(connection) => {
-                                let remote_addr = connection.remote_address();
-
-                                debug!(
-                                    "Accepted connection from {} (RTT: {:?})",
-                                    remote_addr,
-                                    connection.rtt()
-                                );
-
-                                // Cache the incoming connection so we can reuse it for outgoing requests
-                                {
-                                    let mut c = cache.write();
-                                    c.insert(remote_addr, connection.clone());
-                                }
-
-                                if let Err(e) = Self::handle_connection(
-                                    connection,
-                                    remote_addr,
-                                    tx,
-                                    f_tx,
-                                    fs_tx,
-                                    id,
-                                    ks,
-                                )
-                                .await
-                                {
-                                    warn!("Connection handler error: {}", e);
-                                }
-                            }
-
-                            Err(e) => {
-                                warn!("Failed to complete connection: {}", e);
-                            }
-                        },
-
-                        Err(e) => {
-                            warn!("Failed to accept connection: {}", e);
-                        }
-                    }
-                });
-            }
+            Self::accept_loop(
+                endpoint,
+                message_tx,
+                file_stream_tx,
+                fs_stream_tx,
+                local_id,
+                connection_cache,
+                key_store,
+            )
+            .await;
         });
 
         Ok(())
@@ -1296,6 +1449,14 @@ impl QuicTransport {
                 debug!("Closing connection to {}", addr);
                 cached.connection.close(VarInt::from_u32(0), b"shutdown");
             }
+        }
+
+        // Shut down WiFi Aware endpoint if configured
+        let aware_ep = self.aware_endpoint.read().clone();
+        if let Some(aware_ep) = aware_ep {
+            aware_ep.close(VarInt::from_u32(0), b"shutdown");
+            aware_ep.wait_idle().await;
+            info!("WiFi Aware QUIC endpoint shut down");
         }
 
         self.endpoint.close(VarInt::from_u32(0), b"shutdown");

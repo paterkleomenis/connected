@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 #[cfg(target_os = "android")]
 use std::net::Ipv4Addr;
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
@@ -1221,6 +1223,55 @@ pub fn inject_proximity_device(
     })?;
 
     client.inject_proximity_device(device_id, device_name, dtype, ip, port)?;
+    Ok(())
+}
+
+/// Inject a WiFi Aware socket (from Android NAN data path) into the QUIC transport.
+/// The socket is already bound to the WiFi Aware network by the Kotlin layer.
+/// This creates a second QUIC endpoint for IPv6 link-local connections.
+#[uniffi::export]
+#[cfg(unix)]
+pub fn inject_aware_socket(
+    fd: i32,
+    peer_ipv6: String,
+    peer_scope_id: i32,
+    port: u16,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+
+    // Safety: fd is a valid file descriptor from Android's WiFi Aware data path.
+    // from_raw_fd takes ownership; the FD must remain open for the socket's lifetime.
+    let socket = unsafe { std::net::UdpSocket::from_raw_fd(fd) };
+
+    socket
+        .set_nonblocking(true)
+        .map_err(|e| ConnectedFfiError::InvalidArgument {
+            msg: format!("Failed to set non-blocking: {}", e),
+        })?;
+
+    let peer_ipv6 = peer_ipv6
+        .split_once('%')
+        .map(|(addr, _)| addr.to_string())
+        .unwrap_or(peer_ipv6);
+    let ipv6: std::net::Ipv6Addr =
+        peer_ipv6
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IPv6 address".into(),
+            })?;
+
+    let _guard = get_runtime().enter();
+    client.set_aware_endpoint(
+        socket,
+        Some(ipv6),
+        u32::try_from(peer_scope_id).unwrap_or(0),
+    )?;
+
+    info!(
+        "WiFi Aware socket injected, peer: {}%{}:{}",
+        peer_ipv6, peer_scope_id, port
+    );
+
     Ok(())
 }
 

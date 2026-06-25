@@ -7,7 +7,7 @@ use crate::security::KeyStore;
 use crate::transport::{MAX_MESSAGE_SIZE, Message, QuicTransport, UnpairReason};
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -332,10 +332,20 @@ impl ConnectedClient {
         })?;
 
         // 6. Announce Presence
-        client.discovery.announce().map_err(|e| {
-            error!("Failed to announce via mDNS: {}", e);
-            e
-        })?;
+        if let Err(e) = client.discovery.announce() {
+            #[cfg(target_os = "android")]
+            {
+                warn!(
+                    "mDNS announce unavailable on Android; continuing with proximity discovery: {}",
+                    e
+                );
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                error!("Failed to announce via mDNS: {}", e);
+                return Err(e);
+            }
+        }
 
         Ok(client)
     }
@@ -444,6 +454,19 @@ impl ConnectedClient {
             }
         }
 
+        Ok(())
+    }
+
+    /// Set the WiFi Aware endpoint for IPv6 link-local connections.
+    /// This is called from the FFI layer when a WiFi Aware data path is established.
+    pub fn set_aware_endpoint(
+        &self,
+        socket: std::net::UdpSocket,
+        peer_ipv6: Option<Ipv6Addr>,
+        peer_scope_id: u32,
+    ) -> Result<()> {
+        self.transport
+            .set_aware_endpoint(socket, peer_ipv6, peer_scope_id)?;
         Ok(())
     }
 
@@ -2561,27 +2584,43 @@ impl ConnectedClient {
 
         // 1. Discovery Listener
         let (disco_tx, mut disco_rx) = mpsc::unbounded_channel();
-        self.discovery
-            .start_listening(disco_tx)
-            .map_err(|e| ConnectedError::Discovery(e.to_string()))?;
-
-        let event_tx = self.event_tx.clone();
-        tokio::spawn(async move {
-            while let Some(event) = disco_rx.recv().await {
-                match event {
-                    DiscoveryEvent::DeviceFound(d) => {
-                        let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
-                    }
-                    DiscoveryEvent::DeviceLost(id) => {
-                        let _ = event_tx.send(ConnectedEvent::DeviceLost(id));
-                    }
-                    DiscoveryEvent::Error(msg) => {
-                        let _ = event_tx
-                            .send(ConnectedEvent::Error(format!("Discovery error: {}", msg)));
-                    }
+        let discovery_started = match self.discovery.start_listening(disco_tx) {
+            Ok(()) => true,
+            Err(e) => {
+                #[cfg(target_os = "android")]
+                {
+                    warn!(
+                        "mDNS browse unavailable on Android; continuing with proximity discovery: {}",
+                        e
+                    );
+                    false
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    return Err(ConnectedError::Discovery(e.to_string()));
                 }
             }
-        });
+        };
+
+        if discovery_started {
+            let event_tx = self.event_tx.clone();
+            tokio::spawn(async move {
+                while let Some(event) = disco_rx.recv().await {
+                    match event {
+                        DiscoveryEvent::DeviceFound(d) => {
+                            let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
+                        }
+                        DiscoveryEvent::DeviceLost(id) => {
+                            let _ = event_tx.send(ConnectedEvent::DeviceLost(id));
+                        }
+                        DiscoveryEvent::Error(msg) => {
+                            let _ = event_tx
+                                .send(ConnectedEvent::Error(format!("Discovery error: {}", msg)));
+                        }
+                    }
+                }
+            });
+        }
 
         // 2. Transport Listener (Incoming Messages)
         let (msg_tx, mut msg_rx) = mpsc::unbounded_channel();
@@ -3604,20 +3643,7 @@ impl ConnectedClient {
 fn get_local_ip() -> Option<IpAddr> {
     let ifaces = if_addrs::get_if_addrs().ok()?;
 
-    // Filter for IPv4 and non-loopback
-    let ipv4_ifaces: Vec<_> = ifaces
-        .into_iter()
-        .filter(|iface| {
-            !iface.is_loopback()
-                && iface.ip().is_ipv4()
-                && !iface.ip().to_string().starts_with("127.")
-        })
-        .collect();
-
-    // Priority 1: Physical-looking interfaces (wlan, eth, en, wi-fi)
-    // EXCLUDING virtual adapters (vethernet, wsl, virtual, etc.)
-    let priority_names = ["wlan", "eth", "en", "wi-fi", "ethernet"];
-    let virtual_names = [
+    let excluded_names = [
         "vethernet",
         "wsl",
         "virtual",
@@ -3632,7 +3658,34 @@ fn get_local_ip() -> Option<IpAddr> {
         "proton",
         "mullvad",
         "wireguard",
+        "rmnet",
+        "r_rmnet",
+        "rev_rmnet",
+        "ccmni",
+        "dummy",
+        "p2p",
+        "clat",
     ];
+
+    // Filter for IPv4 and non-loopback on interfaces that can actually carry
+    // peer traffic for this app.
+    let ipv4_ifaces: Vec<_> = ifaces
+        .into_iter()
+        .filter(|iface| {
+            let name = iface.name.to_lowercase();
+            !iface.is_loopback()
+                && iface.ip().is_ipv4()
+                && !iface.ip().to_string().starts_with("127.")
+                && !excluded_names
+                    .iter()
+                    .any(|excluded| name.contains(excluded))
+        })
+        .collect();
+
+    // Priority 1: Physical-looking interfaces (wlan, eth, en, wi-fi)
+    // EXCLUDING virtual adapters (vethernet, wsl, virtual, etc.)
+    let priority_names = ["wlan", "eth", "en", "wi-fi", "ethernet"];
+    let virtual_names = excluded_names;
 
     ipv4_ifaces
         .iter()

@@ -1,6 +1,6 @@
 # Connected
 
-**Connected** is a high-speed, offline, cross-platform ecosystem that bridges the gap between your devices. Built with **Rust** and **Jetpack Compose**, it aims to outperform proprietary solutions like AirDrop by utilizing cutting-edge technologies like Wi-Fi Direct DNS-SD for instant discovery and QUIC for saturating data transfer speeds.
+**Connected** is a high-speed, offline, cross-platform ecosystem that bridges the gap between your devices. Built with **Rust** and **Jetpack Compose**, it aims to outperform proprietary solutions like AirDrop by utilizing WiFi Aware on Android, local-network discovery, and QUIC for saturating data transfer speeds.
 
 Currently available for **Linux** (AppImage, AUR, Flatpak), **Mac**, **Windows**, **iOS** and **Android**.
 
@@ -14,9 +14,9 @@ Currently available for **Linux** (AppImage, AUR, Flatpak), **Mac**, **Windows**
 ## Features
 
 - **Cross-Platform**: Seamlessly transfer files, sync clipboards, make and answer calls, send and receive messages, and control media between Android, iOS, Linux, Mac and Windows devices.
-- **Offline Functionality**: You can also use it without an internet connection. Uses Wi-Fi Direct and Local Network.
+- **Offline Functionality**: You can also use it without an internet connection on supported Android devices via WiFi Aware, plus local network discovery when a network is available.
 - **High Speed**: Powered by the QUIC protocol.
-- **Zero Config**: Auto-discovery via mDNS and Wi-Fi Direct DNS-SD.
+- **Zero Config**: Auto-discovery via mDNS and WiFi Aware.
 - **Secure**: End-to-end encryption for all transfers.
 - **Modern UI**: Beautiful, responsive interfaces using Jetpack Compose (Android) and Tailwind CSS (Desktop).
 
@@ -32,7 +32,7 @@ In a world of walled gardens, connecting devices shouldn't be a hassle.
 ### The Connected Advantage
 
 1. **Protocol Superiority**: We use **QUIC** (via `quinn`), the same protocol powering HTTP/3. This ensures lower latency, better congestion control, and faster connection setup compared to the TCP connections used by legacy transfer tools.
-2. **True Offline Freedom**: While many apps require a shared Router/Access Point, **Connected** is designed to leverage **Wi-Fi Direct**. This allows devices to negotiate their own high-speed link anywhere—on a train, in a park, or in an air-gapped office.
+2. **True Offline Freedom**: While many apps require a shared Router/Access Point, **Connected** is designed to leverage **WiFi Aware** on supported Android devices. This allows nearby devices to negotiate their own link anywhere, including on a train, in a park, or in an air-gapped office.
 3. **Rust-Powered Reliability**: The core logic is written in Rust, guaranteeing memory safety, high performance, and a minimal resource footprint. The desktop client is native and blazingly fast, avoiding the bloat of Electron.
 4. **Privacy by Design**: Your data never leaves your local link. End-to-end encryption is mandatory, ensuring your personal files remain personal.
 

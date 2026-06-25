@@ -107,13 +107,12 @@ class ConnectedApp(private val context: Context) {
                     Manifest.permission.NEARBY_WIFI_DEVICES
                 ) != PackageManager.PERMISSION_GRANTED
             ) return false
-        } else {
-            if (ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.ACCESS_FINE_LOCATION
-                ) != PackageManager.PERMISSION_GRANTED
-            ) return false
         }
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return false
         return true
     }
 
@@ -143,6 +142,7 @@ class ConnectedApp(private val context: Context) {
         const val EXTRA_DEVICE_ID = "deviceId"
         const val EXTRA_COMPLETED_FILE_URI = "completedFileUri"
         const val EXTRA_COMPLETED_FILE_MIME = "completedFileMime"
+        private const val WIFI_AWARE_ENDPOINT_HOLD_MS = 60_000L
 
         @Volatile
         @android.annotation.SuppressLint("StaticFieldLeak")
@@ -165,6 +165,7 @@ class ConnectedApp(private val context: Context) {
 
     private val pendingPairingAwaitingIp = mutableSetOf<String>()
     private val locallyUnpairedDevices = mutableSetOf<String>()
+    private val activeWifiAwareEndpoints = ConcurrentHashMap<String, Long>()
 
     // Stores pending file transfers with timestamp for cleanup: deviceId -> (timestamp, queue of file paths)
     private val pendingFileTransfersAwaitingIp =
@@ -332,7 +333,7 @@ class ConnectedApp(private val context: Context) {
 
     // Network State
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
-    private var proximityManager: ProximityManager? = null
+    private var wifiAwareManager: ConnectedWifiAwareManager? = null
 
     private val _prefsName = "ConnectedPrefs"
     private val _prefRootUri = "root_uri"
@@ -398,7 +399,7 @@ class ConnectedApp(private val context: Context) {
                     when (state) {
                         android.net.wifi.WifiManager.WIFI_STATE_DISABLED -> {
                             Log.d("ConnectedApp", "Wi-Fi turned off - clearing device cache")
-                            // Keep manager instance; it resumes when Wi-Fi Direct returns
+                            // Keep manager instance; it resumes when WiFi Aware returns
                             runOnMainThread {
                                 devices.clear()
                                 trustedDevices.clear()
@@ -491,9 +492,14 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    fun startProximityManager() {
-        if (proximityManager != null) return
-        proximityManager = ProximityManager(context).also { manager ->
+    fun startWifiAwareManager() {
+        if (wifiAwareManager != null) return
+        if (!ConnectedWifiAwareManager.isSupported(context)) {
+            Log.d("ConnectedApp", "WiFi Aware service not supported on this device")
+            return
+        }
+        Log.d("ConnectedApp", "WiFi Aware supported, using NAN for proximity")
+        wifiAwareManager = ConnectedWifiAwareManager(context).also { manager ->
             manager.onPairingIntent = { deviceId ->
                 if (!pendingPairing.contains(deviceId)) {
                     try {
@@ -511,35 +517,64 @@ class ConnectedApp(private val context: Context) {
                     }
                 }
             }
-            manager.onWifiDirectConnected = { peerId, ip, port ->
-                if (pendingPairingAwaitingIp.remove(peerId) || pendingPairing.contains(peerId)) {
-                    val device = devices.find { it.id == peerId }
-                    if (device != null) {
-                        val updated = DiscoveredDevice(device.id, device.name, ip, port.toUShort(), device.deviceType)
-                        devices[devices.indexOfFirst { it.id == peerId }] = updated
-                        sendPairRequest(updated)
-                    }
-                }
+            manager.onAwareConnected = { peerId, ipv6, port ->
+                handleWifiAwareConnected(peerId, ipv6, port)
+            }
+            manager.onAwareLost = { peerId ->
+                handleWifiAwareLost(peerId)
             }
             if (hasProximityPermissions()) {
                 try {
                     manager.start()
                 } catch (e: SecurityException) {
-                    Log.w("ConnectedApp", "Failed to start proximity manager: permission denied", e)
+                    Log.w("ConnectedApp", "Failed to start WiFi Aware manager: permission denied", e)
                 }
             }
         }
     }
 
-    fun stopProximityManager() {
-        if (hasProximityPermissions()) {
-            try {
-                proximityManager?.stop()
-            } catch (e: SecurityException) {
-                Log.w("ConnectedApp", "Failed to stop proximity manager: permission denied", e)
+    private fun handleWifiAwareConnected(peerId: String, ip: String, port: Int) {
+        rememberWifiAwareEndpoint(peerId, ip)
+        if (pendingPairingAwaitingIp.remove(peerId) || pendingPairing.contains(peerId)) {
+            val index = devices.indexOfFirst { it.id == peerId }
+            if (index >= 0) {
+                val device = devices[index]
+                val updated = DiscoveredDevice(device.id, device.name, ip, port.toUShort(), device.deviceType)
+                devices[index] = updated
+                sendPairRequest(updated)
             }
         }
-        proximityManager = null
+    }
+
+    private fun handleWifiAwareLost(peerId: String) {
+        activeWifiAwareEndpoints.remove(peerId)
+        pendingPairingAwaitingIp.remove(peerId)
+        runOnMainThread {
+            val index = devices.indexOfFirst { it.id == peerId }
+            if (index >= 0) {
+                val device = devices[index]
+                if (isWifiAwareIp(device.ip)) {
+                    devices[index] = DiscoveredDevice(
+                        device.id,
+                        device.name,
+                        "0.0.0.0",
+                        0u,
+                        device.deviceType
+                    )
+                }
+            }
+        }
+    }
+
+    fun stopWifiAwareManager() {
+        if (hasProximityPermissions()) {
+            try {
+                wifiAwareManager?.stop()
+            } catch (e: SecurityException) {
+                Log.w("ConnectedApp", "Failed to stop WiFi Aware manager: permission denied", e)
+            }
+        }
+        wifiAwareManager = null
     }
 
     private val discoveryCallback = object : DiscoveryCallback {
@@ -552,7 +587,20 @@ class ConnectedApp(private val context: Context) {
 
                 if (existingIndex >= 0) {
 
-                    devices[existingIndex] = device
+                    val existing = devices[existingIndex]
+                    if (shouldKeepWifiAwareEndpoint(existing, device)) {
+                        Log.d(
+                            "ConnectedApp",
+                            "Keeping active WiFi Aware endpoint for ${device.id}: ${existing.ip}:${existing.port}, ignoring ${device.ip}:${device.port}"
+                        )
+                        devices[existingIndex] = existing.copy(
+                            name = device.name,
+                            deviceType = device.deviceType
+                        )
+                    } else {
+                        if (isWifiAwareIp(device.ip)) rememberWifiAwareEndpoint(device.id, device.ip)
+                        devices[existingIndex] = device
+                    }
 
                 } else {
 
@@ -560,6 +608,7 @@ class ConnectedApp(private val context: Context) {
 
                     if (staleIndex >= 0) devices.removeAt(staleIndex)
 
+                    if (isWifiAwareIp(device.ip)) rememberWifiAwareEndpoint(device.id, device.ip)
                     devices.add(device)
 
                 }
@@ -641,6 +690,7 @@ class ConnectedApp(private val context: Context) {
                 trustedDevices.remove(deviceId)
 
                 pendingPairingAwaitingIp.remove(deviceId)
+                activeWifiAwareEndpoints.remove(deviceId)
 
                 pendingFileTransfersAwaitingIp.remove(deviceId)
 
@@ -1085,6 +1135,7 @@ class ConnectedApp(private val context: Context) {
             runOnMainThread {
                 pendingPairing.remove(deviceId)
                 pendingPairingAwaitingIp.remove(deviceId)
+                activeWifiAwareEndpoints.remove(deviceId)
                 if (pairingRequest.value?.deviceId == deviceId) {
                     pairingRequest.value = null
                 }
@@ -1102,6 +1153,7 @@ class ConnectedApp(private val context: Context) {
         override fun onDeviceUnpaired(deviceId: String, deviceName: String, reason: String) {
             runOnMainThread {
                 trustedDevices.remove(deviceId)
+                activeWifiAwareEndpoints.remove(deviceId)
                 val reasonText = when (reason) {
                     "blocked" -> "blocked you"
                     "forgotten" -> "forgot you"
@@ -1155,7 +1207,7 @@ class ConnectedApp(private val context: Context) {
                 registerTelephonyCallback(telephonyCallback)
             }
 
-            startProximityManager()
+            startWifiAwareManager()
 
             // Clean up any orphaned temp files from previous crashes/force-stops
             // This runs early to free disk space immediately on app start
@@ -1250,8 +1302,8 @@ class ConnectedApp(private val context: Context) {
         // Stop clipboard sync job
         stopClipboardSync()
 
-        // Stop proximity manager (Wi-Fi Direct)
-        stopProximityManager()
+        // Stop WiFi Aware manager
+        stopWifiAwareManager()
 
         // Clear thumbnail cache to free memory
         clearThumbnailCache()
@@ -1904,6 +1956,31 @@ class ConnectedApp(private val context: Context) {
 
     fun isSyntheticIp(ip: String) = ip == "0.0.0.0" || ip.startsWith("198.18.")
 
+    private fun isWifiAwareIp(ip: String) = ip.startsWith("fe80:", ignoreCase = true)
+
+    private fun rememberWifiAwareEndpoint(deviceId: String, ip: String) {
+        if (isWifiAwareIp(ip)) {
+            activeWifiAwareEndpoints[deviceId] =
+                System.currentTimeMillis() + WIFI_AWARE_ENDPOINT_HOLD_MS
+        }
+    }
+
+    private fun shouldKeepWifiAwareEndpoint(
+        existing: DiscoveredDevice,
+        incoming: DiscoveredDevice
+    ): Boolean {
+        if (!isWifiAwareIp(existing.ip) || isWifiAwareIp(incoming.ip)) return false
+
+        val expiresAt = activeWifiAwareEndpoints[existing.id] ?: return false
+        val now = System.currentTimeMillis()
+        if (expiresAt <= now) {
+            activeWifiAwareEndpoints.remove(existing.id)
+            return false
+        }
+
+        return true
+    }
+
     fun copyDocumentFileToLocal(source: androidx.documentfile.provider.DocumentFile, dest: File): Boolean {
         if (source.isDirectory) {
             if (!dest.exists() && !dest.mkdirs()) return false
@@ -1925,7 +2002,11 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun sendPairRequest(device: DiscoveredDevice) {
-        if (isSyntheticIp(device.ip)) {
+        val needsAwareConnect =
+            isSyntheticIp(device.ip) ||
+                (isWifiAwareIp(device.ip) && wifiAwareManager?.isConnected(device.id) != true)
+
+        if (needsAwareConnect) {
             try {
                 setPairingModePersistent(true)
             } catch (e: Exception) {
@@ -1935,14 +2016,20 @@ class ConnectedApp(private val context: Context) {
             if (!pendingPairing.contains(device.id)) pendingPairing.add(device.id)
             if (hasProximityPermissions()) {
                 try {
-                    proximityManager?.requestConnect(device.id)
+                    if (isWifiAwareIp(device.ip)) {
+                        Log.d(
+                            "ConnectedApp",
+                            "WiFi Aware endpoint for ${device.id} is stale; reconnecting before pairing"
+                        )
+                    }
+                    wifiAwareManager?.requestConnect(device.id)
                 } catch (e: SecurityException) {
                     Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
                 }
             }
             runOnMainThread {
                 android.widget.Toast
-                    .makeText(context, "Waiting for Wi-Fi Direct connection...", android.widget.Toast.LENGTH_SHORT)
+                    .makeText(context, "Waiting for nearby connection...", android.widget.Toast.LENGTH_SHORT)
                     .show()
             }
             return
@@ -1955,6 +2042,7 @@ class ConnectedApp(private val context: Context) {
     fun cancelPairing(device: DiscoveredDevice) {
         pendingPairing.remove(device.id)
         pendingPairingAwaitingIp.remove(device.id)
+        activeWifiAwareEndpoints.remove(device.id)
         if (pairingRequest.value?.deviceId == device.id) {
             pairingRequest.value = null
         }
@@ -2135,7 +2223,7 @@ class ConnectedApp(private val context: Context) {
 
                     if (hasProximityPermissions()) {
                         try {
-                            proximityManager?.requestConnect(device.id)
+                            wifiAwareManager?.requestConnect(device.id)
                         } catch (e: SecurityException) {
                             Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
                         }
@@ -3230,7 +3318,7 @@ class ConnectedApp(private val context: Context) {
 
                         if (hasProximityPermissions()) {
                             try {
-                                proximityManager?.requestConnect(device.id)
+                                wifiAwareManager?.requestConnect(device.id)
                             } catch (e: SecurityException) {
                                 Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
                             }
@@ -3244,7 +3332,7 @@ class ConnectedApp(private val context: Context) {
 
                                     context,
 
-                                    "Waiting for Wi-Fi Direct connection...",
+                                    "Waiting for nearby connection...",
 
                                     android.widget.Toast.LENGTH_SHORT
 
@@ -3396,6 +3484,8 @@ class ConnectedApp(private val context: Context) {
             locallyUnpairedDevices.add(device.id)
             trustedDevices.remove(device.id)
             pendingPairing.remove(device.id)
+            pendingPairingAwaitingIp.remove(device.id)
+            activeWifiAwareEndpoints.remove(device.id)
             try {
                 unpairDeviceById(device.id)
                 runOnMainThread {
@@ -3418,6 +3508,8 @@ class ConnectedApp(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             trustedDevices.remove(device.id)
             pendingPairing.remove(device.id)
+            pendingPairingAwaitingIp.remove(device.id)
+            activeWifiAwareEndpoints.remove(device.id)
             try {
                 forgetDeviceById(device.id)
                 runOnMainThread {

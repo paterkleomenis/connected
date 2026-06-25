@@ -127,6 +127,12 @@ impl DiscoveryService {
     /// Disable virtual network interfaces that commonly interfere with mDNS discovery.
     /// These include VMware, VirtualBox, Hyper-V, WSL, Docker, and other virtualization adapters.
     fn disable_virtual_interfaces(daemon: &ServiceDaemon) {
+        fn disable_interface_name(daemon: &ServiceDaemon, name: &str) {
+            if let Err(e) = daemon.disable_interface(IfKind::Name(name.to_string())) {
+                trace!("Could not disable interface '{}': {}", name, e);
+            }
+        }
+
         // Common virtual interface name patterns to exclude
         let virtual_interface_patterns: &[&str] = &[
             // VMware
@@ -168,7 +174,35 @@ impl DiscoveryService {
             "nordlynx",
             "proton",
             "mullvad",
+            // Android cellular / test / peer-to-peer interfaces. These are not
+            // useful for LAN mDNS and can produce unroutable peer endpoints.
+            "rmnet",
+            "r_rmnet",
+            "ccmni",
+            "rev_rmnet",
+            "dummy",
+            "p2p",
+            "clat",
         ];
+
+        // Register Android interface names up front. Some of these interfaces can
+        // appear after the daemon starts, so relying only on the current if_addrs
+        // snapshot leaves mDNS on unreachable cellular or Wi-Fi Direct adapters.
+        for name in ["dummy0", "p2p0", "p2p-p2p0", "clat4", "v4-rmnet_data0"] {
+            disable_interface_name(daemon, name);
+        }
+        for idx in 0..16 {
+            for prefix in [
+                "rmnet_data",
+                "r_rmnet_data",
+                "rev_rmnet_data",
+                "ccmni",
+                "ccmni_data",
+                "v4-rmnet_data",
+            ] {
+                disable_interface_name(daemon, &format!("{}{}", prefix, idx));
+            }
+        }
 
         // Enumerate real OS interfaces and disable any whose name matches a
         // virtual-interface pattern (case-insensitive substring).
@@ -730,6 +764,138 @@ impl DiscoveryService {
         }
     }
 
+    fn is_blocked_discovery_interface(name: &str) -> bool {
+        let name = name.to_ascii_lowercase();
+        let blocked_prefixes = [
+            "lo",
+            "rmnet",
+            "r_rmnet",
+            "ccmni",
+            "rev_rmnet",
+            "dummy",
+            "p2p",
+            "clat",
+            "tun",
+            "tap",
+            "utun",
+            "wg",
+            "ipsec",
+            "vmnet",
+            "vbox",
+            "docker",
+            "br-",
+            "veth",
+        ];
+
+        blocked_prefixes
+            .iter()
+            .any(|prefix| name == *prefix || name.starts_with(prefix))
+    }
+
+    fn interface_preference_score(name: &str) -> i32 {
+        let name = name.to_ascii_lowercase();
+
+        if name.starts_with("aware") {
+            80
+        } else if name.starts_with("wlan")
+            || name.contains("wi-fi")
+            || name.contains("wifi")
+            || name.starts_with("wl")
+        {
+            70
+        } else if name.starts_with("eth") || name.starts_with("en") {
+            60
+        } else {
+            20
+        }
+    }
+
+    fn scoped_interface_names(scoped_ip: &ScopedIp) -> Vec<&str> {
+        match scoped_ip {
+            ScopedIp::V4(v4) => v4
+                .interface_ids()
+                .iter()
+                .map(|id| id.name.as_str())
+                .collect(),
+            ScopedIp::V6(v6) => vec![v6.scope_id().name.as_str()],
+            _ => Vec::new(),
+        }
+    }
+
+    fn score_scoped_ip(scoped_ip: &ScopedIp) -> Option<(IpAddr, i32, String)> {
+        let ip = scoped_ip.to_ip_addr();
+        let interface_names = Self::scoped_interface_names(scoped_ip);
+
+        if interface_names
+            .iter()
+            .any(|name| Self::is_blocked_discovery_interface(name))
+        {
+            return None;
+        }
+
+        let interface_score = interface_names
+            .iter()
+            .map(|name| Self::interface_preference_score(name))
+            .max()
+            .unwrap_or(10);
+
+        let ip_score = match ip {
+            IpAddr::V4(v4) => {
+                if v4.is_unspecified() || v4.is_loopback() || v4.is_link_local() {
+                    return None;
+                }
+                100
+            }
+            IpAddr::V6(v6) => {
+                if v6.is_unspecified() || v6.is_loopback() || v6.is_multicast() {
+                    return None;
+                }
+
+                if v6.is_unicast_link_local() {
+                    if interface_names
+                        .iter()
+                        .any(|name| name.to_ascii_lowercase().starts_with("aware"))
+                    {
+                        90
+                    } else {
+                        return None;
+                    }
+                } else {
+                    80
+                }
+            }
+        };
+
+        let interfaces = if interface_names.is_empty() {
+            "unknown".to_string()
+        } else {
+            interface_names.join(",")
+        };
+
+        Some((ip, ip_score + interface_score, interfaces))
+    }
+
+    fn select_best_scoped_ip(addresses: &std::collections::HashSet<ScopedIp>) -> Option<IpAddr> {
+        let mut candidates: Vec<(IpAddr, i32, String)> =
+            addresses.iter().filter_map(Self::score_scoped_ip).collect();
+
+        candidates.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| a.0.to_string().cmp(&b.0.to_string()))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+
+        if let Some((ip, score, interfaces)) = candidates.first() {
+            debug!(
+                "Selected discovery address {} from interfaces [{}] with score {}",
+                ip, interfaces, score
+            );
+            Some(*ip)
+        } else {
+            None
+        }
+    }
+
     fn handle_service_resolved(
         info: &ResolvedService,
         local_id: &str,
@@ -837,31 +1003,13 @@ impl DiscoveryService {
             .map(|v| v.val_str().parse().unwrap_or(DeviceType::Unknown))
             .unwrap_or(DeviceType::Unknown);
 
-        // Get best IP address (prefer IPv4 for compatibility)
-        // In mdns-sd 0.17, addresses are ScopedIp which contains the IpAddr
-        let ip = info
-            .addresses
-            .iter()
-            .find(|scoped_ip| scoped_ip.is_ipv4())
-            .map(|scoped_ip| scoped_ip.to_ip_addr())
-            .or_else(|| {
-                info.addresses
-                    .iter()
-                    .find(|scoped_ip| match scoped_ip {
-                        ScopedIp::V6(v6) => !v6.addr().is_unicast_link_local(),
-                        _ => false,
-                    })
-                    .map(|scoped_ip| scoped_ip.to_ip_addr())
-            })
-            .or_else(|| {
-                info.addresses
-                    .iter()
-                    .find(|scoped_ip| scoped_ip.is_ipv6())
-                    .map(|scoped_ip| scoped_ip.to_ip_addr())
-            });
+        let ip = Self::select_best_scoped_ip(&info.addresses);
 
         let Some(ip) = ip else {
-            warn!("No IP address found for device: {}", device_name);
+            warn!(
+                "No supported IP address found for device {} from {:?}",
+                device_name, info.addresses
+            );
             return;
         };
 
