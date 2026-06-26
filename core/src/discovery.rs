@@ -24,6 +24,7 @@ const MIN_COMPATIBLE_VERSION: u32 = 1;
 pub(crate) enum DiscoverySource {
     Connected,
     Discovered,
+    AirDrop,
 }
 
 #[derive(Clone)]
@@ -37,6 +38,7 @@ struct TrackedEndpoint {
 struct TrackedDevice {
     connected: Option<TrackedEndpoint>,
     discovered: Option<TrackedEndpoint>,
+    airdrop: Option<TrackedEndpoint>,
 }
 
 impl TrackedDevice {
@@ -45,6 +47,8 @@ impl TrackedDevice {
             Some(DiscoverySource::Connected)
         } else if self.discovered.is_some() {
             Some(DiscoverySource::Discovered)
+        } else if self.airdrop.is_some() {
+            Some(DiscoverySource::AirDrop)
         } else {
             None
         }
@@ -54,6 +58,7 @@ impl TrackedDevice {
         self.connected
             .as_ref()
             .or(self.discovered.as_ref())
+            .or(self.airdrop.as_ref())
             .map(|endpoint| endpoint.device.clone())
     }
 }
@@ -594,6 +599,19 @@ impl DiscoveryService {
                         discovered.device.device_type = device.device_type;
                     }
                 }
+
+                // Keep airdrop metadata in sync too.
+                if let Some(airdrop) = tracked.airdrop.as_mut() {
+                    if airdrop.device.name != device.name {
+                        airdrop.device.name = device.name.clone();
+                    }
+
+                    if device.device_type != DeviceType::Unknown
+                        && airdrop.device.device_type == DeviceType::Unknown
+                    {
+                        airdrop.device.device_type = device.device_type;
+                    }
+                }
             }
             DiscoverySource::Discovered => {
                 // If we already have a discovered endpoint with a valid IP,
@@ -641,6 +659,66 @@ impl DiscoveryService {
                         connected.device.device_type = device.device_type;
                     }
                 }
+
+                // Keep airdrop metadata in sync.
+                if let Some(airdrop) = tracked.airdrop.as_mut() {
+                    if airdrop.device.name != device.name {
+                        airdrop.device.name = device.name.clone();
+                    }
+
+                    if device.device_type != DeviceType::Unknown
+                        && airdrop.device.device_type == DeviceType::Unknown
+                    {
+                        airdrop.device.device_type = device.device_type;
+                    }
+                }
+            }
+            DiscoverySource::AirDrop => {
+                // AirDrop endpoint: similar logic to Discovered but for Apple devices
+                // found via _airdrop._tcp mDNS.
+                if let Some(existing) = tracked.airdrop.as_mut() {
+                    let new_is_unspecified = device.ip == "0.0.0.0" || device.ip == "::";
+                    let existing_is_valid =
+                        existing.device.ip != "0.0.0.0" && existing.device.ip != "::";
+
+                    if new_is_unspecified && existing_is_valid {
+                        existing.last_seen = Instant::now();
+                        if existing.device.name != device.name {
+                            existing.device.name = device.name.clone();
+                        }
+                        if existing.device.device_type == DeviceType::Unknown
+                            && device.device_type != DeviceType::Unknown
+                        {
+                            existing.device.device_type = device.device_type;
+                        }
+                    } else {
+                        *existing = endpoint;
+                    }
+                } else {
+                    tracked.airdrop = Some(endpoint);
+                }
+
+                // Sync metadata with other sources
+                if let Some(connected) = tracked.connected.as_mut() {
+                    if connected.device.name != device.name {
+                        connected.device.name = device.name.clone();
+                    }
+                    if device.device_type != DeviceType::Unknown
+                        && connected.device.device_type == DeviceType::Unknown
+                    {
+                        connected.device.device_type = device.device_type;
+                    }
+                }
+                if let Some(discovered) = tracked.discovered.as_mut() {
+                    if discovered.device.name != device.name {
+                        discovered.device.name = device.name.clone();
+                    }
+                    if device.device_type != DeviceType::Unknown
+                        && discovered.device.device_type == DeviceType::Unknown
+                    {
+                        discovered.device.device_type = device.device_type;
+                    }
+                }
             }
         }
 
@@ -663,12 +741,16 @@ impl DiscoveryService {
         match source {
             DiscoverySource::Connected => tracked.connected = None,
             DiscoverySource::Discovered => tracked.discovered = None,
+            DiscoverySource::AirDrop => tracked.airdrop = None,
         }
 
         let new_source = tracked.active_source();
         let new_device = tracked.active_device();
 
-        if tracked.connected.is_none() && tracked.discovered.is_none() {
+        if tracked.connected.is_none()
+            && tracked.discovered.is_none()
+            && tracked.airdrop.is_none()
+        {
             devices.remove(device_id);
         }
 
@@ -702,11 +784,20 @@ impl DiscoveryService {
                 tracked.discovered = None;
             }
 
+            if tracked.airdrop.as_ref().is_some_and(|endpoint| {
+                now.duration_since(endpoint.last_seen) > DEVICE_STALE_TIMEOUT
+            }) {
+                tracked.airdrop = None;
+            }
+
             let new_source = tracked.active_source();
 
             let new_device = tracked.active_device();
 
-            if tracked.connected.is_none() && tracked.discovered.is_none() {
+            if tracked.connected.is_none()
+                && tracked.discovered.is_none()
+                && tracked.airdrop.is_none()
+            {
                 devices.remove(&device_id);
             }
 

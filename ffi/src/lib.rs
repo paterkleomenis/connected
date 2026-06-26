@@ -2427,6 +2427,194 @@ pub fn send_active_call_update(
 }
 
 // ============================================================================
+// AirDrop Support
+// ============================================================================
+
+use connected_core::airdrop::{AirDropClient, AirDropEvent, AirDropServer};
+use tokio::sync::mpsc;
+
+/// AirDrop event data passed to the callback
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AirDropTransferRequest {
+    pub transfer_id: String,
+    pub sender_name: String,
+    pub file_name: String,
+    pub file_size: u64,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AirDropTransferCompleted {
+    pub transfer_id: String,
+    pub file_path: String,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AirDropTransferFailed {
+    pub transfer_id: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AirDropDeviceFound {
+    pub device_id: String,
+    pub device_name: String,
+    pub ip: String,
+    pub port: u16,
+}
+
+#[uniffi::export(callback_interface)]
+pub trait AirDropCallback: Send + Sync {
+    /// Called when an Apple device wants to send a file via AirDrop
+    fn on_transfer_request(&self, request: AirDropTransferRequest);
+    /// Called when an AirDrop file transfer completes
+    fn on_transfer_completed(&self, result: AirDropTransferCompleted);
+    /// Called when an AirDrop file transfer fails
+    fn on_transfer_failed(&self, result: AirDropTransferFailed);
+    /// Called when an AirDrop-capable device is discovered
+    fn on_device_found(&self, device: AirDropDeviceFound);
+    /// Called when an AirDrop device is lost
+    fn on_device_lost(&self, device_id: String);
+    /// Called on AirDrop errors
+    fn on_error(&self, error_msg: String);
+}
+
+static AIRDROP_CALLBACK: RwLock<Option<Box<dyn AirDropCallback>>> = RwLock::new(None);
+static AIRDROP_SERVER: OnceLock<RwLock<Option<AirDropServer>>> = OnceLock::new();
+
+/// Register the AirDrop callback for receiving events
+#[uniffi::export]
+pub fn register_airdrop_callback(callback: Box<dyn AirDropCallback>) {
+    *AIRDROP_CALLBACK.write() = Some(callback);
+    info!("AirDrop callback registered");
+}
+
+/// Start the AirDrop server, making this device discoverable by Apple devices.
+/// Returns the port the server is listening on.
+#[uniffi::export]
+pub fn start_airdrop_server(download_dir: String) -> Result<u16, ConnectedFfiError> {
+    let client = get_client()?;
+    let download_path = PathBuf::from(download_dir);
+
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AirDropEvent>();
+
+    let device = client.local_device();
+    let mut server = AirDropServer::new(device, event_tx.clone(), download_path)
+        .map_err(|e| ConnectedFfiError::ConnectionError { msg: e.to_string() })?;
+
+    let port = get_runtime()
+        .block_on(server.start(0))
+        .map_err(|e| ConnectedFfiError::ConnectionError { msg: e.to_string() })?;
+
+    // Spawn a task to forward AirDrop events to the callback
+    get_runtime().spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            let cb = AIRDROP_CALLBACK.read();
+            if let Some(callback) = cb.as_ref() {
+                match event {
+                    AirDropEvent::IncomingTransferRequest {
+                        transfer_id,
+                        sender_name,
+                        file_name,
+                        file_size,
+                    } => {
+                        callback.on_transfer_request(AirDropTransferRequest {
+                            transfer_id,
+                            sender_name,
+                            file_name,
+                            file_size,
+                        });
+                    }
+                    AirDropEvent::TransferCompleted {
+                        transfer_id,
+                        file_path,
+                    } => {
+                        callback.on_transfer_completed(AirDropTransferCompleted {
+                            transfer_id,
+                            file_path: file_path.to_string_lossy().to_string(),
+                        });
+                    }
+                    AirDropEvent::TransferFailed {
+                        transfer_id,
+                        error,
+                    } => {
+                        callback.on_transfer_failed(AirDropTransferFailed {
+                            transfer_id,
+                            error,
+                        });
+                    }
+                    AirDropEvent::DeviceFound {
+                        device_id,
+                        device_name,
+                        ip,
+                        port,
+                    } => {
+                        callback.on_device_found(AirDropDeviceFound {
+                            device_id,
+                            device_name,
+                            ip: ip.to_string(),
+                            port,
+                        });
+                    }
+                    AirDropEvent::DeviceLost { device_id } => {
+                        callback.on_device_lost(device_id);
+                    }
+                }
+            }
+        }
+    });
+
+    // Store the server (it keeps mDNS alive)
+    AIRDROP_SERVER
+        .get_or_init(|| RwLock::new(None))
+        .write()
+        .replace(server);
+
+    info!("AirDrop server started on port {}", port);
+    Ok(port)
+}
+
+/// Stop the AirDrop server and unregister from mDNS
+#[uniffi::export]
+pub fn stop_airdrop_server() {
+    if let Some(server) = AIRDROP_SERVER
+        .get()
+        .and_then(|s| s.write().take())
+    {
+        server.stop();
+        info!("AirDrop server stopped");
+    }
+    *AIRDROP_CALLBACK.write() = None;
+}
+
+/// Send a file to an Apple device via AirDrop
+#[uniffi::export]
+pub fn send_file_via_airdrop(
+    target_ip: String,
+    target_port: u16,
+    file_path: String,
+    file_name: String,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP address".into(),
+            })?;
+
+    let airdrop_client = AirDropClient::new(client.local_device().name);
+    let target_addr = std::net::SocketAddr::new(ip, target_port);
+    let file_path = PathBuf::from(&file_path);
+
+    get_runtime().block_on(async move {
+        airdrop_client
+            .send_file(target_addr, &file_path, &file_name)
+            .await
+            .map_err(|e| ConnectedFfiError::ConnectionError { msg: e.to_string() })
+    })
+}
+
+// ============================================================================
 // Update Support
 // ============================================================================
 

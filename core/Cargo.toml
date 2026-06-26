@@ -39,3 +39,12 @@ zip = { version = "8.0", default-features = false, features = [
 walkdir = "2.5"
 reqwest = { version = "0.13", features = ["rustls"], default-features = false }
 semver = "1.0"
+
+# AirDrop protocol support
+plist = "1.7"
+cpio = "0.3"
+hyper = { version = "1.6", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy"] }
+http-body-util = "0.1"
+tokio-rustls = "0.26"
+flate2 = "1.1"

@@ -1,5 +1,6 @@
 pub mod ios_paths;
 
+pub mod airdrop;
 pub mod client;
 pub mod device;
 pub mod discovery;
@@ -12,6 +13,7 @@ pub mod telephony;
 pub mod transport;
 pub mod update;
 
+pub use airdrop::{AirDropClient, AirDropEvent, AirDropServer};
 pub use client::ConnectedClient;
 pub use device::{Device, DeviceType};
 pub use discovery::{DiscoveryEvent, DiscoveryService};

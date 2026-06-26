@@ -148,6 +148,8 @@ final class ConnectedAppModel: ObservableObject {
     private let mediaBridge: MediaBridge
     private let telephonyBridge: TelephonyBridge
     private let browserDownloadBridge: BrowserDownloadBridge
+    let airDropManager: AirDropManager
+    private let airDropBridge: AirDropBridge
 #if canImport(UserNotifications)
     private let notificationBridge: ClipboardNotificationBridge
 #endif
@@ -239,6 +241,8 @@ final class ConnectedAppModel: ObservableObject {
         mediaBridge = MediaBridge()
         telephonyBridge = TelephonyBridge()
         browserDownloadBridge = BrowserDownloadBridge()
+        airDropManager = AirDropManager()
+        airDropBridge = AirDropBridge()
 #if canImport(UserNotifications)
         notificationBridge = ClipboardNotificationBridge()
 #endif
@@ -251,6 +255,7 @@ final class ConnectedAppModel: ObservableObject {
         mediaBridge.app = self
         telephonyBridge.app = self
         browserDownloadBridge.app = self
+        airDropBridge.app = self
 #if canImport(UserNotifications)
         notificationBridge.app = self
         UNUserNotificationCenter.current().delegate = notificationBridge
@@ -385,6 +390,7 @@ final class ConnectedAppModel: ObservableObject {
                 registerUnpairCallback(callback: unpair)
                 registerMediaControlCallback(callback: media)
                 registerTelephonyCallback(callback: telephony)
+                registerAirdropCallback(callback: airDropBridge)
                 try setDownloadDirectory(path: downloadPath)
                 try setPairingModePersistent(enabled: pairingMode)
 
@@ -424,6 +430,10 @@ final class ConnectedAppModel: ObservableObject {
                     self.mergeDevices(discovered)
                     self.infoMessage = "Connected core initialized"
                     self.lastErrorMessage = nil
+
+                    // Start AirDrop server to be discoverable by Apple devices
+                    self.airDropManager.startServer()
+
                     if self.isMediaControlEnabled {
                         self.startLocalMediaObserverIfNeeded()
                         self.refreshLocalMediaStateAndBroadcast()
