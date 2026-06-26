@@ -313,58 +313,7 @@ jobs:
           arch: ${{ matrix.arch }}
 
   # -------------------------------------------------------------------------
-  # Job 7: RPM Build (Fedora)
-  # -------------------------------------------------------------------------
-  build-rpm:
-    name: RPM Build (${{ matrix.arch }})
-    needs: [pre-commit, quality, security]
-    if: github.event_name != 'schedule'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-latest
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    container:
-      image: fedora:43
-    steps:
-      - name: Install system dependencies
-        run: |
-          dnf install -y \
-            gcc \
-            gcc-c++ \
-            rust-toolset \
-            cargo \
-            pkg-config \
-            gtk3-devel \
-            webkit2gtk4.1-devel \
-            libappindicator-gtk3-devel \
-            openssl-devel \
-            dbus-devel \
-            rpm-build \
-            rpmdevtools \
-            wget \
-            git
-
-      - uses: actions/checkout@v7
-
-      - name: Build RPM
-        run: |
-          chmod +x packaging/linux/build-rpm.sh
-          packaging/linux/build-rpm.sh --release --arch ${{ matrix.arch }}
-
-      - name: Upload RPM Artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: connected-desktop-${{ matrix.arch }}.rpm
-          path: target/connected-desktop-${{ matrix.arch }}.rpm
-          if-no-files-found: error
-
-  # -------------------------------------------------------------------------
-  # Job 8: Windows Build
+  # Job 7: Windows Build
   # -------------------------------------------------------------------------
   build-windows:
     name: Windows Build (${{ matrix.arch }})

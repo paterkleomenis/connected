@@ -131,58 +131,7 @@ jobs:
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
-  # Job 4: Build RPM (Fedora)
-  # -------------------------------------------------------------------------
-  build-rpm:
-    name: Build RPM (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-latest
-            artifact: connected-desktop-x86_64.rpm
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
-            artifact: connected-desktop-aarch64.rpm
-    runs-on: ${{ matrix.runner }}
-    container:
-      image: fedora:43
-    steps:
-      - name: Install system dependencies
-        run: |
-          dnf install -y \
-            gcc \
-            gcc-c++ \
-            rust-toolset \
-            cargo \
-            pkg-config \
-            gtk3-devel \
-            webkit2gtk4.1-devel \
-            libappindicator-gtk3-devel \
-            openssl-devel \
-            dbus-devel \
-            rpm-build \
-            rpmdevtools \
-            wget \
-            git
-
-      - uses: actions/checkout@v7
-
-      - name: Build RPM
-        run: |
-          chmod +x packaging/linux/build-rpm.sh
-          packaging/linux/build-rpm.sh --release --arch ${{ matrix.arch }}
-
-      - name: Upload RPM Artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.artifact }}
-          path: target/connected-desktop-${{ matrix.arch }}.rpm
-          if-no-files-found: error
-
-  # -------------------------------------------------------------------------
-  # Job 5: Build Windows MSIX per architecture
+  # Job 4: Build Windows MSIX per architecture
   # -------------------------------------------------------------------------
   build-windows:
     name: Build Windows MSIX (${{ matrix.arch }})
@@ -533,7 +482,6 @@ jobs:
         build-linux,
         build-flatpak,
         build-appimage,
-        build-rpm,
         bundle-windows-msix,
         build-macos,
         build-android,
@@ -578,8 +526,6 @@ jobs:
             connected-desktop-x86_64.AppImage.zsync
             connected-desktop-aarch64.AppImage
             connected-desktop-aarch64.AppImage.zsync
-            connected-desktop-x86_64.rpm
-            connected-desktop-aarch64.rpm
             connected-desktop-windows-x64.msix
             connected-desktop-windows-arm64.msix
             connected-android.apk
@@ -635,7 +581,7 @@ jobs:
       - name: Install COPR CLI
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl
+          sudo apt-get install -y curl rpm
           pip3 install copr-cli
 
       - name: Configure COPR credentials

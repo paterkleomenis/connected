@@ -78,6 +78,7 @@ if [ -z "$version" ]; then
 fi
 
 need_cmd curl
+need_cmd rpmbuild
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COPR_CFG="${ROOT_DIR}/packaging/rpm/copr-package.cfg"
@@ -99,11 +100,55 @@ if [ -z "$chroots" ]; then
   chroots="$COPR_CHROOTS"
 fi
 
-# Build for each architecture
+# Create temp directory for SRPM builds
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+# Build SRPM and submit for each architecture
+# Each architecture gets its own SRPM containing the correct binary
 IFS=' ' read -ra ARCH_ARRAY <<< "$ARCHITECTURES"
 for arch in "${ARCH_ARRAY[@]}"; do
   echo ""
-  echo "=== Building for $arch ==="
+  echo "=== Building SRPM for $arch ==="
+
+  # Download the binary from GitHub releases
+  rpm_url="https://github.com/paterkleomenis/connected/releases/download/${version}/connected-desktop-linux-${arch}"
+  binary_file="$TMPDIR/connected-desktop-linux-${arch}"
+
+  echo "Downloading binary from: $rpm_url"
+  curl -fSL "$rpm_url" -o "$binary_file"
+
+  if [ ! -f "$binary_file" ]; then
+    die "Failed to download binary for $arch"
+  fi
+
+  # Create RPM build directory structure for this architecture
+  RPM_DIR="$TMPDIR/rpm-$arch"
+  mkdir -p "$RPM_DIR"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+  # Copy spec file and update version
+  cp "$ROOT_DIR/packaging/rpm/connected-desktop.spec" "$RPM_DIR/SPECS/"
+  sed -i "s/^Version:.*/Version:        $version/" "$RPM_DIR/SPECS/connected-desktop.spec"
+
+  # Copy the binary
+  cp "$binary_file" "$RPM_DIR/SOURCES/connected-desktop-linux-${arch}"
+
+  # Copy source files (Source1-Source4)
+  cp "$ROOT_DIR/packaging/connected-desktop.desktop" "$RPM_DIR/SOURCES/"
+  cp "$ROOT_DIR/packaging/flatpak/com.paterkleomenis.Connected.png" "$RPM_DIR/SOURCES/"
+  cp "$ROOT_DIR/LICENSE-MIT" "$RPM_DIR/SOURCES/"
+  cp "$ROOT_DIR/LICENSE-APACHE" "$RPM_DIR/SOURCES/"
+
+  # Build SRPM
+  rpmbuild -bs \
+    --define "_topdir $RPM_DIR" \
+    --define "_arch $arch" \
+    "$RPM_DIR/SPECS/connected-desktop.spec"
+
+  SRPM=$(find "$RPM_DIR/SRPMS" -name "*.src.rpm" -type f | head -1)
+  [ -n "$SRPM" ] || die "SRPM build failed for $arch"
+
+  echo "SRPM built: $SRPM"
 
   # Filter chroots for this architecture
   arch_chroots=""
@@ -119,17 +164,6 @@ for arch in "${ARCH_ARRAY[@]}"; do
   fi
 
   echo "  Chroots:$arch_chroots"
-
-  # Download the RPM from GitHub release
-  rpm_url="https://github.com/paterkleomenis/connected/releases/download/${version}/connected-desktop-${arch}.rpm"
-  rpm_file="/tmp/connected-desktop-${version}-${arch}.rpm"
-
-  echo "Downloading RPM from: $rpm_url"
-  curl -fSL "$rpm_url" -o "$rpm_file"
-
-  if [ ! -f "$rpm_file" ]; then
-    die "Failed to download RPM for $arch"
-  fi
 
   if [ "$do_push" -eq 1 ]; then
     need_cmd copr-cli
@@ -148,17 +182,14 @@ for arch in "${ARCH_ARRAY[@]}"; do
       --nowait \
       $chroot_args \
       "$COPR_PROJECT" \
-      "$rpm_url"
+      "$SRPM"
 
     echo "Build submitted successfully for $arch"
   else
     echo "Dry run: would submit build to COPR project: $COPR_PROJECT"
-    echo "  RPM URL: $rpm_url"
+    echo "  SRPM: $SRPM"
     echo "  Chroots:$arch_chroots"
   fi
-
-  # Clean up downloaded RPM
-  rm -f "$rpm_file"
 done
 
 echo ""
