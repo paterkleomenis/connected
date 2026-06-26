@@ -349,28 +349,24 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x android/gradlew
-
       - name: Decode Keystore
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
 
-      - name: Build Release APK
-        working-directory: android
-        run: ./gradlew assembleStandaloneRelease
+      - name: Build Release APK and AAB with Gradle
+        uses: burrunan/gradle-cache-action@v3
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-
-      - name: Build Release AAB
-        working-directory: android
-        run: ./gradlew bundlePlayRelease
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        with:
+          job-id: android-release
+          build-root-directory: android
+          read-only: true
+          arguments: |
+            --build-cache
+            assembleStandaloneRelease
+            bundlePlayRelease
 
       - name: Prepare Android APK artifact
         run: cp android/app/build/outputs/apk/standalone/release/app-standalone-release.apk connected-android.apk

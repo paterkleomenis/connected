@@ -559,12 +559,15 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x android/gradlew
-
       - name: Build with Gradle
-        working-directory: android
-        run: ./gradlew assembleStandaloneDebug
+        uses: burrunan/gradle-cache-action@v3
+        with:
+          job-id: android-debug
+          build-root-directory: android
+          #read-only: ${{ github.ref != 'refs/heads/main' }}
+          arguments: |
+            --build-cache
+            assembleStandaloneDebug
 
       - name: Prepare Android artifact
         run: cp android/app/build/outputs/apk/standalone/debug/app-standalone-debug.apk connected-android.apk
