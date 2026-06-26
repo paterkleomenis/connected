@@ -78,7 +78,6 @@ if [ -z "$version" ]; then
 fi
 
 need_cmd curl
-need_cmd copr-cli
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COPR_CFG="${ROOT_DIR}/packaging/rpm/copr-package.cfg"
@@ -86,6 +85,7 @@ COPR_CFG="${ROOT_DIR}/packaging/rpm/copr-package.cfg"
 [ -f "$COPR_CFG" ] || die "COPR config not found at ${COPR_CFG}"
 
 # Source the config
+# shellcheck source=packaging/rpm/copr-package.cfg
 source "$COPR_CFG"
 
 if [ "$version" = "latest" ]; then
@@ -100,59 +100,63 @@ if [ -z "$chroots" ]; then
 fi
 
 # Build for each architecture
-for arch in $ARCHITECTURES; do
+IFS=' ' read -ra ARCH_ARRAY <<< "$ARCHITECTURES"
+for arch in "${ARCH_ARRAY[@]}"; do
   echo ""
   echo "=== Building for $arch ==="
-  
+
+  # Filter chroots for this architecture
+  arch_chroots=""
+  IFS=' ' read -ra CHROOT_ARRAY <<< "$chroots"
+  for chroot in "${CHROOT_ARRAY[@]}"; do
+    case "$chroot" in
+      *"$arch"*) arch_chroots="$arch_chroots $chroot" ;;
+    esac
+  done
+
+  if [ -z "$arch_chroots" ]; then
+    die "No chroots found for architecture: $arch"
+  fi
+
+  echo "  Chroots:$arch_chroots"
+
   # Download the RPM from GitHub release
   rpm_url="https://github.com/paterkleomenis/connected/releases/download/${version}/connected-desktop-${arch}.rpm"
   rpm_file="/tmp/connected-desktop-${version}-${arch}.rpm"
-  
+
   echo "Downloading RPM from: $rpm_url"
   curl -fSL "$rpm_url" -o "$rpm_file"
-  
+
   if [ ! -f "$rpm_file" ]; then
     die "Failed to download RPM for $arch"
   fi
-  
-  echo "Downloaded: $(ls -lh "$rpm_file" | awk '{print $5}')"
-  
-  # Determine chroot for this architecture
-  case "$arch" in
-    x86_64)
-      build_chroot="fedora-43-x86_64"
-      ;;
-    aarch64)
-      build_chroot="fedora-43-aarch64"
-      ;;
-    *)
-      die "Unsupported architecture: $arch"
-      ;;
-  esac
-  
+
   if [ "$do_push" -eq 1 ]; then
+    need_cmd copr-cli
+
     echo "Submitting build to COPR project: $COPR_PROJECT"
-    echo "  Chroot: $build_chroot"
-    
-    # Create a temporary directory for the SRPM-like structure
-    temp_dir=$(mktemp -d)
-    trap "rm -rf $temp_dir" EXIT
-    
-    # For COPR, we can submit a URL to the RPM directly
-    # This tells COPR to build from the GitHub release RPM
+
+    # Build copr-cli --chroot flags
+    chroot_args=""
+    IFS=' ' read -ra FILTERED_CHROOTS <<< "$arch_chroots"
+    for chroot in "${FILTERED_CHROOTS[@]}"; do
+      chroot_args="$chroot_args --chroot $chroot"
+    done
+
+    # shellcheck disable=SC2086
     copr-cli build \
       --nowait \
-      --chroot "$build_chroot" \
+      $chroot_args \
       "$COPR_PROJECT" \
       "$rpm_url"
-    
+
     echo "Build submitted successfully for $arch"
   else
     echo "Dry run: would submit build to COPR project: $COPR_PROJECT"
     echo "  RPM URL: $rpm_url"
-    echo "  Chroot: $build_chroot"
+    echo "  Chroots:$arch_chroots"
   fi
-  
+
   # Clean up downloaded RPM
   rm -f "$rpm_file"
 done
