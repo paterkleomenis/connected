@@ -160,6 +160,11 @@ build-flatpak:
 build-appimage:
     {{ if os_family() == "windows" { "echo ERROR: AppImage builds are only supported on Linux && exit /b 2" } else { "packaging/linux/build-appimage.sh --release" } }}
 
+# Build RPM package (Fedora/RHEL)
+[doc("Build RPM package (Fedora/RHEL only)")]
+build-rpm:
+    {{ if os_family() == "windows" { "echo ERROR: RPM builds are only supported on Linux && exit /b 2" } else { "packaging/linux/build-rpm.sh --release" } }}
+
 # Install pre-commit hooks
 [doc("Install pre-commit hooks")]
 install-hooks:
