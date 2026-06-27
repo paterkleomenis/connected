@@ -373,6 +373,12 @@ final class ConnectedAppModel: ObservableObject {
                     switch error {
                     case .InitializationError:
                         break
+                    case .ConnectionError:
+                        // mDNS/multicast errors are non-fatal on iOS — the
+                        // BonjourPublisher handles publishing via NSNetService,
+                        // and manual IP connection still works.
+                        NSLog("Non-fatal init error (continuing): %@", error.localizedDescription)
+                        break
                     default:
                         throw error
                     }

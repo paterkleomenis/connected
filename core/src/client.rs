@@ -333,14 +333,14 @@ impl ConnectedClient {
 
         // 6. Announce Presence
         if let Err(e) = client.discovery.announce() {
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "ios"))]
             {
                 warn!(
-                    "mDNS announce unavailable on Android; continuing with proximity discovery: {}",
-                    e
+                    "mDNS announce unavailable on {}; continuing without multicast discovery: {}",
+                    std::env::consts::OS, e
                 );
             }
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 error!("Failed to announce via mDNS: {}", e);
                 return Err(e);
@@ -2587,15 +2587,15 @@ impl ConnectedClient {
         let discovery_started = match self.discovery.start_listening(disco_tx) {
             Ok(()) => true,
             Err(e) => {
-                #[cfg(target_os = "android")]
+                #[cfg(any(target_os = "android", target_os = "ios"))]
                 {
                     warn!(
-                        "mDNS browse unavailable on Android; continuing with proximity discovery: {}",
-                        e
+                        "mDNS browse unavailable on {}; continuing without multicast discovery: {}",
+                        std::env::consts::OS, e
                     );
                     false
                 }
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 {
                     return Err(ConnectedError::Discovery(e.to_string()));
                 }
