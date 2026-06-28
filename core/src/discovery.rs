@@ -14,8 +14,9 @@ use tracing::{debug, error, info, trace, warn};
 // QUIC runs over UDP, so we use UDP service type
 const SERVICE_TYPE: &str = "_connected._udp.local.";
 const BROWSE_TIMEOUT: Duration = Duration::from_millis(100);
-const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(45);
+const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(10);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(5);
+const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
 const PROTOCOL_VERSION: u32 = 1;
 const MIN_COMPATIBLE_VERSION: u32 = 1;
 
@@ -286,56 +287,10 @@ impl DiscoveryService {
 
     pub fn announce(&self) -> Result<()> {
         let device = self.local_device_snapshot();
+
+        Self::do_announce(&self.daemon, &device)?;
+
         let instance_name = Self::create_instance_name(&device);
-
-        // Properties for service discovery
-        let mut properties = HashMap::new();
-        properties.insert("id".to_string(), device.id.clone());
-        properties.insert("name".to_string(), device.name.clone());
-        properties.insert("type".to_string(), device.device_type.as_str().to_string());
-        properties.insert("version".to_string(), PROTOCOL_VERSION.to_string());
-
-        let ip: IpAddr = device
-            .ip
-            .parse()
-            .map_err(|_| ConnectedError::InvalidAddress(device.ip.clone()))?;
-
-        if ip.is_unspecified() {
-            warn!("Local IP unspecified; skipping mDNS announce");
-            return Ok(());
-        }
-
-        // Create the hostname - use a unique name for this device
-        let hostname = format!("{}.local.", device.id);
-
-        debug!(
-            "Creating mDNS service: type={}, instance={}, hostname={}, ip={}, port={}",
-            SERVICE_TYPE, instance_name, hostname, ip, device.port
-        );
-
-        let service_info = ServiceInfo::new(
-            SERVICE_TYPE,
-            &instance_name,
-            &hostname,
-            ip,
-            device.port,
-            properties.clone(),
-        )?
-        .enable_addr_auto();
-
-        debug!("Service properties: {:?}", properties);
-
-        if self.announced.load(Ordering::SeqCst) {
-            let old_fullname = self.service_fullname.read().clone();
-            if let Err(e) = self.daemon.unregister(&old_fullname) {
-                debug!(
-                    "Failed to unregister previous mDNS service '{}': {}",
-                    old_fullname, e
-                );
-            }
-        }
-
-        self.daemon.register(service_info)?;
         *self.service_fullname.write() = format!("{}.{}", instance_name, SERVICE_TYPE);
         self.announced.store(true, Ordering::SeqCst);
 
@@ -344,6 +299,46 @@ impl DiscoveryService {
             device.name, device.id, device.ip, device.port, SERVICE_TYPE
         );
 
+        Ok(())
+    }
+
+    fn do_announce(daemon: &ServiceDaemon, device: &Device) -> Result<()> {
+        let instance_name = Self::create_instance_name(device);
+        let hostname = format!("{}.local.", device.id);
+
+        // Properties for service discovery
+        let mut properties = HashMap::new();
+        properties.insert("id".to_string(), device.id.clone());
+        properties.insert("name".to_string(), device.name.clone());
+        properties.insert("type".to_string(), device.device_type.as_str().to_string());
+        properties.insert("version".to_string(), PROTOCOL_VERSION.to_string());
+
+        let mut ip: IpAddr = device
+            .ip
+            .parse()
+            .map_err(|_| ConnectedError::InvalidAddress(device.ip.clone()))?;
+
+        if ip.is_unspecified() {
+            ip = crate::client::get_local_ip()
+                .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+            if ip.is_unspecified() {
+                debug!("Local IP unspecified; skipping mDNS re-announce");
+                return Ok(());
+            }
+            debug!("Resolved local IP for mDNS announce: {}", ip);
+        }
+
+        let service_info = ServiceInfo::new(
+            SERVICE_TYPE,
+            &instance_name,
+            &hostname,
+            ip,
+            device.port,
+            properties,
+        )?
+        .enable_addr_auto();
+
+        daemon.register(service_info)?;
         Ok(())
     }
 
@@ -365,8 +360,18 @@ impl DiscoveryService {
     }
 
     fn spawn_browse_loop(&self, event_tx: mpsc::UnboundedSender<DiscoveryEvent>) -> Result<()> {
-        // Start browsing for services
-        let receiver = self.daemon.browse(SERVICE_TYPE)?;
+        // Start browsing for services. The daemon's command queue may be temporarily
+        // full during startup while it processes interface setup.
+        let receiver = loop {
+            match self.daemon.browse(SERVICE_TYPE) {
+                Ok(r) => break r,
+                Err(mdns_sd::Error::Again) => {
+                    debug!("mDNS browse queue full, retrying in 100ms");
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
         let local_id = self.local_device.id.clone();
         let discovered = self.discovered_devices.clone();
         let running = self.running.clone();
@@ -430,6 +435,37 @@ impl DiscoveryService {
             })?;
 
         self.thread_handles.write().push(cleanup_handle);
+
+        // Periodic re-announcement thread to keep our mDNS service alive.
+        // mdns-sd does not re-announce automatically; after the TTL expires (~120s),
+        // peers forget us. We re-register every REANNOUNCE_INTERVAL.
+        let daemon_clone = self.daemon.clone();
+        let running_reannounce = self.running.clone();
+        let announced_reannounce = self.announced.clone();
+        let local_device_reannounce = self.local_device.clone();
+        let local_name_reannounce = self.local_name.clone();
+
+        let reannounce_handle = std::thread::Builder::new()
+            .name("mdns-reannounce".to_string())
+            .spawn(move || {
+                // Initial delay to avoid redundant re-announce right after announce().
+                std::thread::sleep(REANNOUNCE_INTERVAL / 2);
+
+                while running_reannounce.load(Ordering::SeqCst) {
+                    if announced_reannounce.load(Ordering::SeqCst) {
+                        let mut device = local_device_reannounce.clone();
+                        device.name = local_name_reannounce.read().clone();
+                        match Self::do_announce(&daemon_clone, &device) {
+                            Err(e) => debug!("mDNS re-announce failed: {}", e),
+                            _ => debug!("Re-announced device on mDNS"),
+                        }
+                    }
+                    std::thread::sleep(REANNOUNCE_INTERVAL);
+                }
+                debug!("mDNS re-announce thread stopped");
+            })?;
+
+        self.thread_handles.write().push(reannounce_handle);
 
         Ok(())
     }

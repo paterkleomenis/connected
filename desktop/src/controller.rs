@@ -1497,6 +1497,22 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
             // Spawn event loop
             spawn_event_loop(c.clone(), c.subscribe());
 
+            // Re-fetch any devices discovered during startup.
+            // Between start_listening/browse and spawn_event_loop subscribing,
+            // DeviceFound events hit a broadcast channel with no subscribers and
+            // are silently dropped. Repopulate the store from what the discovery
+            // layer already knows about (matches Android FFI's start_discovery pattern).
+            for d in c.get_discovered_devices() {
+                let mut info: DeviceInfo = d.into();
+                info.is_trusted = c.is_device_trusted(&info.id);
+                if info.is_trusted {
+                    get_pending_pairings().lock_or_recover().remove(&info.id);
+                }
+                get_devices_store()
+                    .lock_or_recover()
+                    .insert(info.id.clone(), info);
+            }
+
             Some(c)
         }
         Err(e) => {

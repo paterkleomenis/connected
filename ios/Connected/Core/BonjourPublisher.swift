@@ -11,8 +11,10 @@ import Foundation
 ///
 /// This runs alongside `BonjourBrowser`, which handles iOS-native browsing.
 ///
-/// A heartbeat timer re-publishes every 60 seconds because iOS's mDNSResponder
-/// can silently drop the service without calling `netServiceDidStop`.
+/// A heartbeat timer re-publishes every 5 seconds to keep the service
+/// visible on the network.  iOS's mDNSResponder can silently drop the
+/// service without calling `netServiceDidStop`, and peers use a stale
+/// timeout to evict unannounced devices.
 ///
 /// - Note: Only one instance should exist at a time; held by `ConnectedAppModel`.
 final class BonjourPublisher: NSObject {
@@ -101,7 +103,7 @@ final class BonjourPublisher: NSObject {
         let name = name
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self.heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 self?.republish(name: name)
             }
         }

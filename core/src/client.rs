@@ -3648,7 +3648,7 @@ impl ConnectedClient {
     }
 }
 
-fn get_local_ip() -> Option<IpAddr> {
+pub fn get_local_ip() -> Option<IpAddr> {
     let ifaces = if_addrs::get_if_addrs().ok()?;
 
     let excluded_names = [
