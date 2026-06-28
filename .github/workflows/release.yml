@@ -109,7 +109,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "linux-build-${{ matrix.arch }}"
+          shared-key: "appimage-build-${{ matrix.arch }}"
 
       - name: Install Linux dependencies
         run: |
