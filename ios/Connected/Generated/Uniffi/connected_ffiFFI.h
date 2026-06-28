@@ -760,6 +760,11 @@ void uniffi_connected_ffi_fn_func_initialize_with_ip(RustBuffer device_name, Rus
 void uniffi_connected_ffi_fn_func_initiate_call(RustBuffer target_ip, uint16_t target_port, RustBuffer number, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_INJECT_AWARE_SOCKET
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_INJECT_AWARE_SOCKET
+void uniffi_connected_ffi_fn_func_inject_aware_socket(int32_t fd, RustBuffer peer_ipv6, int32_t peer_scope_id, uint16_t port, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_INJECT_PROXIMITY_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_INJECT_PROXIMITY_DEVICE
 void uniffi_connected_ffi_fn_func_inject_proximity_device(RustBuffer device_id, RustBuffer device_name, RustBuffer device_type, RustBuffer ip, uint16_t port, RustCallStatus *_Nonnull out_status
@@ -1355,6 +1360,12 @@ uint16_t uniffi_connected_ffi_checksum_func_initialize_with_ip(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INITIATE_CALL
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INITIATE_CALL
 uint16_t uniffi_connected_ffi_checksum_func_initiate_call(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INJECT_AWARE_SOCKET
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INJECT_AWARE_SOCKET
+uint16_t uniffi_connected_ffi_checksum_func_inject_aware_socket(void
 
 );
 #endif

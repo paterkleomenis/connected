@@ -13,7 +13,6 @@ use tracing::{debug, error, info, trace, warn};
 
 // QUIC runs over UDP, so we use UDP service type
 const SERVICE_TYPE: &str = "_connected._udp.local.";
-const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
 const BROWSE_TIMEOUT: Duration = Duration::from_millis(100);
 const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(45);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(5);
@@ -66,6 +65,7 @@ pub struct DiscoveryService {
     running: Arc<AtomicBool>,
     announced: Arc<AtomicBool>,
     service_fullname: Arc<RwLock<String>>,
+    browse_event_tx: RwLock<Option<mpsc::UnboundedSender<DiscoveryEvent>>>,
     thread_handles: RwLock<Vec<JoinHandle<()>>>,
 }
 
@@ -120,6 +120,7 @@ impl DiscoveryService {
             running: Arc::new(AtomicBool::new(false)),
             announced: Arc::new(AtomicBool::new(false)),
             service_fullname: Arc::new(RwLock::new(service_fullname)),
+            browse_event_tx: RwLock::new(None),
             thread_handles: RwLock::new(Vec::new()),
         })
     }
@@ -324,7 +325,16 @@ impl DiscoveryService {
 
         debug!("Service properties: {:?}", properties);
 
-        // Register (will update if already registered)
+        if self.announced.load(Ordering::SeqCst) {
+            let old_fullname = self.service_fullname.read().clone();
+            if let Err(e) = self.daemon.unregister(&old_fullname) {
+                debug!(
+                    "Failed to unregister previous mDNS service '{}': {}",
+                    old_fullname, e
+                );
+            }
+        }
+
         self.daemon.register(service_info)?;
         *self.service_fullname.write() = format!("{}.{}", instance_name, SERVICE_TYPE);
         self.announced.store(true, Ordering::SeqCst);
@@ -338,16 +348,23 @@ impl DiscoveryService {
     }
 
     pub fn start_listening(&self, event_tx: mpsc::UnboundedSender<DiscoveryEvent>) -> Result<()> {
-        // If already running, just re-announce
+        *self.browse_event_tx.write() = Some(event_tx.clone());
+
+        // If already running, restart browse to force a fresh mDNS query.
         if self.running.swap(true, Ordering::SeqCst) {
-            debug!("Discovery already running, re-announcing");
+            debug!("Discovery already running, restarting browse and re-announcing");
+            self.restart_browse()?;
             let _ = self.announce();
             return Ok(());
         }
 
-        // Clear any stale devices from previous sessions
+        // Clear any devices from previous sessions
         self.clear_discovered_devices();
 
+        self.spawn_browse_loop(event_tx)
+    }
+
+    fn spawn_browse_loop(&self, event_tx: mpsc::UnboundedSender<DiscoveryEvent>) -> Result<()> {
         // Start browsing for services
         let receiver = self.daemon.browse(SERVICE_TYPE)?;
         let local_id = self.local_device.id.clone();
@@ -382,36 +399,7 @@ impl DiscoveryService {
                 info!("Discovery listener stopped");
             })?;
 
-        // Periodic re-announcement thread for visibility
-        let daemon = self.daemon.clone();
-        let local_device = self.local_device.clone();
-        let local_name = self.local_name.clone();
-        let running_announce = self.running.clone();
-        let announced = self.announced.clone();
-
-        let announce_handle = std::thread::Builder::new()
-            .name("mdns-announce".to_string())
-            .spawn(move || {
-                // Initial delay before first re-announcement
-                std::thread::sleep(REANNOUNCE_INTERVAL / 2);
-
-                while running_announce.load(Ordering::SeqCst) {
-                    if announced.load(Ordering::SeqCst) {
-                        let mut device = local_device.clone();
-                        device.name = local_name.read().clone();
-                        match Self::do_announce(&daemon, &device) {
-                            Err(e) => {
-                                debug!("Re-announcement failed: {}", e);
-                            }
-                            _ => {
-                                debug!("Re-announced device on mDNS");
-                            }
-                        }
-                    }
-                    std::thread::sleep(REANNOUNCE_INTERVAL);
-                }
-                debug!("Announce thread stopped");
-            })?;
+        self.thread_handles.write().push(discovery_handle);
 
         // Periodic cleanup thread to remove stale devices
         let discovered_cleanup = self.discovered_devices.clone();
@@ -441,49 +429,95 @@ impl DiscoveryService {
                 debug!("Device cleanup thread stopped");
             })?;
 
-        // Store thread handles for proper cleanup
-        {
-            let mut handles = self.thread_handles.write();
-            handles.push(discovery_handle);
-            handles.push(announce_handle);
-            handles.push(cleanup_handle);
+        self.thread_handles.write().push(cleanup_handle);
+
+        Ok(())
+    }
+
+    fn cleanup_stale_endpoints(
+        devices: &mut HashMap<String, TrackedDevice>,
+        now: Instant,
+    ) -> Vec<DiscoveryEvent> {
+        let mut events = Vec::new();
+        let ids: Vec<String> = devices.keys().cloned().collect();
+
+        for device_id in ids {
+            let Some(tracked) = devices.get_mut(&device_id) else {
+                continue;
+            };
+
+            let prev_source = tracked.active_source();
+            let prev_device = tracked.active_device();
+
+            if tracked.connected.as_ref().is_some_and(|endpoint| {
+                now.duration_since(endpoint.last_seen) > DEVICE_STALE_TIMEOUT
+            }) {
+                tracked.connected = None;
+            }
+
+            if tracked.discovered.as_ref().is_some_and(|endpoint| {
+                now.duration_since(endpoint.last_seen) > DEVICE_STALE_TIMEOUT
+            }) {
+                tracked.discovered = None;
+            }
+
+            let new_source = tracked.active_source();
+            let new_device = tracked.active_device();
+
+            if tracked.connected.is_none() && tracked.discovered.is_none() {
+                devices.remove(&device_id);
+            }
+
+            if let Some(event) =
+                Self::transition_event(&device_id, prev_source, prev_device, new_source, new_device)
+            {
+                events.push(event);
+            }
+        }
+
+        events
+    }
+
+    pub fn restart_browse(&self) -> Result<()> {
+        if !self.running.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        let event_tx =
+            self.browse_event_tx.read().clone().ok_or_else(|| {
+                ConnectedError::Discovery("mDNS browse event channel missing".into())
+            })?;
+
+        self.running.store(false, Ordering::SeqCst);
+
+        if let Err(e) = self.daemon.stop_browse(SERVICE_TYPE) {
+            debug!("Failed to stop mDNS browse during refresh: {}", e);
+        }
+
+        self.join_thread_handles("restarting discovery browse");
+
+        self.running.store(true, Ordering::SeqCst);
+        if let Err(e) = self.spawn_browse_loop(event_tx) {
+            self.running.store(false, Ordering::SeqCst);
+            return Err(e);
         }
 
         Ok(())
     }
 
-    fn do_announce(daemon: &ServiceDaemon, device: &Device) -> Result<()> {
-        let instance_name = Self::create_instance_name(device);
-        let hostname = format!("{}.local.", device.id);
+    fn join_thread_handles(&self, context: &str) {
+        let handles: Vec<JoinHandle<()>> = {
+            let mut guard = self.thread_handles.write();
+            std::mem::take(&mut *guard)
+        };
 
-        let mut properties = HashMap::new();
-        properties.insert("id".to_string(), device.id.clone());
-        properties.insert("name".to_string(), device.name.clone());
-        properties.insert("type".to_string(), device.device_type.as_str().to_string());
-        properties.insert("version".to_string(), PROTOCOL_VERSION.to_string());
-
-        let ip: IpAddr = device
-            .ip
-            .parse()
-            .map_err(|_| ConnectedError::InvalidAddress(device.ip.clone()))?;
-
-        if ip.is_unspecified() {
-            debug!("Local IP unspecified; skipping mDNS re-announce");
-            return Ok(());
+        for handle in handles {
+            let thread_name = handle.thread().name().unwrap_or("unnamed").to_string();
+            match handle.join() {
+                Ok(()) => debug!("Thread '{}' joined while {}", thread_name, context),
+                Err(_) => warn!("Thread '{}' panicked while {}", thread_name, context),
+            }
         }
-
-        let service_info = ServiceInfo::new(
-            SERVICE_TYPE,
-            &instance_name,
-            &hostname,
-            ip,
-            device.port,
-            properties,
-        )?
-        .enable_addr_auto();
-
-        daemon.register(service_info)?;
-        Ok(())
     }
 
     pub fn update_local_name(&self, new_name: String) -> Result<()> {
@@ -673,51 +707,6 @@ impl DiscoveryService {
         }
 
         Self::transition_event(device_id, prev_source, prev_device, new_source, new_device)
-    }
-
-    fn cleanup_stale_endpoints(
-        devices: &mut HashMap<String, TrackedDevice>,
-        now: Instant,
-    ) -> Vec<DiscoveryEvent> {
-        let mut events = Vec::new();
-        let ids: Vec<String> = devices.keys().cloned().collect();
-
-        for device_id in ids {
-            let Some(tracked) = devices.get_mut(&device_id) else {
-                continue;
-            };
-
-            let prev_source = tracked.active_source();
-            let prev_device = tracked.active_device();
-
-            if tracked.connected.as_ref().is_some_and(|endpoint| {
-                now.duration_since(endpoint.last_seen) > DEVICE_STALE_TIMEOUT
-            }) {
-                tracked.connected = None;
-            }
-
-            if tracked.discovered.as_ref().is_some_and(|endpoint| {
-                now.duration_since(endpoint.last_seen) > DEVICE_STALE_TIMEOUT
-            }) {
-                tracked.discovered = None;
-            }
-
-            let new_source = tracked.active_source();
-
-            let new_device = tracked.active_device();
-
-            if tracked.connected.is_none() && tracked.discovered.is_none() {
-                devices.remove(&device_id);
-            }
-
-            if let Some(event) =
-                Self::transition_event(&device_id, prev_source, prev_device, new_source, new_device)
-            {
-                events.push(event);
-            }
-        }
-
-        events
     }
 
     fn handle_event(
@@ -1150,19 +1139,8 @@ impl DiscoveryService {
             debug!("Failed to unregister mDNS service: {}", e);
         }
 
-        // Wait for threads to finish with timeout
-        let handles: Vec<JoinHandle<()>> = {
-            let mut guard = self.thread_handles.write();
-            std::mem::take(&mut *guard)
-        };
-
-        for handle in handles {
-            let thread_name = handle.thread().name().unwrap_or("unnamed").to_string();
-            match handle.join() {
-                Ok(()) => debug!("Thread '{}' joined successfully", thread_name),
-                Err(_) => warn!("Thread '{}' panicked during shutdown", thread_name),
-            }
-        }
+        self.join_thread_handles("shutting down discovery");
+        *self.browse_event_tx.write() = None;
 
         // Give time for goodbye packets
         std::thread::sleep(Duration::from_millis(50));

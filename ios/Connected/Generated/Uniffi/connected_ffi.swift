@@ -457,6 +457,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt32: FfiConverterPrimitive {
+    typealias FfiType = Int32
+    typealias SwiftType = Int32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int32, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
     typealias FfiType = UInt64
     typealias SwiftType = UInt64
@@ -4782,6 +4798,20 @@ public func initiateCall(targetIp: String, targetPort: UInt16, number: String)th
     )
 }
 }
+/**
+ * Inject a WiFi Aware socket (from Android NAN data path) into the QUIC transport.
+ * The socket is already bound to the WiFi Aware network by the Kotlin layer.
+ * This creates a second QUIC endpoint for IPv6 link-local connections.
+ */
+public func injectAwareSocket(fd: Int32, peerIpv6: String, peerScopeId: Int32, port: UInt16)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+    uniffi_connected_ffi_fn_func_inject_aware_socket(
+        FfiConverterInt32.lower(fd),
+        FfiConverterString.lower(peerIpv6),
+        FfiConverterInt32.lower(peerScopeId),
+        FfiConverterUInt16.lower(port),$0
+    )
+}
+}
 public func injectProximityDevice(deviceId: String, deviceName: String, deviceType: String, ip: String, port: UInt16)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
     uniffi_connected_ffi_fn_func_inject_proximity_device(
         FfiConverterString.lower(deviceId),
@@ -5214,6 +5244,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_initiate_call() != 860) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_connected_ffi_checksum_func_inject_aware_socket() != 602) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_inject_proximity_device() != 11923) {

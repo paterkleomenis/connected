@@ -337,7 +337,8 @@ impl ConnectedClient {
             {
                 warn!(
                     "mDNS announce unavailable on {}; continuing without multicast discovery: {}",
-                    std::env::consts::OS, e
+                    std::env::consts::OS,
+                    e
                 );
             }
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -368,9 +369,8 @@ impl ConnectedClient {
         let _ = self.discovery.clear_discovered_devices();
     }
 
-    /// Lightweight discovery refresh: clears the stale device list and
-    /// re-announces ourselves on mDNS so that nearby peers re-discover us
-    /// (and the running browse loop re-discovers them).
+    /// Lightweight discovery refresh: clears the local device list, restarts
+    /// the mDNS browse query, and re-announces ourselves once.
     pub fn rename_local_device(&self, new_name: String) -> Result<()> {
         let trimmed_name = new_name.trim();
         if trimmed_name.is_empty() {
@@ -411,10 +411,17 @@ impl ConnectedClient {
     }
 
     pub fn refresh_discovery(&self) {
-        info!("Refreshing discovery — clearing stale devices and re-announcing");
+        info!("Refreshing discovery — clearing devices, restarting browse, and re-announcing");
         let removed_ids = self.discovery.clear_discovered_devices();
         for id in removed_ids {
             let _ = self.event_tx.send(ConnectedEvent::DeviceLost(id));
+        }
+
+        if let Err(e) = self.discovery.restart_browse() {
+            warn!(
+                "Failed to restart mDNS browse during discovery refresh: {}",
+                e
+            );
         }
 
         if let Err(e) = self.discovery.announce() {
@@ -2591,7 +2598,8 @@ impl ConnectedClient {
                 {
                     warn!(
                         "mDNS browse unavailable on {}; continuing without multicast discovery: {}",
-                        std::env::consts::OS, e
+                        std::env::consts::OS,
+                        e
                     );
                     false
                 }

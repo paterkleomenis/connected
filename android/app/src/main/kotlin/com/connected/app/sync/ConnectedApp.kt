@@ -49,6 +49,7 @@ import uniffi.connected_ffi.acceptFileTransfer
 import uniffi.connected_ffi.cancelPairingRequest
 import uniffi.connected_ffi.forgetDeviceById
 import uniffi.connected_ffi.getDiscoveredDevices
+import uniffi.connected_ffi.getLocalDevice
 import uniffi.connected_ffi.initialize
 import uniffi.connected_ffi.isDeviceTrusted
 import uniffi.connected_ffi.notifyNewSms
@@ -448,7 +449,7 @@ class ConnectedApp(private val context: Context) {
         initialize()
     }
 
-    /** Lightweight discovery refresh: clears stale devices and re-announces on mDNS. */
+    /** Lightweight discovery refresh: clears cached devices, restarts mDNS browse, and re-announces. */
     fun refreshDeviceDiscovery() {
         // Clear UI list immediately so the user sees the refresh
         runOnMainThread {
@@ -508,6 +509,14 @@ class ConnectedApp(private val context: Context) {
             ).show()
         }
     }
+
+    private fun localDeviceOrNull(): DiscoveredDevice? =
+        try {
+            getLocalDevice()
+        } catch (e: Exception) {
+            Log.w("ConnectedApp", "Local device is not available yet", e)
+            null
+        }
 
     fun startWifiAwareManager() {
         if (wifiAwareManager != null) return
@@ -2026,9 +2035,26 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun sendPairRequest(device: DiscoveredDevice) {
+        val awareEndpoint = wifiAwareManager?.connectedEndpoint(device.id)
+        val target = if (
+            awareEndpoint != null &&
+                (isSyntheticIp(device.ip) || isWifiAwareIp(device.ip))
+        ) {
+            val (ip, port) = awareEndpoint
+            if (device.ip != ip || device.port.toInt() != port) {
+                Log.d(
+                    "ConnectedApp",
+                    "Using active WiFi Aware endpoint for ${device.id}: [$ip]:$port instead of ${device.ip}:${device.port}"
+                )
+            }
+            DiscoveredDevice(device.id, device.name, ip, port.toUShort(), device.deviceType)
+        } else {
+            device
+        }
+
         val needsAwareConnect =
-            isSyntheticIp(device.ip) ||
-                (isWifiAwareIp(device.ip) && wifiAwareManager?.isConnected(device.id) != true)
+            isSyntheticIp(target.ip) ||
+                (isWifiAwareIp(target.ip) && wifiAwareManager?.isConnected(target.id) != true)
 
         if (needsAwareConnect) {
             if (requiresLocationToggleForProximity() && !isLocationEnabled()) {
@@ -2048,17 +2074,17 @@ class ConnectedApp(private val context: Context) {
             } catch (e: Exception) {
                 Log.w("ConnectedApp", "Failed to enable pairing mode", e)
             }
-            pendingPairingAwaitingIp.add(device.id)
-            if (!pendingPairing.contains(device.id)) pendingPairing.add(device.id)
+            pendingPairingAwaitingIp.add(target.id)
+            if (!pendingPairing.contains(target.id)) pendingPairing.add(target.id)
             if (hasProximityPermissions()) {
                 try {
-                    if (isWifiAwareIp(device.ip)) {
+                    if (isWifiAwareIp(target.ip)) {
                         Log.d(
                             "ConnectedApp",
-                            "WiFi Aware endpoint for ${device.id} is stale; reconnecting before pairing"
+                            "WiFi Aware endpoint for ${target.id} is stale; reconnecting before pairing"
                         )
                     }
-                    wifiAwareManager?.requestConnect(device.id)
+                    wifiAwareManager?.requestConnect(target.id)
                 } catch (e: SecurityException) {
                     Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
                 }
@@ -2070,9 +2096,9 @@ class ConnectedApp(private val context: Context) {
             }
             return
         }
-        pairDevice(device.ip, device.port)
+        pairDevice(target.ip, target.port)
         android.widget.Toast.makeText(context, "Pairing request sent", android.widget.Toast.LENGTH_SHORT).show()
-        if (!pendingPairing.contains(device.id)) pendingPairing.add(device.id)
+        if (!pendingPairing.contains(target.id)) pendingPairing.add(target.id)
     }
 
     fun cancelPairing(device: DiscoveredDevice) {

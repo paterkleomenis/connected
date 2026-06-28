@@ -503,7 +503,8 @@ impl QuicTransport {
     }
 
     /// Get the appropriate endpoint for a given address.
-    /// Returns the WiFi Aware endpoint for IPv6 link-local addresses, or the main endpoint otherwise.
+    /// Returns the WiFi Aware endpoint for IPv6 link-local addresses,
+    /// and the main endpoint otherwise.
     fn get_endpoint_for_addr(&self, addr: &SocketAddr) -> Endpoint {
         if Self::is_link_local(addr) {
             if let Some(ep) = self.aware_endpoint.read().clone() {

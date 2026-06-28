@@ -142,6 +142,7 @@ final class ConnectedAppModel: ObservableObject {
     private let discoveryBridge: DiscoveryBridge
     private let transferBridge: TransferBridge
     private let bonjourPublisher = BonjourPublisher()
+    private let bonjourBrowser = BonjourBrowser()
     private let clipboardBridge: ClipboardBridge
     private let pairingBridge: PairingBridge
     private let unpairBridge: UnpairBridge
@@ -251,6 +252,7 @@ final class ConnectedAppModel: ObservableObject {
         mediaBridge.app = self
         telephonyBridge.app = self
         browserDownloadBridge.app = self
+        bonjourBrowser.delegate = self
 #if canImport(UserNotifications)
         notificationBridge.app = self
         UNUserNotificationCenter.current().delegate = notificationBridge
@@ -425,6 +427,7 @@ final class ConnectedAppModel: ObservableObject {
                             deviceId: dev.id,
                             txt: ["type": "ios", "version": "1"]
                         )
+                        self.bonjourBrowser.start(localDeviceId: dev.id)
                     }
 
                     self.mergeDevices(discovered)
@@ -460,6 +463,7 @@ final class ConnectedAppModel: ObservableObject {
                 deviceId: dev.id,
                 txt: ["type": "ios", "version": "1"]
             )
+                bonjourBrowser.start(localDeviceId: dev.id)
         }
     }
 
@@ -499,6 +503,10 @@ final class ConnectedAppModel: ObservableObject {
     }
 
     func refreshDiscoveryNow() {
+        if let dev = localDevice {
+            bonjourBrowser.restart(localDeviceId: dev.id)
+        }
+
         runInBackground { [weak self] in
             do {
                 try refreshDiscovery()
@@ -524,6 +532,7 @@ final class ConnectedAppModel: ObservableObject {
                     deviceId: dev.id,
                     txt: ["type": "ios", "version": "1"]
                 )
+                bonjourBrowser.start(localDeviceId: dev.id)
             }
 
             let discovery = discoveryBridge
@@ -549,6 +558,7 @@ final class ConnectedAppModel: ObservableObject {
             }
         } else {
             bonjourPublisher.stop()
+            bonjourBrowser.stop()
             runInBackground { [weak self] in
                 stopDiscovery()
                 Task { @MainActor [weak self] in
@@ -2763,5 +2773,23 @@ private final class BrowserDownloadBridge: BrowserDownloadCallback, @unchecked S
         Task { @MainActor [weak app] in
             app?.handleDownloadFailed(error: errorMsg)
         }
+    }
+}
+
+extension ConnectedAppModel: BonjourBrowserDelegate {
+    func bonjourBrowserDidFindDevice(_ device: DiscoveredDevice) {
+        handleDeviceFound(device)
+    }
+
+    func bonjourBrowserDidRemoveDevice(_ deviceId: String) {
+        handleDeviceLost(deviceId)
+    }
+
+    func bonjourBrowserDidUpdateStatus(_ status: String) {
+        infoMessage = status
+    }
+
+    func bonjourBrowserDidFail(_ message: String) {
+        lastErrorMessage = message
     }
 }

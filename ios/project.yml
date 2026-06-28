@@ -39,6 +39,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.connected.app.sync
         PRODUCT_NAME: Connected
         INFOPLIST_FILE: Connected/Support/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Connected/Support/Connected.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: Connected/Support/Connected-Bridging-Header.h
         SWIFT_INCLUDE_PATHS:
           - $(SRCROOT)/Connected/Generated/Uniffi

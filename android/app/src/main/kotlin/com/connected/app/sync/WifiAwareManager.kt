@@ -46,7 +46,7 @@ class ConnectedWifiAwareManager(private val context: Context) {
 
     companion object {
         private const val TAG = "WifiAwareManager"
-        private const val SERVICE_TYPE = "connected"
+        private const val SERVICE_TYPE = "_connected._udp"
         private const val SERVICE_INSTANCE_PREFIX = "conn"
         private const val PROTOCOL_VERSION = 1
         private const val MIN_COMPATIBLE_VERSION = 1
@@ -55,6 +55,9 @@ class ConnectedWifiAwareManager(private val context: Context) {
         private const val MSG_KEY_TYPE = "type"
         private const val MSG_KEY_PORT = "port"
         private const val MSG_KEY_VERSION = "ver"
+        private const val MSG_KEY_PAIRING_NAME = "pairingName"
+        private const val MSG_KEY_VENDOR_NAME = "vendorName"
+        private const val MSG_KEY_MODEL_NAME = "modelName"
 
         private const val REATTACH_DELAY_MS = 5_000L
         private const val STALE_PEER_MS = 45_000L
@@ -276,6 +279,8 @@ class ConnectedWifiAwareManager(private val context: Context) {
 
     fun isConnected(deviceId: String): Boolean = connectedEndpoints.containsKey(deviceId)
 
+    fun connectedEndpoint(deviceId: String): Pair<String, Int>? = connectedEndpoints[deviceId]
+
     private fun clearPeersForSource(source: PeerHandleSource) {
         val stalePeers = peers.values.filter { it.handleSource == source }
         stalePeers.forEach { peer ->
@@ -394,6 +399,9 @@ class ConnectedWifiAwareManager(private val context: Context) {
             MSG_KEY_TYPE to deviceType,
             MSG_KEY_PORT to port.toString(),
             MSG_KEY_VERSION to PROTOCOL_VERSION.toString(),
+            MSG_KEY_PAIRING_NAME to name.take(48),
+            MSG_KEY_VENDOR_NAME to "Connected",
+            MSG_KEY_MODEL_NAME to deviceType.take(48),
         )
         return encodeTxtRecords(entries)
     }

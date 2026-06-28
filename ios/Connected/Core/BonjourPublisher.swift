@@ -9,8 +9,7 @@ import Foundation
 /// has the necessary entitlements, so this works without any special
 /// provisioning.
 ///
-/// This runs *alongside* the Rust mDNS — the Rust side still handles
-/// **browsing** (receiving), while this handles **publishing** (sending).
+/// This runs alongside `BonjourBrowser`, which handles iOS-native browsing.
 ///
 /// A heartbeat timer re-publishes every 60 seconds because iOS's mDNSResponder
 /// can silently drop the service without calling `netServiceDidStop`.
