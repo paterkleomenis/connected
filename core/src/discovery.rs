@@ -267,10 +267,19 @@ impl DiscoveryService {
         format!("{}--{}", name.replace("--", "-"), device.id)
     }
 
-    fn local_device_snapshot(&self) -> Device {
-        let mut device = self.local_device.clone();
-        device.name = self.local_name.read().clone();
+    fn device_snapshot(local_device: &Device, local_name: &Arc<RwLock<String>>) -> Device {
+        let mut device = local_device.clone();
+        device.name = local_name.read().clone();
         device
+    }
+
+    fn local_device_snapshot(&self) -> Device {
+        Self::device_snapshot(&self.local_device, &self.local_name)
+    }
+
+    fn mark_announced(&self, instance_name: &str) {
+        *self.service_fullname.write() = format!("{}.{}", instance_name, SERVICE_TYPE);
+        self.announced.store(true, Ordering::SeqCst);
     }
 
     fn parse_instance_name(instance: &str) -> Option<(String, String)> {
@@ -291,8 +300,7 @@ impl DiscoveryService {
         Self::do_announce(&self.daemon, &device)?;
 
         let instance_name = Self::create_instance_name(&device);
-        *self.service_fullname.write() = format!("{}.{}", instance_name, SERVICE_TYPE);
-        self.announced.store(true, Ordering::SeqCst);
+        self.mark_announced(&instance_name);
 
         info!(
             "Announced device '{}' (id={}) on mDNS at {}:{} [service_type={}]",
@@ -453,8 +461,8 @@ impl DiscoveryService {
 
                 while running_reannounce.load(Ordering::SeqCst) {
                     if announced_reannounce.load(Ordering::SeqCst) {
-                        let mut device = local_device_reannounce.clone();
-                        device.name = local_name_reannounce.read().clone();
+                        let device =
+                            Self::device_snapshot(&local_device_reannounce, &local_name_reannounce);
                         match Self::do_announce(&daemon_clone, &device) {
                             Err(e) => debug!("mDNS re-announce failed: {}", e),
                             _ => debug!("Re-announced device on mDNS"),
