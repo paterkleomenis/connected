@@ -377,10 +377,9 @@ private struct GlassToggleRow: View {
             }
 
             Spacer()
-
-            Toggle(title, isOn: $isOn)
-                .labelsHidden()
+            Toggle(isOn: $isOn) { EmptyView() }
                 .toggleStyle(MonochromeToggleStyle())
+                .fixedSize()
         }
     }
 }
