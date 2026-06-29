@@ -39,31 +39,78 @@ pub fn format_file_size(bytes: u64) -> String {
     format!("{:.1} {}", s, UNITS[i])
 }
 
-#[cfg(target_os = "windows")]
-fn hostname_output() -> std::io::Result<std::process::Output> {
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    Command::new("hostname")
-        .creation_flags(CREATE_NO_WINDOW)
+fn get_pretty_hostname() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    if let Ok(output) = Command::new("scutil")
+        .arg("--get")
+        .arg("ComputerName")
         .output()
-}
+        && output.status.success()
+    {
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
 
-#[cfg(not(target_os = "windows"))]
-fn hostname_output() -> std::io::Result<std::process::Output> {
-    Command::new("hostname").output()
+    #[cfg(target_os = "linux")]
+    if let Ok(output) = Command::new("hostnamectl").arg("--pretty").output()
+        && output.status.success()
+    {
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        if let Ok(output) = Command::new("wmic")
+            .args(["computersystem", "get", "name"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            && output.status.success()
+        {
+            let name = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .nth(1)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+
+    None
 }
 
 pub fn get_hostname() -> String {
-    if let Ok(name) = std::env::var("HOSTNAME") {
+    if let Some(name) = get_pretty_hostname() {
         return name;
     }
+
+    #[cfg(target_os = "windows")]
     if let Ok(name) = std::env::var("COMPUTERNAME") {
-        // Windows
         return name;
     }
-    if let Ok(output) = hostname_output()
+
+    let mut cmd = Command::new("hostname");
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    if let Ok(output) = cmd.output()
         && output.status.success()
     {
-        return String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() {
+            return name;
+        }
     }
+
     "Desktop".to_string()
 }
