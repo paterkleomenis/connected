@@ -352,7 +352,7 @@ class ConnectedWifiAwareManager(private val context: Context) {
 
         val matchName = local.name
 
-        val serviceInfo = buildServiceInfo(local.id, matchName, local.deviceType, local.port.toInt())
+        val serviceInfo = buildServiceInfo(local.id, matchName, local.deviceType.name.lowercase(), local.port.toInt())
         val config = PublishConfig.Builder()
             .setServiceName(SERVICE_TYPE)
             .setPublishType(PublishConfig.PUBLISH_TYPE_SOLICITED)
@@ -719,7 +719,7 @@ class ConnectedWifiAwareManager(private val context: Context) {
             Log.w(TAG, "Failed to get local device for WiFi Aware message", e)
             return
         }
-        val info = buildServiceInfo(local.id, local.name, local.deviceType, local.port.toInt())
+        val info = buildServiceInfo(local.id, local.name, local.deviceType.name.lowercase(), local.port.toInt())
         runCatching { sub.sendMessage(peerHandle, 0, info) }
             .onFailure { Log.w(TAG, "Failed to send WiFi Aware peer info: ${it.message}") }
     }

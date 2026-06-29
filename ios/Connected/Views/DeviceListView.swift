@@ -231,7 +231,7 @@ private struct DeviceRow: View {
             // Top row: Device info and action buttons (matching Android DeviceItem)
             HStack(spacing: 12) {
                 // Device icon
-                Image(systemName: iconName(for: device.deviceType))
+                Image(systemName: iconName(for: device.deviceType, name: device.name))
                     .font(.title3)
                     .foregroundStyle(GlassTheme.primary(for: colorScheme))
                     .frame(width: 24, height: 24)
@@ -285,8 +285,10 @@ private struct DeviceRow: View {
                             Button("Share Clipboard", action: onShareClipboard)
                             Button("Browse Files", action: onBrowse)
                             Button("Request Contacts", action: onRequestContacts)
-                            Button("Request Conversations", action: onRequestConversations)
-                            Button("Request Call Log", action: onRequestCallLog)
+                            if device.deviceType != .ios {
+                                Button("Request Conversations", action: onRequestConversations)
+                                Button("Request Call Log", action: onRequestCallLog)
+                            }
                             Button("Unpair", role: .destructive, action: onUnpair)
                             Button("Forget", role: .destructive, action: onForget)
                         } label: {
@@ -387,8 +389,8 @@ private struct DeviceRow: View {
         .accessibilityLabel(label)
     }
 
-    private func iconName(for type: String) -> String {
-        deviceIconName(for: type)
+    private func iconName(for type: DeviceType, name: String? = nil) -> String {
+        deviceIconName(for: type, name: name)
     }
 }
 

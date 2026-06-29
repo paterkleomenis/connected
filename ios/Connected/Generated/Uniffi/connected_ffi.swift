@@ -525,7 +525,11 @@ fileprivate struct FfiConverterString: FfiConverter {
             return String()
         }
         let bytes = UnsafeBufferPointer<UInt8>(start: value.data!, count: Int(value.len))
-        return String(bytes: bytes, encoding: String.Encoding.utf8)!
+        // Use Swift's native UTF-8 decoder; `String(bytes:encoding:.utf8)` goes
+        // through Foundation's NSString and silently strips a leading U+FEFF BOM.
+        // Invalid UTF-8 substitutes U+FFFD instead of trapping (unreachable
+        // given Rust's `String` invariant).
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     public static func lower(_ value: String) -> RustBuffer {
@@ -541,7 +545,8 @@ fileprivate struct FfiConverterString: FfiConverter {
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> String {
         let len: Int32 = try readInt(&buf)
-        return String(bytes: try readBytes(&buf, count: Int(len)), encoding: String.Encoding.utf8)!
+        // See `lift` above for why we avoid Foundation's NSString-backed decoder here.
+        return String(decoding: try readBytes(&buf, count: Int(len)), as: UTF8.self)
     }
 
     public static func write(_ value: String, into buf: inout [UInt8]) {
@@ -575,11 +580,11 @@ public struct DiscoveredDevice: Equatable, Hashable {
     public var name: String
     public var ip: String
     public var port: UInt16
-    public var deviceType: String
+    public var deviceType: DeviceType
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String, ip: String, port: UInt16, deviceType: String) {
+    public init(id: String, name: String, ip: String, port: UInt16, deviceType: DeviceType) {
         self.id = id
         self.name = name
         self.ip = ip
@@ -607,7 +612,7 @@ public struct FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer {
                 name: FfiConverterString.read(from: &buf),
                 ip: FfiConverterString.read(from: &buf),
                 port: FfiConverterUInt16.read(from: &buf),
-                deviceType: FfiConverterString.read(from: &buf)
+                deviceType: FfiConverterTypeDeviceType.read(from: &buf)
         )
     }
 
@@ -616,7 +621,7 @@ public struct FfiConverterTypeDiscoveredDevice: FfiConverterRustBuffer {
         FfiConverterString.write(value.name, into: &buf)
         FfiConverterString.write(value.ip, into: &buf)
         FfiConverterUInt16.write(value.port, into: &buf)
-        FfiConverterString.write(value.deviceType, into: &buf)
+        FfiConverterTypeDeviceType.write(value.deviceType, into: &buf)
     }
 }
 
@@ -1793,6 +1798,101 @@ public func FfiConverterTypeConnectedFfiError_lower(_ value: ConnectedFfiError) 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum DeviceType: Equatable, Hashable {
+
+    case android
+    case ios
+    case linux
+    case windows
+    case macOs
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension DeviceType: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDeviceType: FfiConverterRustBuffer {
+    typealias SwiftType = DeviceType
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeviceType {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .android
+
+        case 2: return .ios
+
+        case 3: return .linux
+
+        case 4: return .windows
+
+        case 5: return .macOs
+
+        case 6: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DeviceType, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .android:
+            writeInt(&buf, Int32(1))
+
+
+        case .ios:
+            writeInt(&buf, Int32(2))
+
+
+        case .linux:
+            writeInt(&buf, Int32(3))
+
+
+        case .windows:
+            writeInt(&buf, Int32(4))
+
+
+        case .macOs:
+            writeInt(&buf, Int32(5))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(6))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDeviceType_lift(_ buf: RustBuffer) throws -> DeviceType {
+    return try FfiConverterTypeDeviceType.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDeviceType_lower(_ value: DeviceType) -> RustBuffer {
+    return FfiConverterTypeDeviceType.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum FfiFsEntryType: Equatable, Hashable {
 
     case file
@@ -2358,7 +2458,11 @@ fileprivate struct UniffiCallbackInterfaceBrowserDownloadCallback {
 
     // Rust stores this pointer for future callback invocations, so it must live
     // for the process lifetime (not just for the init function call).
-    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceBrowserDownloadCallback> = {
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceBrowserDownloadCallback> = {
         let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceBrowserDownloadCallback>.allocate(capacity: 1)
         ptr.initialize(to: vtable)
         return UnsafePointer(ptr)
@@ -2519,7 +2623,11 @@ fileprivate struct UniffiCallbackInterfaceClipboardCallback {
 
     // Rust stores this pointer for future callback invocations, so it must live
     // for the process lifetime (not just for the init function call).
-    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceClipboardCallback> = {
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceClipboardCallback> = {
         let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceClipboardCallback>.allocate(capacity: 1)
         ptr.initialize(to: vtable)
         return UnsafePointer(ptr)
@@ -2702,7 +2810,11 @@ fileprivate struct UniffiCallbackInterfaceDiscoveryCallback {
 
     // Rust stores this pointer for future callback invocations, so it must live
     // for the process lifetime (not just for the init function call).
-    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceDiscoveryCallback> = {
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceDiscoveryCallback> = {
         let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceDiscoveryCallback>.allocate(capacity: 1)
         ptr.initialize(to: vtable)
         return UnsafePointer(ptr)
@@ -3025,7 +3137,11 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
 
     // Rust stores this pointer for future callback invocations, so it must live
     // for the process lifetime (not just for the init function call).
-    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFileTransferCallback> = {
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFileTransferCallback> = {
         let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceFileTransferCallback>.allocate(capacity: 1)
         ptr.initialize(to: vtable)
         return UnsafePointer(ptr)
@@ -3273,7 +3389,11 @@ fileprivate struct UniffiCallbackInterfaceFilesystemProviderCallback {
 
     // Rust stores this pointer for future callback invocations, so it must live
     // for the process lifetime (not just for the init function call).
-    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFilesystemProviderCallback> = {
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFilesystemProviderCallback> = {
         let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceFilesystemProviderCallback>.allocate(capacity: 1)
         ptr.initialize(to: vtable)
         return UnsafePointer(ptr)
@@ -3434,7 +3554,11 @@ fileprivate struct UniffiCallbackInterfaceMediaControlCallback {
 
     // Rust stores this pointer for future callback invocations, so it must live
     // for the process lifetime (not just for the init function call).
-    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceMediaControlCallback> = {
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceMediaControlCallback> = {
         let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceMediaControlCallback>.allocate(capacity: 1)
         ptr.initialize(to: vtable)
         return UnsafePointer(ptr)
@@ -3625,7 +3749,11 @@ fileprivate struct UniffiCallbackInterfacePairingCallback {
 
     // Rust stores this pointer for future callback invocations, so it must live
     // for the process lifetime (not just for the init function call).
-    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfacePairingCallback> = {
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfacePairingCallback> = {
         let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfacePairingCallback>.allocate(capacity: 1)
         ptr.initialize(to: vtable)
         return UnsafePointer(ptr)
@@ -4196,7 +4324,11 @@ fileprivate struct UniffiCallbackInterfaceTelephonyCallback {
 
     // Rust stores this pointer for future callback invocations, so it must live
     // for the process lifetime (not just for the init function call).
-    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceTelephonyCallback> = {
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceTelephonyCallback> = {
         let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceTelephonyCallback>.allocate(capacity: 1)
         ptr.initialize(to: vtable)
         return UnsafePointer(ptr)
@@ -4331,7 +4463,11 @@ fileprivate struct UniffiCallbackInterfaceUnpairCallback {
 
     // Rust stores this pointer for future callback invocations, so it must live
     // for the process lifetime (not just for the init function call).
-    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceUnpairCallback> = {
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceUnpairCallback> = {
         let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceUnpairCallback>.allocate(capacity: 1)
         ptr.initialize(to: vtable)
         return UnsafePointer(ptr)

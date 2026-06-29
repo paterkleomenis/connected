@@ -41,7 +41,6 @@ use mpris::PlaybackStatus;
 #[cfg(target_os = "linux")]
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use std::sync::Mutex;
@@ -427,7 +426,7 @@ fn spawn_event_loop(
                                 name: d.name.clone(),
                                 ip: d.ip.clone(),
                                 port: d.port,
-                                device_type: d.device_type.as_str().to_string(),
+                                device_type: d.device_type,
                             },
                         );
                     }
@@ -2520,8 +2519,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         if info.ip == "0.0.0.0" {
                             continue;
                         }
-                        let device_type = connected_core::DeviceType::from_str(&info.device_type)
-                            .unwrap_or(connected_core::DeviceType::Unknown);
+                        let device_type = info.device_type;
                         if let Ok(ip) = info.ip.parse() {
                             let _ = c.inject_proximity_device(
                                 device_id,

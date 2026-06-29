@@ -1,5 +1,6 @@
 use crate::components::icon::{Icon, IconType, get_device_icon_type};
 use crate::state::DeviceInfo;
+use connected_core::DeviceType;
 use dioxus::prelude::*;
 
 #[component]
@@ -11,12 +12,10 @@ pub fn DeviceCard(
     on_cancel_pair: EventHandler<DeviceInfo>,
     on_send_file: EventHandler<DeviceInfo>,
 ) -> Element {
-    let device_icon = if device.device_type.trim().is_empty()
-        || device.device_type.eq_ignore_ascii_case("unknown")
-    {
+    let device_icon = if device.device_type == DeviceType::Unknown {
         get_device_icon_type(&device.name)
     } else {
-        get_device_icon_type(&device.device_type)
+        get_device_icon_type(device.device_type.as_str())
     };
     let mut is_hovered = use_signal(|| false);
 
@@ -61,8 +60,8 @@ pub fn DeviceCard(
                         "{device.ip}:{device.port}"
                     }
                 }
-                if device.device_type.to_lowercase() != "unknown" {
-                    p { class: "device-type", "{device.device_type}" }
+                if device.device_type != DeviceType::Unknown {
+                    p { class: "device-type", "{device.device_type.as_str()}" }
                 }
                 if device.is_trusted {
                     p {

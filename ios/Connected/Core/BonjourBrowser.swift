@@ -76,7 +76,17 @@ final class BonjourBrowser: NSObject {
         }
 
         let name = txt["name"].flatMap { $0.isEmpty ? nil : $0 } ?? service.name
-        let deviceType = txt["type"].flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
+        let deviceTypeString = txt["type"].flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
+        let deviceType: DeviceType = {
+            switch deviceTypeString.lowercased() {
+            case "android", "mobile", "phone": return .android
+            case "ios", "iphone", "ipad": return .ios
+            case "linux": return .linux
+            case "windows": return .windows
+            case "macos", "mac": return .macOs
+            default: return .unknown
+            }
+        }()
         let port = UInt16(clamping: service.port)
         let device = DiscoveredDevice(
             id: deviceId,
@@ -92,7 +102,7 @@ final class BonjourBrowser: NSObject {
             try injectProximityDevice(
                 deviceId: device.id,
                 deviceName: device.name,
-                deviceType: device.deviceType,
+                deviceType: deviceTypeString,
                 ip: device.ip,
                 port: device.port
             )

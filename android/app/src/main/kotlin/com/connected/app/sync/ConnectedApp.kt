@@ -31,6 +31,7 @@ import uniffi.connected_ffi.BrowserDownloadCallback
 import uniffi.connected_ffi.CallAction
 import uniffi.connected_ffi.ClipboardCallback
 import uniffi.connected_ffi.DiscoveredDevice
+import uniffi.connected_ffi.DeviceType
 import uniffi.connected_ffi.DiscoveryCallback
 import uniffi.connected_ffi.FfiActiveCall
 import uniffi.connected_ffi.FfiCallLogEntry
@@ -1134,7 +1135,7 @@ class ConnectedApp(private val context: Context) {
     private val pairingCallback = object : PairingCallback {
         override fun onPairingRequest(deviceName: String, fingerprint: String, deviceId: String) {
             // Check if Core already trusts this device (e.g. re-connection after local unpair)
-            if (isDeviceTrusted(DiscoveredDevice(deviceId, deviceName, "0.0.0.0", 0u, "Unknown"))) {
+            if (isDeviceTrusted(DiscoveredDevice(deviceId, deviceName, "0.0.0.0", 0u, DeviceType.UNKNOWN))) {
                 Log.d("ConnectedApp", "Already trusted device re-connecting: $deviceName")
                 runOnMainThread {
                     android.widget.Toast.makeText(

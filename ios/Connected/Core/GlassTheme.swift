@@ -222,33 +222,40 @@ extension View {
 }
 
 // MARK: - Device Icon Helper (Matching Android)
-func deviceIconName(for type: String) -> String {
-    let normalized = type.lowercased()
-    if normalized.contains("android") || normalized.contains("phone") || normalized.contains("mobile") {
+func deviceIconName(for type: DeviceType, name: String? = nil) -> String {
+    switch type {
+    case .android:
         return "iphone.gen3.radiowaves.left.and.right"
-    }
-    if normalized.contains("ios") || normalized.contains("iphone") {
+    case .ios:
         return "iphone"
-    }
-    if normalized.contains("ipad") || normalized.contains("tablet") {
-        return "ipad"
-    }
-    if normalized.contains("mac") || normalized.contains("macos") {
-        return "laptopcomputer"
-    }
-    if normalized.contains("windows") {
-        return "desktopcomputer"
-    }
-    if normalized.contains("linux") {
+    case .linux:
         return "terminal"
+    case .windows:
+        return "desktopcomputer"
+    case .macOs:
+        return "laptopcomputer"
+    case .unknown:
+        let normalized = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if normalized.contains("phone") || normalized.contains("mobile") {
+            return "iphone.gen3.radiowaves.left.and.right"
+        }
+        if normalized.contains("tablet") || normalized.contains("ipad") {
+            return "ipad"
+        }
+        if normalized.contains("laptop") || normalized.contains("notebook") {
+            return "laptopcomputer"
+        }
+        if normalized.contains("desktop") || normalized.contains("computer") || normalized.contains("pc") {
+            return "desktopcomputer"
+        }
+        if normalized.contains("tv") || normalized.contains("television") {
+            return "tv"
+        }
+        if normalized.contains("watch") || normalized.contains("wearable") {
+            return "applewatch"
+        }
+        return "display"
     }
-    if normalized.contains("tv") {
-        return "tv"
-    }
-    if normalized.contains("watch") {
-        return "applewatch"
-    }
-    return "display"
 }
 
 // MARK: - Monochrome Toggle Style

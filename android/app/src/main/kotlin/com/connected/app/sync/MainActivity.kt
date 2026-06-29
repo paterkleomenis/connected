@@ -63,6 +63,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.connected_ffi.DiscoveredDevice
+import uniffi.connected_ffi.DeviceType
 import uniffi.connected_ffi.FfiCallLogEntry
 import uniffi.connected_ffi.FfiContact
 import uniffi.connected_ffi.FfiConversation
@@ -527,72 +528,27 @@ fun formatFileSize(bytes: ULong): String {
     return String.format(Locale.getDefault(), "%.1f GB", gb)
 }
 
-fun getDeviceIcon(type: String, name: String? = null): Int {
-    val normalizedType = type.trim().lowercase()
-    val normalized = if (
-        (normalizedType.isEmpty() || normalizedType == "unknown") &&
-        !name.isNullOrBlank()
-    ) {
-        name.trim().lowercase()
-    } else {
-        normalizedType
+fun getDeviceIcon(type: DeviceType, name: String? = null): Int {
+    return when (type) {
+        DeviceType.ANDROID -> R.drawable.ic_android
+        DeviceType.IOS -> R.drawable.ic_ios
+        DeviceType.LINUX -> R.drawable.ic_linux
+        DeviceType.WINDOWS -> R.drawable.ic_windows
+        DeviceType.MAC_OS -> R.drawable.ic_macos
+        DeviceType.UNKNOWN -> {
+            // Fall back to name-based detection
+            val normalized = name?.trim()?.lowercase() ?: ""
+            when {
+                normalized.contains("phone") || normalized.contains("mobile") -> R.drawable.ic_android
+                normalized.contains("tablet") -> R.drawable.ic_tablet
+                normalized.contains("laptop") || normalized.contains("notebook") -> R.drawable.ic_laptop
+                normalized.contains("desktop") || normalized.contains("computer") || normalized.contains("pc") -> R.drawable.ic_desktop
+                normalized.contains("tv") || normalized.contains("television") -> R.drawable.ic_tv
+                normalized.contains("watch") || normalized.contains("wearable") -> R.drawable.ic_watch
+                else -> R.drawable.ic_device_unknown
+            }
+        }
     }
-
-    if (
-        normalized.contains("android") ||
-        normalized.contains("phone") ||
-        normalized.contains("mobile") ||
-        normalized.contains("pixel") ||
-        normalized.contains("galaxy")
-    ) {
-        return R.drawable.ic_android
-    }
-
-    if (normalized.contains("ios") || normalized.contains("iphone")) {
-        return R.drawable.ic_ios
-    }
-
-    if (normalized.contains("ipad") || normalized.contains("tablet")) {
-        return R.drawable.ic_tablet
-    }
-
-    if (normalized.contains("linux")) {
-        return R.drawable.ic_linux
-    }
-
-    if (normalized.contains("windows")) {
-        return R.drawable.ic_windows
-    }
-
-    if (normalized.contains("macos") || normalized.contains("mac")) {
-        return R.drawable.ic_macos
-    }
-
-    if (normalized.contains("laptop") || normalized.contains("notebook")) {
-        return R.drawable.ic_laptop
-    }
-
-    if (
-        normalized.contains("desktop") ||
-        normalized.contains("computer") ||
-        normalized.contains("pc")
-    ) {
-        return R.drawable.ic_desktop
-    }
-
-    if (normalized.contains("tv") || normalized.contains("television")) {
-        return R.drawable.ic_tv
-    }
-
-    if (normalized.contains("watch") || normalized.contains("wearable")) {
-        return R.drawable.ic_watch
-    }
-
-    if (normalized == "unknown" || normalized.isEmpty()) {
-        return R.drawable.ic_device_unknown
-    }
-
-    return R.drawable.ic_desktop
 }
 
 enum class Screen {
@@ -1118,7 +1074,7 @@ fun SettingsScreen(
 
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
-    val currentVersion = remember { 
+    val currentVersion = remember {
         try {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "Unknown"
         } catch (e: Exception) {
@@ -2262,36 +2218,38 @@ fun DeviceItem(
                                         }
                                     }
                                 )
-                                DropdownMenuItem(
-                                    text = { Text("Request Conversations") },
-                                    leadingIcon = {
-                                        Icon(
-                                            painterResource(R.drawable.ic_message),
-                                            contentDescription = null
-                                        )
-                                    },
-                                    onClick = {
-                                        showMenu = false
-                                        if (app.requestConversationsFromDevice(device)) {
-                                            phoneDataKind.value = PhoneDataKind.Conversations
+                                if (device.deviceType != DeviceType.IOS) {
+                                    DropdownMenuItem(
+                                        text = { Text("Request Conversations") },
+                                        leadingIcon = {
+                                            Icon(
+                                                painterResource(R.drawable.ic_message),
+                                                contentDescription = null
+                                            )
+                                        },
+                                        onClick = {
+                                            showMenu = false
+                                            if (app.requestConversationsFromDevice(device)) {
+                                                phoneDataKind.value = PhoneDataKind.Conversations
+                                            }
                                         }
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Request Call Log") },
-                                    leadingIcon = {
-                                        Icon(
-                                            painterResource(R.drawable.ic_call),
-                                            contentDescription = null
-                                        )
-                                    },
-                                    onClick = {
-                                        showMenu = false
-                                        if (app.requestCallLogFromDevice(device)) {
-                                            phoneDataKind.value = PhoneDataKind.CallLog
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Request Call Log") },
+                                        leadingIcon = {
+                                            Icon(
+                                                painterResource(R.drawable.ic_call),
+                                                contentDescription = null
+                                            )
+                                        },
+                                        onClick = {
+                                            showMenu = false
+                                            if (app.requestCallLogFromDevice(device)) {
+                                                phoneDataKind.value = PhoneDataKind.CallLog
+                                            }
                                         }
-                                    }
-                                )
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Unpair") },
                                     leadingIcon = {

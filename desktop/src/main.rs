@@ -21,7 +21,7 @@ use state::{
 
 use components::{DeviceCard, FileBrowser, FileDialog, Icon, IconType};
 use connected_core::telephony::{ActiveCallState, CallAction};
-use connected_core::{MediaCommand, UpdateInfo};
+use connected_core::{DeviceType, MediaCommand, UpdateInfo};
 use controller::{AppAction, app_controller};
 use dioxus::prelude::*;
 
@@ -1688,13 +1688,18 @@ fn App() -> Element {
                                 device_detail_tab.set("phone".to_string());
                                 // Trigger auto-sync for the current phone sub-tab if enabled and data is empty
                                 if let Some(ref dev) = *selected_device.read() {
+                                    let is_ios = dev.device_type == DeviceType::IOS;
+                                    // Default to contacts tab for iOS devices
+                                    if is_ios && *phone_sub_tab.read() != "contacts" {
+                                        phone_sub_tab.set("contacts".to_string());
+                                    }
                                     let current_sub = phone_sub_tab.read().clone();
-                                    if current_sub == "messages" && *auto_sync_messages.read() && phone_conversations.read().is_empty() {
+                                    if current_sub == "messages" && !is_ios && *auto_sync_messages.read() && phone_conversations.read().is_empty() {
                                         action_tx.send(AppAction::RequestConversationsSync {
                                             ip: dev.ip.clone(),
                                             port: dev.port,
                                         });
-                                    } else if current_sub == "calls" && *auto_sync_calls.read() && phone_call_log.read().is_empty() {
+                                    } else if current_sub == "calls" && !is_ios && *auto_sync_calls.read() && phone_call_log.read().is_empty() {
                                         action_tx.send(AppAction::RequestCallLog {
                                             ip: dev.ip.clone(),
                                             port: dev.port,
@@ -1912,7 +1917,7 @@ fn App() -> Element {
                                     class: "device-detail-info",
                                     style: "margin-left: 0;",
                                     span { class: "device-address", "{device.ip}:{device.port}" }
-                                    span { class: "device-type-badge", "{device.device_type}" }
+                                    span { class: "device-type-badge", "{device.device_type.as_str()}" }
                                 }
                                 div {
                                     class: "device-detail-actions",
@@ -2394,46 +2399,48 @@ fn App() -> Element {
                                         // Phone sub-navigation tabs
                                         div {
                                             class: "phone-tabs",
-                                            button {
-                                                class: if *phone_sub_tab.read() == "messages" { "phone-tab active" } else { "phone-tab" },
-                                                onclick: {
-                                                    let device_id = device.id.clone();
-                                                    move |_| {
-                                                        phone_sub_tab.set("messages".to_string());
-                                                        // Only sync if auto-sync enabled AND data is empty
-                                                        if *auto_sync_messages.read() && phone_conversations.read().is_empty()
-                                                            && let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned()
-                                                        {
-                                                            action_tx.send(AppAction::RequestConversationsSync {
-                                                                ip: fresh_device.ip.clone(),
-                                                                port: fresh_device.port,
-                                                            });
+                                            if device.device_type != DeviceType::IOS {
+                                                button {
+                                                    class: if *phone_sub_tab.read() == "messages" { "phone-tab active" } else { "phone-tab" },
+                                                    onclick: {
+                                                        let device_id = device.id.clone();
+                                                        move |_| {
+                                                            phone_sub_tab.set("messages".to_string());
+                                                            // Only sync if auto-sync enabled AND data is empty
+                                                            if *auto_sync_messages.read() && phone_conversations.read().is_empty()
+                                                                && let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned()
+                                                            {
+                                                                action_tx.send(AppAction::RequestConversationsSync {
+                                                                    ip: fresh_device.ip.clone(),
+                                                                    port: fresh_device.port,
+                                                                });
+                                                            }
                                                         }
-                                                    }
-                                                },
-                                                Icon { icon: IconType::Message, size: 16, color: "currentColor".to_string() }
-                                                span { " Messages" }
-                                            }
-                                            button {
-                                                class: if *phone_sub_tab.read() == "calls" { "phone-tab active" } else { "phone-tab" },
-                                                onclick: {
-                                                    let device_id = device.id.clone();
-                                                    move |_| {
-                                                        phone_sub_tab.set("calls".to_string());
-                                                        // Only sync if auto-sync enabled AND data is empty
-                                                        if *auto_sync_calls.read() && phone_call_log.read().is_empty()
-                                                            && let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned()
-                                                        {
-                                                            action_tx.send(AppAction::RequestCallLog {
-                                                                ip: fresh_device.ip.clone(),
-                                                                port: fresh_device.port,
-                                                                limit: 200,
-                                                            });
+                                                    },
+                                                    Icon { icon: IconType::Message, size: 16, color: "currentColor".to_string() }
+                                                    span { " Messages" }
+                                                }
+                                                button {
+                                                    class: if *phone_sub_tab.read() == "calls" { "phone-tab active" } else { "phone-tab" },
+                                                    onclick: {
+                                                        let device_id = device.id.clone();
+                                                        move |_| {
+                                                            phone_sub_tab.set("calls".to_string());
+                                                            // Only sync if auto-sync enabled AND data is empty
+                                                            if *auto_sync_calls.read() && phone_call_log.read().is_empty()
+                                                                && let Some(fresh_device) = get_devices_store().lock_or_recover().get(&device_id).cloned()
+                                                            {
+                                                                action_tx.send(AppAction::RequestCallLog {
+                                                                    ip: fresh_device.ip.clone(),
+                                                                    port: fresh_device.port,
+                                                                    limit: 200,
+                                                                });
+                                                            }
                                                         }
-                                                    }
-                                                },
-                                                Icon { icon: IconType::Call, size: 16, color: "currentColor".to_string() }
-                                                span { " Calls" }
+                                                    },
+                                                    Icon { icon: IconType::Call, size: 16, color: "currentColor".to_string() }
+                                                    span { " Calls" }
+                                                }
                                             }
                                             button {
                                                 class: if *phone_sub_tab.read() == "contacts" { "phone-tab active" } else { "phone-tab" },
@@ -2458,7 +2465,7 @@ fn App() -> Element {
                                         }
 
                                         // Messages Tab Content
-                                        if *phone_sub_tab.read() == "messages" {
+                                        if *phone_sub_tab.read() == "messages" && device.device_type != DeviceType::IOS {
                                             if let Some(ref thread_id) = *selected_conversation.read() {
                                                 // Thread view - show individual messages
                                                 {
@@ -2711,7 +2718,7 @@ fn App() -> Element {
                                         }
 
                                         // Calls Tab Content
-                                        if *phone_sub_tab.read() == "calls" {
+                                        if *phone_sub_tab.read() == "calls" && device.device_type != DeviceType::IOS {
                                             div {
                                                 class: "phone-content",
                                                 div {

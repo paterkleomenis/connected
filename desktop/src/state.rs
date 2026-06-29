@@ -267,13 +267,15 @@ pub fn remove_device_from_settings(device_id: &str) {
 // Data Models
 // ============================================================================
 
+use connected_core::DeviceType;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeviceInfo {
     pub id: String,
     pub name: String,
     pub ip: String,
     pub port: u16,
-    pub device_type: String,
+    pub device_type: DeviceType,
     pub is_trusted: bool,
     pub is_pending: bool,
 }
@@ -285,7 +287,7 @@ impl From<Device> for DeviceInfo {
             name: d.name,
             ip: d.ip.to_string(),
             port: d.port,
-            device_type: d.device_type.as_str().to_string(),
+            device_type: d.device_type,
             is_trusted: false,
             is_pending: false,
         }
@@ -479,7 +481,7 @@ pub struct SavedDeviceInfo {
     pub name: String,
     pub ip: String,
     pub port: u16,
-    pub device_type: String,
+    pub device_type: DeviceType,
 }
 
 #[derive(Debug, Clone, PartialEq)]

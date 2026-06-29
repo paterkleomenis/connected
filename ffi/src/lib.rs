@@ -1,8 +1,6 @@
 #![allow(unsafe_code)]
 
-use connected_core::{
-    ConnectedClient, ConnectedError, ConnectedEvent, Device, DeviceType, TransferDirection,
-};
+use connected_core::{ConnectedClient, ConnectedError, ConnectedEvent, Device, TransferDirection};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -587,13 +585,49 @@ impl From<connected_core::MediaState> for MediaState {
     }
 }
 
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum DeviceType {
+    Android,
+    IOS,
+    Linux,
+    Windows,
+    MacOS,
+    Unknown,
+}
+
+impl From<DeviceType> for connected_core::DeviceType {
+    fn from(d: DeviceType) -> Self {
+        match d {
+            DeviceType::Android => connected_core::DeviceType::Android,
+            DeviceType::IOS => connected_core::DeviceType::IOS,
+            DeviceType::Linux => connected_core::DeviceType::Linux,
+            DeviceType::Windows => connected_core::DeviceType::Windows,
+            DeviceType::MacOS => connected_core::DeviceType::MacOS,
+            DeviceType::Unknown => connected_core::DeviceType::Unknown,
+        }
+    }
+}
+
+impl From<connected_core::DeviceType> for DeviceType {
+    fn from(d: connected_core::DeviceType) -> Self {
+        match d {
+            connected_core::DeviceType::Android => DeviceType::Android,
+            connected_core::DeviceType::IOS => DeviceType::IOS,
+            connected_core::DeviceType::Linux => DeviceType::Linux,
+            connected_core::DeviceType::Windows => DeviceType::Windows,
+            connected_core::DeviceType::MacOS => DeviceType::MacOS,
+            connected_core::DeviceType::Unknown => DeviceType::Unknown,
+        }
+    }
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct DiscoveredDevice {
     pub id: String,
     pub name: String,
     pub ip: String,
     pub port: u16,
-    pub device_type: String,
+    pub device_type: DeviceType,
 }
 
 impl From<Device> for DiscoveredDevice {
@@ -603,7 +637,7 @@ impl From<Device> for DiscoveredDevice {
             name: d.name,
             ip: d.ip.to_string(),
             port: d.port,
-            device_type: d.device_type.as_str().to_string(),
+            device_type: d.device_type.into(),
         }
     }
 }
@@ -821,8 +855,8 @@ pub fn initialize(
 
     // Parse device type
     // Parse device type
-    let dtype = DeviceType::from_str(&device_type).unwrap_or(DeviceType::Unknown); // assuming helper exists or we implement logic
-    // Actually DeviceType::from_str is available in core::device
+    let dtype = connected_core::DeviceType::from_str(&device_type)
+        .unwrap_or(connected_core::DeviceType::Unknown);
 
     let path = if storage_path.is_empty() {
         None
@@ -867,7 +901,8 @@ pub fn initialize_with_ip(
     init_android_logging();
     let runtime = get_runtime();
     // Parse device type
-    let dtype = DeviceType::from_str(&device_type).unwrap_or(DeviceType::Unknown);
+    let dtype = connected_core::DeviceType::from_str(&device_type)
+        .unwrap_or(connected_core::DeviceType::Unknown);
     let ip: std::net::IpAddr =
         ip_address
             .parse()
@@ -1217,7 +1252,8 @@ pub fn inject_proximity_device(
 ) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
     // Parse device type
-    let dtype = DeviceType::from_str(&device_type).unwrap_or(DeviceType::Unknown);
+    let dtype = connected_core::DeviceType::from_str(&device_type)
+        .unwrap_or(connected_core::DeviceType::Unknown);
     let ip: IpAddr = ip.parse().map_err(|_| ConnectedFfiError::InvalidArgument {
         msg: "Invalid IP".into(),
     })?;
