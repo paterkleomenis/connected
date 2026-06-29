@@ -346,7 +346,16 @@ impl DiscoveryService {
         )?
         .enable_addr_auto();
 
-        daemon.register(service_info)?;
+        loop {
+            match daemon.register(service_info.clone()) {
+                Ok(()) => break,
+                Err(mdns_sd::Error::Again) => {
+                    debug!("mDNS daemon queue full, retrying in 100ms");
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
         Ok(())
     }
 
@@ -374,7 +383,7 @@ impl DiscoveryService {
             match self.daemon.browse(SERVICE_TYPE) {
                 Ok(r) => break r,
                 Err(mdns_sd::Error::Again) => {
-                    debug!("mDNS browse queue full, retrying in 100ms");
+                    debug!("mDNS daemon queue full, retrying in 100ms");
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => return Err(e.into()),
