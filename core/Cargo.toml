@@ -39,3 +39,4 @@ zip = { version = "8.0", default-features = false, features = [
 walkdir = "2.5"
 reqwest = { version = "0.13", features = ["rustls"], default-features = false }
 semver = "1.0"
+time.workspace = true
