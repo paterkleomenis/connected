@@ -12,6 +12,8 @@ mod mpris_server;
 mod state;
 mod titlebar;
 mod utils;
+#[cfg(target_os = "windows")]
+mod windows_audio;
 
 use state::{
     ThemeModeSetting, get_clipboard_sync_enabled, get_device_name_setting,
