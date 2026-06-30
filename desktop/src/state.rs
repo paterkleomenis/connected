@@ -37,7 +37,7 @@ impl<T> LockOrRecover<T> for Mutex<T> {
     fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T> {
         match self.lock() {
             Ok(guard) => guard,
-            Err(_poisoned) => {
+            Err(poisoned) => {
                 // A thread panicked while holding the lock.
                 // This indicates a serious bug — data may be inconsistent.
                 let count = POISON_RECOVERY_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
@@ -55,6 +55,7 @@ impl<T> LockOrRecover<T> for Mutex<T> {
                 // In debug builds, fail loudly to surface the bug early.
                 #[cfg(debug_assertions)]
                 {
+                    let _ = poisoned;
                     tracing::error!("Backtrace: {:?}", std::backtrace::Backtrace::capture());
                     panic!(
                         "Mutex poisoned at {}:{} — failing in debug mode to surface the \
