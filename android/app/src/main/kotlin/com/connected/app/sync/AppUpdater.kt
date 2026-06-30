@@ -97,7 +97,7 @@ object AppUpdater {
      */
     fun downloadUpdate(context: Context, downloadUrl: String, versionName: String) {
         try {
-            val request = DownloadManager.Request(downloadUrl.toUri())
+            val request = DownloadManager.Request(  downloadUrl.toUri())
                 .setTitle("Downloading Connected $versionName")
                 .setDescription("Downloading app update")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
