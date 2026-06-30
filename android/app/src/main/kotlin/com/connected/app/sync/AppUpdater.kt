@@ -2,7 +2,7 @@ package com.connected.app.sync
 
 import android.app.DownloadManager
 import android.content.Context
-import android.net.Uri
+import androidx.core.net.toUri
 import android.os.Environment
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -27,8 +27,15 @@ object AppUpdater {
      */
     fun isPlayStoreInstall(context: Context): Boolean {
         try {
-            val installer = context.packageManager.getInstallerPackageName(context.packageName)
-            return installer != null && installer.startsWith("com.android.vending")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                val installSource = context.packageManager.getInstallSourceInfo(context.packageName)
+                val installer = installSource.installingPackageName
+                return installer != null && installer.startsWith("com.android.vending")
+            } else {
+                @Suppress("DEPRECATION")
+                val installer = context.packageManager.getInstallerPackageName(context.packageName)
+                return installer != null && installer.startsWith("com.android.vending")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error checking installer package", e)
         }
@@ -90,7 +97,7 @@ object AppUpdater {
      */
     fun downloadUpdate(context: Context, downloadUrl: String, versionName: String) {
         try {
-            val request = DownloadManager.Request(Uri.parse(downloadUrl))
+            val request = DownloadManager.Request(downloadUrl.toUri())
                 .setTitle("Downloading Connected $versionName")
                 .setDescription("Downloading app update")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)

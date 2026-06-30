@@ -18,7 +18,8 @@ use crate::state::{
     set_active_outgoing_transfer_id, set_autostart_enabled_setting, set_device_name_setting,
     set_discovery_active, set_download_directory_setting, set_last_remote_clipboard_content,
     set_pairing_mode_state, set_phone_call_log, set_phone_contacts, set_phone_conversations,
-    set_phone_messages, set_sdk_initialized, set_transfer_status, store_transfer_path,
+    set_phone_messages, set_sdk_initialized, set_shared_folder_setting, set_transfer_status,
+    store_transfer_path,
 };
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -217,6 +218,9 @@ pub enum AppAction {
     RefreshDiscovery,
     RefreshDevices,
     SetDownloadDirectory {
+        path: String,
+    },
+    SetSharedFolder {
         path: String,
     },
     SetAutostart(bool),
@@ -1105,7 +1109,6 @@ fn spawn_event_loop(
                                             Ok(())
                                         }
 
-                                        #[allow(unsafe_code)]
                                         fn control_system_volume(
                                             cmd: MediaCommand,
                                         ) -> windows::core::Result<()>
@@ -2570,6 +2573,16 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             "",
                         );
                     }
+                }
+            }
+            AppAction::SetSharedFolder { path } => {
+                set_shared_folder_setting(Some(path.clone()));
+                if let Some(c) = &client {
+                    c.register_filesystem_provider(Box::new(DesktopFilesystemProvider::with_root(
+                        PathBuf::from(&path),
+                    )));
+                    info!("Shared folder set to: {}", path);
+                    add_notification("Settings", &format!("Shared folder set to {}", path), "");
                 }
             }
             AppAction::SetAutostart(enabled) => match crate::autostart::set_enabled(enabled) {

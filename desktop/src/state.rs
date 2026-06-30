@@ -32,19 +32,12 @@ pub trait LockOrRecover<T> {
     fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T>;
 }
 
-/// Get the count of mutex poison recoveries (useful for monitoring/telemetry).
-#[allow(dead_code)]
-pub fn get_poison_recovery_count() -> usize {
-    POISON_RECOVERY_COUNT.load(Ordering::Relaxed)
-}
-
 impl<T> LockOrRecover<T> for Mutex<T> {
     #[track_caller]
     fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T> {
         match self.lock() {
             Ok(guard) => guard,
-            #[allow(unused_variables)]
-            Err(poisoned) => {
+            Err(_poisoned) => {
                 // A thread panicked while holding the lock.
                 // This indicates a serious bug — data may be inconsistent.
                 let count = POISON_RECOVERY_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
@@ -117,6 +110,7 @@ pub struct AppSettings {
     pub device_name: Option<String>,
     pub saved_devices: HashMap<String, SavedDeviceInfo>,
     pub download_directory: Option<String>,
+    pub shared_folder: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -134,6 +128,7 @@ impl Default for AppSettings {
             device_name: None,
             saved_devices: HashMap::new(),
             download_directory: None,
+            shared_folder: None,
         }
     }
 }
@@ -1148,6 +1143,14 @@ pub fn get_download_directory_setting() -> Option<String> {
 
 pub fn set_download_directory_setting(path: Option<String>) {
     update_setting(|s| s.download_directory = path);
+}
+
+pub fn get_shared_folder_setting() -> Option<String> {
+    get_app_settings().lock_or_recover().shared_folder.clone()
+}
+
+pub fn set_shared_folder_setting(path: Option<String>) {
+    update_setting(|s| s.shared_folder = path);
 }
 
 pub fn get_transfer_file_paths() -> &'static Arc<Mutex<HashMap<String, PathBuf>>> {

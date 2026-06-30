@@ -880,19 +880,24 @@ fn main() {
     }
 
     #[allow(unused_mut)]
-    let mut config = dioxus::desktop::Config::new().with_window(
-        dioxus::desktop::WindowBuilder::new()
-            .with_title("Connected")
-            .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
-            .with_decorations(decorations)
-            .with_transparent(transparent)
-            .with_window_icon(load_icon())
-            .with_visible(!launched_from_autostart),
-    );
+    let mut config = dioxus::desktop::Config::new()
+        .with_window(
+            dioxus::desktop::WindowBuilder::new()
+                .with_title("Connected")
+                .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
+                .with_decorations(decorations)
+                .with_transparent(transparent)
+                .with_window_icon(load_icon())
+                .with_visible(!launched_from_autostart),
+        )
+        .with_disable_context_menu(true)
+        .with_on_window(|window, _| {
+            ipc::set_wakeup_window(window);
+        });
 
     // Set up menu bar on macOS
     #[cfg(target_os = "macos")]
-    {
+    let config = {
         use dioxus::desktop::muda::{Menu, PredefinedMenuItem, Submenu};
 
         let menu = Menu::new();
@@ -923,39 +928,30 @@ fn main() {
         menu.append_items(&[&app_menu, &window_menu])
             .expect("Failed to build menu");
 
-        config = config.with_menu(Some(menu));
-    }
+        config.with_menu(Some(menu))
+    };
 
     #[cfg(not(target_os = "macos"))]
-    {
-        config = config.with_menu(None);
-    }
-
-    config = config.with_disable_context_menu(true);
+    let config = config.with_menu(None);
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
-    {
-        // Handle tray left-click explicitly so it matches the "Open" action.
-        config = config.with_tray_icon_show_window_on_click(false);
-    }
+    let config = config.with_tray_icon_show_window_on_click(false);
 
-    if let Some(d) = data_dir {
-        config = config.with_data_directory(d);
-    }
+    let config = if let Some(d) = data_dir {
+        config.with_data_directory(d)
+    } else {
+        config
+    };
 
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-    {
+    let config = {
         let close_behavior = if get_show_tray_icon_setting() {
             dioxus::desktop::WindowCloseBehaviour::WindowHides
         } else {
             dioxus::desktop::WindowCloseBehaviour::WindowCloses
         };
-        config = config.with_close_behaviour(close_behavior);
-    }
-
-    config = config.with_on_window(|window, _| {
-        ipc::set_wakeup_window(window);
-    });
+        config.with_close_behaviour(close_behavior)
+    };
 
     LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
@@ -1052,6 +1048,13 @@ fn App() -> Element {
         get_download_directory_setting().unwrap_or_else(|| {
             dirs::download_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
+                .display()
+                .to_string()
+        })
+    });
+    let mut shared_folder = use_signal(|| {
+        get_shared_folder_setting().unwrap_or_else(|| {
+            crate::fs_provider::DesktopFilesystemProvider::default_shared_folder()
                 .display()
                 .to_string()
         })
@@ -3106,6 +3109,43 @@ fn App() -> Element {
                                 }
                             }
                             p { class: "settings-hint", "Choose where received files and downloads are saved." }
+                        }
+
+                        div {
+                            class: "info-card",
+                            h3 {
+                                Icon { icon: IconType::Folder, size: 20, color: "currentColor".to_string() }
+                                " Shared Folder"
+                            }
+                            div {
+                                class: "info-grid",
+                                div { class: "info-label", "Peers can browse" }
+                                div {
+                                    class: "info-value",
+                                    style: "display: flex; justify-content: space-between; align-items: center; gap: 8px;",
+                                    span {
+                                        style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;",
+                                        "{shared_folder}"
+                                    }
+                                    button {
+                                        class: "secondary-button",
+                                        style: "padding: 4px 8px; font-size: 0.8rem; white-space: nowrap;",
+                                        onclick: move |_| {
+                                            let current_dir = shared_folder.read().clone();
+                                            if let Some(path) = rfd::FileDialog::new()
+                                                .set_directory(&current_dir)
+                                                .pick_folder()
+                                            {
+                                                let path_str = path.display().to_string();
+                                                shared_folder.set(path_str.clone());
+                                                action_tx.send(AppAction::SetSharedFolder { path: path_str });
+                                            }
+                                        },
+                                        "Browse"
+                                    }
+                                }
+                            }
+                            p { class: "settings-hint", "Choose which folder other devices can browse. By default, peers can access your home directory." }
                         }
 
                         div {

@@ -22,6 +22,15 @@ const READ_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3
 /// Maximum allowed incoming file size (100 GB). Transfers exceeding this are rejected.
 const MAX_INCOMING_FILE_SIZE: u64 = 100 * 1024 * 1024 * 1024;
 
+pub struct IncomingTransferConfig {
+    pub progress_tx: Option<mpsc::UnboundedSender<TransferProgress>>,
+    pub auto_accept: bool,
+    pub accept_rx: Option<tokio::sync::oneshot::Receiver<bool>>,
+    pub cancel_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub approved_batches:
+        Option<Arc<parking_lot::RwLock<std::collections::HashMap<String, PathBuf>>>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FileTransferMessage {
     /// Request to send a file
@@ -1261,19 +1270,20 @@ impl FileTransfer {
     /// This version reads the request, waits for accept/reject, then receives the file
     /// Receive a file transfer on an existing stream
     /// This version reads the request, waits for accept/reject, then receives the file
-    #[allow(clippy::too_many_arguments)]
     pub async fn handle_incoming(
         mut send: SendStream,
         mut recv: RecvStream,
         save_dir: impl AsRef<Path>,
-        progress_tx: Option<mpsc::UnboundedSender<TransferProgress>>,
-        auto_accept: bool,
-        accept_rx: Option<tokio::sync::oneshot::Receiver<bool>>,
-        cancel_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
-        approved_batches: Option<
-            Arc<parking_lot::RwLock<std::collections::HashMap<String, PathBuf>>>,
-        >,
+        config: IncomingTransferConfig,
     ) -> Result<String> {
+        let IncomingTransferConfig {
+            progress_tx,
+            auto_accept,
+            accept_rx,
+            cancel_flag,
+            approved_batches,
+        } = config;
+
         // Read Request
         let request: FileTransferMessage = recv_message(&mut recv).await?;
 

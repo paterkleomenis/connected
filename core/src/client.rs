@@ -2,7 +2,7 @@ use crate::device::{Device, DeviceType};
 use crate::discovery::{DiscoveryEvent, DiscoveryService, DiscoverySource};
 use crate::error::{ConnectedError, Result};
 use crate::events::{ConnectedEvent, TransferDirection};
-use crate::file_transfer::{FileTransfer, TransferProgress};
+use crate::file_transfer::{FileTransfer, IncomingTransferConfig, TransferProgress};
 use crate::security::KeyStore;
 use crate::transport::{MAX_MESSAGE_SIZE, Message, QuicTransport, UnpairReason};
 use parking_lot::RwLock;
@@ -3509,11 +3509,13 @@ impl ConnectedClient {
                         send,
                         recv,
                         download_dir,
-                        Some(progress_tx),
-                        should_auto_accept,
-                        accept_rx,
-                        Some(cancel_flag),
-                        Some(approved_batches_clone),
+                        IncomingTransferConfig {
+                            progress_tx: Some(progress_tx),
+                            auto_accept: should_auto_accept,
+                            accept_rx,
+                            cancel_flag: Some(cancel_flag),
+                            approved_batches: Some(approved_batches_clone),
+                        },
                     )
                     .await;
 

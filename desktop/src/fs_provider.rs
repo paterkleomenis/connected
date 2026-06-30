@@ -13,12 +13,24 @@ const MAX_FS_READ_BYTES: u64 = 16 * 1024 * 1024;
 
 impl DesktopFilesystemProvider {
     pub fn new() -> Self {
-        let root = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let root = Self::default_shared_folder();
         let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
         Self {
             root,
             root_canonical,
         }
+    }
+
+    pub fn with_root(root: PathBuf) -> Self {
+        let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
+        Self {
+            root,
+            root_canonical,
+        }
+    }
+
+    pub fn default_shared_folder() -> PathBuf {
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
     }
 
     /// Resolve and validate a user-supplied path, returning the **canonical** path.
