@@ -171,16 +171,15 @@ for arch in "${ARCH_ARRAY[@]}"; do
     echo "Submitting build to COPR project: $COPR_PROJECT"
 
     # Build copr-cli --chroot flags
-    chroot_args=""
+    chroot_args=()
     IFS=' ' read -ra FILTERED_CHROOTS <<< "$arch_chroots"
     for chroot in "${FILTERED_CHROOTS[@]}"; do
-      chroot_args="$chroot_args --chroot $chroot"
+      chroot_args+=(--chroot "$chroot")
     done
 
-    # shellcheck disable=SC2086
     copr-cli build \
       --nowait \
-      $chroot_args \
+      "${chroot_args[@]}" \
       "$COPR_PROJECT" \
       "$SRPM"
 
