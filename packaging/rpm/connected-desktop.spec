@@ -1,5 +1,5 @@
 Name:           connected-desktop
-Version:        3.2.0
+Version:        3.2.1
 Release:        1%{?dist}
 Summary:        High-speed, offline, cross-platform ecosystem bridging devices
 
@@ -61,6 +61,6 @@ install -Dm644 %{SOURCE4} %{buildroot}%{_datadir}/licenses/%{name}/LICENSE-APACH
 %{_datadir}/icons/hicolor/512x512/apps/%{name}.png
 
 %changelog
-* Fri Jun 26 2026 Connected Team <paterkleomenis@protonmail.com> - 3.2.0-1
+* Fri Jun 26 2026 Connected Team <paterkleomenis@protonmail.com> - 3.2.1-1
 - Initial RPM package
 - Binary package for Fedora
