@@ -53,7 +53,6 @@ fi
 
 # Escape dots for regex matching (sed uses . as wildcard)
 OLD_VER_RE="${OLD_VER//\./\\.}"
-NEW_VER_RE="${NEW_VER//\./\\.}"
 
 # Default Android versionCode: encode major.minor.patch as MMMMmmpp
 if [[ -z "$ANDROID_CODE" ]]; then
