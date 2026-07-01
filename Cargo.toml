@@ -56,7 +56,7 @@ thiserror = "2.0"
 tracing = "0.1"
 
 # UniFFI for cross-platform bindings
-uniffi = { version = "0.31", features = ["cli"] }
+uniffi = { version = "0.32", features = ["cli"] }
 
 # Misc
 uuid = { version = "1.20", features = ["v4", "v5", "serde"] }
