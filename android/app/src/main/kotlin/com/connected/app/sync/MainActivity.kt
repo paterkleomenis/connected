@@ -1181,9 +1181,14 @@ fun SettingsScreen(
             onDismissRequest = {
                 showTelephonyDisclosureDialog.value = false
             },
-            title = { Text("Permission Required") },
+            title = { Text("Phone Link Permission") },
             text = {
-                Text("Connected needs access to your SMS and Call Logs to sync them with your desktop PC. We do not use this data for any other purpose.")
+                Text(
+                    "Connected requires SMS and Call Log permissions to synchronize your messages and calls with your linked desktop device.\n\n" +
+                    "This allows you to read, receive, and reply to SMS messages, as well as view your call history directly from your computer.\n\n" +
+                    "Because messages and calls are synchronized in real-time, Connected will access this data in the background, even when the app is closed or not in use.\n\n" +
+                    "All data is transferred directly between your devices over your local network using end-to-end encryption. No data is ever sent to remote servers or third parties."
+                )
             },
             confirmButton = {
                 Button(onClick = {
