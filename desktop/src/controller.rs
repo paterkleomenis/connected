@@ -363,6 +363,30 @@ fn spawn_event_loop(
                     let dev_name = d.name.clone();
                     let mut info: DeviceInfo = d.clone().into();
                     info.is_trusted = c_clone.is_device_trusted(&d.id);
+                    let is_trusted = info.is_trusted;
+
+                    // If the device was previously forgotten (e.g. forget happened while
+                    // it was offline), re-send the unpair notification so the remote side
+                    // learns it was forgotten and removes us from its trusted list.
+                    if !is_trusted && c_clone.is_device_forgotten_by_id(&d.id) {
+                        if let Ok(ip_addr) = dev_ip.parse::<std::net::IpAddr>() {
+                            let c = c_clone.clone();
+                            let dname = d.name.clone();
+                            tokio::spawn(async move {
+                                info!(
+                                    "Re-sending unpair notification to previously forgotten device: {}",
+                                    dname
+                                );
+                                let _ = c
+                                    .send_unpair_notification(
+                                        ip_addr,
+                                        dev_port,
+                                        UnpairReason::Forgotten,
+                                    )
+                                    .await;
+                            });
+                        }
+                    }
 
                     // If trusted, remove from pending
                     if info.is_trusted {
@@ -423,7 +447,7 @@ fn spawn_event_loop(
                         });
                     }
 
-                    if d.ip != "0.0.0.0" {
+                    if d.ip != "0.0.0.0" && is_trusted {
                         save_device_to_settings(
                             d.id.clone(),
                             SavedDeviceInfo {
@@ -437,7 +461,14 @@ fn spawn_event_loop(
                 }
                 ConnectedEvent::DeviceLost(id) => {
                     let mut store = get_devices_store().lock_or_recover();
-                    store.remove(&id);
+                    if let Some(device) = store.get_mut(&id) {
+                        if device.is_trusted {
+                            // Keep trusted devices visible as offline
+                            device.ip = "0.0.0.0".to_string();
+                        } else {
+                            store.remove(&id);
+                        }
+                    }
                 }
                 ConnectedEvent::CompressionProgress {
                     filename,
@@ -1428,6 +1459,40 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
                 get_devices_store()
                     .lock_or_recover()
                     .insert(info.id.clone(), info);
+            }
+
+            // Add trusted devices that are currently offline (not discovered via mDNS).
+            // These are shown in a separate "Offline" section so users can manage them
+            // (unpair/forget) without waiting for the device to reconnect.
+            {
+                let saved = get_saved_devices_setting();
+                let store = get_devices_store().lock_or_recover();
+                let missing: Vec<_> = saved
+                    .iter()
+                    .filter(|(device_id, info)| {
+                        !store.contains_key(*device_id) && info.ip != "0.0.0.0"
+                    })
+                    .filter(|(device_id, _)| c.is_device_trusted(device_id))
+                    .map(|(device_id, info)| {
+                        (
+                            device_id.clone(),
+                            DeviceInfo {
+                                id: device_id.clone(),
+                                name: info.name.clone(),
+                                ip: "0.0.0.0".to_string(),
+                                port: info.port,
+                                device_type: info.device_type,
+                                is_trusted: true,
+                                is_pending: false,
+                            },
+                        )
+                    })
+                    .collect();
+                drop(store);
+                let mut store = get_devices_store().lock_or_recover();
+                for (device_id, device) in missing {
+                    store.insert(device_id, device);
+                }
             }
 
             Some(c)

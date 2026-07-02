@@ -857,6 +857,20 @@ body {
     opacity: 1;
 }
 
+/* Offline device card variant */
+.device-card.offline {
+    opacity: 0.6;
+    border-style: dashed;
+}
+
+.device-card.offline:hover {
+    opacity: 0.8;
+}
+
+.device-card.offline .device-card-icon {
+    background: rgba(255, 255, 255, 0.03);
+}
+
 /* Device Card Icon */
 .device-card-icon {
     --icon-chip-size: 52px;

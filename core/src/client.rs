@@ -1240,6 +1240,14 @@ impl ConnectedClient {
             .any(|p| p.device_id.as_deref() == Some(device_id))
     }
 
+    pub fn is_device_forgotten_by_id(&self, device_id: &str) -> bool {
+        self.key_store
+            .read()
+            .get_forgotten_peers()
+            .iter()
+            .any(|p| p.device_id.as_deref() == Some(device_id))
+    }
+
     pub fn get_trusted_peers(&self) -> Vec<crate::security::PeerInfo> {
         self.key_store.read().get_trusted_peers()
     }
@@ -2408,8 +2416,11 @@ impl ConnectedClient {
                     .await;
             }
 
-            // Remove local trust after best-effort remote notification.
-            self.key_store.write().remove_peer(&fp)?;
+            // Mark as forgotten (keeps record to prevent auto-re-pairing) after
+            // best-effort remote notification. If the notification failed because
+            // the peer was offline, the DeviceFound handler will re-send it when
+            // the peer reconnects.
+            self.key_store.write().forget_peer(fp.clone())?;
 
             self.transport
                 .invalidate_connection_by_fingerprint_with_reason(&fp, b"forgotten");

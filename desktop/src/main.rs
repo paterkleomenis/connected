@@ -1860,10 +1860,10 @@ fn App() -> Element {
                                 Icon { icon: IconType::Refresh, size: 18, color: "currentColor".to_string() }
                             }
                         }
-                        span { class: "content-subtitle", "{devices_list.read().len()} device(s) found" }
+                        span { class: "content-subtitle", "{devices_list.read().iter().filter(|d| d.ip != \"0.0.0.0\").count()} device(s) found" }
                     }
 
-                    if devices_list.read().is_empty() {
+                    if devices_list.read().iter().all(|d| d.ip == "0.0.0.0") {
                         div {
                             class: "empty-state",
                             div {
@@ -1883,7 +1883,7 @@ fn App() -> Element {
                             class: "devices-container",
                             div {
                                 class: "device-grid",
-                                for device in devices_list.read().iter() {
+                                for device in devices_list.read().iter().filter(|d| d.ip != "0.0.0.0") {
                                     DeviceCard {
                                         key: "{device.id}",
                                         device: device.clone(),
@@ -3029,6 +3029,71 @@ fn App() -> Element {
                                 }
                                 div { class: "info-label", "IP" }
                                 div { class: "info-value", "{local_device_ip}" }
+                            }
+                        }
+
+                        // Paired Devices section
+                        div {
+                            class: "info-card",
+                            h3 {
+                                Icon { icon: IconType::Pair, size: 20, color: "currentColor".to_string() }
+                                " Paired Devices"
+                            }
+                            if devices_list.read().iter().filter(|d| d.is_trusted).count() == 0 {
+                                p { class: "settings-hint", "No devices paired yet." }
+                            } else {
+                                div {
+                                    class: "info-grid",
+                                    for device in devices_list.read().iter().filter(|d| d.is_trusted) {
+                                        div {
+                                            class: "paired-device-row",
+                                            style: "display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-light);",
+                                            div {
+                                                style: "display: flex; align-items: center; gap: 10px;",
+                                                div {
+                                                    style: "width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary);"
+                                                }
+                                                div {
+                                                    div { style: "font-weight: 500; font-size: var(--text-sm);", "{device.name}" }
+                                                    div { style: "font-size: var(--text-xs); color: var(--text-tertiary);",
+                                                        if device.ip != "0.0.0.0" {
+                                                            "{device.device_type.as_str()}"
+                                                        } else {
+                                                            "Offline"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            div {
+                                                style: "display: flex; gap: 6px;",
+                                                button {
+                                                    class: "secondary-button",
+                                                    style: "padding: 4px 8px; font-size: 0.75rem;",
+                                                    title: "Unpair (keep trust, device can reconnect automatically)",
+                                                    onclick: {
+                                                        let device_id = device.id.clone();
+                                                        move |_| {
+                                                            action_tx.send(AppAction::UnpairDevice { device_id: device_id.clone() });
+                                                        }
+                                                    },
+                                                    "Unpair"
+                                                }
+                                                button {
+                                                    class: "action-button danger",
+                                                    style: "padding: 4px 8px; font-size: 0.75rem;",
+                                                    title: "Forget (remove trust, requires re-pairing)",
+                                                    onclick: {
+                                                        let device_id = device.id.clone();
+                                                        move |_| {
+                                                            action_tx.send(AppAction::ForgetDevice { device_id: device_id.clone() });
+                                                        }
+                                                    },
+                                                    "Forget"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 

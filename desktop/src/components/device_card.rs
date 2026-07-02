@@ -19,7 +19,13 @@ pub fn DeviceCard(
     };
     let mut is_hovered = use_signal(|| false);
 
-    let card_class = if is_selected {
+    let card_class = if device.ip == "0.0.0.0" {
+        if is_selected {
+            "device-card offline selected"
+        } else {
+            "device-card offline"
+        }
+    } else if is_selected {
         "device-card selected"
     } else {
         "device-card"

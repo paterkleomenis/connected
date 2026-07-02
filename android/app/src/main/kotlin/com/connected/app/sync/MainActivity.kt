@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Close
@@ -1289,6 +1290,92 @@ fun SettingsScreen(
                             showRenameDialog.value = true
                         }) {
                             Text("Rename")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Paired Devices Section
+        item {
+            val trustedIds = connectedApp.trustedDevices.toList()
+            val savedMap = connectedApp.getSavedTrustedDevices().associateBy { it.id }
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Paired Devices", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Manage devices that have been paired with this device",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    if (trustedIds.isEmpty()) {
+                        Text(
+                            "No devices paired yet",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
+                    } else {
+                        trustedIds.forEach { deviceId ->
+                            val saved = savedMap[deviceId]
+                            val deviceName = saved?.name ?: deviceId
+                            val deviceType = saved?.deviceType ?: "Unknown"
+                            val isOnline = connectedApp.devices.any { it.id == deviceId }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(
+                                                color = if (isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                shape = CircleShape
+                                            )
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            deviceName,
+                                            style = MaterialTheme.typography.bodyLarge
+                                        )
+                                        Text(
+                                            if (isOnline) deviceType else "Offline",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Row {
+                                    TextButton(
+                                        onClick = { connectedApp.unpairDeviceByIdLocal(deviceId) }
+                                    ) {
+                                        Text("Unpair")
+                                    }
+                                    TextButton(
+                                        onClick = { connectedApp.forgetDeviceByIdLocal(deviceId) },
+                                        colors = ButtonDefaults.textButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.error
+                                        )
+                                    ) {
+                                        Text("Forget")
+                                    }
+                                }
+                            }
+                            if (deviceId != trustedIds.last()) {
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            }
                         }
                     }
                 }
