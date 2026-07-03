@@ -1671,6 +1671,24 @@ pub fn is_device_trusted(device_id: String) -> bool {
 }
 
 #[uniffi::export]
+pub fn get_trusted_peers() -> Vec<TrustedPeer> {
+    match get_client() {
+        Ok(client) => client
+            .get_trusted_peers()
+            .into_iter()
+            .filter_map(|p| {
+                Some(TrustedPeer {
+                    fingerprint: p.fingerprint,
+                    name: p.name.unwrap_or_default(),
+                    device_id: p.device_id.unwrap_or_default(),
+                })
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
+#[uniffi::export]
 pub fn accept_file_transfer(transfer_id: String) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
     client

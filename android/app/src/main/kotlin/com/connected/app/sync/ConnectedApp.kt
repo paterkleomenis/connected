@@ -48,7 +48,6 @@ import uniffi.connected_ffi.TelephonyCallback
 import uniffi.connected_ffi.UnpairCallback
 import uniffi.connected_ffi.acceptFileTransfer
 import uniffi.connected_ffi.cancelPairingRequest
-import uniffi.connected_ffi.forgetDeviceById
 import uniffi.connected_ffi.getDiscoveredDevices
 import uniffi.connected_ffi.getLocalDevice
 import uniffi.connected_ffi.initialize
@@ -90,7 +89,7 @@ import uniffi.connected_ffi.setPairingModePersistent
 import uniffi.connected_ffi.shutdown
 import uniffi.connected_ffi.startDiscovery
 import uniffi.connected_ffi.trustDevice
-import uniffi.connected_ffi.unpairDeviceById
+import uniffi.connected_ffi.getTrustedPeers
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Collections
@@ -362,42 +361,6 @@ class ConnectedApp(private val context: Context) {
     private val _prefDeviceName = "device_name"
     private val _prefDownloadDir = "download_directory"
     private val _prefThemeMode = "theme_mode"
-    private val _prefTrustedDevices = "trusted_devices"
-
-    data class SavedTrustedDevice(
-        val id: String,
-        val name: String,
-        val deviceType: String
-    )
-
-    fun saveTrustedDevice(deviceId: String, name: String, deviceType: String) {
-        val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
-        val devices = getSavedTrustedDevices().toMutableList()
-        if (devices.none { it.id == deviceId }) {
-            devices.add(SavedTrustedDevice(deviceId, name, deviceType))
-            val json = devices.joinToString(",") { "${it.id}|${it.name}|${it.deviceType}" }
-            prefs.edit { putString(_prefTrustedDevices, json) }
-        }
-    }
-
-    fun removeTrustedDevice(deviceId: String) {
-        val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
-        val devices = getSavedTrustedDevices().toMutableList()
-        devices.removeAll { it.id == deviceId }
-        val json = devices.joinToString(",") { "${it.id}|${it.name}|${it.deviceType}" }
-        prefs.edit { putString(_prefTrustedDevices, if (devices.isEmpty()) null else json) }
-    }
-
-    fun getSavedTrustedDevices(): List<SavedTrustedDevice> {
-        val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
-        val json = prefs.getString(_prefTrustedDevices, null) ?: return emptyList()
-        return json.split(",").filter { it.isNotEmpty() }.mapNotNull { entry ->
-            val parts = entry.split("|")
-            if (parts.size == 3) {
-                SavedTrustedDevice(parts[0], parts[1], parts[2])
-            } else null
-        }
-    }
 
     fun getCustomDownloadDir(): Uri? {
         val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
@@ -458,11 +421,6 @@ class ConnectedApp(private val context: Context) {
                             // Keep manager instance; it resumes when WiFi Aware returns
                             runOnMainThread {
                                 devices.clear()
-                                trustedDevices.clear()
-                                // Restore saved trusted devices (will be verified against keystore on next SDK restart)
-                                for (saved in getSavedTrustedDevices()) {
-                                    trustedDevices.add(saved.id)
-                                }
                             }
                         }
 
@@ -496,7 +454,6 @@ class ConnectedApp(private val context: Context) {
         // Clear UI list immediately so the user sees the refresh
         runOnMainThread {
             devices.clear()
-            trustedDevices.clear()
         }
         scope.launch(Dispatchers.IO) {
             try {
@@ -509,8 +466,16 @@ class ConnectedApp(private val context: Context) {
                 runOnMainThread {
                     devices.clear()
                     devices.addAll(list)
+                    // Re-populate trustedDevices from keystore so offline
+                    // paired devices aren't lost after a refresh.
                     trustedDevices.clear()
-                    list.forEach { if (isDeviceTrusted(it)) trustedDevices.add(it.id) }
+                    try {
+                        for (peer in getTrustedPeers()) {
+                            if (peer.deviceId.isNotEmpty()) {
+                                trustedDevices.add(peer.deviceId)
+                            }
+                        }
+                    } catch (_: Exception) {}
                 }
             } catch (e: Exception) {
                 Log.e("ConnectedApp", "Failed to refresh discovery", e)
@@ -695,8 +660,6 @@ class ConnectedApp(private val context: Context) {
                     if (!trustedDevices.contains(device.id)) {
                         trustedDevices.add(device.id)
                     }
-                    // Persist trusted device info so it survives device going offline
-                    saveTrustedDevice(device.id, device.name, device.deviceType.name)
 
                     if (pendingPairing.contains(device.id)) {
                         // Core auto-trusted (we initiated). Automatically finalize trusting in UI.
@@ -1252,7 +1215,6 @@ class ConnectedApp(private val context: Context) {
         override fun onDeviceUnpaired(deviceId: String, deviceName: String, reason: String) {
             runOnMainThread {
                 trustedDevices.remove(deviceId)
-                removeTrustedDevice(deviceId)
                 activeWifiAwareEndpoints.remove(deviceId)
                 val reasonText = when (reason) {
                     "blocked" -> "blocked you"
@@ -1296,20 +1258,16 @@ class ConnectedApp(private val context: Context) {
             registerUnpairCallback(unpairCallback)
             registerMediaControlCallback(mediaCallback)
 
-            // Restore saved trusted devices so offline paired devices appear in settings.
-            // Verify each against the core keystore — if the remote device forgot us,
-            // the peer is gone from the keystore and we should clean up.
-            for (saved in getSavedTrustedDevices()) {
-                val stillTrusted = try {
-                    isDeviceTrusted(saved.id)
-                } catch (_: Exception) { false }
-                if (stillTrusted) {
-                    if (!trustedDevices.contains(saved.id)) {
-                        trustedDevices.add(saved.id)
+            // Pre-populate trustedDevices from the core keystore so offline
+            // paired devices appear in Settings immediately on startup.
+            try {
+                for (peer in getTrustedPeers()) {
+                    if (peer.deviceId.isNotEmpty() && !trustedDevices.contains(peer.deviceId)) {
+                        trustedDevices.add(peer.deviceId)
                     }
-                } else {
-                    removeTrustedDevice(saved.id)
                 }
+            } catch (e: Exception) {
+                Log.w("ConnectedApp", "Failed to load trusted peers from keystore: ${e.message}")
             }
 
             // Restore custom download directory from preferences
@@ -3624,23 +3582,14 @@ class ConnectedApp(private val context: Context) {
         sendPairRequest(device)
     }
 
-    fun unpairDevice(device: DiscoveredDevice) {
-        unpairDeviceByIdInternal(device.id)
-    }
-
-    fun unpairDeviceByIdLocal(deviceId: String) {
-        unpairDeviceByIdInternal(deviceId)
-    }
-
-    private fun unpairDeviceByIdInternal(deviceId: String) {
+    fun unpairDeviceById(deviceId: String) {
         scope.launch(Dispatchers.IO) {
             locallyUnpairedDevices.add(deviceId)
-            removeTrustedDevice(deviceId)
             pendingPairing.remove(deviceId)
             pendingPairingAwaitingIp.remove(deviceId)
             activeWifiAwareEndpoints.remove(deviceId)
             try {
-                unpairDeviceById(deviceId)
+                uniffi.connected_ffi.unpairDeviceById(deviceId)
                 runOnMainThread {
                     trustedDevices.remove(deviceId)
                     android.widget.Toast.makeText(context, "Device unpaired", android.widget.Toast.LENGTH_SHORT).show()
@@ -3659,23 +3608,22 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    fun unpairDevice(device: DiscoveredDevice) {
+        unpairDeviceById(device.id)
+    }
+
     fun forgetDevice(device: DiscoveredDevice) {
-        forgetDeviceByIdInternal(device.id)
+        forgetDeviceById(device.id)
     }
 
-    fun forgetDeviceByIdLocal(deviceId: String) {
-        forgetDeviceByIdInternal(deviceId)
-    }
-
-    private fun forgetDeviceByIdInternal(deviceId: String) {
+    fun forgetDeviceById(deviceId: String) {
         scope.launch(Dispatchers.IO) {
             locallyUnpairedDevices.add(deviceId)
-            removeTrustedDevice(deviceId)
             pendingPairing.remove(deviceId)
             pendingPairingAwaitingIp.remove(deviceId)
             activeWifiAwareEndpoints.remove(deviceId)
             try {
-                forgetDeviceById(deviceId)
+                uniffi.connected_ffi.forgetDeviceById(deviceId)
                 runOnMainThread {
                     trustedDevices.remove(deviceId)
                     android.widget.Toast.makeText(context, "Device forgotten", android.widget.Toast.LENGTH_SHORT).show()

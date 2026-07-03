@@ -3189,9 +3189,19 @@ impl ConnectedClient {
 
                         match reason {
                             UnpairReason::Unpaired => {
-                                info!("Device {} unpaired (trust preserved)", resolved_device_id);
-                                if let Err(e) = key_store.write().unpair_peer(fingerprint.clone()) {
-                                    error!("Failed to mark peer as unpaired: {}", e);
+                                // Don't downgrade a Forgotten peer to Unpaired.
+                                if key_store.read().is_forgotten(&fingerprint) {
+                                    info!(
+                                        "Device {} already forgotten, not downgrading to unpaired",
+                                        resolved_device_id
+                                    );
+                                } else {
+                                    info!("Device {} unpaired (trust preserved)", resolved_device_id);
+                                    if let Err(e) =
+                                        key_store.write().unpair_peer(fingerprint.clone())
+                                    {
+                                        error!("Failed to mark peer as unpaired: {}", e);
+                                    }
                                 }
                             }
                             UnpairReason::Forgotten => {
@@ -3202,7 +3212,11 @@ impl ConnectedClient {
                         }
 
                         // Invalidate connection to ensure clean state on both sides
-                        transport.invalidate_connection(&addr);
+                        let close_reason = match reason {
+                            UnpairReason::Forgotten => b"forgotten".as_slice(),
+                            UnpairReason::Unpaired => b"unpaired".as_slice(),
+                        };
+                        transport.invalidate_connection_with_reason(&addr, close_reason);
 
                         let _ = event_tx.send(ConnectedEvent::DeviceUnpaired {
                             device_id: resolved_device_id,

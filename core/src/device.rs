@@ -15,12 +15,12 @@ pub enum DeviceType {
 impl DeviceType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            DeviceType::Android => "android",
-            DeviceType::IOS => "ios",
-            DeviceType::Linux => "linux",
-            DeviceType::Windows => "windows",
-            DeviceType::MacOS => "macos",
-            DeviceType::Unknown => "unknown",
+            DeviceType::Android => "Android",
+            DeviceType::IOS => "iOS",
+            DeviceType::Linux => "Linux",
+            DeviceType::Windows => "Windows",
+            DeviceType::MacOS => "macOS",
+            DeviceType::Unknown => "Unknown",
         }
     }
 }

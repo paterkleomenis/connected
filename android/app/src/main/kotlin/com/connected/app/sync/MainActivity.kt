@@ -69,7 +69,17 @@ import uniffi.connected_ffi.FfiCallLogEntry
 import uniffi.connected_ffi.FfiContact
 import uniffi.connected_ffi.FfiConversation
 import uniffi.connected_ffi.FfiSmsMessage
+import uniffi.connected_ffi.getTrustedPeers
 import androidx.core.net.toUri
+
+fun DeviceType.displayName() = when (this) {
+    DeviceType.ANDROID -> "Android"
+    DeviceType.IOS -> "iOS"
+    DeviceType.LINUX -> "Linux"
+    DeviceType.WINDOWS -> "Windows"
+    DeviceType.MAC_OS -> "macOS"
+    DeviceType.UNKNOWN -> "Unknown"
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
@@ -1299,7 +1309,8 @@ fun SettingsScreen(
         // Paired Devices Section
         item {
             val trustedIds = connectedApp.trustedDevices.toList()
-            val savedMap = connectedApp.getSavedTrustedDevices().associateBy { it.id }
+            val trustedPeers = try { getTrustedPeers() } catch (_: Exception) { emptyList() }
+            val peerNames = trustedPeers.associate { it.deviceId to it.name }
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                 modifier = Modifier.fillMaxWidth()
@@ -1321,10 +1332,10 @@ fun SettingsScreen(
                         )
                     } else {
                         trustedIds.forEach { deviceId ->
-                            val saved = savedMap[deviceId]
-                            val deviceName = saved?.name ?: deviceId
-                            val deviceType = saved?.deviceType ?: "Unknown"
-                            val isOnline = connectedApp.devices.any { it.id == deviceId }
+                            val onlineDevice = connectedApp.devices.firstOrNull { it.id == deviceId }
+                            val deviceName = onlineDevice?.name ?: peerNames[deviceId]?.takeIf { it.isNotEmpty() } ?: deviceId
+                            val deviceType = onlineDevice?.deviceType?.displayName() ?: "Offline"
+                            val isOnline = onlineDevice != null
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1359,12 +1370,12 @@ fun SettingsScreen(
                                 }
                                 Row {
                                     TextButton(
-                                        onClick = { connectedApp.unpairDeviceByIdLocal(deviceId) }
+                                        onClick = { connectedApp.unpairDeviceById(deviceId) }
                                     ) {
                                         Text("Unpair")
                                     }
                                     TextButton(
-                                        onClick = { connectedApp.forgetDeviceByIdLocal(deviceId) },
+                                        onClick = { connectedApp.forgetDeviceById(deviceId) },
                                         colors = ButtonDefaults.textButtonColors(
                                             contentColor = MaterialTheme.colorScheme.error
                                         )
