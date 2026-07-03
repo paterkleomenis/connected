@@ -1,6 +1,5 @@
 use crate::device::Device;
 use crate::telephony::TelephonyMessage;
-use crate::transport::UnpairReason;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,11 +63,10 @@ pub enum ConnectedEvent {
     },
     /// Pairing mode enabled/disabled
     PairingModeChanged(bool),
-    /// A paired device has unpaired/forgotten/blocked us
+    /// A paired device has unpaired/blocked us
     DeviceUnpaired {
         device_id: String,
         device_name: String,
-        reason: UnpairReason,
     },
     /// Media control event (command received or state update)
     MediaControl {

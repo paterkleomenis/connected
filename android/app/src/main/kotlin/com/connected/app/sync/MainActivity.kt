@@ -1370,17 +1370,12 @@ fun SettingsScreen(
                                 }
                                 Row {
                                     TextButton(
-                                        onClick = { connectedApp.unpairDeviceById(deviceId) }
-                                    ) {
-                                        Text("Unpair")
-                                    }
-                                    TextButton(
-                                        onClick = { connectedApp.forgetDeviceById(deviceId) },
+                                        onClick = { connectedApp.unpairDeviceById(deviceId) },
                                         colors = ButtonDefaults.textButtonColors(
                                             contentColor = MaterialTheme.colorScheme.error
                                         )
                                     ) {
-                                        Text("Forget")
+                                        Text("Unpair")
                                     }
                                 }
                             }
@@ -2364,19 +2359,6 @@ fun DeviceItem(
                                     onClick = {
                                         showMenu = false
                                         app.unpairDevice(device)
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Forget") },
-                                    leadingIcon = {
-                                        Icon(
-                                            painterResource(R.drawable.ic_refresh),
-                                            contentDescription = null
-                                        )
-                                    },
-                                    onClick = {
-                                        showMenu = false
-                                        app.forgetDevice(device)
                                     }
                                 )
                             }

@@ -1938,18 +1938,6 @@ fn App() -> Element {
                                         },
                                         Icon { icon: IconType::Unpair, size: 14, color: "currentColor".to_string() }
                                     }
-                                    button {
-                                        class: "header-action-btn warning",
-                                        title: "Forget device",
-                                        onclick: {
-                                            let device = device.clone();
-                                            move |_| {
-                                                action_tx.send(AppAction::ForgetDevice { device_id: device.id.clone() });
-                                                selected_device.set(None);
-                                            }
-                                        },
-                                        Icon { icon: IconType::Refresh, size: 14, color: "currentColor".to_string() }
-                                    }
                                 }
                             }
 
@@ -3067,9 +3055,9 @@ fn App() -> Element {
                                             div {
                                                 style: "display: flex; gap: 6px;",
                                                 button {
-                                                    class: "secondary-button",
+                                                    class: "action-button danger",
                                                     style: "padding: 4px 8px; font-size: 0.75rem;",
-                                                    title: "Unpair (keep trust, device can reconnect automatically)",
+                                                    title: "Unpair (remove trust, requires re-pairing)",
                                                     onclick: {
                                                         let device_id = device.id.clone();
                                                         move |_| {
@@ -3077,18 +3065,6 @@ fn App() -> Element {
                                                         }
                                                     },
                                                     "Unpair"
-                                                }
-                                                button {
-                                                    class: "action-button danger",
-                                                    style: "padding: 4px 8px; font-size: 0.75rem;",
-                                                    title: "Forget (remove trust, requires re-pairing)",
-                                                    onclick: {
-                                                        let device_id = device.id.clone();
-                                                        move |_| {
-                                                            action_tx.send(AppAction::ForgetDevice { device_id: device_id.clone() });
-                                                        }
-                                                    },
-                                                    "Forget"
                                                 }
                                             }
                                         }

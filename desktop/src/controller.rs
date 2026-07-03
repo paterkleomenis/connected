@@ -24,7 +24,6 @@ use crate::state::{
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
 use connected_core::telephony::{CallLogEntry, CallType};
-use connected_core::transport::UnpairReason;
 #[cfg(not(target_os = "windows"))]
 use connected_core::update::UpdateChecker;
 #[cfg(target_os = "macos")]
@@ -133,9 +132,6 @@ pub enum AppAction {
         device_id: String,
     },
     UnpairDevice {
-        device_id: String,
-    },
-    ForgetDevice {
         device_id: String,
     },
     SetPairingMode(bool),
@@ -365,27 +361,21 @@ fn spawn_event_loop(
                     info.is_trusted = c_clone.is_device_trusted(&d.id);
                     let is_trusted = info.is_trusted;
 
-                    // If the device was previously forgotten (e.g. forget happened while
+                    // If the device was previously unpaired (e.g. unpair happened while
                     // it was offline), re-send the unpair notification so the remote side
-                    // learns it was forgotten and removes us from its trusted list.
+                    // learns it was unpaired and removes us from its trusted list.
                     if !is_trusted
-                        && c_clone.is_device_forgotten_by_id(&d.id)
+                        && c_clone.is_device_unpaired(&d.id)
                         && let Ok(ip_addr) = dev_ip.parse::<std::net::IpAddr>()
                     {
                         let c = c_clone.clone();
                         let dname = d.name.clone();
                         tokio::spawn(async move {
                             info!(
-                                "Re-sending unpair notification to previously forgotten device: {}",
+                                "Re-sending unpair notification to previously unpaired device: {}",
                                 dname
                             );
-                            let _ = c
-                                .send_unpair_notification(
-                                    ip_addr,
-                                    dev_port,
-                                    UnpairReason::Forgotten,
-                                )
-                                .await;
+                            let _ = c.send_unpair_notification(ip_addr, dev_port).await;
                         });
                     }
 
@@ -754,7 +744,6 @@ fn spawn_event_loop(
                 } => {
                     if !*get_pairing_mode_state().lock_or_recover()
                         && !c_clone.is_device_trusted(&device_id)
-                        && !c_clone.is_device_forgotten(&fingerprint)
                     {
                         info!(
                             "Auto-rejecting pairing request while pairing mode is disabled: {} ({})",
@@ -830,7 +819,6 @@ fn spawn_event_loop(
                 ConnectedEvent::DeviceUnpaired {
                     device_id,
                     device_name,
-                    reason,
                 } => {
                     // Update local store - device is no longer trusted
                     {
@@ -840,27 +828,21 @@ fn spawn_event_loop(
                         }
                     }
 
-                    if matches!(reason, UnpairReason::Forgotten) {
-                        remove_device_from_settings(&device_id);
+                    remove_device_from_settings(&device_id);
 
-                        // If device is not discovered (offline), remove it from UI
-                        let is_discovered = c_clone
-                            .get_discovered_devices()
-                            .iter()
-                            .any(|d| d.id == device_id);
-                        if !is_discovered {
-                            let mut store = get_devices_store().lock_or_recover();
-                            store.remove(&device_id);
-                        }
+                    // If device is not discovered (offline), remove it from UI
+                    let is_discovered = c_clone
+                        .get_discovered_devices()
+                        .iter()
+                        .any(|d| d.id == device_id);
+                    if !is_discovered {
+                        let mut store = get_devices_store().lock_or_recover();
+                        store.remove(&device_id);
                     }
 
-                    let reason_str = match reason {
-                        UnpairReason::Unpaired => "unpaired from",
-                        UnpairReason::Forgotten => "forgotten by",
-                    };
                     add_notification(
                         "Device Disconnected",
-                        &format!("You were {} {}", reason_str, device_name),
+                        &format!("You were unpaired from {}", device_name),
                         "",
                     );
                 }
@@ -1464,7 +1446,7 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
 
             // Add trusted devices that are currently offline (not discovered via mDNS).
             // These are shown in a separate "Offline" section so users can manage them
-            // (unpair/forget) without waiting for the device to reconnect.
+            // (unpair) without waiting for the device to reconnect.
             {
                 let saved = get_saved_devices_setting();
                 let store = get_devices_store().lock_or_recover();
@@ -1789,23 +1771,6 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             AppAction::SetPairingMode(enabled) => {
                 if let Some(c) = &client {
                     c.set_pairing_mode_persistent(enabled);
-                }
-            }
-            AppAction::ForgetDevice { device_id } => {
-                if let Some(c) = &client {
-                    let c = c.clone();
-                    let did = device_id.clone();
-                    tokio::spawn(async move {
-                        match c.forget_device_by_id(&did).await {
-                            Err(e) => {
-                                error!("Failed to forget device: {}", e);
-                                add_notification("Forget Failed", &e.to_string(), "");
-                            }
-                            Ok(_) => {
-                                // Core emits event, event loop handles UI update
-                            }
-                        }
-                    });
                 }
             }
             AppAction::AcceptFileTransfer { transfer_id } => {

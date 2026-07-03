@@ -69,10 +69,9 @@ pub enum Message {
         text: String,
     },
     FileTransfer,
-    /// Sent when a device unpairs/forgets/blocks another device
+    /// Sent when a device unpairs/blocks another device
     DeviceUnpaired {
         device_id: String,
-        reason: UnpairReason,
     },
     MediaControl(MediaControlMessage),
     /// Telephony messages (SMS, calls, contacts)
@@ -104,12 +103,6 @@ pub struct MediaState {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub playing: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum UnpairReason {
-    Unpaired,
-    Forgotten,
 }
 
 struct ConnectionCache {
@@ -958,11 +951,7 @@ impl QuicTransport {
         Ok(connection)
     }
 
-    pub fn invalidate_connection(&self, addr: &SocketAddr) {
-        self.invalidate_connection_with_reason(addr, b"unpaired");
-    }
-
-    pub fn invalidate_connection_with_reason(&self, addr: &SocketAddr, reason: &[u8]) {
+    pub fn invalidate_connection(&self, addr: &SocketAddr, reason: &[u8]) {
         let addr = self.scoped_addr_for_aware(*addr);
         let mut cache = self.connection_cache.write();
         match cache.remove(&addr) {
@@ -977,15 +966,7 @@ impl QuicTransport {
         }
     }
 
-    pub fn invalidate_connection_by_fingerprint(&self, fingerprint: &str) {
-        self.invalidate_connection_by_fingerprint_with_reason(fingerprint, b"unpaired");
-    }
-
-    pub fn invalidate_connection_by_fingerprint_with_reason(
-        &self,
-        fingerprint: &str,
-        reason: &[u8],
-    ) {
+    pub fn invalidate_connection_by_fingerprint(&self, fingerprint: &str, reason: &[u8]) {
         let mut cache = self.connection_cache.write();
         let mut to_remove = Vec::new();
 
@@ -1092,7 +1073,7 @@ impl QuicTransport {
         let connection = self.connect(target_addr).await?;
 
         let (mut send, mut recv) = connection.open_bi().await.map_err(|e| {
-            self.invalidate_connection(&target_addr);
+            self.invalidate_connection(&target_addr, b"unpaired");
             ConnectedError::Connection(e.to_string())
         })?;
 
@@ -1150,11 +1131,11 @@ impl QuicTransport {
                 }
             }
             Ok(Err(e)) => {
-                self.invalidate_connection(&target_addr);
+                self.invalidate_connection(&target_addr, b"unpaired");
                 Err(ConnectedError::PingFailed(e.to_string()))
             }
             Err(_) => {
-                self.invalidate_connection(&target_addr);
+                self.invalidate_connection(&target_addr, b"unpaired");
                 Err(ConnectedError::Timeout("Ping timeout".to_string()))
             }
         }
@@ -1325,21 +1306,7 @@ impl QuicTransport {
                         remote_addr, reason
                     );
 
-                    if reason.reason == b"unpaired".as_slice()
-                        || reason.reason == b"forgotten".as_slice()
-                    {
-                        let unpair_reason = if reason.reason == b"forgotten".as_slice() {
-                            UnpairReason::Forgotten
-                        } else {
-                            UnpairReason::Unpaired
-                        };
-
-                        let reason_str = if unpair_reason == UnpairReason::Forgotten {
-                            "forgotten"
-                        } else {
-                            "unpaired"
-                        };
-
+                    if reason.reason == b"unpaired".as_slice() {
                         let device_id_opt = {
                             let ks = key_store.read();
                             ks.get_peer_info(&fingerprint).and_then(|p| p.device_id)
@@ -1347,22 +1314,19 @@ impl QuicTransport {
 
                         if let Some(device_id) = device_id_opt {
                             info!(
-                                "Peer {} ({}) disconnected with '{}' reason. Triggering unpair/forget.",
-                                device_id, fingerprint, reason_str
+                                "Peer {} ({}) disconnected with 'unpaired' reason. Triggering unpair.",
+                                device_id, fingerprint
                             );
                             let _ = message_tx.send((
                                 remote_addr,
                                 fingerprint.clone(),
-                                Message::DeviceUnpaired {
-                                    device_id,
-                                    reason: unpair_reason,
-                                },
+                                Message::DeviceUnpaired { device_id },
                                 None,
                             ));
                         } else {
                             warn!(
-                                "Peer closed with '{}' but device_id not found for fingerprint {}",
-                                reason_str, fingerprint
+                                "Peer closed with 'unpaired' but device_id not found for fingerprint {}",
+                                fingerprint
                             );
                         }
                     }
@@ -1503,11 +1467,11 @@ impl rustls::client::danger::ServerCertVerifier for PeerVerifier {
             return Ok(rustls::client::danger::ServerCertVerified::assertion());
         }
 
-        // Forgotten peers can connect but will need to go through pairing request
+        // Unpaired peers can connect but will need to go through pairing request
         // Allow connection so handshake message can be processed
-        if ks.is_forgotten(&fingerprint) {
+        if ks.is_unpaired(&fingerprint) {
             info!(
-                "Allowing FORGOTTEN peer (will require re-pairing): {}",
+                "Allowing UNPAIRED peer (will require re-pairing): {}",
                 fingerprint
             );
             return Ok(rustls::client::danger::ServerCertVerified::assertion());
@@ -1612,10 +1576,10 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
             return Ok(rustls::server::danger::ClientCertVerified::assertion());
         }
 
-        // Forgotten clients can connect but will trigger pairing request
-        if ks.is_forgotten(&fingerprint) {
+        // Unpaired clients can connect but will trigger pairing request
+        if ks.is_unpaired(&fingerprint) {
             info!(
-                "Allowing FORGOTTEN client (will require re-pairing): {}",
+                "Allowing UNPAIRED client (will require re-pairing): {}",
                 fingerprint
             );
             return Ok(rustls::server::danger::ClientCertVerified::assertion());

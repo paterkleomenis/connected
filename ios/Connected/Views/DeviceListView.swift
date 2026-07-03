@@ -71,7 +71,6 @@ struct DeviceListView: View {
                                     onPair: { model.requestPairing(with: device) },
                                     onCancelPair: { model.cancelPairing(with: device) },
                                     onUnpair: { model.unpairDevice(device) },
-                                    onForget: { model.forgetDevice(device) },
                                     onSendFile: {
                                         selectedFileTarget = device
                                         showingFileImporter = true
@@ -213,7 +212,6 @@ private struct DeviceRow: View {
     let onPair: () -> Void
     let onCancelPair: () -> Void
     let onUnpair: () -> Void
-    let onForget: () -> Void
     let onSendFile: () -> Void
     let onSendPendingShare: () -> Void
     let onShareClipboard: () -> Void
@@ -290,7 +288,6 @@ private struct DeviceRow: View {
                                 Button("Request Call Log", action: onRequestCallLog)
                             }
                             Button("Unpair", role: .destructive, action: onUnpair)
-                            Button("Forget", role: .destructive, action: onForget)
                         } label: {
                             Image(systemName: "ellipsis.circle.fill")
                                 .font(.title)

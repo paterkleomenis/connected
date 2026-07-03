@@ -183,7 +183,6 @@ class ConnectedApp(private val context: Context) {
     val pendingShareUris = mutableStateListOf<String>()
 
     private val pendingPairingAwaitingIp = mutableSetOf<String>()
-    private val locallyUnpairedDevices = mutableSetOf<String>()
     private val activeWifiAwareEndpoints = ConcurrentHashMap<String, Long>()
 
     // Stores pending file transfers with timestamp for cleanup: deviceId -> (timestamp, queue of file paths)
@@ -655,8 +654,7 @@ class ConnectedApp(private val context: Context) {
 
 
 
-                if (isDeviceTrusted(device) && !locallyUnpairedDevices.contains(device.id)) {
-                    locallyUnpairedDevices.remove(device.id)
+                if (isDeviceTrusted(device)) {
                     if (!trustedDevices.contains(device.id)) {
                         trustedDevices.add(device.id)
                     }
@@ -675,25 +673,6 @@ class ConnectedApp(private val context: Context) {
                 } else {
                     if (trustedDevices.contains(device.id)) {
                         trustedDevices.remove(device.id)
-                    }
-
-                    // If this device was locally forgotten (user tapped Forget while it
-                    // was offline), re-send the unpair notification now that it's back
-                    // online so the remote side removes us from its trusted list.
-                    if (locallyUnpairedDevices.contains(device.id)
-                        && !isSyntheticIp(device.ip)
-                    ) {
-                        locallyUnpairedDevices.remove(device.id)
-                        val ip = device.ip
-                        val port = device.port
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                Log.d("ConnectedApp", "Re-sending unpair notification to previously forgotten device: ${device.name}")
-                                sendUnpairNotification(ip, port, "forgotten")
-                            } catch (e: Exception) {
-                                Log.w("ConnectedApp", "Failed to re-send unpair notification: $e")
-                            }
-                        }
                     }
                 }
 
@@ -747,7 +726,7 @@ class ConnectedApp(private val context: Context) {
                 devices.removeAll { it.id == deviceId }
 
                 // Keep trusted devices visible as offline in settings.
-                // They remain in trustedDevices so the user can manage (forget/unpair)
+                // They remain in trustedDevices so the user can manage (unpair)
                 // them even when the remote device is offline.
                 // Cleanup of truly untrusted devices happens in initialize() on restart.
 
@@ -1218,7 +1197,6 @@ class ConnectedApp(private val context: Context) {
                 activeWifiAwareEndpoints.remove(deviceId)
                 val reasonText = when (reason) {
                     "blocked" -> "blocked you"
-                    "forgotten" -> "forgot you"
                     else -> "unpaired from you"
                 }
                 unpairNotification.value = "$deviceName $reasonText"
@@ -3578,13 +3556,11 @@ class ConnectedApp(private val context: Context) {
 
     // Device Management Wrappers
     fun pairDevice(device: DiscoveredDevice) {
-        locallyUnpairedDevices.remove(device.id)
         sendPairRequest(device)
     }
 
     fun unpairDeviceById(deviceId: String) {
         scope.launch(Dispatchers.IO) {
-            locallyUnpairedDevices.add(deviceId)
             pendingPairing.remove(deviceId)
             pendingPairingAwaitingIp.remove(deviceId)
             activeWifiAwareEndpoints.remove(deviceId)
@@ -3612,36 +3588,6 @@ class ConnectedApp(private val context: Context) {
         unpairDeviceById(device.id)
     }
 
-    fun forgetDevice(device: DiscoveredDevice) {
-        forgetDeviceById(device.id)
-    }
-
-    fun forgetDeviceById(deviceId: String) {
-        scope.launch(Dispatchers.IO) {
-            locallyUnpairedDevices.add(deviceId)
-            pendingPairing.remove(deviceId)
-            pendingPairingAwaitingIp.remove(deviceId)
-            activeWifiAwareEndpoints.remove(deviceId)
-            try {
-                uniffi.connected_ffi.forgetDeviceById(deviceId)
-                runOnMainThread {
-                    trustedDevices.remove(deviceId)
-                    android.widget.Toast.makeText(context, "Device forgotten", android.widget.Toast.LENGTH_SHORT).show()
-                }
-            } catch (e: Exception) {
-                Log.e("ConnectedApp", "Forget failed", e)
-                runOnMainThread {
-                    trustedDevices.remove(deviceId)
-                    android.widget.Toast.makeText(
-                        context,
-                        "Forget failed: ${e.message}",
-                        android.widget.Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        }
-    }
-
     fun rejectDevice(request: PairingRequest) {
         scope.launch(Dispatchers.IO) {
             try {
@@ -3667,7 +3613,6 @@ class ConnectedApp(private val context: Context) {
                 pairingRequest.value = null
                 dismissPairingNotification()
                 runOnMainThread {
-                    locallyUnpairedDevices.remove(request.deviceId)
                     pendingPairing.remove(request.deviceId)
                     if (!trustedDevices.contains(request.deviceId)) {
                         trustedDevices.add(request.deviceId)

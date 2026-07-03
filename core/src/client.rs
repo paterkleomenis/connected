@@ -3,8 +3,8 @@ use crate::discovery::{DiscoveryEvent, DiscoveryService, DiscoverySource};
 use crate::error::{ConnectedError, Result};
 use crate::events::{ConnectedEvent, TransferDirection};
 use crate::file_transfer::{FileTransfer, IncomingTransferConfig, TransferProgress};
-use crate::security::KeyStore;
-use crate::transport::{MAX_MESSAGE_SIZE, Message, QuicTransport, UnpairReason};
+use crate::security::{KeyStore, PeerStatus};
+use crate::transport::{MAX_MESSAGE_SIZE, Message, QuicTransport};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -1155,10 +1155,10 @@ impl ConnectedClient {
             // Then invalidate connection
             let addr = SocketAddr::new(ip, port);
             self.transport
-                .invalidate_connection_with_reason(&addr, reason.as_bytes());
+                .invalidate_connection(&addr, reason.as_bytes());
         }
 
-        self.invalidate_connection_by_device_id_with_reason(device_id, reason.as_bytes());
+        self.invalidate_connection_by_device_id(device_id, reason.as_bytes());
 
         info!("Ended pairing with {}: {}", device_id, reason);
         Ok(())
@@ -1240,12 +1240,12 @@ impl ConnectedClient {
             .any(|p| p.device_id.as_deref() == Some(device_id))
     }
 
-    pub fn is_device_forgotten_by_id(&self, device_id: &str) -> bool {
+    pub fn is_device_unpaired(&self, device_id: &str) -> bool {
         self.key_store
             .read()
-            .get_forgotten_peers()
+            .get_all_known_peers()
             .iter()
-            .any(|p| p.device_id.as_deref() == Some(device_id))
+            .any(|p| p.device_id.as_deref() == Some(device_id) && p.status == PeerStatus::Unpaired)
     }
 
     pub fn get_trusted_peers(&self) -> Vec<crate::security::PeerInfo> {
@@ -1317,7 +1317,7 @@ impl ConnectedClient {
                         addr, e
                     );
 
-                    self.transport.invalidate_connection(&addr);
+                    self.transport.invalidate_connection(&addr, b"unpaired");
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     self.send_handshake_internal(addr).await
                 } else {
@@ -1649,7 +1649,6 @@ impl ConnectedClient {
         &self,
         target_ip: IpAddr,
         target_port: u16,
-        reason: UnpairReason,
     ) -> Result<()> {
         let addr = SocketAddr::new(target_ip, target_port);
 
@@ -1667,7 +1666,6 @@ impl ConnectedClient {
 
         let msg = Message::DeviceUnpaired {
             device_id: self.local_device.id.clone(),
-            reason,
         };
 
         let data = serde_json::to_vec(&msg)
@@ -1707,7 +1705,7 @@ impl ConnectedClient {
                     "Clipboard send to {} failed ({}), invalidating connection and retrying...",
                     addr, e
                 );
-                self.transport.invalidate_connection(&addr);
+                self.transport.invalidate_connection(&addr, b"unpaired");
                 return self.send_clipboard_inner(addr, text).await;
             }
         }
@@ -1793,7 +1791,7 @@ impl ConnectedClient {
                     "Media control send to {} failed ({}), invalidating connection and retrying...",
                     addr, e
                 );
-                self.transport.invalidate_connection(&addr);
+                self.transport.invalidate_connection(&addr, b"unpaired");
                 return self.send_media_control_inner(addr, msg).await;
             }
         }
@@ -1875,7 +1873,7 @@ impl ConnectedClient {
                     "Telephony send to {} failed ({}), invalidating connection and retrying...",
                     addr, e
                 );
-                self.transport.invalidate_connection(&addr);
+                self.transport.invalidate_connection(&addr, b"unpaired");
 
                 // Retry once with fresh connection
                 return self.send_telephony_inner(addr, &msg).await;
@@ -2282,12 +2280,7 @@ impl ConnectedClient {
         }
     }
 
-    /// Invalidate cached connection for a device by looking up its IP from discovered devices
-    fn invalidate_connection_by_device_id(&self, device_id: &str) {
-        self.invalidate_connection_by_device_id_with_reason(device_id, b"unpaired");
-    }
-
-    fn invalidate_connection_by_device_id_with_reason(&self, device_id: &str, reason: &[u8]) {
+    fn invalidate_connection_by_device_id(&self, device_id: &str, reason: &[u8]) {
         let discovered = self.discovery.get_discovered_devices();
         info!(
             "Looking for device {} in {} discovered devices",
@@ -2301,8 +2294,7 @@ impl ConnectedClient {
         if let Some(device) = discovered.iter().find(|d| d.id == device_id) {
             if let Some(ip) = device.ip_addr() {
                 let addr = SocketAddr::new(ip, device.port);
-                self.transport
-                    .invalidate_connection_with_reason(&addr, reason);
+                self.transport.invalidate_connection(&addr, reason);
                 info!(
                     "Invalidated connection cache for device {} at {}",
                     device_id, addr
@@ -2326,10 +2318,9 @@ impl ConnectedClient {
         self.pending_handshakes.read().contains_key(ip)
     }
 
-    /// Forget a device - completely removes trust.
-    /// The device will need to go through full pairing request flow again.
-    /// This is what the UI "Forget" action should call.
-    pub async fn forget_device(&self, fingerprint: &str) -> Result<()> {
+    /// Unpair a device - removes trust but keeps record to prevent auto-re-pairing.
+    /// The device will need to go through pairing request flow again.
+    pub async fn unpair_device(&self, fingerprint: &str) -> Result<()> {
         let (device_id, device_name, target) = {
             let ks = self.key_store.read();
             let info = ks.get_peer_info(fingerprint);
@@ -2356,32 +2347,34 @@ impl ConnectedClient {
         // Try to notify peer while it is still trusted locally, so opening the
         // control stream is permitted even when pairing mode is disabled.
         if let Some((ip, port)) = target {
-            let _ = self
-                .send_unpair_notification(ip, port, UnpairReason::Forgotten)
-                .await;
+            let _ = self.send_unpair_notification(ip, port).await;
         }
 
-        // Remove local trust after best-effort remote notification.
-        self.key_store.write().remove_peer(fingerprint)?;
+        // Mark as unpaired in keystore (keeps record to prevent auto-re-pairing)
+        self.key_store
+            .write()
+            .unpair_peer(fingerprint.to_string())?;
 
         // Invalidate cached connection
-        self.invalidate_connection_by_device_id_with_reason(&device_id, b"forgotten");
+        self.invalidate_connection_by_device_id(&device_id, b"unpaired");
         self.transport
-            .invalidate_connection_by_fingerprint_with_reason(fingerprint, b"forgotten");
+            .invalidate_connection_by_fingerprint(fingerprint, b"unpaired");
 
         // Emit DeviceUnpaired event
         let _ = self.event_tx.send(ConnectedEvent::DeviceUnpaired {
             device_id: device_id.clone(),
             device_name,
-            reason: UnpairReason::Forgotten,
         });
 
-        info!("Forgot device {} - trust completely removed", device_id);
+        info!(
+            "Unpaired device {} - trust removed, requires re-pairing",
+            device_id
+        );
         Ok(())
     }
 
-    /// Forget a device by its device_id - completely removes trust.
-    pub async fn forget_device_by_id(&self, device_id: &str) -> Result<()> {
+    /// Unpair a device by its device_id - removes trust but keeps record.
+    pub async fn unpair_device_by_id(&self, device_id: &str) -> Result<()> {
         let (fingerprint, device_name, target) = {
             let ks = self.key_store.read();
             let peers = ks.get_all_known_peers();
@@ -2411,162 +2404,27 @@ impl ConnectedClient {
             // Try to notify peer while it is still trusted locally, so opening
             // the control stream is permitted even when pairing mode is disabled.
             if let Some((ip, port)) = target {
-                let _ = self
-                    .send_unpair_notification(ip, port, UnpairReason::Forgotten)
-                    .await;
+                let _ = self.send_unpair_notification(ip, port).await;
             }
 
-            // Mark as forgotten (keeps record to prevent auto-re-pairing) after
-            // best-effort remote notification. If the notification failed because
-            // the peer was offline, the DeviceFound handler will re-send it when
-            // the peer reconnects.
-            self.key_store.write().forget_peer(fp.clone())?;
+            // Mark as unpaired in keystore (keeps record to prevent auto-re-pairing)
+            self.key_store.write().unpair_peer(fp.clone())?;
 
             self.transport
-                .invalidate_connection_by_fingerprint_with_reason(&fp, b"forgotten");
-        } else {
-            // Even if not found in keystore, try to invalidate connection
+                .invalidate_connection_by_fingerprint(&fp, b"unpaired");
         }
 
         // Invalidate any cached connection to this device
-        self.invalidate_connection_by_device_id_with_reason(device_id, b"forgotten");
+        self.invalidate_connection_by_device_id(device_id, b"unpaired");
 
         // Emit event so UI updates
         let _ = self.event_tx.send(ConnectedEvent::DeviceUnpaired {
             device_id: device_id.to_string(),
             device_name,
-            reason: UnpairReason::Forgotten,
-        });
-
-        info!("Forgot device {} - trust completely removed", device_id);
-        Ok(())
-    }
-
-    /// Completely remove a device from known peers.
-    /// This allows re-pairing without any record (clean slate).
-    ///
-    /// Difference between forget and remove:
-    /// - forget: Device must go through pairing request (user approval required)
-    /// - remove: Device is unknown, can auto-pair in pairing mode
-    /// - block: Device cannot connect at all
-    pub fn is_device_forgotten(&self, fingerprint: &str) -> bool {
-        self.key_store.read().is_forgotten(fingerprint)
-    }
-
-    pub fn get_forgotten_peers(&self) -> Vec<crate::security::PeerInfo> {
-        self.key_store.read().get_forgotten_peers()
-    }
-
-    /// Unpair a device - disconnects but keeps trust intact.
-    /// The device can reconnect automatically anytime (no re-pairing needed).
-    /// This is what the UI "Unpair" action should call.
-    pub async fn unpair_device(&self, fingerprint: &str) -> Result<()> {
-        let (device_id, device_name, target) = {
-            let ks = self.key_store.read();
-            let info = ks.get_peer_info(fingerprint);
-            if let Some(p) = info {
-                let did = p.device_id.unwrap_or_else(|| "unknown".to_string());
-                let name = p.name.unwrap_or_else(|| "Unknown".to_string());
-
-                // Try to find IP/Port
-                let target = self
-                    .discovery
-                    .get_device_by_id(&did)
-                    .and_then(|d| d.ip_addr().map(|ip| (ip, d.port)));
-
-                (did, name, target)
-            } else {
-                ("unknown".to_string(), "Unknown".to_string(), None)
-            }
-        };
-
-        // Mark as unpaired in keystore immediately
-        if let Err(e) = self.key_store.write().unpair_peer(fingerprint.to_string()) {
-            warn!("Failed to mark peer as unpaired in keystore: {}", e);
-        }
-
-        if let Some((ip, _)) = target {
-            self.pending_handshakes.write().remove(&ip);
-        }
-
-        // Try to send notification
-        if let Some((ip, port)) = target {
-            let _ = self
-                .send_unpair_notification(ip, port, UnpairReason::Unpaired)
-                .await;
-        }
-
-        // Just invalidate the connection - trust remains intact
-        self.invalidate_connection_by_device_id(&device_id);
-        self.transport
-            .invalidate_connection_by_fingerprint(fingerprint);
-
-        // Emit event so UI updates
-        let _ = self.event_tx.send(ConnectedEvent::DeviceUnpaired {
-            device_id: device_id.clone(),
-            device_name,
-            reason: UnpairReason::Unpaired,
-        });
-
-        info!("Unpaired device - trust preserved, can reconnect anytime");
-        Ok(())
-    }
-
-    /// Unpair a device by its device_id - disconnects but keeps trust intact.
-    pub async fn unpair_device_by_id(&self, device_id: &str) -> Result<()> {
-        let (fingerprint, device_name, target) = {
-            let ks = self.key_store.read();
-            let peers = ks.get_all_known_peers();
-            if let Some(p) = peers
-                .into_iter()
-                .find(|p| p.device_id.as_deref() == Some(device_id))
-            {
-                let name = p.name.unwrap_or_else(|| "Unknown".to_string());
-
-                // Try to find IP/Port
-                let target = self
-                    .discovery
-                    .get_device_by_id(device_id)
-                    .and_then(|d| d.ip_addr().map(|ip| (ip, d.port)));
-
-                (Some(p.fingerprint), name, target)
-            } else {
-                (None, "Unknown".to_string(), None)
-            }
-        };
-
-        // Mark as unpaired in keystore immediately
-        if let Some(fp) = &fingerprint
-            && let Err(e) = self.key_store.write().unpair_peer(fp.clone())
-        {
-            warn!("Failed to mark peer as unpaired in keystore: {}", e);
-        }
-
-        if let Some((ip, _)) = target {
-            self.pending_handshakes.write().remove(&ip);
-        }
-
-        if let Some((ip, port)) = target {
-            let _ = self
-                .send_unpair_notification(ip, port, UnpairReason::Unpaired)
-                .await;
-        }
-
-        // Just invalidate the connection - trust remains intact
-        self.invalidate_connection_by_device_id(device_id);
-        if let Some(fp) = fingerprint {
-            self.transport.invalidate_connection_by_fingerprint(&fp);
-        }
-
-        // Emit event so UI updates
-        let _ = self.event_tx.send(ConnectedEvent::DeviceUnpaired {
-            device_id: device_id.to_string(),
-            device_name,
-            reason: UnpairReason::Unpaired,
         });
 
         info!(
-            "Unpaired device {} - trust preserved, can reconnect anytime",
+            "Unpaired device {} - trust removed, requires re-pairing",
             device_id
         );
         Ok(())
@@ -2708,11 +2566,10 @@ impl ConnectedClient {
 
                         // Take a single KeyStore snapshot to avoid inconsistent state
                         // between multiple separate reads (TOCTOU within the lock).
-                        let (is_trusted, is_forgotten, is_unpaired, _needs_pairing) = {
+                        let (is_trusted, is_unpaired, _needs_pairing) = {
                             let ks = key_store.read();
                             (
                                 ks.is_trusted(&fingerprint),
-                                ks.is_forgotten(&fingerprint),
                                 ks.is_unpaired(&fingerprint),
                                 ks.needs_pairing_request(&fingerprint),
                             )
@@ -2721,10 +2578,84 @@ impl ConnectedClient {
                         let pending_entry = pending_handshakes.read().get(&addr.ip()).cloned();
                         let has_pending = pending_entry.is_some();
 
-                        // If forgotten, always require re-pairing approval (don't auto-trust)
-                        if is_forgotten {
+                        // If WE initiated the pairing (pending outbound handshake),
+                        // auto-trust the handshake regardless of unpaired status.
+                        // The is_unpaired guard only applies to INCOMING connections
+                        // where we did NOT initiate the pairing.
+                        if !is_trusted && has_pending {
+                            let pending_fp_matches = match &pending_entry {
+                                Some(pending) => pending
+                                    .fingerprint
+                                    .as_ref()
+                                    .is_none_or(|expected_fp| *expected_fp == fingerprint),
+                                None => false,
+                            };
+
+                            if pending_fp_matches {
+                                info!(
+                                    "Auto-trusting peer from Handshake (pending outbound pairing): {} - {}",
+                                    device_name, fingerprint
+                                );
+                                pending_handshakes.write().remove(&addr.ip());
+
+                                if let Err(e) = key_store.write().trust_peer(
+                                    fingerprint.clone(),
+                                    Some(device_id.clone()),
+                                    Some(device_name.clone()),
+                                ) {
+                                    error!("Failed to auto-trust peer: {}", e);
+                                }
+
+                                // Emit DeviceFound to refresh UI
+                                let known_device = discovery.get_device_by_id(&device_id);
+                                let resolved_type = known_device
+                                    .as_ref()
+                                    .map(|dev| dev.device_type)
+                                    .unwrap_or(DeviceType::Unknown);
+                                let resolved_port = known_device
+                                    .as_ref()
+                                    .map(|dev| dev.port)
+                                    .filter(|port| *port != 0)
+                                    .unwrap_or_else(|| {
+                                        if listening_port != 0 {
+                                            listening_port
+                                        } else {
+                                            addr.port()
+                                        }
+                                    });
+                                let d = Device::new(
+                                    device_id,
+                                    device_name.clone(),
+                                    addr.ip(),
+                                    resolved_port,
+                                    resolved_type,
+                                );
+                                let _ = discovery
+                                    .upsert_device_endpoint(d.clone(), DiscoverySource::Connected);
+                                let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
+
+                                if let Some(mut send) = send_stream.take() {
+                                    let msg = Message::HandshakeAck {
+                                        device_id: local_id.clone(),
+                                        device_name: local_name.read().clone(),
+                                    };
+                                    if let Ok(data) = serde_json::to_vec(&msg) {
+                                        let len_bytes = (data.len() as u32).to_be_bytes();
+                                        if send.write_all(&len_bytes).await.is_ok() {
+                                            let _ = send.write_all(&data).await;
+                                        }
+                                        let _ = send.finish();
+                                    }
+                                }
+
+                                continue;
+                            }
+                        }
+
+                        // If unpaired, require re-approval (incoming connection, not our pending handshake)
+                        if is_unpaired {
                             info!(
-                                "Received Handshake from FORGOTTEN peer (requires re-approval): {} - {}",
+                                "Received Handshake from UNPAIRED peer (requires re-approval): {} - {}",
                                 device_name, fingerprint
                             );
                             record_pending_pairing_request(
@@ -2737,77 +2668,6 @@ impl ConnectedClient {
                                 device_name,
                                 device_id,
                             });
-                            continue;
-                        }
-
-                        // If we have a pending handshake with a stored fingerprint,
-                        // verify it matches this connection's fingerprint to prevent
-                        // auto-trusting a different device that shares/spoofs the IP.
-                        let pending_fp_matches = match &pending_entry {
-                            Some(pending) => pending
-                                .fingerprint
-                                .as_ref()
-                                .is_none_or(|expected_fp| *expected_fp == fingerprint),
-                            None => false,
-                        };
-
-                        if (!is_trusted && has_pending && pending_fp_matches) || is_unpaired {
-                            info!(
-                                "Auto-trusting peer from Handshake (pending outbound pairing or unpaired): {} - {}",
-                                device_name, fingerprint
-                            );
-                            pending_handshakes.write().remove(&addr.ip());
-
-                            if let Err(e) = key_store.write().trust_peer(
-                                fingerprint.clone(),
-                                Some(device_id.clone()),
-                                Some(device_name.clone()),
-                            ) {
-                                error!("Failed to auto-trust peer: {}", e);
-                            }
-
-                            // Emit DeviceFound to refresh UI
-                            let known_device = discovery.get_device_by_id(&device_id);
-                            let resolved_type = known_device
-                                .as_ref()
-                                .map(|dev| dev.device_type)
-                                .unwrap_or(DeviceType::Unknown);
-                            let resolved_port = known_device
-                                .as_ref()
-                                .map(|dev| dev.port)
-                                .filter(|port| *port != 0)
-                                .unwrap_or_else(|| {
-                                    if listening_port != 0 {
-                                        listening_port
-                                    } else {
-                                        addr.port()
-                                    }
-                                });
-                            let d = Device::new(
-                                device_id,
-                                device_name.clone(),
-                                addr.ip(),
-                                resolved_port,
-                                resolved_type,
-                            );
-                            let _ = discovery
-                                .upsert_device_endpoint(d.clone(), DiscoverySource::Connected);
-                            let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
-
-                            if let Some(mut send) = send_stream.take() {
-                                let msg = Message::HandshakeAck {
-                                    device_id: local_id.clone(),
-                                    device_name: local_name.read().clone(),
-                                };
-                                if let Ok(data) = serde_json::to_vec(&msg) {
-                                    let len_bytes = (data.len() as u32).to_be_bytes();
-                                    if send.write_all(&len_bytes).await.is_ok() {
-                                        let _ = send.write_all(&data).await;
-                                    }
-                                    let _ = send.finish();
-                                }
-                            }
-
                             continue;
                         }
 
@@ -2907,20 +2767,89 @@ impl ConnectedClient {
                         device_id: remote_device_id,
                         device_name,
                     } => {
+                        let mut send_stream = send_stream;
                         info!("Received HandshakeAck from {}", device_name);
 
                         // Take a single KeyStore snapshot to avoid inconsistent state
-                        let (is_trusted, is_forgotten) = {
+                        let (is_trusted, is_unpaired) = {
                             let ks = key_store.read();
-                            (ks.is_trusted(&fingerprint), ks.is_forgotten(&fingerprint))
+                            (ks.is_trusted(&fingerprint), ks.is_unpaired(&fingerprint))
                         };
                         let pending_entry = pending_handshakes.read().get(&addr.ip()).cloned();
                         let has_pending = pending_entry.is_some();
 
-                        // If forgotten, require re-approval even for acks
-                        if is_forgotten {
+                        // If WE initiated the pairing (pending outbound handshake),
+                        // auto-trust the ack regardless of unpaired status.
+                        // The is_unpaired guard only applies to INCOMING connections
+                        // where we did NOT initiate the pairing.
+                        if !is_trusted && has_pending {
+                            let pending_fp_matches = match &pending_entry {
+                                Some(pending) => pending
+                                    .fingerprint
+                                    .as_ref()
+                                    .is_none_or(|expected_fp| *expected_fp == fingerprint),
+                                None => false,
+                            };
+
+                            if pending_fp_matches {
+                                info!(
+                                    "Auto-trusting peer from HandshakeAck: {} - {} (pending outbound handshake)",
+                                    device_name, fingerprint,
+                                );
+
+                                pending_handshakes.write().remove(&addr.ip());
+
+                                if let Err(e) = key_store.write().trust_peer(
+                                    fingerprint.clone(),
+                                    Some(remote_device_id.clone()),
+                                    Some(device_name.clone()),
+                                ) {
+                                    error!("Failed to auto-trust peer: {}", e);
+                                }
+
+                                let known_device = discovery.get_device_by_id(&remote_device_id);
+                                let resolved_type = known_device
+                                    .as_ref()
+                                    .map(|dev| dev.device_type)
+                                    .unwrap_or(DeviceType::Unknown);
+                                let resolved_port = known_device
+                                    .as_ref()
+                                    .map(|dev| dev.port)
+                                    .filter(|port| *port != 0)
+                                    .unwrap_or(addr.port());
+                                let d = Device::new(
+                                    remote_device_id,
+                                    device_name.clone(),
+                                    addr.ip(),
+                                    resolved_port,
+                                    resolved_type,
+                                );
+                                let _ = discovery
+                                    .upsert_device_endpoint(d.clone(), DiscoverySource::Connected);
+                                let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
+
+                                if let Some(mut send) = send_stream.take() {
+                                    let msg = Message::HandshakeAck {
+                                        device_id: local_id.clone(),
+                                        device_name: local_name.read().clone(),
+                                    };
+                                    if let Ok(data) = serde_json::to_vec(&msg) {
+                                        let len_bytes = (data.len() as u32).to_be_bytes();
+                                        if send.write_all(&len_bytes).await.is_ok() {
+                                            let _ = send.write_all(&data).await;
+                                        }
+                                        let _ = send.finish();
+                                    }
+                                }
+
+                                continue;
+                            }
+                        }
+
+                        // If unpaired, require re-approval (incoming connection, not our pending handshake)
+                        if is_unpaired {
                             info!(
-                                "Received HandshakeAck from FORGOTTEN peer (requires re-approval): {} - {}",
+                                "Received HandshakeAck from UNPAIRED peer (requires re-approval): {} - {}",
                                 device_name, fingerprint
                             );
                             record_pending_pairing_request(
@@ -2937,65 +2866,10 @@ impl ConnectedClient {
                         }
 
                         if !is_trusted {
-                            // Only auto-trust if we have a pending outbound handshake to this IP
-                            // (i.e. WE initiated the pairing). Never auto-trust just because
-                            // pairing mode is enabled — that would allow an attacker to send an
-                            // unsolicited HandshakeAck and get trusted without user approval.
-                            // Verify the fingerprint matches our pending handshake
-                            // to prevent a different device from being auto-trusted.
-                            let pending_fp_matches = match &pending_entry {
-                                Some(pending) => pending
-                                    .fingerprint
-                                    .as_ref()
-                                    .is_none_or(|expected_fp| *expected_fp == fingerprint),
-                                None => false,
-                            };
-
-                            if has_pending && pending_fp_matches {
-                                info!(
-                                    "Auto-trusting peer from HandshakeAck: {} - {} (pending outbound handshake)",
-                                    device_name, fingerprint,
-                                );
-
-                                // Remove from pending handshakes
-                                pending_handshakes.write().remove(&addr.ip());
-
-                                if let Err(e) = key_store.write().trust_peer(
-                                    fingerprint.clone(),
-                                    Some(remote_device_id.clone()),
-                                    Some(device_name.clone()),
-                                ) {
-                                    error!("Failed to auto-trust peer: {}", e);
-                                }
-
-                                // Emit DeviceFound to refresh UI
-                                let known_device = discovery.get_device_by_id(&remote_device_id);
-                                let resolved_type = known_device
-                                    .as_ref()
-                                    .map(|dev| dev.device_type)
-                                    .unwrap_or(DeviceType::Unknown);
-                                let resolved_port = known_device
-                                    .as_ref()
-                                    .map(|dev| dev.port)
-                                    .filter(|port| *port != 0)
-                                    .unwrap_or(addr.port());
-                                let d = Device::new(
-                                    remote_device_id,
-                                    device_name,
-                                    addr.ip(),
-                                    resolved_port,
-                                    resolved_type,
-                                );
-                                // Update discovery with trusted connection info
-                                let _ = discovery
-                                    .upsert_device_endpoint(d.clone(), DiscoverySource::Connected);
-                                let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
-                            } else {
-                                warn!(
-                                    "Received unsolicited HandshakeAck from {} ({}) - ignoring (no pending outbound handshake)",
-                                    device_name, fingerprint
-                                );
-                            }
+                            warn!(
+                                "Received unsolicited HandshakeAck from {} ({}) - ignoring (no pending outbound handshake)",
+                                device_name, fingerprint
+                            );
                         } else {
                             if let Err(e) = key_store.write().trust_peer(
                                 fingerprint.clone(),
@@ -3063,7 +2937,7 @@ impl ConnectedClient {
                         }
 
                         // Invalidate connection to ensure clean state
-                        transport.invalidate_connection(&addr);
+                        transport.invalidate_connection(&addr, b"unpaired");
 
                         let _ = event_tx.send(ConnectedEvent::PairingRejected {
                             device_name,
@@ -3150,7 +3024,6 @@ impl ConnectedClient {
                     }
                     Message::DeviceUnpaired {
                         device_id: claimed_device_id,
-                        reason,
                     } => {
                         // Security fix (#2): Do NOT trust the sender's claimed device_id.
                         // The TLS fingerprint is the only authenticated identity — use it
@@ -3187,44 +3060,20 @@ impl ConnectedClient {
                             }
                         };
 
-                        match reason {
-                            UnpairReason::Unpaired => {
-                                // Don't downgrade a Forgotten peer to Unpaired.
-                                if key_store.read().is_forgotten(&fingerprint) {
-                                    info!(
-                                        "Device {} already forgotten, not downgrading to unpaired",
-                                        resolved_device_id
-                                    );
-                                } else {
-                                    info!(
-                                        "Device {} unpaired (trust preserved)",
-                                        resolved_device_id
-                                    );
-                                    if let Err(e) =
-                                        key_store.write().unpair_peer(fingerprint.clone())
-                                    {
-                                        error!("Failed to mark peer as unpaired: {}", e);
-                                    }
-                                }
-                            }
-                            UnpairReason::Forgotten => {
-                                if let Err(e) = key_store.write().remove_peer(&fingerprint) {
-                                    error!("Failed to remove unpaired peer: {}", e);
-                                }
-                            }
+                        info!(
+                            "Device {} unpaired (requires re-pairing)",
+                            resolved_device_id
+                        );
+                        if let Err(e) = key_store.write().unpair_peer(fingerprint.clone()) {
+                            error!("Failed to mark peer as unpaired: {}", e);
                         }
 
                         // Invalidate connection to ensure clean state on both sides
-                        let close_reason = match reason {
-                            UnpairReason::Forgotten => b"forgotten".as_slice(),
-                            UnpairReason::Unpaired => b"unpaired".as_slice(),
-                        };
-                        transport.invalidate_connection_with_reason(&addr, close_reason);
+                        transport.invalidate_connection(&addr, b"unpaired");
 
                         let _ = event_tx.send(ConnectedEvent::DeviceUnpaired {
                             device_id: resolved_device_id,
                             device_name,
-                            reason,
                         });
                     }
 

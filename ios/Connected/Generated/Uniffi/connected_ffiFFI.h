@@ -711,16 +711,6 @@ void uniffi_connected_ffi_fn_func_clear_discovered_devices(RustCallStatus *_Nonn
 
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_FORGET_DEVICE
-#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_FORGET_DEVICE
-void uniffi_connected_ffi_fn_func_forget_device(RustBuffer fingerprint, RustCallStatus *_Nonnull out_status
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_FORGET_DEVICE_BY_ID
-#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_FORGET_DEVICE_BY_ID
-void uniffi_connected_ffi_fn_func_forget_device_by_id(RustBuffer device_id, RustCallStatus *_Nonnull out_status
-);
-#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_DISCOVERED_DEVICES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_DISCOVERED_DEVICES
 RustBuffer uniffi_connected_ffi_fn_func_get_discovered_devices(RustCallStatus *_Nonnull out_status
@@ -742,6 +732,12 @@ RustBuffer uniffi_connected_ffi_fn_func_get_local_device(RustCallStatus *_Nonnul
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_LOCAL_FINGERPRINT
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_LOCAL_FINGERPRINT
 RustBuffer uniffi_connected_ffi_fn_func_get_local_fingerprint(RustCallStatus *_Nonnull out_status
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_TRUSTED_PEERS
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_GET_TRUSTED_PEERS
+RustBuffer uniffi_connected_ffi_fn_func_get_trusted_peers(RustCallStatus *_Nonnull out_status
 
 );
 #endif
@@ -768,11 +764,6 @@ void uniffi_connected_ffi_fn_func_inject_aware_socket(int32_t fd, RustBuffer pee
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_INJECT_PROXIMITY_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_INJECT_PROXIMITY_DEVICE
 void uniffi_connected_ffi_fn_func_inject_proximity_device(RustBuffer device_id, RustBuffer device_name, RustBuffer device_type, RustBuffer ip, uint16_t port, RustCallStatus *_Nonnull out_status
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_IS_DEVICE_FORGOTTEN
-#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_IS_DEVICE_FORGOTTEN
-int8_t uniffi_connected_ffi_fn_func_is_device_forgotten(RustBuffer fingerprint, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_IS_DEVICE_TRUSTED
@@ -958,7 +949,7 @@ void uniffi_connected_ffi_fn_func_send_trust_confirmation(RustBuffer target_ip, 
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_UNPAIR_NOTIFICATION
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_UNPAIR_NOTIFICATION
-void uniffi_connected_ffi_fn_func_send_unpair_notification(RustBuffer target_ip, uint16_t target_port, RustBuffer reason, RustCallStatus *_Nonnull out_status
+void uniffi_connected_ffi_fn_func_send_unpair_notification(RustBuffer target_ip, uint16_t target_port, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SET_DOWNLOAD_DIRECTORY
@@ -1309,18 +1300,6 @@ uint16_t uniffi_connected_ffi_checksum_func_clear_discovered_devices(void
 
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_FORGET_DEVICE
-#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_FORGET_DEVICE
-uint16_t uniffi_connected_ffi_checksum_func_forget_device(void
-
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_FORGET_DEVICE_BY_ID
-#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_FORGET_DEVICE_BY_ID
-uint16_t uniffi_connected_ffi_checksum_func_forget_device_by_id(void
-
-);
-#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_DISCOVERED_DEVICES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_DISCOVERED_DEVICES
 uint16_t uniffi_connected_ffi_checksum_func_get_discovered_devices(void
@@ -1342,6 +1321,12 @@ uint16_t uniffi_connected_ffi_checksum_func_get_local_device(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_LOCAL_FINGERPRINT
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_LOCAL_FINGERPRINT
 uint16_t uniffi_connected_ffi_checksum_func_get_local_fingerprint(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_TRUSTED_PEERS
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_GET_TRUSTED_PEERS
+uint16_t uniffi_connected_ffi_checksum_func_get_trusted_peers(void
 
 );
 #endif
@@ -1372,12 +1357,6 @@ uint16_t uniffi_connected_ffi_checksum_func_inject_aware_socket(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INJECT_PROXIMITY_DEVICE
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_INJECT_PROXIMITY_DEVICE
 uint16_t uniffi_connected_ffi_checksum_func_inject_proximity_device(void
-
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_IS_DEVICE_FORGOTTEN
-#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_IS_DEVICE_FORGOTTEN
-uint16_t uniffi_connected_ffi_checksum_func_is_device_forgotten(void
 
 );
 #endif

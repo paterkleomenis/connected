@@ -677,22 +677,6 @@ final class ConnectedAppModel: ObservableObject {
         }
     }
 
-    func forgetDevice(_ device: DiscoveredDevice) {
-        runInBackground { [weak self] in
-            do {
-                try forgetDeviceById(deviceId: device.id)
-                Task { @MainActor [weak self] in
-                    self?.trustedDeviceIds.remove(device.id)
-                    self?.pendingPairing.remove(device.id)
-                }
-            } catch {
-                Task { @MainActor [weak self] in
-                    self?.lastErrorMessage = "Forget failed: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
     func sendFileToDevice(at fileURL: URL, to device: DiscoveredDevice) {
         runInBackground { [weak self] in
             guard let self else { return }

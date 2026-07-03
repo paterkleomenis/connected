@@ -1046,15 +1046,9 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                     ConnectedEvent::DeviceUnpaired {
                         device_id,
                         device_name,
-                        reason,
                     } => {
-                        use connected_core::transport::UnpairReason;
-                        let reason_str = match reason {
-                            UnpairReason::Unpaired => "unpaired",
-                            UnpairReason::Forgotten => "forgotten",
-                        };
                         if let Some(cb) = UNPAIR_CALLBACK.read().as_ref() {
-                            cb.on_device_unpaired(device_id, device_name, reason_str.to_string());
+                            cb.on_device_unpaired(device_id, device_name, "unpaired".to_string());
                         }
                     }
                     ConnectedEvent::MediaControl { from_device, event } => {
@@ -1558,10 +1552,7 @@ pub fn send_trust_confirmation(
 pub fn send_unpair_notification(
     target_ip: String,
     target_port: u16,
-    reason: String,
 ) -> Result<(), ConnectedFfiError> {
-    use connected_core::transport::UnpairReason;
-
     let client = get_client()?;
     let ip: std::net::IpAddr =
         target_ip
@@ -1570,16 +1561,8 @@ pub fn send_unpair_notification(
                 msg: "Invalid IP".into(),
             })?;
 
-    let unpair_reason = match reason.as_str() {
-        "forgotten" => UnpairReason::Forgotten,
-        _ => UnpairReason::Unpaired,
-    };
-
     get_runtime().spawn(async move {
-        if let Err(e) = client
-            .send_unpair_notification(ip, target_port, unpair_reason)
-            .await
-        {
+        if let Err(e) = client.send_unpair_notification(ip, target_port).await {
             error!(
                 "Failed to send unpair notification to {}:{}: {}",
                 ip, target_port, e
@@ -1634,32 +1617,6 @@ pub fn unpair_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
     get_runtime()
         .block_on(async { client.unpair_device_by_id(&device_id).await })
         .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn forget_device(fingerprint: String) -> Result<(), ConnectedFfiError> {
-    // Forget = completely remove trust (must re-pair to connect again)
-    let client = get_client()?;
-    get_runtime()
-        .block_on(async { client.forget_device(&fingerprint).await })
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn forget_device_by_id(device_id: String) -> Result<(), ConnectedFfiError> {
-    // Forget = completely remove trust (must re-pair to connect again)
-    let client = get_client()?;
-    get_runtime()
-        .block_on(async { client.forget_device_by_id(&device_id).await })
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn is_device_forgotten(fingerprint: String) -> bool {
-    match get_client() {
-        Ok(client) => client.is_device_forgotten(&fingerprint),
-        _ => false,
-    }
 }
 
 #[uniffi::export]

@@ -25,9 +25,7 @@ pub use telephony::{
     MmsAttachment, PhoneNumber, PhoneNumberType, SmsMessage, SmsStatus, TelephonyCapabilities,
     TelephonyMessage,
 };
-pub use transport::{
-    MediaCommand, MediaControlMessage, MediaState, Message, QuicTransport, UnpairReason,
-};
+pub use transport::{MediaCommand, MediaControlMessage, MediaState, Message, QuicTransport};
 pub use update::{
     UpdateChecker, UpdateInfo, download_to_file, install_linux_appimage_update,
     install_macos_update,
