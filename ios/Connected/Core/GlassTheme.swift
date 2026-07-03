@@ -258,6 +258,19 @@ func deviceIconName(for type: DeviceType, name: String? = nil) -> String {
     }
 }
 
+extension DeviceType {
+    func displayName() -> String {
+        switch self {
+        case .android: return "Android"
+        case .ios: return "iOS"
+        case .linux: return "Linux"
+        case .windows: return "Windows"
+        case .macOs: return "macOS"
+        case .unknown: return "Unknown"
+        }
+    }
+}
+
 // MARK: - Monochrome Toggle Style
 struct MonochromeToggleStyle: ToggleStyle {
     @Environment(\.colorScheme) private var colorScheme

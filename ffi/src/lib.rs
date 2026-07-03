@@ -1549,31 +1549,6 @@ pub fn send_trust_confirmation(
 }
 
 #[uniffi::export]
-pub fn send_unpair_notification(
-    target_ip: String,
-    target_port: u16,
-) -> Result<(), ConnectedFfiError> {
-    let client = get_client()?;
-    let ip: std::net::IpAddr =
-        target_ip
-            .parse()
-            .map_err(|_| ConnectedFfiError::InvalidArgument {
-                msg: "Invalid IP".into(),
-            })?;
-
-    get_runtime().spawn(async move {
-        if let Err(e) = client.send_unpair_notification(ip, target_port).await {
-            error!(
-                "Failed to send unpair notification to {}:{}: {}",
-                ip, target_port, e
-            );
-        }
-    });
-
-    Ok(())
-}
-
-#[uniffi::export]
 pub fn trust_device(
     fingerprint: String,
     device_id: String,

@@ -84,7 +84,6 @@ import uniffi.connected_ffi.sendMediaState
 import uniffi.connected_ffi.sendMessages
 import uniffi.connected_ffi.sendSmsSendResult
 import uniffi.connected_ffi.sendTrustConfirmation
-import uniffi.connected_ffi.sendUnpairNotification
 import uniffi.connected_ffi.setPairingModePersistent
 import uniffi.connected_ffi.shutdown
 import uniffi.connected_ffi.startDiscovery

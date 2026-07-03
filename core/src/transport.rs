@@ -1307,12 +1307,18 @@ impl QuicTransport {
                     );
 
                     if reason.reason == b"unpaired".as_slice() {
-                        let device_id_opt = {
+                        let (device_id_opt, already_unpaired) = {
                             let ks = key_store.read();
-                            ks.get_peer_info(&fingerprint).and_then(|p| p.device_id)
+                            let info = ks.get_peer_info(&fingerprint).and_then(|p| p.device_id);
+                            (info, ks.is_unpaired(&fingerprint))
                         };
 
-                        if let Some(device_id) = device_id_opt {
+                        if already_unpaired {
+                            debug!(
+                                "Peer {} disconnected with 'unpaired' reason but already unpaired locally, ignoring",
+                                fingerprint
+                            );
+                        } else if let Some(device_id) = device_id_opt {
                             info!(
                                 "Peer {} ({}) disconnected with 'unpaired' reason. Triggering unpair.",
                                 device_id, fingerprint

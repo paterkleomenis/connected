@@ -6,7 +6,7 @@ use crate::file_transfer::{FileTransfer, IncomingTransferConfig, TransferProgres
 use crate::security::{KeyStore, PeerStatus};
 use crate::transport::{MAX_MESSAGE_SIZE, Message, QuicTransport};
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -144,6 +144,8 @@ pub struct ConnectedClient {
     fs_stream_semaphore: Arc<tokio::sync::Semaphore>,
     /// Active/approved batch transfers on this receiver, mapping batch_id -> download directory.
     pub(crate) approved_batches: Arc<RwLock<HashMap<String, PathBuf>>>,
+    /// Track device IDs we've already sent unpair notifications to, so we don't spam.
+    notified_unpairs: Arc<RwLock<HashSet<String>>>,
 }
 
 impl ConnectedClient {
@@ -323,6 +325,7 @@ impl ConnectedClient {
             fs_provider: Arc::new(RwLock::new(None)),
             fs_stream_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FS_STREAMS)),
             approved_batches: Arc::new(RwLock::new(HashMap::new())),
+            notified_unpairs: Arc::new(RwLock::new(HashSet::new())),
         });
 
         // 5. Start Background Tasks
@@ -2355,6 +2358,9 @@ impl ConnectedClient {
             .write()
             .unpair_peer(fingerprint.to_string())?;
 
+        // Clear notified state so we'll send the notification on next discovery
+        self.notified_unpairs.write().remove(&device_id);
+
         // Invalidate cached connection
         self.invalidate_connection_by_device_id(&device_id, b"unpaired");
         self.transport
@@ -2409,6 +2415,9 @@ impl ConnectedClient {
 
             // Mark as unpaired in keystore (keeps record to prevent auto-re-pairing)
             self.key_store.write().unpair_peer(fp.clone())?;
+
+            // Clear notified state so we'll send the notification on next discovery
+            self.notified_unpairs.write().remove(device_id);
 
             self.transport
                 .invalidate_connection_by_fingerprint(&fp, b"unpaired");
@@ -2481,10 +2490,54 @@ impl ConnectedClient {
 
         if discovery_started {
             let event_tx = self.event_tx.clone();
+            let key_store_clone = self.key_store.clone();
+            let transport_clone = self.transport.clone();
+            let notified_unpairs_clone = self.notified_unpairs.clone();
+            let local_device_id = self.local_device.id.clone();
             tokio::spawn(async move {
                 while let Some(event) = disco_rx.recv().await {
                     match event {
                         DiscoveryEvent::DeviceFound(d) => {
+                            // When a device is discovered, check if we have it marked as
+                            // unpaired in our keystore. If so, send an unpair notification
+                            // so the remote peer learns it has been unpaired.
+                            let device_id = d.id.clone();
+                            if let Some(ip) = d.ip_addr() {
+                                let should_notify = {
+                                    let ks = key_store_clone.read();
+                                    let notified = notified_unpairs_clone.read();
+                                    let is_unpaired = ks.get_all_known_peers().iter().any(|p| {
+                                        p.device_id.as_deref() == Some(&device_id)
+                                            && p.status == PeerStatus::Unpaired
+                                    });
+                                    is_unpaired && !notified.contains(&device_id)
+                                };
+
+                                if should_notify {
+                                    info!(
+                                        "Discovered unpaired device {}, sending unpair notification",
+                                        device_id
+                                    );
+                                    let addr = SocketAddr::new(ip, d.port);
+                                    if let Ok((mut send, _recv)) = transport_clone
+                                        .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+                                        .await
+                                    {
+                                        let msg = Message::DeviceUnpaired {
+                                            device_id: local_device_id.clone(),
+                                        };
+                                        if let Ok(data) = serde_json::to_vec(&msg) {
+                                            let len_bytes = (data.len() as u32).to_be_bytes();
+                                            let _ = send.write_all(&len_bytes).await;
+                                            let _ = send.write_all(&data).await;
+                                            let _ = send.finish();
+                                            // Mark as notified so we don't spam
+                                            notified_unpairs_clone.write().insert(device_id);
+                                        }
+                                    }
+                                }
+                            }
+
                             let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
                         }
                         DiscoveryEvent::DeviceLost(id) => {
@@ -2514,6 +2567,7 @@ impl ConnectedClient {
         let pending_pairing_requests = self.pending_pairing_requests.clone();
         let discovery = self.discovery.clone();
         let transport = self.transport.clone();
+        let notified_unpairs = self.notified_unpairs.clone();
 
         // Handle Control Messages
         tokio::spawn(async move {
@@ -3067,6 +3121,10 @@ impl ConnectedClient {
                         if let Err(e) = key_store.write().unpair_peer(fingerprint.clone()) {
                             error!("Failed to mark peer as unpaired: {}", e);
                         }
+
+                        // Mark as notified so we don't send an unpair notification back
+                        // to the peer that just told us they unpaired
+                        notified_unpairs.write().insert(resolved_device_id.clone());
 
                         // Invalidate connection to ensure clean state on both sides
                         transport.invalidate_connection(&addr, b"unpaired");

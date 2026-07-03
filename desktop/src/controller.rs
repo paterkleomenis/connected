@@ -361,24 +361,6 @@ fn spawn_event_loop(
                     info.is_trusted = c_clone.is_device_trusted(&d.id);
                     let is_trusted = info.is_trusted;
 
-                    // If the device was previously unpaired (e.g. unpair happened while
-                    // it was offline), re-send the unpair notification so the remote side
-                    // learns it was unpaired and removes us from its trusted list.
-                    if !is_trusted
-                        && c_clone.is_device_unpaired(&d.id)
-                        && let Ok(ip_addr) = dev_ip.parse::<std::net::IpAddr>()
-                    {
-                        let c = c_clone.clone();
-                        let dname = d.name.clone();
-                        tokio::spawn(async move {
-                            info!(
-                                "Re-sending unpair notification to previously unpaired device: {}",
-                                dname
-                            );
-                            let _ = c.send_unpair_notification(ip_addr, dev_port).await;
-                        });
-                    }
-
                     // If trusted, remove from pending
                     if info.is_trusted {
                         get_pending_pairings().lock_or_recover().remove(&info.id);

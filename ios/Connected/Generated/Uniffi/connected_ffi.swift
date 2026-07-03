@@ -5344,14 +5344,6 @@ public func sendTrustConfirmation(targetIp: String, targetPort: UInt16)throws   
     )
 }
 }
-public func sendUnpairNotification(targetIp: String, targetPort: UInt16)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_connected_ffi_fn_func_send_unpair_notification(
-        FfiConverterString.lower(targetIp),
-        FfiConverterUInt16.lower(targetPort),uniffiCallStatus
-    )
-}
-}
 public func setDownloadDirectory(path: String)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
         uniffiCallStatus in
     uniffi_connected_ffi_fn_func_set_download_directory(
@@ -5605,9 +5597,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_send_trust_confirmation() != 51676) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_connected_ffi_checksum_func_send_unpair_notification() != 4713) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_set_download_directory() != 57851) {

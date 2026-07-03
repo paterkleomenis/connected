@@ -23,6 +23,7 @@ struct SettingsView: View {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     identityCard
                     pairingCard
+                    pairedDevicesCard
                     receivedFilesCard
                     sharedFolderCard
                     preferencesCard
@@ -114,6 +115,62 @@ struct SettingsView: View {
                     model.refreshDiscoveryNow()
                 }
                 .glassButtonProminent()
+            }
+        }
+    }
+
+    // MARK: - Paired Devices Card
+    private var pairedDevicesCard: some View {
+        GlassSettingsCard(
+            title: "Paired Devices",
+            subtitle: "Manage devices that have been paired with this device.",
+            icon: "person.2"
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                let sortedIds = model.trustedDeviceIds.sorted()
+
+                if sortedIds.isEmpty {
+                    Text("No devices paired yet")
+                        .font(.subheadline)
+                        .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
+                } else {
+                    ForEach(Array(sortedIds.enumerated()), id: \.element) { index, deviceId in
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(model.isDeviceOnline(deviceId)
+                                    ? GlassTheme.primary(for: colorScheme)
+                                    : GlassTheme.onSurfaceVariant(for: colorScheme))
+                                .frame(width: 8, height: 8)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(model.deviceName(for: deviceId))
+                                    .font(.body)
+                                    .foregroundStyle(GlassTheme.onSurface(for: colorScheme))
+                                    .lineLimit(1)
+
+                                Text(model.isDeviceOnline(deviceId)
+                                    ? (model.deviceType(for: deviceId)?.displayName() ?? "Online")
+                                    : "Offline")
+                                    .font(.caption)
+                                    .foregroundStyle(GlassTheme.onSurfaceVariant(for: colorScheme))
+                            }
+
+                            Spacer()
+
+                            Button("Unpair", role: .destructive) {
+                                model.unpairTrustedDeviceById(deviceId)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.red)
+                            .controlSize(.small)
+                        }
+
+                        if index < sortedIds.count - 1 {
+                            Divider()
+                                .overlay(GlassTheme.outlineVariant(for: colorScheme).opacity(0.5))
+                        }
+                    }
+                }
             }
         }
     }

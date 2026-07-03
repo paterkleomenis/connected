@@ -58,6 +58,9 @@ final class ConnectedAppModel: ObservableObject {
     @Published private(set) var devices: [DiscoveredDevice] = []
     @Published private(set) var trustedDeviceIds: Set<String> = []
     @Published private(set) var pendingPairing: Set<String> = []
+    /// Cached names and types for trusted devices so they remain visible offline.
+    private(set) var trustedDeviceNames: [String: String] = [:]
+    private(set) var trustedDeviceTypes: [String: DeviceType] = [:]
     @Published var selectedDeviceId: String?
 
     @Published var localDevice: DiscoveredDevice?
@@ -338,7 +341,7 @@ final class ConnectedAppModel: ObservableObject {
     }
 
     var hasTrustedDevices: Bool {
-        devices.contains { trustedDeviceIds.contains($0.id) }
+        !trustedDeviceIds.isEmpty
     }
 
     func initializeIfNeeded() {
@@ -408,6 +411,7 @@ final class ConnectedAppModel: ObservableObject {
                 let discovered = (try? getDiscoveredDevices()) ?? []
                 let localDevice = try? getLocalDevice()
                 let localFingerprint = (try? getLocalFingerprint()) ?? ""
+                let trustedPeers = (try? getTrustedPeers()) ?? []
 
                 Task { @MainActor [weak self] in
                     guard let self else { return }
@@ -416,6 +420,15 @@ final class ConnectedAppModel: ObservableObject {
                     self.pairingModeEnabled = pairingMode
                     self.localDevice = localDevice
                     self.localFingerprint = localFingerprint
+
+                    // Pre-populate trustedDeviceIds from the core keystore so offline
+                    // paired devices appear in Settings immediately on startup.
+                    for peer in trustedPeers {
+                        if !peer.deviceId.isEmpty {
+                            self.trustedDeviceIds.insert(peer.deviceId)
+                        }
+                    }
+                    self.cacheTrustedPeerMetadata(trustedPeers)
 
                     // Start iOS-native Bonjour publisher — mdns-sd raw sockets
                     // cannot send outgoing multicast on iOS without a special
@@ -510,6 +523,17 @@ final class ConnectedAppModel: ObservableObject {
         runInBackground { [weak self] in
             do {
                 try refreshDiscovery()
+                let trustedPeers = (try? getTrustedPeers()) ?? []
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.trustedDeviceIds.removeAll()
+                    for peer in trustedPeers {
+                        if !peer.deviceId.isEmpty {
+                            self.trustedDeviceIds.insert(peer.deviceId)
+                        }
+                    }
+                    self.cacheTrustedPeerMetadata(trustedPeers)
+                }
             } catch {
                 Task { @MainActor [weak self] in
                     self?.lastErrorMessage = "Discovery refresh failed: \(error.localizedDescription)"
@@ -667,12 +691,58 @@ final class ConnectedAppModel: ObservableObject {
                 try unpairDeviceById(deviceId: device.id)
                 Task { @MainActor [weak self] in
                     self?.trustedDeviceIds.remove(device.id)
+                    self?.trustedDeviceNames.removeValue(forKey: device.id)
+                    self?.trustedDeviceTypes.removeValue(forKey: device.id)
                     self?.pendingPairing.remove(device.id)
                 }
             } catch {
                 Task { @MainActor [weak self] in
                     self?.lastErrorMessage = "Unpair failed: \(error.localizedDescription)"
                 }
+            }
+        }
+    }
+
+    func unpairTrustedDeviceById(_ deviceId: String) {
+        runInBackground { [weak self] in
+            do {
+                try unpairDeviceById(deviceId: deviceId)
+                Task { @MainActor [weak self] in
+                    self?.trustedDeviceIds.remove(deviceId)
+                    self?.trustedDeviceNames.removeValue(forKey: deviceId)
+                    self?.trustedDeviceTypes.removeValue(forKey: deviceId)
+                    self?.pendingPairing.remove(deviceId)
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.lastErrorMessage = "Unpair failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func deviceName(for deviceId: String) -> String {
+        if let online = devices.first(where: { $0.id == deviceId }) {
+            return online.name
+        }
+        return trustedDeviceNames[deviceId] ?? deviceId
+    }
+
+    func deviceType(for deviceId: String) -> DeviceType? {
+        if let online = devices.first(where: { $0.id == deviceId }) {
+            return online.deviceType
+        }
+        return trustedDeviceTypes[deviceId]
+    }
+
+    func isDeviceOnline(_ deviceId: String) -> Bool {
+        devices.contains { $0.id == deviceId }
+    }
+
+    private func cacheTrustedPeerMetadata(_ peers: [TrustedPeer]) {
+        for peer in peers {
+            if !peer.name.isEmpty {
+                trustedDeviceNames[peer.deviceId] = peer.name
             }
         }
     }
@@ -1561,6 +1631,10 @@ final class ConnectedAppModel: ObservableObject {
 
         if trustedDeviceIds.contains(device.id) {
             sendLastLocalMediaState(to: device)
+            if !device.name.isEmpty {
+                trustedDeviceNames[device.id] = device.name
+            }
+            trustedDeviceTypes[device.id] = device.deviceType
         }
 
         refreshTrustState(deviceId: device.id)
@@ -1568,8 +1642,12 @@ final class ConnectedAppModel: ObservableObject {
 
     fileprivate func handleDeviceLost(_ deviceId: String) {
         devices.removeAll { $0.id == deviceId }
-        trustedDeviceIds.remove(deviceId)
-        pendingPairing.remove(deviceId)
+        // Keep trusted devices visible as offline in settings.
+        // They remain in trustedDeviceIds so the user can manage (unpair)
+        // them even when the remote device is offline.
+        if !trustedDeviceIds.contains(deviceId) {
+            pendingPairing.remove(deviceId)
+        }
         if selectedDeviceId == deviceId {
             selectedDeviceId = nil
         }
@@ -1751,6 +1829,8 @@ final class ConnectedAppModel: ObservableObject {
 
     fileprivate func handleDeviceUnpaired(deviceId: String, deviceName: String, reason: String) {
         trustedDeviceIds.remove(deviceId)
+        trustedDeviceNames.removeValue(forKey: deviceId)
+        trustedDeviceTypes.removeValue(forKey: deviceId)
         pendingPairing.remove(deviceId)
         infoMessage = "\(deviceName) \(reason)"
     }
