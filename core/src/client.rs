@@ -3196,7 +3196,10 @@ impl ConnectedClient {
                                         resolved_device_id
                                     );
                                 } else {
-                                    info!("Device {} unpaired (trust preserved)", resolved_device_id);
+                                    info!(
+                                        "Device {} unpaired (trust preserved)",
+                                        resolved_device_id
+                                    );
                                     if let Err(e) =
                                         key_store.write().unpair_peer(fingerprint.clone())
                                     {

@@ -1676,12 +1676,10 @@ pub fn get_trusted_peers() -> Vec<TrustedPeer> {
         Ok(client) => client
             .get_trusted_peers()
             .into_iter()
-            .filter_map(|p| {
-                Some(TrustedPeer {
-                    fingerprint: p.fingerprint,
-                    name: p.name.unwrap_or_default(),
-                    device_id: p.device_id.unwrap_or_default(),
-                })
+            .map(|p| TrustedPeer {
+                fingerprint: p.fingerprint,
+                name: p.name.unwrap_or_default(),
+                device_id: p.device_id.unwrap_or_default(),
             })
             .collect(),
         _ => vec![],

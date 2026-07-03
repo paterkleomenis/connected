@@ -368,24 +368,25 @@ fn spawn_event_loop(
                     // If the device was previously forgotten (e.g. forget happened while
                     // it was offline), re-send the unpair notification so the remote side
                     // learns it was forgotten and removes us from its trusted list.
-                    if !is_trusted && c_clone.is_device_forgotten_by_id(&d.id) {
-                        if let Ok(ip_addr) = dev_ip.parse::<std::net::IpAddr>() {
-                            let c = c_clone.clone();
-                            let dname = d.name.clone();
-                            tokio::spawn(async move {
-                                info!(
-                                    "Re-sending unpair notification to previously forgotten device: {}",
-                                    dname
-                                );
-                                let _ = c
-                                    .send_unpair_notification(
-                                        ip_addr,
-                                        dev_port,
-                                        UnpairReason::Forgotten,
-                                    )
-                                    .await;
-                            });
-                        }
+                    if !is_trusted
+                        && c_clone.is_device_forgotten_by_id(&d.id)
+                        && let Ok(ip_addr) = dev_ip.parse::<std::net::IpAddr>()
+                    {
+                        let c = c_clone.clone();
+                        let dname = d.name.clone();
+                        tokio::spawn(async move {
+                            info!(
+                                "Re-sending unpair notification to previously forgotten device: {}",
+                                dname
+                            );
+                            let _ = c
+                                .send_unpair_notification(
+                                    ip_addr,
+                                    dev_port,
+                                    UnpairReason::Forgotten,
+                                )
+                                .await;
+                        });
                     }
 
                     // If trusted, remove from pending

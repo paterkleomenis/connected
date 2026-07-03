@@ -318,7 +318,10 @@ impl DiscoveryService {
         let mut properties = HashMap::new();
         properties.insert("id".to_string(), device.id.clone());
         properties.insert("name".to_string(), device.name.clone());
-        properties.insert("type".to_string(), device.device_type.as_str().to_lowercase());
+        properties.insert(
+            "type".to_string(),
+            device.device_type.as_str().to_lowercase(),
+        );
         properties.insert("version".to_string(), PROTOCOL_VERSION.to_string());
 
         let mut ip: IpAddr = device
