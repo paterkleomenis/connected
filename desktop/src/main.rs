@@ -1636,9 +1636,7 @@ fn App() -> Element {
                         },
                         Icon { icon: IconType::NavDevices, size: 18, color: "currentColor".to_string() }
                         span { "Devices" }
-                        if !devices_list.read().is_empty() {
-                            span { class: "nav-badge", "{devices_list.read().len()}" }
-                        }
+                        span { class: "nav-badge", "{devices_list.read().iter().filter(|d| d.ip != \"0.0.0.0\").count()}" }
                     }
 
                     // Show device feature tabs when a device is selected
