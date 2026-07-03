@@ -1900,6 +1900,9 @@ fn App() -> Element {
                                             send_target_device.set(Some(d));
                                             show_send_dialog.set(true);
                                         },
+                                        on_unpair: move |d: DeviceInfo| {
+                                            action_tx.send(AppAction::UnpairDevice { device_id: d.id.clone() });
+                                        },
                                     }
                                 }
                             }
@@ -1925,7 +1928,7 @@ fn App() -> Element {
                                 div {
                                     class: "device-detail-actions",
                                     button {
-                                        class: "header-action-btn",
+                                        class: "header-action-btn text danger",
                                         title: "Unpair device",
                                         onclick: {
                                             let device = device.clone();
@@ -1935,6 +1938,7 @@ fn App() -> Element {
                                             }
                                         },
                                         Icon { icon: IconType::Unpair, size: 14, color: "currentColor".to_string() }
+                                        span { " Unpair" }
                                     }
                                 }
                             }

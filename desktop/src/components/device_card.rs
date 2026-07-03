@@ -11,6 +11,7 @@ pub fn DeviceCard(
     on_pair: EventHandler<DeviceInfo>,
     on_cancel_pair: EventHandler<DeviceInfo>,
     on_send_file: EventHandler<DeviceInfo>,
+    on_unpair: EventHandler<DeviceInfo>,
 ) -> Element {
     let device_icon = if device.device_type == DeviceType::Unknown {
         get_device_icon_type(&device.name)
@@ -52,6 +53,24 @@ pub fn DeviceCard(
                     span {
                         class: "untrusted-badge",
                         Icon { icon: IconType::Warning, size: 12, color: "var(--bg-card)".to_string() }
+                    }
+                }
+            }
+
+            if device.is_trusted && *is_hovered.read() {
+                div {
+                    class: "device-icon-unpair",
+                    button {
+                        class: "action-button danger",
+                        title: "Unpair device",
+                        onclick: {
+                            let device = device.clone();
+                            move |evt: Event<MouseData>| {
+                                evt.stop_propagation();
+                                on_unpair.call(device.clone());
+                            }
+                        },
+                        Icon { icon: IconType::Unpair, size: 14, color: "currentColor".to_string() }
                     }
                 }
             }
