@@ -3029,18 +3029,19 @@ fn App() -> Element {
                                 p { class: "settings-hint", "No devices paired yet." }
                             } else {
                                 div {
-                                    class: "info-grid",
+                                    class: "paired-devices-list",
                                     for device in devices_list.read().iter().filter(|d| d.is_trusted) {
                                         div {
                                             class: "paired-device-row",
                                             style: "display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-light);",
                                             div {
-                                                style: "display: flex; align-items: center; gap: 10px;",
+                                                style: "display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;",
                                                 div {
                                                     style: "width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-tertiary);"
                                                 }
                                                 div {
-                                                    div { style: "font-weight: 500; font-size: var(--text-sm);", "{device.name}" }
+                                                    style: "min-width: 0;",
+                                                    div { style: "font-weight: 500; font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", "{device.name}" }
                                                     div { style: "font-size: var(--text-xs); color: var(--text-tertiary);",
                                                         if device.ip != "0.0.0.0" {
                                                             "{device.device_type.as_str()}"
@@ -3051,7 +3052,7 @@ fn App() -> Element {
                                                 }
                                             }
                                             div {
-                                                style: "display: flex; gap: 6px;",
+                                                style: "display: flex; gap: 6px; flex-shrink: 0; margin-left: 12px;",
                                                 button {
                                                     class: "action-button danger",
                                                     style: "padding: 4px 8px; font-size: 0.75rem;",
