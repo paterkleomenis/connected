@@ -997,7 +997,11 @@ fn App() -> Element {
     // UI State
     let mut local_device_name =
         use_signal(|| get_device_name_setting().unwrap_or_else(get_hostname));
-    let local_device_ip = use_signal(String::new);
+    let local_device_ip = use_signal(|| {
+        connected_core::client::get_local_ip()
+            .map(|ip| ip.to_string())
+            .unwrap_or_default()
+    });
     let mut devices_list = use_signal(Vec::<DeviceInfo>::new);
     let mut selected_device = use_signal(|| None::<DeviceInfo>);
     let mut active_tab = use_signal(|| "devices".to_string());
