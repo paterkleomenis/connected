@@ -381,6 +381,18 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     style: "white-space: pre-wrap; font-family: var(--font-mono); text-align: left; padding: 16px; background: var(--bg-tertiary); border-radius: 8px; width: 100%; overflow-x: auto;",
                                     "{String::from_utf8_lossy(&data.data)}"
                                 }
+                            } else if data.mime_type.starts_with("audio/") {
+                                audio {
+                                    controls: "true",
+                                    src: "data:{data.mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&data.data)}",
+                                    style: "max-width: 100%; border-radius: 8px;"
+                                }
+                            } else if data.mime_type.starts_with("video/") {
+                                video {
+                                    controls: "true",
+                                    src: "data:{data.mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&data.data)}",
+                                    style: "max-width: 100%; max-height: 65vh; border-radius: 8px;"
+                                }
                             } else {
                                 div {
                                     class: "empty-state",
