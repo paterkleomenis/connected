@@ -18,6 +18,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let mut last_update_seen = use_signal(|| *get_remote_files_update().lock_or_recover());
     let mut context_menu = use_signal(|| Option::<(String, String, i32, i32)>::None);
     let mut preview_content = use_signal(|| Option::<PreviewData>::None);
+    let mut video_fullscreen = use_signal(|| false);
 
     // Thumbnail state
     let mut current_thumbnails = use_signal(HashMap::<String, String>::new); // path -> base64
@@ -137,6 +138,60 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                     });
                 }
             }
+        }
+    });
+
+    // Auto-hide fullscreen buttons after 500ms of inactivity
+    use_effect(move || {
+        let has_video = preview_content
+            .read()
+            .as_ref()
+            .is_some_and(|d| d.mime_type.starts_with("video/"));
+        if has_video {
+            document::eval(
+                r#"
+                (function() {
+                    var timer = null;
+                    function getBtns() { return document.querySelectorAll('[data-fullscreen-close], [data-fullscreen-open]'); }
+                    function show() {
+                        getBtns().forEach(function(b) {
+                            b.style.opacity = '1';
+                            b.style.pointerEvents = 'auto';
+                        });
+                        clearTimeout(timer);
+                        timer = setTimeout(function() {
+                            getBtns().forEach(function(b) {
+                                b.style.opacity = '0';
+                                b.style.pointerEvents = 'none';
+                            });
+                        }, 500);
+                    }
+                    show();
+                    window.__connected_fs_handler = function() { show(); };
+                    window.addEventListener('mousemove', window.__connected_fs_handler);
+                    window.__connected_fs_keydown = function(e) {
+                        if (e.key === 'Escape') {
+                            var close = document.querySelector('[data-fullscreen-close]');
+                            if (close) close.click();
+                        }
+                    };
+                    window.addEventListener('keydown', window.__connected_fs_keydown);
+                })();
+            "#,
+            );
+        } else {
+            document::eval(
+                r#"
+                if (window.__connected_fs_handler) {
+                    window.removeEventListener('mousemove', window.__connected_fs_handler);
+                    window.__connected_fs_handler = null;
+                }
+                if (window.__connected_fs_keydown) {
+                    window.removeEventListener('keydown', window.__connected_fs_keydown);
+                    window.__connected_fs_keydown = null;
+                }
+            "#,
+            );
         }
     });
 
@@ -349,7 +404,45 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 }
             }
 
-            if let Some(data) = preview_val.as_ref() {
+            if *video_fullscreen.read() && preview_val.as_ref().is_some_and(|d| d.mime_type.starts_with("video/")) {
+                div {
+                    style: "position: fixed; inset: 0; z-index: 3000; background: #000; display: flex; align-items: center; justify-content: center;",
+                    onclick: move |_| video_fullscreen.set(false),
+                    video {
+                        controls: "true",
+                        src: "data:{preview_val.as_ref().unwrap().mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&preview_val.as_ref().unwrap().data)}",
+                        style: "max-width: 100vw; max-height: 100vh; width: 100vw; height: 100vh; object-fit: contain;",
+                        onclick: |evt| evt.stop_propagation(),
+                        onloadeddata: move |_| {
+                            document::eval(r#"
+                                var v = document.querySelector('[data-fullscreen-close]').parentElement.querySelector('video');
+                                if (v && window.__connected_fs_time !== undefined) {
+                                    v.currentTime = window.__connected_fs_time;
+                                    if (!window.__connected_fs_paused) v.play();
+                                }
+                            "#);
+                        },
+                    }
+                    button {
+                        "data-fullscreen-close": "true",
+                        style: "position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 10; background: rgba(0,0,0,0.8); color: white; border: none; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: opacity 0.3s;",
+                        onclick: move |evt| {
+                            evt.stop_propagation();
+                            document::eval(r#"
+                                var v = document.querySelector('[data-fullscreen-close]').parentElement.querySelector('video');
+                                if (v) {
+                                    window.__connected_fs_paused = v.paused;
+                                    window.__connected_fs_time = v.currentTime;
+                                    v.pause();
+                                }
+                            "#);
+                            video_fullscreen.set(false);
+                            dioxus::desktop::window().window.set_fullscreen(None);
+                        },
+                        Icon { icon: IconType::Close, size: 20, color: "white".to_string() }
+                    }
+                }
+            } else if let Some(data) = preview_val.as_ref() {
                 div {
                     class: "modal-overlay",
                     onclick: move |_| send_action(AppAction::ClosePreview),
@@ -388,10 +481,44 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     style: "max-width: 100%; border-radius: 8px;"
                                 }
                             } else if data.mime_type.starts_with("video/") {
-                                video {
-                                    controls: "true",
-                                    src: "data:{data.mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&data.data)}",
-                                    style: "max-width: 100%; max-height: 65vh; border-radius: 8px;"
+                                div {
+                                    style: "position: relative; width: fit-content; margin: 0 auto;",
+                                    video {
+                                        controls: "true",
+                                        src: "data:{data.mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&data.data)}",
+                                        style: "max-width: 100%; max-height: 65vh; border-radius: 8px;",
+                                        onloadeddata: move |_| {
+                                            document::eval(r#"
+                                                var v = document.querySelector('.dialog-content video');
+                                                if (v && window.__connected_fs_time !== undefined) {
+                                                    v.currentTime = window.__connected_fs_time;
+                                                    if (!window.__connected_fs_paused) v.play();
+                                                }
+                                            "#);
+                                        },
+                                    }
+                                    button {
+                                        "data-fullscreen-open": "true",
+                                        style: "position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 10; background: rgba(0,0,0,0.6); color: white; border: none; border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; backdrop-filter: blur(4px); transition: opacity 0.3s;",
+                                        onclick: move |evt| {
+                                            evt.stop_propagation();
+                                            document::eval(r#"
+                                                var v = document.querySelector('.dialog-content video');
+                                                if (v) {
+                                                    window.__connected_fs_paused = v.paused;
+                                                    window.__connected_fs_time = v.currentTime;
+                                                    v.pause();
+                                                }
+                                            "#);
+                                            video_fullscreen.set(true);
+                                            dioxus::desktop::window()
+                                                .window
+                                                .set_fullscreen(Some(
+                                                    dioxus::desktop::tao::window::Fullscreen::Borderless(None),
+                                                ));
+                                        },
+                                        Icon { icon: IconType::Fullscreen, size: 18, color: "white".to_string() }
+                                    }
                                 }
                             } else {
                                 div {
