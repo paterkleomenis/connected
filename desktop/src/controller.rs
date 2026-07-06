@@ -1928,34 +1928,86 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             let local_path = temp_dir
                                 .join(format!("connected-preview-{}.tmp", uuid::Uuid::new_v4()));
 
-                            add_notification("Preview", &format!("Loading {}...", filename), "");
+                            let mime = mime_guess::from_path(&filename)
+                                .first_or_octet_stream()
+                                .to_string();
 
-                            match c
-                                .fs_download_file(ip_addr, port, remote_path, local_path.clone())
-                                .await
-                            {
-                                Ok(_) => {
-                                    let read_res = tokio::fs::read(&local_path).await;
-                                    let _ = tokio::fs::remove_file(&local_path).await;
+                                // For video/audio: stream via custom protocol
+                            if mime.starts_with("video/") || mime.starts_with("audio/") {
+                                add_notification(
+                                    "Preview",
+                                    &format!("Loading {}...", filename),
+                                    "",
+                                );
 
-                                    if let Ok(data) = read_res {
-                                        let mime = mime_guess::from_path(&filename)
-                                            .first_or_octet_stream()
-                                            .to_string();
+                                let dl_client = c.clone();
+                                let dl_path = local_path.clone();
+                                let dl_ip = ip_addr;
+                                let dl_port = port;
+                                let dl_remote = remote_path.clone();
+                                let head_size = 4 * 1024 * 1024; // 4 MB
+                                let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
-                                        *get_preview_data().lock_or_recover() = Some(PreviewData {
-                                            filename,
-                                            mime_type: mime,
-                                            data,
-                                        });
-                                    } else {
-                                        add_notification("Preview", "Failed to read file", "");
+                                let dl_handle = tokio::spawn(async move {
+                                    if let Err(e) = dl_client
+                                        .fs_download_file_streaming(
+                                            dl_ip, dl_port, dl_remote, dl_path, head_size, ready_tx,
+                                        )
+                                        .await
+                                    {
+                                        error!("Streaming download failed: {}", e);
                                     }
+                                });
+
+                                if let Ok(total_size) = ready_rx.await {
+                                    *get_preview_data().lock_or_recover() = Some(PreviewData {
+                                        filename,
+                                        mime_type: mime.clone(),
+                                        data: vec![],
+                                        temp_file_path: Some(local_path.clone()),
+                                        total_size: Some(total_size),
+                                    });
                                 }
-                                Err(e) => {
-                                    let _ = tokio::fs::remove_file(&local_path).await;
-                                    error!("Failed to preview file: {}", e);
-                                    add_notification("Preview Failed", &e.to_string(), "");
+
+                                let _ = dl_handle.await;
+                            } else {
+                                add_notification(
+                                    "Preview",
+                                    &format!("Loading {}...", filename),
+                                    "",
+                                );
+
+                                match c
+                                    .fs_download_file(
+                                        ip_addr,
+                                        port,
+                                        remote_path,
+                                        local_path.clone(),
+                                    )
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        let read_res = tokio::fs::read(&local_path).await;
+                                        let _ = tokio::fs::remove_file(&local_path).await;
+
+                                        if let Ok(data) = read_res {
+                                            *get_preview_data().lock_or_recover() =
+                                                Some(PreviewData {
+                                                    filename,
+                                                    mime_type: mime,
+                                                    data,
+                                                    temp_file_path: None,
+                                                    total_size: None,
+                                                });
+                                        } else {
+                                            add_notification("Preview", "Failed to read file", "");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = tokio::fs::remove_file(&local_path).await;
+                                        error!("Failed to preview file: {}", e);
+                                        add_notification("Preview Failed", &e.to_string(), "");
+                                    }
                                 }
                             }
                         }
@@ -1989,7 +2041,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
             AppAction::ClosePreview => {
-                *get_preview_data().lock_or_recover() = None;
+                if let Some(data) = get_preview_data().lock_or_recover().take()
+                    && let Some(path) = data.temp_file_path
+                {
+                    let _ = std::fs::remove_file(path);
+                }
             }
             AppAction::ToggleMediaControl { enabled, notify } => {
                 *get_media_enabled().lock_or_recover() = enabled;

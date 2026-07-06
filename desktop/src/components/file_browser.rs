@@ -51,7 +51,11 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
             let current_preview = preview_content.read();
             let should_update_preview = match (current_preview.as_ref(), new_preview.as_ref()) {
                 (None, Some(_)) | (Some(_), None) => true,
-                (Some(c), Some(n)) => c.filename != n.filename,
+                (Some(c), Some(n)) => {
+                    c.filename != n.filename
+                        || c.temp_file_path != n.temp_file_path
+                        || c.mime_type != n.mime_type
+                }
                 (None, None) => false,
             };
             drop(current_preview);
@@ -410,7 +414,11 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                     onclick: move |_| video_fullscreen.set(false),
                     video {
                         controls: "true",
-                        src: "data:{preview_val.as_ref().unwrap().mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&preview_val.as_ref().unwrap().data)}",
+                        src: if let (Some(path), Some(size)) = (&preview_val.as_ref().unwrap().temp_file_path, preview_val.as_ref().unwrap().total_size) {
+                            format!("connected-stream://preview?path={}&mime={}&size={}", urlencoding::encode(&path.to_string_lossy()), urlencoding::encode(&preview_val.as_ref().unwrap().mime_type), size)
+                        } else {
+                            format!("data:{};base64,{}", preview_val.as_ref().unwrap().mime_type, base64::engine::general_purpose::STANDARD.encode(&preview_val.as_ref().unwrap().data))
+                        },
                         style: "max-width: 100vw; max-height: 100vh; width: 100vw; height: 100vh; object-fit: contain;",
                         onclick: |evt| evt.stop_propagation(),
                         onloadeddata: move |_| {
@@ -418,7 +426,10 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                 var v = document.querySelector('[data-fullscreen-close]').parentElement.querySelector('video');
                                 if (v && window.__connected_fs_time !== undefined) {
                                     v.currentTime = window.__connected_fs_time;
-                                    if (!window.__connected_fs_paused) v.play();
+                                    var was_playing = !window.__connected_fs_paused;
+                                    delete window.__connected_fs_time;
+                                    delete window.__connected_fs_paused;
+                                    if (was_playing) v.play();
                                 }
                             "#);
                         },
@@ -477,7 +488,12 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                             } else if data.mime_type.starts_with("audio/") {
                                 audio {
                                     controls: "true",
-                                    src: "data:{data.mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&data.data)}",
+                                    preload: "auto",
+                                    src: if let (Some(path), Some(size)) = (&data.temp_file_path, data.total_size) {
+                                        format!("connected-stream://preview?path={}&mime={}&size={}", urlencoding::encode(&path.to_string_lossy()), urlencoding::encode(&data.mime_type), size)
+                                    } else {
+                                        format!("data:{};base64,{}", data.mime_type, base64::engine::general_purpose::STANDARD.encode(&data.data))
+                                    },
                                     style: "max-width: 100%; border-radius: 8px;"
                                 }
                             } else if data.mime_type.starts_with("video/") {
@@ -485,14 +501,21 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     style: "position: relative; width: fit-content; margin: 0 auto;",
                                     video {
                                         controls: "true",
-                                        src: "data:{data.mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&data.data)}",
+                                        src: if let (Some(path), Some(size)) = (&data.temp_file_path, data.total_size) {
+                                            format!("connected-stream://preview?path={}&mime={}&size={}", urlencoding::encode(&path.to_string_lossy()), urlencoding::encode(&data.mime_type), size)
+                                        } else {
+                                            format!("data:{};base64,{}", data.mime_type, base64::engine::general_purpose::STANDARD.encode(&data.data))
+                                        },
                                         style: "max-width: 100%; max-height: 65vh; border-radius: 8px;",
                                         onloadeddata: move |_| {
                                             document::eval(r#"
                                                 var v = document.querySelector('.dialog-content video');
                                                 if (v && window.__connected_fs_time !== undefined) {
                                                     v.currentTime = window.__connected_fs_time;
-                                                    if (!window.__connected_fs_paused) v.play();
+                                                    var was_playing = !window.__connected_fs_paused;
+                                                    delete window.__connected_fs_time;
+                                                    delete window.__connected_fs_paused;
+                                                    if (was_playing) v.play();
                                                 }
                                             "#);
                                         },

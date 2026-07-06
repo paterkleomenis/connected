@@ -791,6 +791,126 @@ fn ensure_firewall_rules() {
     }
 }
 
+/// Handle requests from the `connected-stream://` custom protocol.
+/// Serves file bytes directly through wry's protocol handler for streaming
+/// audio/video previews without an HTTP server.
+async fn handle_connected_stream_request(
+    url: &str,
+    request: &dioxus::desktop::wry::http::Request<Vec<u8>>,
+) -> dioxus::desktop::wry::http::Response<std::borrow::Cow<'static, [u8]>> {
+    use dioxus::desktop::wry::http;
+    use std::borrow::Cow;
+    use std::io::{Read, Seek, SeekFrom};
+
+    let parsed = match url::Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => {
+            return http::Response::builder()
+                .status(400)
+                .body(Cow::Borrowed(&b"Invalid URL"[..]))
+                .unwrap();
+        }
+    };
+
+    let path_param = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "path")
+        .map(|(_, v)| v.to_string());
+    let mime_param = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "mime")
+        .map(|(_, v)| v.to_string());
+    let size_param = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "size")
+        .and_then(|(_, v)| v.parse::<u64>().ok());
+
+    let file_path = match path_param {
+        Some(p) => p,
+        None => {
+            return http::Response::builder()
+                .status(400)
+                .body(Cow::Borrowed(&b"Missing path parameter"[..]))
+                .unwrap();
+        }
+    };
+
+    let mime = mime_param.unwrap_or_else(|| "application/octet-stream".to_string());
+    let total_size =
+        size_param.unwrap_or_else(|| std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0));
+
+    if total_size == 0 {
+        return http::Response::builder()
+            .status(404)
+            .body(Cow::Borrowed(&b"File not found or empty"[..]))
+            .unwrap();
+    }
+
+    let range_header = request
+        .headers()
+        .get("Range")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    if let Some(range_str) = range_header
+        && let Some(bytes_spec) = range_str.strip_prefix("bytes=")
+    {
+        let parts: Vec<&str> = bytes_spec.split('-').collect();
+        if let Ok(start) = parts[0].trim().parse::<u64>() {
+            let end = parts
+                .get(1)
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(total_size - 1)
+                .min(total_size - 1);
+            let len = end - start + 1;
+
+            let data =
+                match tokio::task::spawn_blocking(move || -> Result<Vec<u8>, std::io::Error> {
+                    let mut file = std::fs::File::open(&file_path)?;
+                    file.seek(SeekFrom::Start(start))?;
+                    let mut buf = vec![0u8; len as usize];
+                    let mut total_read = 0usize;
+                    while total_read < buf.len() {
+                        match file.read(&mut buf[total_read..]) {
+                            Ok(0) => break,
+                            Ok(n) => total_read += n,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    buf.truncate(total_read);
+                    Ok(buf)
+                })
+                .await
+                {
+                    Ok(Ok(data)) => data,
+                    _ => {
+                        return http::Response::builder()
+                            .status(500)
+                            .body(Cow::Borrowed(&b"Read error"[..]))
+                            .unwrap();
+                    }
+                };
+
+            return http::Response::builder()
+                .status(206)
+                .header("Content-Type", &mime)
+                .header(
+                    "Content-Range",
+                    format!("bytes {}-{}/{}", start, end, total_size),
+                )
+                .header("Content-Length", data.len())
+                .header("Accept-Ranges", "bytes")
+                .body(Cow::Owned(data))
+                .unwrap();
+        }
+    }
+
+    http::Response::builder()
+        .status(405)
+        .body(Cow::Borrowed(&b"Range requests required"[..]))
+        .unwrap()
+}
+
 fn main() {
     // Handle the elevated-subprocess entry point before doing anything else.
     // When launched with --install-firewall-rules the process creates the
@@ -895,7 +1015,17 @@ fn main() {
         .with_disable_context_menu(true)
         .with_on_window(|window, _| {
             ipc::set_wakeup_window(window);
-        });
+        })
+        .with_asynchronous_custom_protocol(
+            "connected-stream",
+            |_webview_id, request, responder| {
+                let url = request.uri().to_string();
+                tokio::spawn(async move {
+                    let response = handle_connected_stream_request(&url, &request).await;
+                    responder.respond(response);
+                });
+            },
+        );
 
     // Set up menu bar on macOS
     #[cfg(target_os = "macos")]

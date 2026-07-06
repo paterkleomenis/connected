@@ -638,6 +638,129 @@ impl ConnectedClient {
         Ok(offset)
     }
 
+    /// Download a file with head-first strategy for progressive playback.
+    /// Downloads head_size bytes from the start, signals via oneshot,
+    /// then continues downloading the rest sequentially.
+    /// File grows linearly — no sparse holes.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn fs_download_file_streaming(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        remote_path: String,
+        local_path: PathBuf,
+        head_size: u64,
+        ready_tx: tokio::sync::oneshot::Sender<u64>,
+    ) -> Result<u64> {
+        use crate::filesystem::{FilesystemMessage, STREAM_TYPE_FS};
+        use tokio::io::AsyncWriteExt;
+
+        let addr = SocketAddr::new(target_ip, target_port);
+        let (mut send, mut recv) = self.transport.open_stream(addr, STREAM_TYPE_FS).await?;
+
+        // 1. Get metadata (file size)
+        let meta_req = FilesystemMessage::GetMetadataRequest {
+            path: remote_path.clone(),
+        };
+        crate::file_transfer::send_message(&mut send, &meta_req).await?;
+        let meta_resp: FilesystemMessage =
+            crate::file_transfer::recv_message_with_limit(&mut recv, 16 * 1024 * 1024).await?;
+
+        let file_size = match meta_resp {
+            FilesystemMessage::GetMetadataResponse { entry } => entry.size,
+            FilesystemMessage::Error { message } => return Err(ConnectedError::Protocol(message)),
+            _ => {
+                return Err(ConnectedError::Protocol(
+                    "Unexpected metadata response".to_string(),
+                ));
+            }
+        };
+
+        // 2. Create local file
+        let mut file = tokio::fs::File::create(&local_path)
+            .await
+            .map_err(ConnectedError::Io)?;
+
+        let chunk_size = 4 * 1024 * 1024u64;
+
+        // 3. Download head
+        let head_end = std::cmp::min(head_size, file_size);
+        let mut offset = 0u64;
+        while offset < head_end {
+            let size = std::cmp::min(chunk_size, head_end - offset);
+            let req = FilesystemMessage::ReadFileRequest {
+                path: remote_path.clone(),
+                offset,
+                size,
+            };
+            crate::file_transfer::send_message(&mut send, &req).await?;
+            match crate::file_transfer::recv_message_with_limit::<FilesystemMessage>(
+                &mut recv,
+                (chunk_size * 4) as usize,
+            )
+            .await?
+            {
+                FilesystemMessage::ReadFileResponse { data } => {
+                    if data.is_empty() {
+                        return Err(ConnectedError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "unexpected EOF",
+                        )));
+                    }
+                    file.write_all(&data).await.map_err(ConnectedError::Io)?;
+                    offset += data.len() as u64;
+                }
+                FilesystemMessage::Error { message } => {
+                    return Err(ConnectedError::Protocol(message));
+                }
+                _ => {
+                    return Err(ConnectedError::Protocol("Unexpected response".to_string()));
+                }
+            }
+        }
+        file.flush().await.map_err(ConnectedError::Io)?;
+
+        // Signal: head on disk, caller starts preview
+        let _ = ready_tx.send(file_size);
+
+        // 4. Download the rest sequentially — file grows linearly
+        while offset < file_size {
+            let size = std::cmp::min(chunk_size, file_size - offset);
+            let req = FilesystemMessage::ReadFileRequest {
+                path: remote_path.clone(),
+                offset,
+                size,
+            };
+            crate::file_transfer::send_message(&mut send, &req).await?;
+            match crate::file_transfer::recv_message_with_limit::<FilesystemMessage>(
+                &mut recv,
+                (chunk_size * 4) as usize,
+            )
+            .await?
+            {
+                FilesystemMessage::ReadFileResponse { data } => {
+                    if data.is_empty() {
+                        return Err(ConnectedError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "unexpected EOF",
+                        )));
+                    }
+                    file.write_all(&data).await.map_err(ConnectedError::Io)?;
+                    offset += data.len() as u64;
+                }
+                FilesystemMessage::Error { message } => {
+                    return Err(ConnectedError::Protocol(message));
+                }
+                _ => {
+                    return Err(ConnectedError::Protocol("Unexpected response".to_string()));
+                }
+            }
+        }
+
+        file.flush().await.map_err(ConnectedError::Io)?;
+        Ok(file_size)
+    }
+
     /// Download a file with progress callback
     pub async fn fs_download_file_with_progress<F>(
         &self,

@@ -485,6 +485,8 @@ pub struct PreviewData {
     pub filename: String,
     pub mime_type: String,
     pub data: Vec<u8>,
+    pub temp_file_path: Option<std::path::PathBuf>,
+    pub total_size: Option<u64>,
 }
 
 pub fn get_devices_store() -> &'static Arc<Mutex<HashMap<String, DeviceInfo>>> {

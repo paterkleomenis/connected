@@ -21,6 +21,8 @@ once_cell.workspace = true
 rustls.workspace = true
 mime_guess.workspace = true
 base64 = "0.22"
+urlencoding = "2"
+url = "2"
 image = "0.25"
 uuid = { workspace = true }
 notify-rust = "4.11"
