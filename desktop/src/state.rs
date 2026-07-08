@@ -485,6 +485,9 @@ pub struct PreviewData {
     pub filename: String,
     pub mime_type: String,
     pub data: Vec<u8>,
+    /// Path of a temp file holding the previewed media (audio/video), served to
+    /// the webview via the `preview` asset protocol instead of a base64 blob.
+    pub local_path: Option<String>,
 }
 
 pub fn get_devices_store() -> &'static Arc<Mutex<HashMap<String, DeviceInfo>>> {

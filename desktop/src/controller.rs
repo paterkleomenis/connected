@@ -1,5 +1,44 @@
 use crate::fs_provider::DesktopFilesystemProvider;
 use crate::mpris_server::{MprisUpdate, send_mpris_update};
+use std::process::Command;
+
+/// Open a local media file in a desktop media player. Tries common players and
+/// falls back to the OS default handler. Returns true if a player was launched.
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+fn open_in_media_player(path: &std::path::Path) -> bool {
+    let candidates: &[(&str, &[&str])] = if cfg!(target_os = "windows") {
+        &[("vlc", &[]), ("mpv", &[]), ("cmd", &["/c", "start", ""])]
+    } else if cfg!(target_os = "macos") {
+        &[("vlc", &[]), ("mpv", &[]), ("open", &[])]
+    } else {
+        &[
+            ("vlc", &[]),
+            ("mpv", &[]),
+            ("totem", &[]),
+            ("smplayer", &[]),
+            ("xdg-open", &[]),
+            ("gio", &["open"]),
+        ]
+    };
+
+    for (program, extra) in candidates {
+        let mut command = Command::new(program);
+        for arg in *extra {
+            command.arg(arg);
+        }
+        command.arg(path);
+        match command.spawn() {
+            Ok(_) => {
+                tracing::info!("Opened media \"{}\" with {}", path.display(), program);
+                return true;
+            }
+            Err(e) => {
+                tracing::debug!("Could not launch media player {}: {}", program, e);
+            }
+        }
+    }
+    false
+}
 use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
     SavedDeviceInfo, TransferStatus, add_actionable_notification, add_file_transfer_request,
@@ -1925,31 +1964,84 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     tokio::spawn(async move {
                         if let Ok(ip_addr) = ip_str.parse() {
                             let temp_dir = std::env::temp_dir();
-                            let local_path = temp_dir
-                                .join(format!("connected-preview-{}.tmp", uuid::Uuid::new_v4()));
+                            let ext = std::path::Path::new(&filename)
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .filter(|e| !e.is_empty())
+                                .map(|e| e.to_string())
+                                .unwrap_or_else(|| "bin".to_string());
+                            let local_path = temp_dir.join(format!(
+                                "connected-preview-{}.{}",
+                                uuid::Uuid::new_v4(),
+                                ext
+                            ));
 
                             add_notification("Preview", &format!("Loading {}...", filename), "");
+
+                            let mime = mime_guess::from_path(&filename)
+                                .first_or_octet_stream()
+                                .to_string();
+                            let is_media = mime.starts_with("audio/") || mime.starts_with("video/");
 
                             match c
                                 .fs_download_file(ip_addr, port, remote_path, local_path.clone())
                                 .await
                             {
                                 Ok(_) => {
-                                    let read_res = tokio::fs::read(&local_path).await;
-                                    let _ = tokio::fs::remove_file(&local_path).await;
-
-                                    if let Ok(data) = read_res {
-                                        let mime = mime_guess::from_path(&filename)
-                                            .first_or_octet_stream()
-                                            .to_string();
-
-                                        *get_preview_data().lock_or_recover() = Some(PreviewData {
-                                            filename,
-                                            mime_type: mime,
-                                            data,
-                                        });
+                                    if is_media {
+                                        // The desktop webview cannot play audio/video from
+                                        // custom schemes, so hand the file off to a real
+                                        // media player. Fall back to saving in Downloads.
+                                        if !open_in_media_player(&local_path) {
+                                            warn!("No media player found; saving to Downloads");
+                                            if let Some(dir) = get_download_directory_setting() {
+                                                let dest = std::path::Path::new(&dir).join(&filename);
+                                                let _ = std::fs::copy(&local_path, &dest);
+                                                add_notification(
+                                                    "Preview",
+                                                    &format!(
+                                                        "No media player found. Saved to {}",
+                                                        dest.display()
+                                                    ),
+                                                    "",
+                                                );
+                                            } else {
+                                                add_notification(
+                                                    "Preview",
+                                                    "No media player found to open this file",
+                                                    "",
+                                                );
+                                            }
+                                            let _ = tokio::fs::remove_file(&local_path).await;
+                                            // Surface the failure in the app (toasts may be
+                                            // hidden) so the user at least sees a response.
+                                            *get_preview_data().lock_or_recover() =
+                                                Some(PreviewData {
+                                                    filename,
+                                                    mime_type: mime,
+                                                    data: Vec::new(),
+                                                    local_path: None,
+                                                });
+                                        }
                                     } else {
-                                        add_notification("Preview", "Failed to read file", "");
+                                        let read_res = tokio::fs::read(&local_path).await;
+                                        let _ = tokio::fs::remove_file(&local_path).await;
+
+                                        if let Ok(data) = read_res {
+                                            *get_preview_data().lock_or_recover() =
+                                                Some(PreviewData {
+                                                    filename,
+                                                    mime_type: mime,
+                                                    data,
+                                                    local_path: None,
+                                                });
+                                        } else {
+                                            add_notification(
+                                                "Preview",
+                                                "Failed to read file",
+                                                "",
+                                            );
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -1989,6 +2081,13 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
             AppAction::ClosePreview => {
+                if let Some(name) = get_preview_data()
+                    .lock_or_recover()
+                    .as_ref()
+                    .and_then(|d| d.local_path.clone())
+                {
+                    let _ = std::fs::remove_file(std::env::temp_dir().join(name));
+                }
                 *get_preview_data().lock_or_recover() = None;
             }
             AppAction::ToggleMediaControl { enabled, notify } => {

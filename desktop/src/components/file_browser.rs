@@ -18,7 +18,6 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let mut last_update_seen = use_signal(|| *get_remote_files_update().lock_or_recover());
     let mut context_menu = use_signal(|| Option::<(String, String, i32, i32)>::None);
     let mut preview_content = use_signal(|| Option::<PreviewData>::None);
-    let mut video_fullscreen = use_signal(|| false);
 
     // Thumbnail state
     let mut current_thumbnails = use_signal(HashMap::<String, String>::new); // path -> base64
@@ -72,17 +71,25 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 current_path.set(new_path);
             }
 
-            // Sync thumbnails if updated
+            // Sync thumbnails if updated. Only encode thumbnails we don't already
+            // have, and only re-render when a new one actually arrives — otherwise
+            // every thumbnail triggered a full re-encode + re-render of the list.
             if thumbnails_ts != *last_thumbnails_update.read() {
                 let thumbs_lock = get_thumbnails().lock_or_recover();
-                let mut new_thumbs = HashMap::new();
+                let mut new_thumbs = current_thumbnails.read().clone();
+                let mut changed = false;
                 for (k, v) in thumbs_lock.iter() {
-                    new_thumbs.insert(
-                        k.clone(),
-                        base64::engine::general_purpose::STANDARD.encode(v),
-                    );
+                    if !new_thumbs.contains_key(k) {
+                        new_thumbs.insert(
+                            k.clone(),
+                            base64::engine::general_purpose::STANDARD.encode(v),
+                        );
+                        changed = true;
+                    }
                 }
-                current_thumbnails.set(new_thumbs);
+                if changed {
+                    current_thumbnails.set(new_thumbs);
+                }
                 last_thumbnails_update.set(thumbnails_ts);
             }
 
@@ -92,8 +99,8 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 requested.retain(|_, ts| ts.elapsed() < std::time::Duration::from_secs(5));
             }
 
-            // Increased from 200ms to 500ms to reduce CPU usage
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // Responsive enough to feel instant, light enough to stay idle.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
     });
 
@@ -147,6 +154,22 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
             .read()
             .as_ref()
             .is_some_and(|d| d.mime_type.starts_with("video/"));
+
+        // Always remove any previously attached listeners first to avoid leaks
+        // when switching between different videos.
+        document::eval(
+            r#"
+            if (window.__connected_fs_handler) {
+                window.removeEventListener('mousemove', window.__connected_fs_handler);
+                window.__connected_fs_handler = null;
+            }
+            if (window.__connected_fs_keydown) {
+                window.removeEventListener('keydown', window.__connected_fs_keydown);
+                window.__connected_fs_keydown = null;
+            }
+        "#,
+        );
+
         if has_video {
             document::eval(
                 r#"
@@ -177,19 +200,6 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                     };
                     window.addEventListener('keydown', window.__connected_fs_keydown);
                 })();
-            "#,
-            );
-        } else {
-            document::eval(
-                r#"
-                if (window.__connected_fs_handler) {
-                    window.removeEventListener('mousemove', window.__connected_fs_handler);
-                    window.__connected_fs_handler = null;
-                }
-                if (window.__connected_fs_keydown) {
-                    window.removeEventListener('keydown', window.__connected_fs_keydown);
-                    window.__connected_fs_keydown = null;
-                }
             "#,
             );
         }
@@ -404,45 +414,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 }
             }
 
-            if *video_fullscreen.read() && preview_val.as_ref().is_some_and(|d| d.mime_type.starts_with("video/")) {
-                div {
-                    style: "position: fixed; inset: 0; z-index: 3000; background: #000; display: flex; align-items: center; justify-content: center;",
-                    onclick: move |_| video_fullscreen.set(false),
-                    video {
-                        controls: "true",
-                        src: "data:{preview_val.as_ref().unwrap().mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&preview_val.as_ref().unwrap().data)}",
-                        style: "max-width: 100vw; max-height: 100vh; width: 100vw; height: 100vh; object-fit: contain;",
-                        onclick: |evt| evt.stop_propagation(),
-                        onloadeddata: move |_| {
-                            document::eval(r#"
-                                var v = document.querySelector('[data-fullscreen-close]').parentElement.querySelector('video');
-                                if (v && window.__connected_fs_time !== undefined) {
-                                    v.currentTime = window.__connected_fs_time;
-                                    if (!window.__connected_fs_paused) v.play();
-                                }
-                            "#);
-                        },
-                    }
-                    button {
-                        "data-fullscreen-close": "true",
-                        style: "position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 10; background: rgba(0,0,0,0.8); color: white; border: none; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: opacity 0.3s;",
-                        onclick: move |evt| {
-                            evt.stop_propagation();
-                            document::eval(r#"
-                                var v = document.querySelector('[data-fullscreen-close]').parentElement.querySelector('video');
-                                if (v) {
-                                    window.__connected_fs_paused = v.paused;
-                                    window.__connected_fs_time = v.currentTime;
-                                    v.pause();
-                                }
-                            "#);
-                            video_fullscreen.set(false);
-                            dioxus::desktop::window().window.set_fullscreen(None);
-                        },
-                        Icon { icon: IconType::Close, size: 20, color: "white".to_string() }
-                    }
-                }
-            } else if let Some(data) = preview_val.as_ref() {
+            if let Some(data) = preview_val.as_ref() {
                 div {
                     class: "modal-overlay",
                     onclick: move |_| send_action(AppAction::ClosePreview),
@@ -473,52 +445,6 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                 pre {
                                     style: "white-space: pre-wrap; font-family: var(--font-mono); text-align: left; padding: 16px; background: var(--bg-tertiary); border-radius: 8px; width: 100%; overflow-x: auto;",
                                     "{String::from_utf8_lossy(&data.data)}"
-                                }
-                            } else if data.mime_type.starts_with("audio/") {
-                                audio {
-                                    controls: "true",
-                                    src: "data:{data.mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&data.data)}",
-                                    style: "max-width: 100%; border-radius: 8px;"
-                                }
-                            } else if data.mime_type.starts_with("video/") {
-                                div {
-                                    style: "position: relative; width: fit-content; margin: 0 auto;",
-                                    video {
-                                        controls: "true",
-                                        src: "data:{data.mime_type};base64,{base64::engine::general_purpose::STANDARD.encode(&data.data)}",
-                                        style: "max-width: 100%; max-height: 65vh; border-radius: 8px;",
-                                        onloadeddata: move |_| {
-                                            document::eval(r#"
-                                                var v = document.querySelector('.dialog-content video');
-                                                if (v && window.__connected_fs_time !== undefined) {
-                                                    v.currentTime = window.__connected_fs_time;
-                                                    if (!window.__connected_fs_paused) v.play();
-                                                }
-                                            "#);
-                                        },
-                                    }
-                                    button {
-                                        "data-fullscreen-open": "true",
-                                        style: "position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 10; background: rgba(0,0,0,0.6); color: white; border: none; border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; backdrop-filter: blur(4px); transition: opacity 0.3s;",
-                                        onclick: move |evt| {
-                                            evt.stop_propagation();
-                                            document::eval(r#"
-                                                var v = document.querySelector('.dialog-content video');
-                                                if (v) {
-                                                    window.__connected_fs_paused = v.paused;
-                                                    window.__connected_fs_time = v.currentTime;
-                                                    v.pause();
-                                                }
-                                            "#);
-                                            video_fullscreen.set(true);
-                                            dioxus::desktop::window()
-                                                .window
-                                                .set_fullscreen(Some(
-                                                    dioxus::desktop::tao::window::Fullscreen::Borderless(None),
-                                                ));
-                                        },
-                                        Icon { icon: IconType::Fullscreen, size: 18, color: "white".to_string() }
-                                    }
                                 }
                             } else {
                                 div {
