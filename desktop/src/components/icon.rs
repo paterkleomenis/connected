@@ -52,6 +52,7 @@ pub enum IconType {
     VolumeUp,
     VolumeDown,
     Music,
+    Fullscreen,
 
     // Phone
     Call,
@@ -227,6 +228,9 @@ fn get_svg_content(icon: &IconType) -> &'static str {
         }
         IconType::Music => {
             r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%"><circle cx="5.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="15.5" r="2.5"/><path d="M8 17V5l12-2v12"/></svg>"#
+        }
+        IconType::Fullscreen => {
+            r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>"#
         }
 
         // Phone
