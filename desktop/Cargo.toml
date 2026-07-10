@@ -56,7 +56,7 @@ windows = { version = "0.62", features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 windows_firewall = "0.7"
-tauri-winrt-notification = "0.7"
+tauri-winrt-notification = "0.8"
 
 
 [build-dependencies]
