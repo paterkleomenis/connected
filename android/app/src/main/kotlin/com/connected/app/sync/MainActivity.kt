@@ -1854,6 +1854,24 @@ fun SettingsScreen(
                     ) {
                         Text("Send Feedback")
                     }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedButton(
+                        onClick = {
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW,
+                                    "https://github.com/paterkleomenis/connected/blob/main/PRIVACY_POLICY.md".toUri())
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "Failed to open privacy policy url", e)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Privacy Policy")
+                    }
                 }
             }
         }
