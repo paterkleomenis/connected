@@ -829,7 +829,16 @@ class ConnectedApp(private val context: Context) {
             } else {
                 "Completed: $filename"
             }
-            val savedUri = moveToDownloads(filename)
+            // The transfer may be a single file OR a folder (e.g. Desktop → Android folder push).
+            // moveToDownloads() only handles single files and silently swallows the failure
+            // when given a directory, so branch on whether the completed item is a directory.
+            val isFolder = File(downloadDir, filename).isDirectory
+            val savedUri: Uri? = if (isFolder) {
+                moveFolderToDownloads(filename)
+                null
+            } else {
+                moveToDownloads(filename)
+            }
             val openUri = resolveOpenUriForCompletedTransfer(savedUri, filename)
             Log.d("ConnectedApp", "Completed transfer URI for $filename: $openUri")
             showCompletionNotification(filename, openUri?.toString(), getMimeType(filename))
@@ -1887,22 +1896,58 @@ class ConnectedApp(private val context: Context) {
         }
 
         try {
+            val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS
+            )
+            val destFolder = File(downloadsDir, folderName)
+            var moved = false
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // On Android 10+, use MediaStore for each file
+                // Scoped storage: MediaStore is the sanctioned API and preserves the
+                // nested RELATIVE_PATH (Download/<folderName>) on standard Android.
                 copyFolderToDownloadsMediaStore(sourceFolder, folderName)
+
+                // Verify the files actually landed inside the subfolder. Some device
+                // ROMs silently flatten RELATIVE_PATH into Download/, dropping the
+                // containing folder. Confirm before deleting the private source.
+                val resolver = context.contentResolver
+                val placed = resolver.query(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    arrayOf(android.provider.MediaStore.MediaColumns._ID),
+                    "${android.provider.MediaStore.MediaColumns.RELATIVE_PATH} = ?",
+                    arrayOf("${android.os.Environment.DIRECTORY_DOWNLOADS}/$folderName"),
+                    null
+                )?.use { it.count } ?: 0
+                moved = placed > 0
+
+                if (!moved) {
+                    // Fall back to a direct file copy where the app still has write
+                    // access (legacy storage / older Android / permissive ROMs).
+                    try {
+                        copyFolderRecursively(sourceFolder, destFolder)
+                        moved = destFolder.exists() &&
+                            destFolder.listFiles()?.isNotEmpty() == true
+                    } catch (e: Exception) {
+                        Log.w("ConnectedApp", "Fallback folder copy failed", e)
+                    }
+                }
             } else {
                 // On older Android, use direct file access
-                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
-                    android.os.Environment.DIRECTORY_DOWNLOADS
-                )
-                val destFolder = File(downloadsDir, folderName)
                 copyFolderRecursively(sourceFolder, destFolder)
+                moved = destFolder.exists() &&
+                    destFolder.listFiles()?.isNotEmpty() == true
             }
 
-            // Clean up the source folder from app's private storage
-            sourceFolder.deleteRecursively()
-
-            Log.i("ConnectedApp", "Moved folder to Downloads: $folderName")
+            if (moved) {
+                // Only remove the private copy once the public one is confirmed.
+                sourceFolder.deleteRecursively()
+                Log.i("ConnectedApp", "Moved folder to Downloads: $folderName")
+            } else {
+                Log.w(
+                    "ConnectedApp",
+                    "Could not place folder in Downloads; keeping private copy at ${sourceFolder.absolutePath}"
+                )
+            }
         } catch (e: Exception) {
             Log.e("ConnectedApp", "Failed to move folder to Downloads", e)
         }

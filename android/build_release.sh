@@ -108,7 +108,7 @@ if [ -f "$PLAY_APK" ]; then
     echo ""
 
     # Show file size
-    APK_SIZE=$(ls -lh "$PLAY_APK" | awk '{print $5}')
+    APK_SIZE=$(du -h "$PLAY_APK" | cut -f1)
     echo "📦 APK Size: $APK_SIZE"
     echo ""
 
@@ -121,7 +121,7 @@ if [ -f "$PLAY_APK" ]; then
         echo "✅ Release AAB built successfully!"
         echo "📁 Location: $PLAY_AAB"
 
-        AAB_SIZE=$(ls -lh "$PLAY_AAB" | awk '{print $5}')
+        AAB_SIZE=$(du -h "$PLAY_AAB" | cut -f1)
         echo "📦 AAB Size: $AAB_SIZE"
     else
         echo "❌ AAB build failed"
