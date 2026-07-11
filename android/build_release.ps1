@@ -87,32 +87,35 @@ Write-Host "🔗 Generating UniFFI bindings..." -ForegroundColor Cyan
 .\gradlew.bat :app:generateBindingsRelease
 Write-Host ""
 
-# Compile release build
+# Compile release build (Play flavor for Play Store)
 Write-Host "🚀 Compiling release build..." -ForegroundColor Cyan
-.\gradlew.bat assembleRelease
+.\gradlew.bat assemblePlayRelease
 Write-Host ""
 
+$PlayApk = "app\build\outputs\apk\play\release\app-play-release.apk"
+
 # Check if build was successful
-if (Test-Path "app\build\outputs\apk\release\app-release.apk") {
+if (Test-Path $PlayApk) {
     Write-Host "✅ Release APK built successfully!" -ForegroundColor Green
-    Write-Host "📁 Location: app\build\outputs\apk\release\app-release.apk" -ForegroundColor Cyan
+    Write-Host "📁 Location: $PlayApk" -ForegroundColor Cyan
     Write-Host ""
 
     # Show file size
-    $ApkFile = Get-Item "app\build\outputs\apk\release\app-release.apk"
+    $ApkFile = Get-Item $PlayApk
     $ApkSize = "{0:N2} MB" -f ($ApkFile.Length / 1MB)
     Write-Host "📦 APK Size: $ApkSize" -ForegroundColor Cyan
     Write-Host ""
 
     # Try to build AAB
     Write-Host "📱 Building Android App Bundle (AAB)..." -ForegroundColor Cyan
-    .\gradlew.bat bundleRelease
+    .\gradlew.bat bundlePlayRelease
 
-    if (Test-Path "app\build\outputs\bundle\release\app-release.aab") {
+    $PlayAab = "app\build\outputs\bundle\playRelease\app-play-release.aab"
+    if (Test-Path $PlayAab) {
         Write-Host "✅ Release AAB built successfully!" -ForegroundColor Green
-        Write-Host "📁 Location: app\build\outputs\bundle\release\app-release.aab" -ForegroundColor Cyan
+        Write-Host "📁 Location: $PlayAab" -ForegroundColor Cyan
 
-        $AabFile = Get-Item "app\build\outputs\bundle\release\app-release.aab"
+        $AabFile = Get-Item $PlayAab
         $AabSize = "{0:N2} MB" -f ($AabFile.Length / 1MB)
         Write-Host "📦 AAB Size: $AabSize" -ForegroundColor Cyan
     } else {
@@ -128,6 +131,6 @@ Write-Host ""
 Write-Host "🎉 Build complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "1. Test the APK on a device: adb install -r app\build\outputs\apk\release\app-release.apk"
+Write-Host "1. Test the APK on a device: adb install -r $PlayApk"
 Write-Host "2. Upload the AAB to Play Console"
 Write-Host "3. See PLAY_STORE_GUIDE.md for detailed upload instructions"

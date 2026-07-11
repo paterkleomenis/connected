@@ -94,31 +94,34 @@ echo "🔗 Generating UniFFI bindings..."
 ./gradlew :app:generateBindingsRelease
 echo ""
 
-# Compile release build
+# Compile release build (Play flavor for Play Store)
 echo "🚀 Compiling release build..."
-./gradlew assembleRelease
+./gradlew assemblePlayRelease
 echo ""
 
+PLAY_APK="app/build/outputs/apk/play/release/app-play-release.apk"
+
 # Check if build was successful
-if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
+if [ -f "$PLAY_APK" ]; then
     echo "✅ Release APK built successfully!"
-    echo "📁 Location: app/build/outputs/apk/release/app-release.apk"
+    echo "📁 Location: $PLAY_APK"
     echo ""
 
     # Show file size
-    APK_SIZE=$(find app/build/outputs/apk/release -name "app-release.apk" -exec ls -lh {} \; | awk '{print $5}')
+    APK_SIZE=$(ls -lh "$PLAY_APK" | awk '{print $5}')
     echo "📦 APK Size: $APK_SIZE"
     echo ""
 
     # Try to build AAB
     echo "📱 Building Android App Bundle (AAB)..."
-    ./gradlew bundleRelease
+    ./gradlew bundlePlayRelease
 
-    if [ -f "app/build/outputs/bundle/release/app-release.aab" ]; then
+    PLAY_AAB="app/build/outputs/bundle/playRelease/app-play-release.aab"
+    if [ -f "$PLAY_AAB" ]; then
         echo "✅ Release AAB built successfully!"
-        echo "📁 Location: app/build/outputs/bundle/release/app-release.aab"
+        echo "📁 Location: $PLAY_AAB"
 
-        AAB_SIZE=$(find app/build/outputs/bundle/release -name "app-release.aab" -exec ls -lh {} \; | awk '{print $5}')
+        AAB_SIZE=$(ls -lh "$PLAY_AAB" | awk '{print $5}')
         echo "📦 AAB Size: $AAB_SIZE"
     else
         echo "❌ AAB build failed"
@@ -133,6 +136,6 @@ echo ""
 echo "🎉 Build complete!"
 echo ""
 echo "Next steps:"
-echo "1. Test the APK on a device: adb install -r app/build/outputs/apk/release/app-release.apk"
-echo "2. Upload the AAB to Play Console"
+echo "1. Test the APK on a device: adb install -r $PLAY_APK"
+echo "2. Upload the AAB to Play Console: $PLAY_AAB"
 echo "3. See PLAY_STORE_GUIDE.md for detailed upload instructions"
