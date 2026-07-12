@@ -1,0 +1,17 @@
+Connected is a high-speed, offline, cross-platform app that bridges the gap between your devices. It is built with Rust and Jetpack Compose and aims to outperform proprietary solutions like AirDrop.
+
+Features:
+
+• Cross-platform: transfer files, sync clipboards, make and answer calls, send and receive messages, and control media between Android, iOS, Linux, Mac and Windows devices.
+• Offline functionality: use it without an internet connection on supported Android devices via WiFi Aware, plus local-network discovery when a network is available.
+• High speed: powered by the QUIC protocol (the same protocol behind HTTP/3).
+• Zero config: auto-discovery via mDNS and WiFi Aware.
+• Secure: end-to-end encryption for all transfers.
+• Privacy by design: your data never leaves your local link. All communication happens directly between your own devices — no cloud servers are involved.
+
+Why Connected?
+
+• Protocol superiority: it uses QUIC (via quinn), the protocol powering HTTP/3, for lower latency and faster connection setup than the TCP connections used by legacy transfer tools.
+• True offline freedom: on supported Android devices it leverages WiFi Aware so nearby devices can negotiate their own link anywhere — on a train, in a park, or in an air-gapped office.
+• Rust-powered reliability: the core logic is written in Rust, guaranteeing memory safety, high performance, and a minimal resource footprint.
+• Privacy by design: your personal files remain personal; everything is end-to-end encrypted and stays on your local network.

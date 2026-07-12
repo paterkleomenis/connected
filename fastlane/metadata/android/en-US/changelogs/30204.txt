@@ -1,0 +1,3 @@
+- Offline file transfer via WiFi Aware and local-network discovery
+- Rust core with QUIC (quinn) transport and end-to-end encryption
+- Sync clipboard, SMS, calls and media playback with linked devices

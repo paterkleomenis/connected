@@ -1,0 +1,91 @@
+Categories:
+  - Connectivity
+  - File Transfer
+  - Phone & SMS
+  - Multimedia
+License: MIT
+AuthorName: Connected Team
+AuthorWebSite: https://github.com/paterkleomenis/connected
+WebSite: https://github.com/paterkleomenis/connected
+SourceCode: https://github.com/paterkleomenis/connected
+IssueTracker: https://github.com/paterkleomenis/connected/issues
+Changelog: https://github.com/paterkleomenis/connected/releases
+
+AutoName: Connected
+
+# Translators: add localized descriptions in fastlane/metadata/android/<lang>/
+Description: |-
+  Connected is a high-speed, offline, cross-platform app that bridges the gap
+  between your devices. It is built with Rust and Jetpack Compose and aims to
+  outperform proprietary solutions like AirDrop.
+
+  Features:
+
+  * Cross-platform: transfer files, sync clipboards, make and answer calls,
+  send and receive messages, and control media between Android, iOS, Linux,
+  Mac and Windows devices.
+  * Offline functionality: use it without an internet connection on supported
+  Android devices via WiFi Aware, plus local-network discovery when a network
+  is available.
+  * High speed: powered by the QUIC protocol (the same protocol behind HTTP/3).
+  * Zero config: auto-discovery via mDNS and WiFi Aware.
+  * Secure: end-to-end encryption for all transfers.
+  * Privacy by design: your data never leaves your local link. All
+  communication happens directly between your own devices -- no cloud servers
+  are involved.
+
+RepoType: git
+Repo: https://github.com/paterkleomenis/connected
+
+Builds:
+  - versionName: 3.2.4
+    versionCode: 30204
+    commit: 3.2.4
+    subdir: android
+    # NDK version used to build the Rust core via cargo-ndk. Adjust to match
+    # the version the upstream release was built with if the build fails.
+    ndk: r27c
+    sudo:
+      - apt-get update || true
+      - apt-get install -y curl
+    build:
+      # Install the Rust toolchain. The Gradle build invokes `cargo ndk`
+      # itself (via the pre*ReleaseBuild tasks), so cargo must be on PATH for
+      # the Gradle step below.
+      - export PATH="$HOME/.cargo/bin:$PATH"
+      - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+      - cargo install cargo-ndk
+      - rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+      - cd android
+      # Produce an *unsigned* APK so F-Droid can sign it with the repo key.
+      - cat > /tmp/unsigned.gradle <<'GRADLE'
+        allprojects {
+            afterEvaluate { p ->
+                if (p.plugins.hasPlugin('com.android.application') || p.plugins.hasPlugin('com.android.library')) {
+                    if (p.android.hasProperty('signingConfigs')) {
+                        p.android.signingConfigs.configureEach { it.enabled = false }
+                    }
+                    if (p.android.hasProperty('buildTypes')) {
+                        p.android.buildTypes.configureEach { it.signingConfig = null }
+                    }
+                }
+            }
+        }
+        GRADLE
+      - ./gradlew --no-daemon assembleStandaloneRelease -I /tmp/unsigned.gradle
+    # Heavy build artifacts that must not be scanned as source.
+    scandelete:
+      - target
+      - android/app/src/main/jniLibs
+      - android/build
+      - android/.gradle
+    scanignore:
+      - android/app/src/main/kotlin/uniffi
+
+CurrentVersion: 3.2.4
+CurrentVersionCode: 30204
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+UpdateCheckName: ([0-9.]+)
+UpdateCheckData: android/app/build.gradle.kts|versionCode = ([0-9]+)|android/app/build.gradle.kts|versionName = "([0-9.]+)"
