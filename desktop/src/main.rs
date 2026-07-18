@@ -1536,7 +1536,10 @@ fn App() -> Element {
         {
             let tray_icon_rebuild = tray_icon.clone();
             let action_map = action_map.clone();
-            use_effect(use_reactive(&devices_list, move |_| {
+            use_effect(use_reactive(&devices_list, move |dl| {
+                // Read the signal so Dioxus tracks it as an effect dependency;
+                // without this, the closure never re-runs when devices change.
+                dl.read();
                 let mut map = action_map.lock().unwrap();
                 let menu = build_tray_menu(&mut map);
                 tray_icon_rebuild.set_menu(Some(Box::new(menu)));
