@@ -48,6 +48,8 @@ static PAIRING_CALLBACK: RwLock<Option<Box<dyn PairingCallback>>> = RwLock::new(
 static UNPAIR_CALLBACK: RwLock<Option<Box<dyn UnpairCallback>>> = RwLock::new(None);
 static MEDIA_CALLBACK: RwLock<Option<Box<dyn MediaControlCallback>>> = RwLock::new(None);
 static TELEPHONY_CALLBACK: RwLock<Option<Box<dyn TelephonyCallback>>> = RwLock::new(None);
+static REMOTE_COMMANDS_CALLBACK: RwLock<Option<Box<dyn RemoteCommandsCallback>>> =
+    RwLock::new(None);
 
 fn get_runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
@@ -129,6 +131,37 @@ pub struct MediaState {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub playing: bool,
+}
+
+// ============================================================================
+// Remote Command Types
+// ============================================================================
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum RemoteCommand {
+    Shutdown,
+    Restart,
+    SignOut,
+}
+
+impl From<RemoteCommand> for connected_core::RemoteCommand {
+    fn from(c: RemoteCommand) -> Self {
+        match c {
+            RemoteCommand::Shutdown => connected_core::RemoteCommand::Shutdown,
+            RemoteCommand::Restart => connected_core::RemoteCommand::Restart,
+            RemoteCommand::SignOut => connected_core::RemoteCommand::SignOut,
+        }
+    }
+}
+
+impl From<connected_core::RemoteCommand> for RemoteCommand {
+    fn from(c: connected_core::RemoteCommand) -> Self {
+        match c {
+            connected_core::RemoteCommand::Shutdown => RemoteCommand::Shutdown,
+            connected_core::RemoteCommand::Restart => RemoteCommand::Restart,
+            connected_core::RemoteCommand::SignOut => RemoteCommand::SignOut,
+        }
+    }
 }
 
 // ============================================================================
@@ -753,6 +786,12 @@ pub trait MediaControlCallback: Send + Sync {
 }
 
 #[uniffi::export(callback_interface)]
+pub trait RemoteCommandsCallback: Send + Sync {
+    /// Called when a remote power/session command is received from a trusted peer.
+    fn on_remote_command(&self, from_device: String, command: RemoteCommand);
+}
+
+#[uniffi::export(callback_interface)]
 pub trait TelephonyCallback: Send + Sync {
     /// Called when contacts sync is requested
     fn on_contacts_sync_request(&self, from_device: String, from_ip: String, from_port: u16);
@@ -1059,6 +1098,16 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                                 }
                                 connected_core::MediaControlMessage::StateUpdate(state) => {
                                     cb.on_media_state_update(from_device, state.into());
+                                }
+                            }
+                        }
+                    }
+                    ConnectedEvent::RemoteCommand { from_device, event } => {
+                        if let Some(cb) = REMOTE_COMMANDS_CALLBACK.read().as_ref() {
+                            use connected_core::RemoteCommandMessage;
+                            match event {
+                                RemoteCommandMessage::Command(command) => {
+                                    cb.on_remote_command(from_device, command.into());
                                 }
                             }
                         }
@@ -2041,6 +2090,39 @@ pub fn send_media_state(
 
     get_runtime().spawn(async move {
         let _ = client.send_media_control(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+// ============================================================================
+// Remote Commands Functions
+// ============================================================================
+
+#[uniffi::export]
+pub fn register_remote_commands_callback(callback: Box<dyn RemoteCommandsCallback>) {
+    *REMOTE_COMMANDS_CALLBACK.write() = Some(callback);
+}
+
+#[uniffi::export]
+pub fn send_remote_command(
+    target_ip: String,
+    target_port: u16,
+    command: RemoteCommand,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let cmd: connected_core::RemoteCommand = command.into();
+    let msg = connected_core::RemoteCommandMessage::Command(cmd);
+
+    get_runtime().spawn(async move {
+        let _ = client.send_remote_command(ip, target_port, msg).await;
     });
 
     Ok(())

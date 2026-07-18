@@ -73,6 +73,11 @@ pub enum ConnectedEvent {
         from_device: String,
         event: crate::transport::MediaControlMessage,
     },
+    /// Remote power/session command received from a peer
+    RemoteCommand {
+        from_device: String,
+        event: crate::transport::RemoteCommandMessage,
+    },
     /// Telephony event (SMS, calls, contacts)
     Telephony {
         from_device: String,

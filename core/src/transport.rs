@@ -76,6 +76,8 @@ pub enum Message {
     MediaControl(MediaControlMessage),
     /// Telephony messages (SMS, calls, contacts)
     Telephony(TelephonyMessage),
+    /// Remote power/session commands (shutdown, restart, sign out)
+    RemoteCommand(RemoteCommandMessage),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +105,23 @@ pub struct MediaState {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub playing: bool,
+}
+
+/// Remote power/session commands sent between desktop peers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RemoteCommandMessage {
+    Command(RemoteCommand),
+}
+
+/// A single remote command that can be executed on a trusted peer's machine.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RemoteCommand {
+    /// Power off the machine.
+    Shutdown,
+    /// Reboot the machine.
+    Restart,
+    /// End the current user session (log out).
+    SignOut,
 }
 
 struct ConnectionCache {

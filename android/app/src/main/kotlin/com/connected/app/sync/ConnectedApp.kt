@@ -32,6 +32,8 @@ import uniffi.connected_ffi.CallAction
 import uniffi.connected_ffi.ClipboardCallback
 import uniffi.connected_ffi.DiscoveredDevice
 import uniffi.connected_ffi.DeviceType
+import uniffi.connected_ffi.RemoteCommand
+import uniffi.connected_ffi.sendRemoteCommand
 import uniffi.connected_ffi.DiscoveryCallback
 import uniffi.connected_ffi.FfiActiveCall
 import uniffi.connected_ffi.FfiCallLogEntry
@@ -3032,6 +3034,23 @@ class ConnectedApp(private val context: Context) {
     }
 
     // Send Clipboard Manually
+    fun sendRemoteCommandToDevice(device: DiscoveredDevice, command: RemoteCommand) {
+        scope.launch {
+            try {
+                sendRemoteCommand(device.ip, device.port, command)
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to send remote command: ${e.message}", e)
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Failed to send remote command",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
     fun sendClipboard(device: DiscoveredDevice) {
         scope.launch {
             if (!isAppInForeground.get()) {

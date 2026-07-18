@@ -101,6 +101,7 @@ pub enum ThemeModeSetting {
 pub struct AppSettings {
     pub clipboard_sync_enabled: bool,
     pub media_enabled: bool,
+    pub remote_commands_enabled: bool,
     pub auto_sync_messages: bool,
     pub auto_sync_calls: bool,
     pub auto_sync_contacts: bool,
@@ -119,6 +120,7 @@ impl Default for AppSettings {
         Self {
             clipboard_sync_enabled: true,
             media_enabled: true,
+            remote_commands_enabled: true,
             auto_sync_messages: true,
             auto_sync_calls: true,
             auto_sync_contacts: true,
@@ -455,6 +457,16 @@ pub fn get_media_enabled() -> &'static Arc<Mutex<bool>> {
         // Initialize from persistent settings
         let settings = load_settings();
         Arc::new(Mutex::new(settings.media_enabled))
+    })
+}
+
+static REMOTE_COMMANDS_ENABLED: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
+
+pub fn get_remote_commands_enabled() -> &'static Arc<Mutex<bool>> {
+    REMOTE_COMMANDS_ENABLED.get_or_init(|| {
+        // Initialize from persistent settings
+        let settings = load_settings();
+        Arc::new(Mutex::new(settings.remote_commands_enabled))
     })
 }
 
@@ -1069,6 +1081,14 @@ pub fn get_media_enabled_setting() -> bool {
 
 pub fn set_media_enabled_setting(enabled: bool) {
     update_setting(|s| s.media_enabled = enabled);
+}
+
+pub fn get_remote_commands_enabled_setting() -> bool {
+    get_app_settings().lock_or_recover().remote_commands_enabled
+}
+
+pub fn set_remote_commands_enabled_setting(enabled: bool) {
+    update_setting(|s| s.remote_commands_enabled = enabled);
 }
 
 pub fn get_auto_sync_messages() -> bool {

@@ -11,15 +11,15 @@ use crate::state::{
     get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
     get_pairing_mode_state, get_pairing_requests, get_pending_pairings, get_phone_call_log,
     get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_files_update, get_saved_devices_setting, get_transfer_status,
-    is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced, mark_messages_synced,
-    remove_device_from_settings, remove_file_transfer_request, remove_transfer_path,
-    save_device_to_settings, set_active_call, set_active_incoming_transfer_id,
-    set_active_outgoing_transfer_id, set_autostart_enabled_setting, set_device_name_setting,
-    set_discovery_active, set_download_directory_setting, set_last_remote_clipboard_content,
-    set_pairing_mode_state, set_phone_call_log, set_phone_contacts, set_phone_conversations,
-    set_phone_messages, set_sdk_initialized, set_shared_folder_setting, set_transfer_status,
-    store_transfer_path,
+    get_remote_commands_enabled, get_remote_files_update, get_saved_devices_setting,
+    get_transfer_status, is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced,
+    mark_messages_synced, remove_device_from_settings, remove_file_transfer_request,
+    remove_transfer_path, save_device_to_settings, set_active_call,
+    set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
+    set_autostart_enabled_setting, set_device_name_setting, set_discovery_active,
+    set_download_directory_setting, set_last_remote_clipboard_content, set_pairing_mode_state,
+    set_phone_call_log, set_phone_contacts, set_phone_conversations, set_phone_messages,
+    set_sdk_initialized, set_shared_folder_setting, set_transfer_status, store_transfer_path,
 };
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -35,6 +35,7 @@ use connected_core::update::{
 };
 use connected_core::{
     ConnectedClient, ConnectedEvent, DeviceType, MediaCommand, MediaControlMessage, MediaState,
+    RemoteCommand,
 };
 #[cfg(target_os = "linux")]
 use mpris::PlaybackStatus;
@@ -175,6 +176,11 @@ pub enum AppAction {
         command: MediaCommand,
     },
     ControlRemoteMedia(MediaCommand),
+    SendRemoteCommand {
+        ip: String,
+        port: u16,
+        command: RemoteCommand,
+    },
     // Telephony actions
     RequestContactsSync {
         ip: String,
@@ -1171,6 +1177,19 @@ fn spawn_event_loop(
                         }
                     } else {
                         warn!("IGNORED: Media control is disabled in settings");
+                    }
+                }
+                ConnectedEvent::RemoteCommand { from_device, event } => {
+                    info!("EVENT: Received RemoteCommand event from {}", from_device);
+                    // Only process if remote commands are enabled locally.
+                    if *get_remote_commands_enabled().lock_or_recover() {
+                        let connected_core::RemoteCommandMessage::Command(cmd) = event;
+                        info!("COMMAND: Executing {:?} from {}", cmd, from_device);
+                        tokio::task::spawn_blocking(move || {
+                            crate::remote_commands::execute_remote_command(cmd);
+                        });
+                    } else {
+                        warn!("IGNORED: Remote commands are disabled in settings");
                     }
                 }
                 ConnectedEvent::Telephony {
@@ -2254,6 +2273,22 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             }
                         });
                     }
+                }
+            }
+            AppAction::SendRemoteCommand { ip, port, command } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip.parse() {
+                            let _ = c
+                                .send_remote_command(
+                                    ip_addr,
+                                    port,
+                                    connected_core::RemoteCommandMessage::Command(command),
+                                )
+                                .await;
+                        }
+                    });
                 }
             }
             AppAction::RequestContactsSync { ip, port } => {

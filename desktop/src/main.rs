@@ -9,6 +9,7 @@ mod ipc;
 #[cfg(target_os = "macos")]
 mod macos_media;
 mod mpris_server;
+mod remote_commands;
 mod state;
 mod titlebar;
 mod utils;
@@ -121,7 +122,7 @@ mod tray {
         fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
             use ksni::menu::*;
 
-            let menu = vec![
+            let mut menu = vec![
                 StandardItem {
                     label: "Open".to_string(),
                     activate: Box::new(|_: &mut Self| {
@@ -223,6 +224,71 @@ mod tray {
                 }
                 .into(),
             ];
+
+            // Only show Remote Commands when connected to a desktop peer
+            // (Linux/Windows/macOS), since phones/tablets don't execute them.
+            if let Some(device) = get_default_device() {
+                let is_desktop = matches!(
+                    device.device_type,
+                    connected_core::DeviceType::Linux
+                        | connected_core::DeviceType::Windows
+                        | connected_core::DeviceType::MacOS
+                );
+                if is_desktop {
+                    menu.push(MenuItem::Separator);
+                    menu.push(
+                        SubMenu {
+                            label: "Remote Commands".to_string(),
+                            submenu: vec![
+                                StandardItem {
+                                    label: "Shutdown".to_string(),
+                                    activate: Box::new(|_: &mut Self| {
+                                        if let Some(device) = get_default_device() {
+                                            send_action(AppAction::SendRemoteCommand {
+                                                ip: device.ip,
+                                                port: device.port,
+                                                command: connected_core::RemoteCommand::Shutdown,
+                                            });
+                                        }
+                                    }),
+                                    ..Default::default()
+                                }
+                                .into(),
+                                StandardItem {
+                                    label: "Restart".to_string(),
+                                    activate: Box::new(|_: &mut Self| {
+                                        if let Some(device) = get_default_device() {
+                                            send_action(AppAction::SendRemoteCommand {
+                                                ip: device.ip,
+                                                port: device.port,
+                                                command: connected_core::RemoteCommand::Restart,
+                                            });
+                                        }
+                                    }),
+                                    ..Default::default()
+                                }
+                                .into(),
+                                StandardItem {
+                                    label: "Sign Out".to_string(),
+                                    activate: Box::new(|_: &mut Self| {
+                                        if let Some(device) = get_default_device() {
+                                            send_action(AppAction::SendRemoteCommand {
+                                                ip: device.ip,
+                                                port: device.port,
+                                                command: connected_core::RemoteCommand::SignOut,
+                                            });
+                                        }
+                                    }),
+                                    ..Default::default()
+                                }
+                                .into(),
+                            ],
+                            ..Default::default()
+                        }
+                        .into(),
+                    );
+                }
+            }
 
             menu
         }
@@ -1019,6 +1085,7 @@ fn App() -> Element {
     // Note: discovery_active is now tracked via global state in state.rs
     // (is_sdk_initialized() and is_discovery_active())
     let mut media_enabled = use_signal(get_media_enabled_setting);
+    let mut remote_commands_enabled = use_signal(get_remote_commands_enabled_setting);
     // Fix #17: Consolidate four separate media signals into one struct signal.
     // These were all derived from the same `get_current_media()` global state
     // and updated together in the polling loop — four signals for one source.
@@ -1162,7 +1229,7 @@ fn App() -> Element {
     {
         use dioxus::desktop::trayicon::{
             MouseButton, MouseButtonState, TrayIconEvent,
-            menu::{Menu, MenuItem, PredefinedMenuItem},
+            menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
         };
 
         let window = desktop_window.window.clone();
@@ -1176,6 +1243,9 @@ fn App() -> Element {
             vol_down_id,
             mute_id,
             refresh_devices_id,
+            remote_shutdown_id,
+            remote_restart_id,
+            remote_signout_id,
             quit_id,
             tray_icon,
         ) = use_hook(|| {
@@ -1187,6 +1257,15 @@ fn App() -> Element {
             let vol_down = MenuItem::new("Volume Down", true, None);
             let mute = MenuItem::new("Mute", true, None);
             let refresh_devices = MenuItem::new("Refresh Devices", true, None);
+            let remote_shutdown = MenuItem::new("Shutdown", true, None);
+            let remote_restart = MenuItem::new("Restart", true, None);
+            let remote_signout = MenuItem::new("Sign Out", true, None);
+            let remote_commands = Submenu::with_items(
+                "Remote Commands",
+                true,
+                &[&remote_shutdown, &remote_restart, &remote_signout],
+            )
+            .expect("Failed to build remote commands submenu");
             let quit = MenuItem::new("Quit", true, None);
 
             menu.append_items(&[
@@ -1204,6 +1283,25 @@ fn App() -> Element {
                 &quit,
             ])
             .expect("Failed to build tray menu");
+
+            // Only show Remote Commands when connected to a desktop peer
+            // (Linux/Windows/macOS), since phones/tablets don't execute them.
+            if let Some(device) = get_default_device() {
+                let is_desktop = matches!(
+                    device.device_type,
+                    connected_core::DeviceType::Linux
+                        | connected_core::DeviceType::Windows
+                        | connected_core::DeviceType::MacOS
+                );
+                if is_desktop {
+                    menu.append_items(&[
+                        &PredefinedMenuItem::separator(),
+                        &remote_commands,
+                        &PredefinedMenuItem::separator(),
+                    ])
+                    .expect("Failed to build remote commands submenu");
+                }
+            }
 
             #[cfg(target_os = "macos")]
             let tray_icon = {
@@ -1225,6 +1323,9 @@ fn App() -> Element {
                 vol_down.id().clone(),
                 mute.id().clone(),
                 refresh_devices.id().clone(),
+                remote_shutdown.id().clone(),
+                remote_restart.id().clone(),
+                remote_signout.id().clone(),
                 quit.id().clone(),
                 tray_icon,
             )
@@ -1290,6 +1391,24 @@ fn App() -> Element {
                 }
             } else if event.id == refresh_devices_id {
                 send_action(AppAction::RefreshDevices);
+            } else if event.id == remote_shutdown_id
+                || event.id == remote_restart_id
+                || event.id == remote_signout_id
+            {
+                if let Some(device) = crate::state::get_default_device() {
+                    let command = if event.id == remote_shutdown_id {
+                        connected_core::RemoteCommand::Shutdown
+                    } else if event.id == remote_restart_id {
+                        connected_core::RemoteCommand::Restart
+                    } else {
+                        connected_core::RemoteCommand::SignOut
+                    };
+                    send_action(AppAction::SendRemoteCommand {
+                        ip: device.ip,
+                        port: device.port,
+                        command,
+                    });
+                }
             } else if event.id == quit_id {
                 crate::ipc::quit_application();
             }
@@ -1517,6 +1636,7 @@ fn App() -> Element {
 
                 // Update Media State
                 media_enabled.set(*get_media_enabled().lock_or_recover());
+                remote_commands_enabled.set(*get_remote_commands_enabled().lock_or_recover());
                 if let Some(media) = get_current_media().lock_or_recover().clone() {
                     current_media.set(CurrentMediaUi {
                         title: media
@@ -1577,6 +1697,14 @@ fn App() -> Element {
             enabled: new_state,
             notify: true,
         });
+    };
+
+    let toggle_remote_commands = move |_| {
+        let current = *remote_commands_enabled.read();
+        let new_state = !current;
+        remote_commands_enabled.set(new_state);
+        set_remote_commands_enabled_setting(new_state); // Save to disk
+        *get_remote_commands_enabled().lock_or_recover() = new_state;
     };
 
     let app_theme_class = match theme_mode.read().clone() {
@@ -3298,6 +3426,31 @@ fn App() -> Element {
                                 }
                             }
                             p { class: "settings-hint", "Allow other devices to see and control your media." }
+                        }
+
+                        div {
+                            class: "info-card",
+                            h3 {
+                                Icon { icon: IconType::Power, size: 20, color: "currentColor".to_string() }
+                                " Remote Commands"
+                            }
+                            div {
+                                class: "info-grid",
+                                div { class: "info-label", "Allow remote power/session commands" }
+                                div {
+                                    class: "info-value",
+                                    label {
+                                        class: "toggle-switch",
+                                        input {
+                                            r#type: "checkbox",
+                                            checked: "{remote_commands_enabled}",
+                                            oninput: toggle_remote_commands,
+                                        }
+                                        span { class: "slider" }
+                                    }
+                                }
+                            }
+                            p { class: "settings-hint", "Let trusted devices shut down, restart, or sign you out of this computer. Off by default for safety." }
                         }
 
                         if cfg!(target_os = "linux") || cfg!(target_os = "windows") {

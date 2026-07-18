@@ -1853,6 +1853,87 @@ impl ConnectedClient {
         Ok(())
     }
 
+    pub async fn send_remote_command(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        msg: crate::transport::RemoteCommandMessage,
+    ) -> Result<()> {
+        let addr = SocketAddr::new(target_ip, target_port);
+
+        // Try to send, retry once if connection fails
+        let result = self.send_remote_command_inner(addr, msg.clone()).await;
+
+        if let Err(ref e) = result {
+            let should_retry = matches!(
+                e,
+                ConnectedError::Timeout(_) | ConnectedError::Connection(_) | ConnectedError::Io(_)
+            );
+
+            if should_retry {
+                info!(
+                    "Remote command send to {} failed ({}), invalidating connection and retrying...",
+                    addr, e
+                );
+                self.transport.invalidate_connection(&addr, b"unpaired");
+                return self.send_remote_command_inner(addr, msg).await;
+            }
+        }
+        result
+    }
+
+    async fn send_remote_command_inner(
+        &self,
+        addr: SocketAddr,
+        msg: crate::transport::RemoteCommandMessage,
+    ) -> Result<()> {
+        // Establish the connection first so the TLS fingerprint is available.
+        let (mut send, _recv) = self
+            .transport
+            .open_stream(addr, QuicTransport::STREAM_TYPE_CONTROL)
+            .await?;
+
+        // Verify the target is a trusted peer before sending a remote command.
+        let fingerprint = self.transport.get_connection_fingerprint(addr).await;
+        match fingerprint {
+            Some(ref fp) if self.key_store.read().is_trusted(fp) => {
+                // Trusted — proceed
+            }
+            Some(ref fp) => {
+                warn!(
+                    "Refusing to send remote command to untrusted peer {} (fingerprint: {})",
+                    addr, fp
+                );
+                let _ = send.finish();
+                return Err(ConnectedError::PeerNotTrusted);
+            }
+            None => {
+                warn!(
+                    "Refusing to send remote command to {} — no TLS fingerprint available",
+                    addr
+                );
+                let _ = send.finish();
+                return Err(ConnectedError::PeerNotTrusted);
+            }
+        }
+
+        let msg = Message::RemoteCommand(msg);
+
+        let data = serde_json::to_vec(&msg)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let len_bytes = (data.len() as u32).to_be_bytes();
+
+        send.write_all(&len_bytes)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.write_all(&data)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.finish().map_err(|e| ConnectedError::Io(e.into()))?;
+
+        Ok(())
+    }
+
     pub async fn send_telephony(
         &self,
         target_ip: IpAddr,
@@ -3074,6 +3155,28 @@ impl ConnectedClient {
                                 from_port: addr.port(),
                                 message: telephony_msg,
                             });
+                        }
+                    }
+                    Message::RemoteCommand(remote_msg) => {
+                        // Single KeyStore snapshot for trust check + name lookup
+                        let (is_trusted, from_device) = {
+                            let ks = key_store.read();
+                            let trusted = ks.is_trusted(&fingerprint);
+                            let name = ks
+                                .get_peer_name(&fingerprint)
+                                .unwrap_or_else(|| "Unknown".to_string());
+                            (trusted, name)
+                        };
+                        if is_trusted {
+                            let _ = event_tx.send(ConnectedEvent::RemoteCommand {
+                                from_device,
+                                event: remote_msg,
+                            });
+                        } else {
+                            warn!(
+                                "Ignoring RemoteCommand from untrusted peer {} (fingerprint {})",
+                                addr, fingerprint
+                            );
                         }
                     }
                     Message::DeviceUnpaired {

@@ -65,6 +65,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.connected_ffi.DiscoveredDevice
 import uniffi.connected_ffi.DeviceType
+import uniffi.connected_ffi.RemoteCommand
 import uniffi.connected_ffi.FfiCallLogEntry
 import uniffi.connected_ffi.FfiContact
 import uniffi.connected_ffi.FfiConversation
@@ -2365,6 +2366,61 @@ fun DeviceItem(
                                             }
                                         }
                                     )
+                                }
+                                // Remote power/session commands — only meaningful for desktop peers.
+                                if (device.deviceType == DeviceType.LINUX
+                                    || device.deviceType == DeviceType.WINDOWS
+                                    || device.deviceType == DeviceType.MAC_OS
+                                ) {
+                                    var showRemoteMenu by remember { mutableStateOf(false) }
+                                    HorizontalDivider()
+                                    Box {
+                                        DropdownMenuItem(
+                                            text = { Text("Remote Commands") },
+                                            leadingIcon = {
+                                                Icon(
+                                                    painterResource(R.drawable.ic_terminal),
+                                                    contentDescription = null
+                                                )
+                                            },
+                                            trailingIcon = {
+                                                Icon(
+                                                    painterResource(R.drawable.ic_next),
+                                                    contentDescription = null
+                                                )
+                                            },
+                                            onClick = { showRemoteMenu = true }
+                                        )
+                                        DropdownMenu(
+                                            expanded = showRemoteMenu,
+                                            onDismissRequest = { showRemoteMenu = false }
+                                        ) {
+                                            DropdownMenuItem(
+                                                text = { Text("Shutdown") },
+                                                onClick = {
+                                                    showRemoteMenu = false
+                                                    showMenu = false
+                                                    app.sendRemoteCommandToDevice(device, RemoteCommand.SHUTDOWN)
+                                                }
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("Restart") },
+                                                onClick = {
+                                                    showRemoteMenu = false
+                                                    showMenu = false
+                                                    app.sendRemoteCommandToDevice(device, RemoteCommand.RESTART)
+                                                }
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("Sign Out") },
+                                                onClick = {
+                                                    showRemoteMenu = false
+                                                    showMenu = false
+                                                    app.sendRemoteCommandToDevice(device, RemoteCommand.SIGN_OUT)
+                                                }
+                                            )
+                                        }
+                                    }
                                 }
                                 DropdownMenuItem(
                                     text = { Text("Unpair") },
