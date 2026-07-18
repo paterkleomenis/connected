@@ -511,7 +511,8 @@ fn build_tray_menu(
     action_map.insert(send_files_id.clone(), TrayAction::SendFiles);
     let send_files = MenuItem::with_id(send_files_id, "Send Files...", true, None::<Accelerator>);
 
-    let top: Vec<&dyn IsMenuItem> = vec![&show, &PredefinedMenuItem::separator(), &send_files];
+    let top_sep = PredefinedMenuItem::separator();
+    let top: Vec<&dyn IsMenuItem> = vec![&show, &top_sep, &send_files];
     menu.append_items(&top).expect("Failed to build tray menu");
 
     let active = crate::state::get_active_devices();
@@ -1230,27 +1231,34 @@ fn main() {
 
         let menu = Menu::new();
         let app_menu = Submenu::new("Connected", true);
+        let about = PredefinedMenuItem::about(None, None);
+        let services = PredefinedMenuItem::services(None);
+        let hide = PredefinedMenuItem::hide(None);
+        let hide_others = PredefinedMenuItem::hide_others(None);
+        let quit = PredefinedMenuItem::quit(None);
+        let app_sep1 = PredefinedMenuItem::separator();
+        let app_sep2 = PredefinedMenuItem::separator();
+        let app_sep3 = PredefinedMenuItem::separator();
         app_menu
             .append_items(&[
-                &PredefinedMenuItem::about(None, None),
-                &PredefinedMenuItem::separator(),
-                &PredefinedMenuItem::services(None),
-                &PredefinedMenuItem::separator(),
-                &PredefinedMenuItem::hide(None),
-                &PredefinedMenuItem::hide_others(None),
-                &PredefinedMenuItem::separator(),
-                &PredefinedMenuItem::quit(None),
+                &about,
+                &app_sep1,
+                &services,
+                &app_sep2,
+                &hide,
+                &hide_others,
+                &app_sep3,
+                &quit,
             ])
             .expect("Failed to build app menu");
 
         let window_menu = Submenu::new("Window", true);
+        let minimize = PredefinedMenuItem::minimize(None);
+        let maximize = PredefinedMenuItem::maximize(None);
+        let close_window = PredefinedMenuItem::close_window(None);
+        let win_sep = PredefinedMenuItem::separator();
         window_menu
-            .append_items(&[
-                &PredefinedMenuItem::minimize(None),
-                &PredefinedMenuItem::maximize(None),
-                &PredefinedMenuItem::separator(),
-                &PredefinedMenuItem::close_window(None),
-            ])
+            .append_items(&[&minimize, &maximize, &win_sep, &close_window])
             .expect("Failed to build window menu");
 
         menu.append_items(&[&app_menu, &window_menu])

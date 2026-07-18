@@ -81,17 +81,17 @@ fn sign_out() -> std::io::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn shutdown() -> std::io::Result<()> {
-    spawn("shutdown", &["/s", "/t", "0"])
+    run("shutdown", &["/s", "/t", "0"])
 }
 
 #[cfg(target_os = "windows")]
 fn restart() -> std::io::Result<()> {
-    spawn("shutdown", &["/r", "/t", "0"])
+    run("shutdown", &["/r", "/t", "0"])
 }
 
 #[cfg(target_os = "windows")]
 fn sign_out() -> std::io::Result<()> {
-    spawn("shutdown", &["/l"])
+    run("shutdown", &["/l"])
 }
 
 /// Run a command to completion and return `Err` if it fails to start OR exits
