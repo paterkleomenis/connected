@@ -1539,7 +1539,7 @@ fn App() -> Element {
             use_effect(use_reactive(&devices_list, move |_| {
                 let mut map = action_map.lock().unwrap();
                 let menu = build_tray_menu(&mut map);
-                let _result = tray_icon_rebuild.set_menu(Some(Box::new(menu)));
+                tray_icon_rebuild.set_menu(Some(Box::new(menu)));
             }));
         }
 
