@@ -98,6 +98,7 @@ fn sign_out() -> std::io::Result<()> {
 /// with a non-zero status. This lets the `or_else` fallback chain trigger on
 /// runtime failures (e.g. an invalid verb or a polkit denial), not just when the
 /// binary is missing.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn run(program: &str, args: &[&str]) -> std::io::Result<()> {
     let status = Command::new(program).args(args).status()?;
     if status.success() {
