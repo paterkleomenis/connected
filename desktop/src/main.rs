@@ -68,11 +68,6 @@ fn format_timestamp(ts: u64) -> String {
 
 #[cfg(target_os = "linux")]
 mod tray {
-    use crate::controller::AppAction;
-    use crate::state::{get_default_device, send_action};
-    use crate::utils::get_system_clipboard;
-    use connected_core::MediaCommand;
-
     pub struct ConnectedTray {}
 
     impl ksni::Tray for ConnectedTray {
@@ -131,90 +126,40 @@ mod tray {
                     ..Default::default()
                 }
                 .into(),
-                MenuItem::Separator,
-                StandardItem {
-                    label: "Send Files...".to_string(),
-                    activate: Box::new(|_: &mut Self| {
-                        send_action(AppAction::PickAndSendFiles);
-                    }),
-                    ..Default::default()
+            ];
+
+            // When more than one active device is connected, group the actions
+            // under a submenu named after each device. Otherwise show the
+            // actions directly, targeting the default (single) device.
+            let active_devices = crate::state::get_active_devices();
+            if active_devices.len() > 1 {
+                menu.push(MenuItem::Separator);
+                for device in &active_devices {
+                    menu.push(crate::build_device_submenu(device));
                 }
-                .into(),
-                StandardItem {
-                    label: "Send Clipboard".to_string(),
-                    activate: Box::new(|_: &mut Self| {
-                        if let Some(device) = get_default_device() {
-                            let text = get_system_clipboard();
-                            send_action(AppAction::SendClipboard {
-                                ip: device.ip,
-                                port: device.port,
-                                text,
-                            });
-                        }
-                    }),
-                    ..Default::default()
-                }
-                .into(),
-                MenuItem::Separator,
-                StandardItem {
-                    label: "Volume Up".to_string(),
-                    activate: Box::new(|_: &mut Self| {
-                        if let Some(device) = get_default_device() {
-                            send_action(AppAction::SendMediaCommand {
-                                ip: device.ip,
-                                port: device.port,
-                                command: MediaCommand::VolumeUp,
-                            });
-                        } else {
-                            // Still control local volume even if no device
-                            send_action(AppAction::ControlRemoteMedia(MediaCommand::VolumeUp));
-                        }
-                    }),
-                    ..Default::default()
-                }
-                .into(),
-                StandardItem {
-                    label: "Volume Down".to_string(),
-                    activate: Box::new(|_: &mut Self| {
-                        if let Some(device) = get_default_device() {
-                            send_action(AppAction::SendMediaCommand {
-                                ip: device.ip,
-                                port: device.port,
-                                command: MediaCommand::VolumeDown,
-                            });
-                        } else {
-                            send_action(AppAction::ControlRemoteMedia(MediaCommand::VolumeDown));
-                        }
-                    }),
-                    ..Default::default()
-                }
-                .into(),
-                StandardItem {
-                    label: "Mute".to_string(),
-                    activate: Box::new(|_: &mut Self| {
-                        if let Some(device) = get_default_device() {
-                            send_action(AppAction::SendMediaCommand {
-                                ip: device.ip,
-                                port: device.port,
-                                command: MediaCommand::Mute,
-                            });
-                        } else {
-                            send_action(AppAction::ControlRemoteMedia(MediaCommand::Mute));
-                        }
-                    }),
-                    ..Default::default()
-                }
-                .into(),
-                MenuItem::Separator,
-                StandardItem {
-                    label: "Refresh Devices".to_string(),
-                    activate: Box::new(|_: &mut Self| {
-                        send_action(AppAction::RefreshDevices);
-                    }),
-                    ..Default::default()
-                }
-                .into(),
-                MenuItem::Separator,
+            } else {
+                let target = active_devices
+                    .into_iter()
+                    .next()
+                    .or_else(crate::state::get_default_device);
+
+                menu.push(MenuItem::Separator);
+                let target = target.unwrap_or_else(|| crate::state::DeviceInfo {
+                    id: String::new(),
+                    name: String::new(),
+                    ip: String::new(),
+                    port: 0,
+                    device_type: connected_core::DeviceType::Unknown,
+                    is_trusted: false,
+                    is_pending: false,
+                });
+                // Send Clipboard/Volume still need a target; if none is known
+                // they simply become no-ops (no peer to send to).
+                menu.extend(crate::device_action_items(&target));
+            }
+
+            menu.push(MenuItem::Separator);
+            menu.push(
                 StandardItem {
                     label: "Quit".to_string(),
                     activate: Box::new(|_: &mut Self| {
@@ -223,76 +168,391 @@ mod tray {
                     ..Default::default()
                 }
                 .into(),
-            ];
-
-            // Only show Remote Commands when connected to a desktop peer
-            // (Linux/Windows/macOS), since phones/tablets don't execute them.
-            if let Some(device) = get_default_device() {
-                let is_desktop = matches!(
-                    device.device_type,
-                    connected_core::DeviceType::Linux
-                        | connected_core::DeviceType::Windows
-                        | connected_core::DeviceType::MacOS
-                );
-                if is_desktop {
-                    menu.push(MenuItem::Separator);
-                    menu.push(
-                        SubMenu {
-                            label: "Remote Commands".to_string(),
-                            submenu: vec![
-                                StandardItem {
-                                    label: "Shutdown".to_string(),
-                                    activate: Box::new(|_: &mut Self| {
-                                        if let Some(device) = get_default_device() {
-                                            send_action(AppAction::SendRemoteCommand {
-                                                ip: device.ip,
-                                                port: device.port,
-                                                command: connected_core::RemoteCommand::Shutdown,
-                                            });
-                                        }
-                                    }),
-                                    ..Default::default()
-                                }
-                                .into(),
-                                StandardItem {
-                                    label: "Restart".to_string(),
-                                    activate: Box::new(|_: &mut Self| {
-                                        if let Some(device) = get_default_device() {
-                                            send_action(AppAction::SendRemoteCommand {
-                                                ip: device.ip,
-                                                port: device.port,
-                                                command: connected_core::RemoteCommand::Restart,
-                                            });
-                                        }
-                                    }),
-                                    ..Default::default()
-                                }
-                                .into(),
-                                StandardItem {
-                                    label: "Sign Out".to_string(),
-                                    activate: Box::new(|_: &mut Self| {
-                                        if let Some(device) = get_default_device() {
-                                            send_action(AppAction::SendRemoteCommand {
-                                                ip: device.ip,
-                                                port: device.port,
-                                                command: connected_core::RemoteCommand::SignOut,
-                                            });
-                                        }
-                                    }),
-                                    ..Default::default()
-                                }
-                                .into(),
-                            ],
-                            ..Default::default()
-                        }
-                        .into(),
-                    );
-                }
-            }
+            );
 
             menu
         }
     }
+}
+
+/// Build the per-device submenu (used when multiple devices are connected).
+#[cfg(target_os = "linux")]
+fn build_device_submenu(
+    device: &crate::state::DeviceInfo,
+) -> ksni::menu::MenuItem<tray::ConnectedTray> {
+    use ksni::menu::*;
+    SubMenu {
+        label: device.name.clone(),
+        submenu: device_action_items(device),
+        ..Default::default()
+    }
+    .into()
+}
+
+/// The shared set of action items for a given device.
+#[cfg(target_os = "linux")]
+fn device_action_items(
+    device: &crate::state::DeviceInfo,
+) -> Vec<ksni::menu::MenuItem<tray::ConnectedTray>> {
+    use ksni::menu::*;
+    let port = device.port;
+    let ip_clipboard = device.ip.clone();
+    let ip_volup = device.ip.clone();
+    let ip_voldown = device.ip.clone();
+    let ip_mute = device.ip.clone();
+    let is_desktop = matches!(
+        device.device_type,
+        connected_core::DeviceType::Linux
+            | connected_core::DeviceType::Windows
+            | connected_core::DeviceType::MacOS
+    );
+
+    let mut items: Vec<MenuItem<tray::ConnectedTray>> = vec![
+        StandardItem {
+            label: "Send Files...".to_string(),
+            activate: Box::new(|_: &mut tray::ConnectedTray| {
+                send_action(AppAction::PickAndSendFiles);
+            }),
+            ..Default::default()
+        }
+        .into(),
+        StandardItem {
+            label: "Send Clipboard".to_string(),
+            activate: Box::new(move |_: &mut tray::ConnectedTray| {
+                let text = get_system_clipboard();
+                send_action(AppAction::SendClipboard {
+                    ip: ip_clipboard.clone(),
+                    port,
+                    text,
+                });
+            }),
+            ..Default::default()
+        }
+        .into(),
+        MenuItem::Separator,
+        StandardItem {
+            label: "Volume Up".to_string(),
+            activate: Box::new(move |_: &mut tray::ConnectedTray| {
+                send_action(AppAction::SendMediaCommand {
+                    ip: ip_volup.clone(),
+                    port,
+                    command: MediaCommand::VolumeUp,
+                });
+            }),
+            ..Default::default()
+        }
+        .into(),
+        StandardItem {
+            label: "Volume Down".to_string(),
+            activate: Box::new(move |_: &mut tray::ConnectedTray| {
+                send_action(AppAction::SendMediaCommand {
+                    ip: ip_voldown.clone(),
+                    port,
+                    command: MediaCommand::VolumeDown,
+                });
+            }),
+            ..Default::default()
+        }
+        .into(),
+        StandardItem {
+            label: "Mute".to_string(),
+            activate: Box::new(move |_: &mut tray::ConnectedTray| {
+                send_action(AppAction::SendMediaCommand {
+                    ip: ip_mute.clone(),
+                    port,
+                    command: MediaCommand::Mute,
+                });
+            }),
+            ..Default::default()
+        }
+        .into(),
+        MenuItem::Separator,
+        StandardItem {
+            label: "Refresh Devices".to_string(),
+            activate: Box::new(|_: &mut tray::ConnectedTray| {
+                send_action(AppAction::RefreshDevices);
+            }),
+            ..Default::default()
+        }
+        .into(),
+    ];
+
+    // Only show Remote Commands for desktop peers.
+    if is_desktop {
+        let rc_ip_shutdown = device.ip.clone();
+        let rc_ip_restart = device.ip.clone();
+        let rc_ip_signout = device.ip.clone();
+        items.push(MenuItem::Separator);
+        items.push(
+            SubMenu {
+                label: "Remote Commands".to_string(),
+                submenu: vec![
+                    StandardItem {
+                        label: "Shutdown".to_string(),
+                        activate: Box::new(move |_: &mut tray::ConnectedTray| {
+                            send_action(AppAction::SendRemoteCommand {
+                                ip: rc_ip_shutdown.clone(),
+                                port,
+                                command: connected_core::RemoteCommand::Shutdown,
+                            });
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    StandardItem {
+                        label: "Restart".to_string(),
+                        activate: Box::new(move |_: &mut tray::ConnectedTray| {
+                            send_action(AppAction::SendRemoteCommand {
+                                ip: rc_ip_restart.clone(),
+                                port,
+                                command: connected_core::RemoteCommand::Restart,
+                            });
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                    StandardItem {
+                        label: "Sign Out".to_string(),
+                        activate: Box::new(move |_: &mut tray::ConnectedTray| {
+                            send_action(AppAction::SendRemoteCommand {
+                                ip: rc_ip_signout.clone(),
+                                port,
+                                command: connected_core::RemoteCommand::SignOut,
+                            });
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                ],
+                ..Default::default()
+            }
+            .into(),
+        );
+    }
+
+    items
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[derive(Clone)]
+enum TrayAction {
+    Show,
+    SendFiles,
+    SendClipboard { ip: String, port: u16 },
+    VolumeUp { ip: String, port: u16 },
+    VolumeDown { ip: String, port: u16 },
+    Mute { ip: String, port: u16 },
+    Refresh,
+    RemoteShutdown { ip: String, port: u16 },
+    RemoteRestart { ip: String, port: u16 },
+    RemoteSignOut { ip: String, port: u16 },
+    Quit,
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn empty_device() -> crate::state::DeviceInfo {
+    crate::state::DeviceInfo {
+        id: String::new(),
+        name: String::new(),
+        ip: String::new(),
+        port: 0,
+        device_type: connected_core::DeviceType::Unknown,
+        is_trusted: false,
+        is_pending: false,
+    }
+}
+
+/// Build the shared set of tray action items for a device, registering each
+/// item's `MenuId` in `action_map` so the click handler can dispatch it.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn device_tray_items(
+    device: &crate::state::DeviceInfo,
+    action_map: &mut std::collections::HashMap<dioxus::desktop::trayicon::menu::MenuId, TrayAction>,
+) -> Vec<Box<dyn dioxus::desktop::trayicon::menu::IsMenuItem>> {
+    use dioxus::desktop::trayicon::menu::{
+        MenuId, MenuItem, PredefinedMenuItem, accelerator::Accelerator,
+    };
+
+    let ip = device.ip.clone();
+    let port = device.port;
+    let is_desktop = matches!(
+        device.device_type,
+        connected_core::DeviceType::Linux
+            | connected_core::DeviceType::Windows
+            | connected_core::DeviceType::MacOS
+    );
+
+    let items: Vec<Box<dyn dioxus::desktop::trayicon::menu::IsMenuItem>> = vec![
+        {
+            let id = MenuId::new(format!("clipboard_{}", device.id));
+            action_map.insert(
+                id.clone(),
+                TrayAction::SendClipboard {
+                    ip: ip.clone(),
+                    port,
+                },
+            );
+            Box::new(MenuItem::with_id(
+                id,
+                "Send Clipboard",
+                true,
+                None::<Accelerator>,
+            ))
+        },
+        Box::new(PredefinedMenuItem::separator()),
+        {
+            let id = MenuId::new(format!("volup_{}", device.id));
+            action_map.insert(
+                id.clone(),
+                TrayAction::VolumeUp {
+                    ip: ip.clone(),
+                    port,
+                },
+            );
+            Box::new(MenuItem::with_id(
+                id,
+                "Volume Up",
+                true,
+                None::<Accelerator>,
+            ))
+        },
+        {
+            let id = MenuId::new(format!("voldown_{}", device.id));
+            action_map.insert(
+                id.clone(),
+                TrayAction::VolumeDown {
+                    ip: ip.clone(),
+                    port,
+                },
+            );
+            Box::new(MenuItem::with_id(
+                id,
+                "Volume Down",
+                true,
+                None::<Accelerator>,
+            ))
+        },
+        {
+            let id = MenuId::new(format!("mute_{}", device.id));
+            action_map.insert(
+                id.clone(),
+                TrayAction::Mute {
+                    ip: ip.clone(),
+                    port,
+                },
+            );
+            Box::new(MenuItem::with_id(id, "Mute", true, None::<Accelerator>))
+        },
+        Box::new(PredefinedMenuItem::separator()),
+        {
+            let id = MenuId::new(format!("refresh_{}", device.id));
+            action_map.insert(id.clone(), TrayAction::Refresh);
+            Box::new(MenuItem::with_id(
+                id,
+                "Refresh Devices",
+                true,
+                None::<Accelerator>,
+            ))
+        },
+    ];
+
+    if is_desktop {
+        let mut all = items;
+        all.push(Box::new(PredefinedMenuItem::separator()));
+        all.push({
+            let id = MenuId::new(format!("rc_shutdown_{}", device.id));
+            action_map.insert(
+                id.clone(),
+                TrayAction::RemoteShutdown {
+                    ip: ip.clone(),
+                    port,
+                },
+            );
+            Box::new(MenuItem::with_id(id, "Shutdown", true, None::<Accelerator>))
+        });
+        all.push({
+            let id = MenuId::new(format!("rc_restart_{}", device.id));
+            action_map.insert(
+                id.clone(),
+                TrayAction::RemoteRestart {
+                    ip: ip.clone(),
+                    port,
+                },
+            );
+            Box::new(MenuItem::with_id(id, "Restart", true, None::<Accelerator>))
+        });
+        all.push({
+            let id = MenuId::new(format!("rc_signout_{}", device.id));
+            action_map.insert(id.clone(), TrayAction::RemoteSignOut { ip, port });
+            Box::new(MenuItem::with_id(id, "Sign Out", true, None::<Accelerator>))
+        });
+        all
+    } else {
+        items
+    }
+}
+
+/// Build the full tray menu, populating `action_map` with every item's id.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn build_tray_menu(
+    action_map: &mut std::collections::HashMap<dioxus::desktop::trayicon::menu::MenuId, TrayAction>,
+) -> dioxus::desktop::trayicon::menu::Menu {
+    use dioxus::desktop::trayicon::menu::{
+        IsMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu, accelerator::Accelerator,
+    };
+
+    action_map.clear();
+    let menu = Menu::new();
+
+    let show_id = MenuId::new("show");
+    action_map.insert(show_id.clone(), TrayAction::Show);
+    let show = MenuItem::with_id(show_id, "Open", true, None::<Accelerator>);
+    let send_files_id = MenuId::new("send_files");
+    action_map.insert(send_files_id.clone(), TrayAction::SendFiles);
+    let send_files = MenuItem::with_id(send_files_id, "Send Files...", true, None::<Accelerator>);
+
+    let top: Vec<&dyn IsMenuItem> = vec![&show, &PredefinedMenuItem::separator(), &send_files];
+    menu.append_items(&top).expect("Failed to build tray menu");
+
+    let active = crate::state::get_active_devices();
+
+    if active.len() > 1 {
+        let sep = PredefinedMenuItem::separator();
+        menu.append_items(&[&sep as &dyn IsMenuItem])
+            .expect("Failed to build tray menu");
+        for device in &active {
+            let items = device_tray_items(device, action_map);
+            let refs: Vec<&dyn IsMenuItem> = items.iter().map(|i| i.as_ref()).collect();
+            let sub = Submenu::with_id_and_items(
+                MenuId::new(format!("dev_{}", device.id)),
+                device.name.clone(),
+                true,
+                &refs,
+            )
+            .expect("Failed to build device submenu");
+            menu.append_items(&[&sub as &dyn IsMenuItem])
+                .expect("Failed to build tray menu");
+        }
+    } else {
+        let target = active.into_iter().next().unwrap_or_else(empty_device);
+        let items = device_tray_items(&target, action_map);
+        let refs: Vec<&dyn IsMenuItem> = items.iter().map(|i| i.as_ref()).collect();
+        let sep = PredefinedMenuItem::separator();
+        menu.append_items(&[&sep as &dyn IsMenuItem])
+            .expect("Failed to build tray menu");
+        menu.append_items(&refs).expect("Failed to build tray menu");
+    }
+
+    let sep = PredefinedMenuItem::separator();
+    menu.append_items(&[&sep as &dyn IsMenuItem])
+        .expect("Failed to build tray menu");
+    let quit_id = MenuId::new("quit");
+    action_map.insert(quit_id.clone(), TrayAction::Quit);
+    let quit = MenuItem::with_id(quit_id, "Quit", true, None::<Accelerator>);
+    menu.append_items(&[&quit as &dyn IsMenuItem])
+        .expect("Failed to build tray menu");
+
+    menu
 }
 
 #[cfg(target_os = "linux")]
@@ -1227,192 +1487,123 @@ fn App() -> Element {
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
-        use dioxus::desktop::trayicon::{
-            MouseButton, MouseButtonState, TrayIconEvent,
-            menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
-        };
+        use dioxus::desktop::trayicon::{MouseButton, MouseButtonState, TrayIconEvent};
 
         let window = desktop_window.window.clone();
         let tray_click_window = window.clone();
 
-        let (
-            show_id,
-            send_files_id,
-            send_clipboard_id,
-            vol_up_id,
-            vol_down_id,
-            mute_id,
-            refresh_devices_id,
-            remote_shutdown_id,
-            remote_restart_id,
-            remote_signout_id,
-            quit_id,
-            tray_icon,
-        ) = use_hook(|| {
-            let menu = Menu::new();
-            let show = MenuItem::new("Open", true, None);
-            let send_files = MenuItem::new("Send Files...", true, None);
-            let send_clipboard = MenuItem::new("Send Clipboard", true, None);
-            let vol_up = MenuItem::new("Volume Up", true, None);
-            let vol_down = MenuItem::new("Volume Down", true, None);
-            let mute = MenuItem::new("Mute", true, None);
-            let refresh_devices = MenuItem::new("Refresh Devices", true, None);
-            let remote_shutdown = MenuItem::new("Shutdown", true, None);
-            let remote_restart = MenuItem::new("Restart", true, None);
-            let remote_signout = MenuItem::new("Sign Out", true, None);
-            let remote_commands = Submenu::with_items(
-                "Remote Commands",
-                true,
-                &[&remote_shutdown, &remote_restart, &remote_signout],
-            )
-            .expect("Failed to build remote commands submenu");
-            let quit = MenuItem::new("Quit", true, None);
+        use dioxus::desktop::trayicon::menu::MenuId;
 
-            menu.append_items(&[
-                &show,
-                &PredefinedMenuItem::separator(),
-                &send_files,
-                &send_clipboard,
-                &PredefinedMenuItem::separator(),
-                &vol_up,
-                &vol_down,
-                &mute,
-                &PredefinedMenuItem::separator(),
-                &refresh_devices,
-                &PredefinedMenuItem::separator(),
-                &quit,
-            ])
-            .expect("Failed to build tray menu");
+        let action_map: std::sync::Arc<
+            std::sync::Mutex<std::collections::HashMap<MenuId, TrayAction>>,
+        > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
-            // Only show Remote Commands when connected to a desktop peer
-            // (Linux/Windows/macOS), since phones/tablets don't execute them.
-            if let Some(device) = get_default_device() {
-                let is_desktop = matches!(
-                    device.device_type,
-                    connected_core::DeviceType::Linux
-                        | connected_core::DeviceType::Windows
-                        | connected_core::DeviceType::MacOS
-                );
-                if is_desktop {
-                    menu.append_items(&[
-                        &PredefinedMenuItem::separator(),
-                        &remote_commands,
-                        &PredefinedMenuItem::separator(),
-                    ])
-                    .expect("Failed to build remote commands submenu");
-                }
-            }
+        let tray_icon = use_hook(|| {
+            let mut map = action_map.lock().unwrap();
+            let menu = build_tray_menu(&mut map);
 
             #[cfg(target_os = "macos")]
-            let tray_icon = {
+            let icon = {
                 let tray_icon = dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
                 tray_icon.set_icon_as_template(true);
                 tray_icon
             };
 
             #[cfg(not(target_os = "macos"))]
-            let tray_icon = dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
+            let icon = dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
 
-            let _ = tray_icon.set_visible(get_show_tray_icon_setting());
-
-            (
-                show.id().clone(),
-                send_files.id().clone(),
-                send_clipboard.id().clone(),
-                vol_up.id().clone(),
-                vol_down.id().clone(),
-                mute.id().clone(),
-                refresh_devices.id().clone(),
-                remote_shutdown.id().clone(),
-                remote_restart.id().clone(),
-                remote_signout.id().clone(),
-                quit.id().clone(),
-                tray_icon,
-            )
+            let _ = icon.set_visible(get_show_tray_icon_setting());
+            icon
         });
 
+        let tray_icon_visibility = tray_icon.clone();
         use_effect(use_reactive(&show_tray_icon, move |enabled| {
-            if let Err(err) = tray_icon.set_visible(*enabled.read()) {
+            if let Err(err) = tray_icon_visibility.set_visible(*enabled.read()) {
                 tracing::warn!("Failed to update tray icon visibility: {:?}", err);
             }
         }));
 
+        // Rebuild the tray menu whenever the device list changes so the
+        // per-device grouping stays in sync with active connections.
+        {
+            let tray_icon_rebuild = tray_icon.clone();
+            let action_map = action_map.clone();
+            use_effect(use_reactive(&devices_list, move |_| {
+                let mut map = action_map.lock().unwrap();
+                let menu = build_tray_menu(&mut map);
+                let _ = tray_icon_rebuild.set_menu(Some(Box::new(menu)));
+            }));
+        }
+
         // NOTE: Dioxus installs a global `muda::MenuEvent` handler. Tray menu clicks are delivered
         // through that same event stream, so `use_muda_event_handler` is the reliable hook.
-        dioxus::desktop::use_muda_event_handler(move |event| {
-            if event.id == show_id {
-                ipc::show_window(&window);
-            } else if event.id == send_files_id {
-                send_action(AppAction::PickAndSendFiles);
-            } else if event.id == send_clipboard_id {
-                if let Some(device) = crate::state::get_default_device() {
-                    let text = crate::utils::get_system_clipboard();
-                    send_action(AppAction::SendClipboard {
-                        ip: device.ip,
-                        port: device.port,
-                        text,
-                    });
+        {
+            let action_map = action_map.clone();
+            let window = window.clone();
+            dioxus::desktop::use_muda_event_handler(move |event| {
+                let action = {
+                    let map = action_map.lock().unwrap();
+                    map.get(&event.id).cloned()
+                };
+                match action {
+                    Some(TrayAction::Show) => ipc::show_window(&window),
+                    Some(TrayAction::SendFiles) => {
+                        send_action(AppAction::PickAndSendFiles);
+                    }
+                    Some(TrayAction::SendClipboard { ip, port }) => {
+                        let text = crate::utils::get_system_clipboard();
+                        send_action(AppAction::SendClipboard { ip, port, text });
+                    }
+                    Some(TrayAction::VolumeUp { ip, port }) => {
+                        send_action(AppAction::SendMediaCommand {
+                            ip,
+                            port,
+                            command: connected_core::MediaCommand::VolumeUp,
+                        });
+                    }
+                    Some(TrayAction::VolumeDown { ip, port }) => {
+                        send_action(AppAction::SendMediaCommand {
+                            ip,
+                            port,
+                            command: connected_core::MediaCommand::VolumeDown,
+                        });
+                    }
+                    Some(TrayAction::Mute { ip, port }) => {
+                        send_action(AppAction::SendMediaCommand {
+                            ip,
+                            port,
+                            command: connected_core::MediaCommand::Mute,
+                        });
+                    }
+                    Some(TrayAction::Refresh) => {
+                        send_action(AppAction::RefreshDevices);
+                    }
+                    Some(TrayAction::RemoteShutdown { ip, port }) => {
+                        send_action(AppAction::SendRemoteCommand {
+                            ip,
+                            port,
+                            command: connected_core::RemoteCommand::Shutdown,
+                        });
+                    }
+                    Some(TrayAction::RemoteRestart { ip, port }) => {
+                        send_action(AppAction::SendRemoteCommand {
+                            ip,
+                            port,
+                            command: connected_core::RemoteCommand::Restart,
+                        });
+                    }
+                    Some(TrayAction::RemoteSignOut { ip, port }) => {
+                        send_action(AppAction::SendRemoteCommand {
+                            ip,
+                            port,
+                            command: connected_core::RemoteCommand::SignOut,
+                        });
+                    }
+                    Some(TrayAction::Quit) => crate::ipc::quit_application(),
+                    None => {}
                 }
-            } else if event.id == vol_up_id {
-                if let Some(device) = crate::state::get_default_device() {
-                    send_action(AppAction::SendMediaCommand {
-                        ip: device.ip,
-                        port: device.port,
-                        command: connected_core::MediaCommand::VolumeUp,
-                    });
-                } else {
-                    send_action(AppAction::ControlRemoteMedia(
-                        connected_core::MediaCommand::VolumeUp,
-                    ));
-                }
-            } else if event.id == vol_down_id {
-                if let Some(device) = crate::state::get_default_device() {
-                    send_action(AppAction::SendMediaCommand {
-                        ip: device.ip,
-                        port: device.port,
-                        command: connected_core::MediaCommand::VolumeDown,
-                    });
-                } else {
-                    send_action(AppAction::ControlRemoteMedia(
-                        connected_core::MediaCommand::VolumeDown,
-                    ));
-                }
-            } else if event.id == mute_id {
-                if let Some(device) = crate::state::get_default_device() {
-                    send_action(AppAction::SendMediaCommand {
-                        ip: device.ip,
-                        port: device.port,
-                        command: connected_core::MediaCommand::Mute,
-                    });
-                } else {
-                    send_action(AppAction::ControlRemoteMedia(
-                        connected_core::MediaCommand::Mute,
-                    ));
-                }
-            } else if event.id == refresh_devices_id {
-                send_action(AppAction::RefreshDevices);
-            } else if event.id == remote_shutdown_id
-                || event.id == remote_restart_id
-                || event.id == remote_signout_id
-            {
-                if let Some(device) = crate::state::get_default_device() {
-                    let command = if event.id == remote_shutdown_id {
-                        connected_core::RemoteCommand::Shutdown
-                    } else if event.id == remote_restart_id {
-                        connected_core::RemoteCommand::Restart
-                    } else {
-                        connected_core::RemoteCommand::SignOut
-                    };
-                    send_action(AppAction::SendRemoteCommand {
-                        ip: device.ip,
-                        port: device.port,
-                        command,
-                    });
-                }
-            } else if event.id == quit_id {
-                crate::ipc::quit_application();
-            }
-        });
+            });
+        }
 
         dioxus::desktop::use_tray_icon_event_handler(move |event| {
             if matches!(

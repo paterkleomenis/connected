@@ -503,6 +503,19 @@ pub fn get_devices_store() -> &'static Arc<Mutex<HashMap<String, DeviceInfo>>> {
     DEVICES.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
+/// Return the currently *active* (online, trusted, non-pending) devices.
+/// Offline devices are represented in the store with `ip == "0.0.0.0"`, so an
+/// empty/placeholder IP means the device is not currently reachable.
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+pub fn get_active_devices() -> Vec<DeviceInfo> {
+    get_devices_store()
+        .lock_or_recover()
+        .values()
+        .filter(|d| d.is_trusted && !d.is_pending && !d.ip.is_empty() && d.ip != "0.0.0.0")
+        .cloned()
+        .collect()
+}
+
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub fn get_selected_device() -> Option<DeviceInfo> {
     SELECTED_DEVICE
