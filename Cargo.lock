@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "connected-core"
-version = "3.2.4"
+version = "3.2.5"
 dependencies = [
  "base64",
  "blake3",
@@ -841,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "connected-desktop"
-version = "3.2.4"
+version = "3.2.5"
 dependencies = [
  "arboard",
  "base64",
@@ -880,7 +880,7 @@ dependencies = [
 
 [[package]]
 name = "connected-ffi"
-version = "3.2.4"
+version = "3.2.5"
 dependencies = [
  "android_logger",
  "connected-core",
