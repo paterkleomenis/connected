@@ -228,12 +228,32 @@ class MainActivity : ComponentActivity() {
         when (intent.action) {
             Intent.ACTION_SEND,
             Intent.ACTION_SEND_MULTIPLE -> {
-                val uris = collectShareUris(intent)
-                if (uris.isNotEmpty()) {
-                    connectedApp.setPendingShare(uris)
+                val sharedUrl = extractSharedUrl(intent)
+                if (sharedUrl != null) {
+                    connectedApp.setPendingShareUrl(sharedUrl)
+                } else {
+                    val uris = collectShareUris(intent)
+                    if (uris.isNotEmpty()) {
+                        connectedApp.setPendingShare(uris)
+                    }
                 }
             }
         }
+    }
+
+    private fun extractSharedUrl(intent: Intent): String? {
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+            ?: intent.clipData?.let { clip ->
+                if (clip.itemCount > 0) clip.getItemAt(0)?.text?.toString() else null
+            }
+        if (!text.isNullOrBlank()) {
+            val regex = Regex("""https?://[^\s]+""")
+            val match = regex.find(text)
+            if (match != null) {
+                return match.value
+            }
+        }
+        return null
     }
 
     private fun collectShareUris(intent: Intent): List<Uri> {
@@ -684,6 +704,57 @@ fun MainAppNavigation(
                 },
                 confirmButton = {
                     TextButton(onClick = { connectedApp.clearPendingShare() }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (connectedApp.pendingShareUrl.value != null) {
+            val url = connectedApp.pendingShareUrl.value!!
+            AlertDialog(
+                onDismissRequest = { connectedApp.clearPendingShareUrl() },
+                title = { Text("Open Link on Desktop") },
+                text = {
+                    Column {
+                        Text(
+                            url,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Select a connected desktop device:")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (connectedApp.devices.isEmpty()) {
+                            Text("No devices available.")
+                        } else {
+                            LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                                items(connectedApp.devices) { device ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { connectedApp.sendPendingShareUrlToDevice(device) }
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            painterResource(getDeviceIcon(device.deviceType, device.name)),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(device.name)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { connectedApp.clearPendingShareUrl() }) {
                         Text("Cancel")
                     }
                 }
@@ -2400,7 +2471,7 @@ fun DeviceItem(
                                                 onClick = {
                                                     showRemoteMenu = false
                                                     showMenu = false
-                                                    app.sendRemoteCommandToDevice(device, RemoteCommand.SHUTDOWN)
+                                                    app.sendRemoteCommandToDevice(device, RemoteCommand.Shutdown)
                                                 }
                                             )
                                             DropdownMenuItem(
@@ -2408,7 +2479,7 @@ fun DeviceItem(
                                                 onClick = {
                                                     showRemoteMenu = false
                                                     showMenu = false
-                                                    app.sendRemoteCommandToDevice(device, RemoteCommand.RESTART)
+                                                    app.sendRemoteCommandToDevice(device, RemoteCommand.Restart)
                                                 }
                                             )
                                             DropdownMenuItem(
@@ -2416,7 +2487,7 @@ fun DeviceItem(
                                                 onClick = {
                                                     showRemoteMenu = false
                                                     showMenu = false
-                                                    app.sendRemoteCommandToDevice(device, RemoteCommand.SIGN_OUT)
+                                                    app.sendRemoteCommandToDevice(device, RemoteCommand.SignOut)
                                                 }
                                             )
                                         }

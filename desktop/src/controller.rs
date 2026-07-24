@@ -1185,6 +1185,13 @@ fn spawn_event_loop(
                     if *get_remote_commands_enabled().lock_or_recover() {
                         let connected_core::RemoteCommandMessage::Command(cmd) = event;
                         info!("COMMAND: Executing {:?} from {}", cmd, from_device);
+                        if let connected_core::RemoteCommand::OpenUrl(ref url) = cmd {
+                            add_notification(
+                                "Opening Link",
+                                &format!("Opening link on desktop from {}: {}", from_device, url),
+                                "",
+                            );
+                        }
                         tokio::task::spawn_blocking(move || {
                             crate::remote_commands::execute_remote_command(cmd);
                         });

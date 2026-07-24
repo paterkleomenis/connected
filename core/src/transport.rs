@@ -114,7 +114,7 @@ pub enum RemoteCommandMessage {
 }
 
 /// A single remote command that can be executed on a trusted peer's machine.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RemoteCommand {
     /// Power off the machine.
     Shutdown,
@@ -122,6 +122,8 @@ pub enum RemoteCommand {
     Restart,
     /// End the current user session (log out).
     SignOut,
+    /// Open a URL (e.g. YouTube video or web page) on the remote machine.
+    OpenUrl(String),
 }
 
 struct ConnectionCache {

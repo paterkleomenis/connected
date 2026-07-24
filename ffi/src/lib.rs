@@ -142,6 +142,7 @@ pub enum RemoteCommand {
     Shutdown,
     Restart,
     SignOut,
+    OpenUrl { url: String },
 }
 
 impl From<RemoteCommand> for connected_core::RemoteCommand {
@@ -150,6 +151,7 @@ impl From<RemoteCommand> for connected_core::RemoteCommand {
             RemoteCommand::Shutdown => connected_core::RemoteCommand::Shutdown,
             RemoteCommand::Restart => connected_core::RemoteCommand::Restart,
             RemoteCommand::SignOut => connected_core::RemoteCommand::SignOut,
+            RemoteCommand::OpenUrl { url } => connected_core::RemoteCommand::OpenUrl(url),
         }
     }
 }
@@ -160,6 +162,7 @@ impl From<connected_core::RemoteCommand> for RemoteCommand {
             connected_core::RemoteCommand::Shutdown => RemoteCommand::Shutdown,
             connected_core::RemoteCommand::Restart => RemoteCommand::Restart,
             connected_core::RemoteCommand::SignOut => RemoteCommand::SignOut,
+            connected_core::RemoteCommand::OpenUrl(url) => RemoteCommand::OpenUrl { url },
         }
     }
 }
@@ -2119,6 +2122,30 @@ pub fn send_remote_command(
             })?;
 
     let cmd: connected_core::RemoteCommand = command.into();
+    let msg = connected_core::RemoteCommandMessage::Command(cmd);
+
+    get_runtime().spawn(async move {
+        let _ = client.send_remote_command(ip, target_port, msg).await;
+    });
+
+    Ok(())
+}
+
+#[uniffi::export]
+pub fn send_open_url(
+    target_ip: String,
+    target_port: u16,
+    url: String,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: std::net::IpAddr =
+        target_ip
+            .parse()
+            .map_err(|_| ConnectedFfiError::InvalidArgument {
+                msg: "Invalid IP".into(),
+            })?;
+
+    let cmd = connected_core::RemoteCommand::OpenUrl(url);
     let msg = connected_core::RemoteCommandMessage::Command(cmd);
 
     get_runtime().spawn(async move {

@@ -18,9 +18,42 @@ pub fn execute_remote_command(command: RemoteCommand) {
         RemoteCommand::Shutdown => shutdown(),
         RemoteCommand::Restart => restart(),
         RemoteCommand::SignOut => sign_out(),
+        RemoteCommand::OpenUrl(ref url) => open_url(url),
     };
     if let Err(e) = result {
         error!("Failed to execute remote command {:?}: {}", command, e);
+    }
+}
+
+fn open_url(url: &str) -> std::io::Result<()> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Only http and https URLs can be opened remotely",
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        run("xdg-open", &[url])
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn().map(|_| ())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        run("cmd", &["/C", "start", "", url])
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "remote URL opening is not supported on this platform",
+        ))
     }
 }
 
@@ -142,4 +175,18 @@ fn sign_out() -> std::io::Result<()> {
         std::io::ErrorKind::Unsupported,
         "remote commands are not supported on this platform",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_open_url_rejects_non_http() {
+        let err = open_url("file:///etc/passwd").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+        let err = open_url("ftp://example.com").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
 }

@@ -34,6 +34,7 @@ import uniffi.connected_ffi.DiscoveredDevice
 import uniffi.connected_ffi.DeviceType
 import uniffi.connected_ffi.RemoteCommand
 import uniffi.connected_ffi.sendRemoteCommand
+import uniffi.connected_ffi.sendOpenUrl
 import uniffi.connected_ffi.DiscoveryCallback
 import uniffi.connected_ffi.FfiActiveCall
 import uniffi.connected_ffi.FfiCallLogEntry
@@ -2190,6 +2191,22 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    val pendingShareUrl = mutableStateOf<String?>(null)
+
+    fun setPendingShareUrl(url: String) {
+        pendingShareUrl.value = url
+    }
+
+    fun clearPendingShareUrl() {
+        pendingShareUrl.value = null
+    }
+
+    fun sendPendingShareUrlToDevice(device: DiscoveredDevice) {
+        val url = pendingShareUrl.value ?: return
+        sendOpenUrlToDevice(device, url)
+        pendingShareUrl.value = null
+    }
+
     fun setPendingShare(uris: List<Uri>) {
         pendingShareUris.clear()
         pendingShareUris.addAll(uris.distinctBy { it.toString() }.map { it.toString() })
@@ -3033,7 +3050,7 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    // Send Clipboard Manually
+    // Send Remote Command
     fun sendRemoteCommandToDevice(device: DiscoveredDevice, command: RemoteCommand) {
         scope.launch {
             try {
@@ -3044,6 +3061,31 @@ class ConnectedApp(private val context: Context) {
                     android.widget.Toast.makeText(
                         context,
                         "Failed to send remote command",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
+    // Send Open URL / YouTube video to device
+    fun sendOpenUrlToDevice(device: DiscoveredDevice, url: String) {
+        scope.launch {
+            try {
+                sendOpenUrl(device.ip, device.port, url)
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Sent link to ${device.name}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to send link: ${e.message}", e)
+                runOnMainThread {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Failed to send link to ${device.name}",
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                 }
