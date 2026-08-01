@@ -3150,9 +3150,9 @@ checksum = "a4933f3f57a8e9d9da04db23fb153356ecaf00cbd14aee46279c33dc80925c37"
 
 [[package]]
 name = "ksni"
-version = "0.3.5"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da9eeb3f510b6148ae68f963af2c1fbb0de4d9e4e05f82813cfb319837c3ad2b"
+checksum = "814b44c24cd2cb236c3b8a41c7f08237b452a8e76ecaa81f1cec40b5b678215b"
 dependencies = [
  "futures-util",
  "pastey 0.2.3",
