@@ -873,7 +873,7 @@ dependencies = [
  "serde",
  "serde_json",
  "single-instance",
- "tauri-winrt-notification 0.8.0",
+ "tauri-winrt-notification 0.8.1",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -5611,9 +5611,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-winrt-notification"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31c84bc81df0e7295f0c481c88ee13921f93f432d9aac017c688d106aaa9d380"
+checksum = "f37a6c354fd28fc9e322ed9bd47e3959576dad28c9d58ea1cf888cce1c7ccb36"
 dependencies = [
  "thiserror 2.0.19",
  "windows 0.62.2",
