@@ -111,6 +111,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: quality-${{ matrix.name }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo tools
         if: matrix.name == 'Linux'
@@ -170,6 +171,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "security"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
@@ -210,6 +212,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "linux-build-${{ matrix.arch }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Linux dependencies
         run: |
@@ -263,6 +266,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "appimage-build-${{ matrix.arch }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Linux dependencies
         run: |
@@ -387,6 +391,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "windows-build-${{ matrix.target }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
         shell: pwsh
@@ -500,6 +505,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "macos-build"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build macOS App Bundle
         run: |
@@ -552,6 +558,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "android-build"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -564,7 +571,7 @@ jobs:
         with:
           job-id: android-debug
           build-root-directory: android
-          #read-only: ${{ github.ref != 'refs/heads/main' }}
+          read-only: ${{ github.ref != 'refs/heads/main' }}
           arguments: |
             --build-cache
             assembleStandaloneDebug
@@ -601,6 +608,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "ios-build"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install XcodeGen
         run: brew install xcodegen
