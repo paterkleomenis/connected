@@ -1273,6 +1273,18 @@ fn main() {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     let config = config.with_tray_icon_show_window_on_click(false);
 
+    // Show window on dock icon click on macOS
+    #[cfg(target_os = "macos")]
+    let config = config.with_custom_event_handler(|event, _| {
+        if let dioxus::desktop::tao::event::Event::Reopen {
+            has_visible_windows: false,
+            ..
+        } = event
+        {
+            ipc::request_wakeup();
+        }
+    });
+
     let config = if let Some(d) = data_dir {
         config.with_data_directory(d)
     } else {

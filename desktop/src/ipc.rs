@@ -89,15 +89,16 @@ pub fn set_wakeup_window(window: Arc<Window>) {
 pub fn show_window(window: &Window) {
     window.set_visible(true);
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         // Ensure the window is not minimized when restoring.
-        // Some Linux WMs might treat hidden windows as minimized.
+        // Some Linux WMs might treat hidden windows as minimized, and on
+        // macOS the window may have been miniaturized to the Dock.
         window.set_minimized(false);
         window.set_focus();
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     window.set_focus();
 }
 
