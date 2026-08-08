@@ -132,6 +132,31 @@ fn wake_current_window() {
     }
 }
 
+pub fn window_is_visible() -> bool {
+    WAKEUP_WINDOW
+        .lock()
+        .ok()
+        .and_then(|current| current.as_ref().map(|win| win.is_visible()))
+        .unwrap_or(false)
+}
+
+pub fn hide_window() {
+    let Ok(guard) = WAKEUP_WINDOW.lock() else {
+        return;
+    };
+    if let Some(win) = guard.as_ref() {
+        win.set_visible(false);
+    }
+}
+
+pub fn toggle_window() {
+    if window_is_visible() {
+        hide_window();
+    } else {
+        send_wakeup_signal();
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub fn quit_application() -> ! {
     crate::state::send_action(crate::controller::AppAction::Shutdown);

@@ -68,7 +68,9 @@ fn format_timestamp(ts: u64) -> String {
 
 #[cfg(target_os = "linux")]
 mod tray {
-    pub struct ConnectedTray {}
+    pub struct ConnectedTray {
+        pub window_visible: bool,
+    }
 
     impl ksni::Tray for ConnectedTray {
         fn id(&self) -> String {
@@ -110,6 +112,10 @@ mod tray {
             icons
         }
 
+        fn menu_about_to_show(&mut self) {
+            self.window_visible = crate::ipc::window_is_visible();
+        }
+
         fn activate(&mut self, _: i32, _: i32) {
             crate::ipc::send_wakeup_signal();
         }
@@ -119,9 +125,13 @@ mod tray {
 
             let mut menu = vec![
                 StandardItem {
-                    label: "Open".to_string(),
+                    label: if self.window_visible {
+                        "Hide".to_string()
+                    } else {
+                        "Open".to_string()
+                    },
                     activate: Box::new(|_: &mut Self| {
-                        crate::ipc::send_wakeup_signal();
+                        crate::ipc::toggle_window();
                     }),
                     ..Default::default()
                 }
@@ -493,10 +503,14 @@ fn device_tray_items(
 }
 
 /// Build the full tray menu, populating `action_map` with every item's id.
+/// Returns the menu along with a handle to the top-level "Open"/"Hide" item.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 fn build_tray_menu(
     action_map: &mut std::collections::HashMap<dioxus::desktop::trayicon::menu::MenuId, TrayAction>,
-) -> dioxus::desktop::trayicon::menu::Menu {
+) -> (
+    dioxus::desktop::trayicon::menu::Menu,
+    dioxus::desktop::trayicon::menu::MenuItem,
+) {
     use dioxus::desktop::trayicon::menu::{
         IsMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu, accelerator::Accelerator,
     };
@@ -506,7 +520,12 @@ fn build_tray_menu(
 
     let show_id = MenuId::new("show");
     action_map.insert(show_id.clone(), TrayAction::Show);
-    let show = MenuItem::with_id(show_id, "Open", true, None::<Accelerator>);
+    let show_label = if ipc::window_is_visible() {
+        "Hide"
+    } else {
+        "Open"
+    };
+    let show = MenuItem::with_id(show_id, show_label, true, None::<Accelerator>);
     let send_files_id = MenuId::new("send_files");
     action_map.insert(send_files_id.clone(), TrayAction::SendFiles);
     let send_files = MenuItem::with_id(send_files_id, "Send Files...", true, None::<Accelerator>);
@@ -553,7 +572,7 @@ fn build_tray_menu(
     menu.append_items(&[&quit as &dyn IsMenuItem])
         .expect("Failed to build tray menu");
 
-    menu
+    (menu, show)
 }
 
 #[cfg(target_os = "linux")]
@@ -580,7 +599,9 @@ fn set_linux_tray_visible(visible: bool) {
 
         let sandboxed = running_in_flatpak();
         tokio::spawn(async move {
-            let tray = tray::ConnectedTray {};
+            let tray = tray::ConnectedTray {
+                window_visible: crate::ipc::window_is_visible(),
+            };
             // Flatpak cannot own ksni's generated org.kde.StatusNotifierItem-PID-ID name.
             match tray
                 .disable_dbus_name(sandboxed)
@@ -1505,6 +1526,17 @@ fn App() -> Element {
         });
     });
 
+    // Shared handle to the top-level tray "Open"/"Hide" item, so the poller can
+    // update its label in place when window visibility changes.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    // Arc is intentionally shared with the background poller thread
+    #[allow(clippy::arc_with_non_send_sync)]
+    let show_item_handle = use_hook(|| {
+        std::sync::Arc::new(std::sync::Mutex::new(
+            None::<dioxus::desktop::trayicon::menu::MenuItem>,
+        ))
+    });
+
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         use dioxus::desktop::trayicon::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -1520,7 +1552,8 @@ fn App() -> Element {
 
         let tray_icon = use_hook(|| {
             let mut map = action_map.lock().unwrap();
-            let menu = build_tray_menu(&mut map);
+            let (menu, show) = build_tray_menu(&mut map);
+            show_item_handle.lock().unwrap().replace(show);
 
             #[cfg(target_os = "macos")]
             let icon = {
@@ -1548,12 +1581,14 @@ fn App() -> Element {
         {
             let tray_icon_rebuild = tray_icon.clone();
             let action_map = action_map.clone();
+            let show_item_handle = show_item_handle.clone();
             use_effect(use_reactive(&devices_list, move |dl| {
                 // Read the signal so Dioxus tracks it as an effect dependency;
                 // without this, the closure never re-runs when devices change.
                 dl.read();
                 let mut map = action_map.lock().unwrap();
-                let menu = build_tray_menu(&mut map);
+                let (menu, show) = build_tray_menu(&mut map);
+                show_item_handle.lock().unwrap().replace(show);
                 tray_icon_rebuild.set_menu(Some(Box::new(menu)));
             }));
         }
@@ -1562,14 +1597,13 @@ fn App() -> Element {
         // through that same event stream, so `use_muda_event_handler` is the reliable hook.
         {
             let action_map = action_map.clone();
-            let window = window.clone();
             dioxus::desktop::use_muda_event_handler(move |event| {
                 let action = {
                     let map = action_map.lock().unwrap();
                     map.get(&event.id).cloned()
                 };
                 match action {
-                    Some(TrayAction::Show) => ipc::show_window(&window),
+                    Some(TrayAction::Show) => ipc::toggle_window(),
                     Some(TrayAction::SendFiles) => {
                         send_action(AppAction::PickAndSendFiles);
                     }
@@ -1699,13 +1733,28 @@ fn App() -> Element {
     let wake_window = window.clone();
     use_future(move || {
         let wake_window = wake_window.window.clone();
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let show_item_handle = show_item_handle.clone();
         async move {
             let mut last_devices_hash: u64 = 0;
             let mut last_transfer_status_hash: u64 = 0;
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            let mut last_visible = wake_window.is_visible();
 
             loop {
                 if ipc::take_wakeup_request() {
                     ipc::show_window(&wake_window);
+                }
+
+                #[cfg(any(target_os = "windows", target_os = "macos"))]
+                {
+                    let visible = wake_window.is_visible();
+                    if visible != last_visible {
+                        last_visible = visible;
+                        if let Some(item) = show_item_handle.lock().unwrap().as_ref() {
+                            item.set_text(if visible { "Hide" } else { "Open" });
+                        }
+                    }
                 }
 
                 // Update devices list (with change detection)
