@@ -120,7 +120,7 @@ impl Default for AppSettings {
         Self {
             clipboard_sync_enabled: true,
             media_enabled: true,
-            remote_commands_enabled: true,
+            remote_commands_enabled: false,
             auto_sync_messages: true,
             auto_sync_calls: true,
             auto_sync_contacts: true,
