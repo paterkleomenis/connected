@@ -31,9 +31,11 @@ val sdkDir = project.rootProject.file("local.properties").let { localProps ->
 
 val ndkDir = File(sdkDir, "ndk").listFiles()
     ?.filter { it.isDirectory }?.maxByOrNull { it.name }
-    ?: throw GradleException("NDK not found in ${File(sdkDir, "ndk")}")
 
-val latestNdkVersion: String = ndkDir.name
+val latestNdkVersion: String = ndkDir?.name ?: "26.3.11579223"
+
+// Helper for NDK-dependent tasks
+val effectiveNdkDir: File = ndkDir ?: File(sdkDir, "ndk/$latestNdkVersion")
 
 kotlin {
     compilerOptions {
@@ -207,7 +209,7 @@ dependencies {
 // Task to build Rust library for Android
 tasks.register<Exec>("buildRustDebug") {
     workingDir = file("${project.rootDir}/../ffi")
-    environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
+    environment("ANDROID_NDK_HOME", effectiveNdkDir.absolutePath)
     commandLine(cargoExecutable, "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
@@ -220,7 +222,7 @@ tasks.register<Exec>("buildRustDebug") {
 
 tasks.register<Exec>("buildRustRelease") {
     workingDir = file("${project.rootDir}/../ffi")
-    environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
+    environment("ANDROID_NDK_HOME", effectiveNdkDir.absolutePath)
     commandLine(cargoExecutable, "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
@@ -247,7 +249,7 @@ val hostTag = run {
         else -> "linux-x86_64"
     }
 }
-val llvmStrip = File(ndkDir, "toolchains/llvm/prebuilt/$hostTag/bin/llvm-strip")
+val llvmStrip = File(effectiveNdkDir, "toolchains/llvm/prebuilt/$hostTag/bin/llvm-strip")
 val jniLibsDir = file("${project.projectDir}/src/main/jniLibs")
 val cargoTargetDir = file("${project.rootDir}/../target")
 // Mapping from Android ABI name to cargo target triple (used in target/).
