@@ -190,7 +190,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
 
     // Material Components (Required for Theme.MaterialComponents in themes.xml)
-    implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("com.google.android.material:material:1.14.0")
 
     // JNA for UniFFI bindings
