@@ -8,7 +8,7 @@ use crate::utils::format_file_size;
 use base64::Engine as _;
 use connected_core::filesystem::{FsEntry, FsEntryType};
 use dioxus::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[component]
 pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
@@ -19,6 +19,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let mut context_menu = use_signal(|| Option::<(String, String, i32, i32)>::None);
     let mut preview_content = use_signal(|| Option::<PreviewData>::None);
     let mut video_fullscreen = use_signal(|| false);
+    let mut selected = use_signal(HashSet::<String>::new);
 
     // Thumbnail state
     let mut current_thumbnails = use_signal(HashMap::<String, String>::new); // path -> base64
@@ -65,6 +66,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 files.set(new_files);
                 last_update_seen.set(global_update);
                 loading.set(false);
+                selected.write().clear();
             }
 
             // Update path if changed
@@ -202,6 +204,18 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let thumbnails_val = current_thumbnails.read();
     let preview_val = preview_content.read();
     let context_menu_val = context_menu.read();
+    let selected_val = selected.read();
+
+    let listing_entries = files_val.as_ref().filter(|_| !loading_val);
+    let show_selection_bar = listing_entries.is_some_and(|e| !e.is_empty());
+    let selected_count = listing_entries
+        .map(|e| {
+            e.iter()
+                .filter(|en| selected_val.contains(&en.path))
+                .count()
+        })
+        .unwrap_or(0);
+    let all_selected = listing_entries.is_some_and(|e| e.len() == selected_count);
 
     rsx! {
         div {
@@ -246,6 +260,93 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 span { class: "path-display", "{current_path_val}" }
             }
 
+            if show_selection_bar {
+                div {
+                    class: "selection-bar",
+                    span {
+                        class: "selection-toggle",
+                        onclick: move |_| {
+                            let all_now = {
+                                let entries = files.read();
+                                let sel = selected.read();
+                                entries
+                                    .as_ref()
+                                    .is_some_and(|f| {
+                                        !f.is_empty() && f.iter().all(|e| sel.contains(&e.path))
+                                    })
+                            };
+                            let mut sel = selected.write();
+                            if all_now {
+                                sel.clear();
+                            } else if let Some(f) = files.read().as_ref() {
+                                sel.extend(f.iter().map(|e| e.path.clone()));
+                            }
+                        },
+                        SelectionCheckbox {
+                            checked: all_selected,
+                            partial: selected_count > 0 && !all_selected,
+                            on_toggle: move |_| {
+                                let all_now = {
+                                    let entries = files.read();
+                                    let sel = selected.read();
+                                    entries.as_ref().is_some_and(|f| {
+                                        !f.is_empty() && f.iter().all(|e| sel.contains(&e.path))
+                                    })
+                                };
+                                let mut sel = selected.write();
+                                if all_now {
+                                    sel.clear();
+                                } else if let Some(f) = files.read().as_ref() {
+                                    sel.extend(f.iter().map(|e| e.path.clone()));
+                                }
+                            },
+                        }
+                        span { class: "selection-label", "Select all" }
+                    }
+                    if selected_count > 0 {
+                        span { class: "selection-count", "{selected_count} selected" }
+                        button {
+                            class: "secondary-button",
+                            onclick: {
+                                let ip = device.ip.clone();
+                                let port = device.port;
+                                move |_| {
+                                    let chosen: Vec<FsEntry> = {
+                                        let entries = files.read();
+                                        let sel = selected.read();
+                                        entries
+                                            .as_ref()
+                                            .map(|f| {
+                                                f.iter()
+                                                    .filter(|e| sel.contains(&e.path))
+                                                    .cloned()
+                                                    .collect()
+                                            })
+                                            .unwrap_or_default()
+                                    };
+                                    if !chosen.is_empty() {
+                                        send_action(AppAction::DownloadEntries {
+                                            ip: ip.clone(),
+                                            port,
+                                            entries: chosen,
+                                        });
+                                    }
+                                    selected.write().clear();
+                                }
+                            },
+                            Icon { icon: IconType::Download, size: 14, color: "currentColor".to_string() }
+                            span { " Download" }
+                        }
+                        button {
+                            class: "secondary-button",
+                            onclick: move |_| selected.write().clear(),
+                            Icon { icon: IconType::Close, size: 12, color: "currentColor".to_string() }
+                            span { " Clear" }
+                        }
+                    }
+                }
+            }
+
             if loading_val {
                 div {
                     class: "loading",
@@ -287,6 +388,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     }
                                 }
                             },
+                            span { class: "checkbox-spacer" }
                             span {
                                 class: "icon",
                                 Icon { icon: IconType::Folder, size: 18, color: "var(--accent)".to_string() }
@@ -301,6 +403,9 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                 FsEntryType::Directory => "file-entry directory",
                                 _ => "file-entry file",
                             };
+                            let entry_checked = selected_val.contains(&entry.path);
+                            let selected_suffix =
+                                if entry_checked { " selected" } else { "" };
                             let icon_type = match entry.entry_type {
                                 FsEntryType::Directory => IconType::Folder,
                                 _ => get_file_icon_type(&entry.name),
@@ -309,10 +414,11 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                 FsEntryType::Directory => "var(--accent)",
                                 _ => "var(--text-secondary)",
                             };
+                            let entry_path_for_toggle = entry.path.clone();
 
                             rsx! {
                                 div {
-                                    class: "{entry_class}",
+                                    class: "{entry_class}{selected_suffix}",
                                     onclick: {
                                         let entry = entry.clone();
                                         let ip = device.ip.clone();
@@ -349,6 +455,16 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                                 )));
                                             }
                                         }
+                                    },
+                                    SelectionCheckbox {
+                                        checked: entry_checked,
+                                        partial: false,
+                                        on_toggle: move |_| {
+                                            let mut sel = selected.write();
+                                            if !sel.remove(&entry_path_for_toggle) {
+                                                sel.insert(entry_path_for_toggle.clone());
+                                            }
+                                        },
                                     },
                                     span {
                                         class: "icon",
@@ -531,6 +647,33 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn SelectionCheckbox(checked: bool, partial: bool, on_toggle: EventHandler<()>) -> Element {
+    let class = if checked {
+        "checkbox checked"
+    } else if partial {
+        "checkbox partial"
+    } else {
+        "checkbox"
+    };
+
+    rsx! {
+        button {
+            class: "{class}",
+            title: "Select",
+            onclick: move |evt: Event<MouseData>| {
+                evt.stop_propagation();
+                on_toggle.call(());
+            },
+            if checked {
+                Icon { icon: IconType::Check, size: 12, color: "currentColor".to_string() }
+            } else if partial {
+                span { class: "checkbox-dash" }
             }
         }
     }

@@ -1842,6 +1842,72 @@ body {
     text-overflow: ellipsis;
 }
 
+.selection-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+}
+
+.selection-toggle {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+    user-select: none;
+}
+
+.selection-label {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+}
+
+.selection-label:hover {
+    color: var(--text-primary);
+}
+
+.selection-count {
+    font-size: var(--text-xs);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.checkbox {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    padding: 0;
+    border: 2px solid var(--text-tertiary);
+    border-radius: 4px;
+    background: var(--bg-card);
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.checkbox:hover {
+    border-color: var(--accent);
+}
+
+.checkbox.checked,
+.checkbox.partial {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg-primary);
+}
+
+.checkbox-dash {
+    width: 8px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--bg-primary);
+}
+
 .file-list {
     flex: 1;
     overflow-y: auto;
@@ -1871,6 +1937,20 @@ body {
 
 .file-entry:active {
     background: var(--bg-tertiary);
+}
+
+.file-entry.selected {
+    background: var(--accent-light);
+}
+
+.file-entry .checkbox {
+    margin-right: var(--space-1);
+}
+
+.checkbox-spacer {
+    width: 16px;
+    min-width: 16px;
+    margin-right: var(--space-1);
 }
 
 .file-entry .icon {

@@ -22,6 +22,7 @@ use crate::state::{
     set_sdk_initialized, set_shared_folder_setting, set_transfer_status, store_transfer_path,
 };
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
+use connected_core::filesystem::{FsEntry, FsEntryType};
 use connected_core::telephony::{CallAction, TelephonyMessage};
 use connected_core::telephony::{CallLogEntry, CallType};
 #[cfg(not(target_os = "windows"))]
@@ -153,6 +154,11 @@ pub enum AppAction {
         port: u16,
         remote_path: String,
         filename: String,
+    },
+    DownloadEntries {
+        ip: String,
+        port: u16,
+        entries: Vec<FsEntry>,
     },
     PreviewFile {
         ip: String,
@@ -1935,6 +1941,99 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                     add_notification("Download Failed", &e.to_string(), "");
                                 }
                             }
+                        }
+                    });
+                }
+            }
+            AppAction::DownloadEntries { ip, port, entries } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    let ip_str = ip.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip_str.parse() {
+                            let download_dir = get_download_directory_setting()
+                                .map(PathBuf::from)
+                                .unwrap_or_else(|| {
+                                    dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
+                                });
+
+                            let total = entries.len();
+                            add_notification(
+                                "Download",
+                                &format!("Downloading {} items...", total),
+                                "",
+                            );
+
+                            let mut downloaded = 0usize;
+                            let mut failed = 0usize;
+                            let mut skipped = 0usize;
+                            for entry in entries {
+                                let FsEntry {
+                                    name,
+                                    path,
+                                    entry_type,
+                                    ..
+                                } = entry;
+                                let result = match entry_type {
+                                    FsEntryType::Directory => {
+                                        // Downloads the whole folder recursively into download_dir/<name>
+                                        c.fs_download_folder_with_progress(
+                                            ip_addr,
+                                            port,
+                                            path,
+                                            download_dir.clone(),
+                                            |_, _, _| {},
+                                        )
+                                        .await
+                                        .map(|_| ())
+                                    }
+                                    FsEntryType::File => {
+                                        let local_path = download_dir.join(&name);
+                                        c.fs_download_file(ip_addr, port, path, local_path)
+                                            .await
+                                            .map(|_| ())
+                                    }
+                                    _ => {
+                                        debug!(
+                                            "Skipping unsupported entry type for {}: {:?}",
+                                            name, entry_type
+                                        );
+                                        skipped += 1;
+                                        continue;
+                                    }
+                                };
+                                match result {
+                                    Ok(_) => downloaded += 1,
+                                    Err(e) => {
+                                        error!("Failed to download {}: {}", name, e);
+                                        failed += 1;
+                                    }
+                                }
+                            }
+
+                            let (title, message) = match (failed, skipped, downloaded) {
+                                // Clean run
+                                (0, 0, _) => ("Download Succeeded", format!("Downloaded {downloaded} items")),
+                                // Everything came through, but some entries were not downloadable types
+                                (0, _, _) => (
+                                    "Download Succeeded",
+                                    format!("Downloaded {downloaded} items, {skipped} skipped"),
+                                ),
+                                // Nothing succeeded and nothing was skipped
+                                (_, 0, 0) => {
+                                    ("Download Failed", format!("All {failed} items failed"))
+                                }
+                                // Mixed outcome
+                                _ => {
+                                    let mut msg =
+                                        format!("{downloaded} downloaded, {failed} failed");
+                                    if skipped > 0 {
+                                        msg.push_str(&format!(", {skipped} skipped"));
+                                    }
+                                    ("Download Partially Failed", msg)
+                                }
+                            };
+                            add_notification(title, &message, "");
                         }
                     });
                 }
