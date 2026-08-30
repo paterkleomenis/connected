@@ -91,7 +91,7 @@ mod tray {
             for size in [16u32, 22, 24, 32, 48, 64] {
                 let rgba = super::render_connected_tray_icon_rgba(size);
                 let mut argb = Vec::with_capacity((size * size * 4) as usize);
-                for px in rgba.chunks_exact(4) {
+                for px in rgba.as_chunks::<4>().0 {
                     let r = px[0];
                     let g = px[1];
                     let b = px[2];
