@@ -10,6 +10,11 @@ import android.os.Looper
 
 class ClipboardHelperActivity : Activity() {
 
+    /** Guards against duplicate shares: onWindowFocusChanged can fire more than
+     *  once (dialogs, permission prompts) and each focus gain previously
+     *  scheduled another broadcast. */
+    private var clipboardShared = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // No setContentView needed for invisible activity
@@ -17,7 +22,8 @@ class ClipboardHelperActivity : Activity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
+        if (hasFocus && !clipboardShared) {
+            clipboardShared = true
             // Slight delay to ensure system recognizes focus
             Handler(Looper.getMainLooper()).postDelayed({
                 shareClipboard()

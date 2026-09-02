@@ -159,8 +159,18 @@ pub fn toggle_window() {
 
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub fn quit_application() -> ! {
+    use std::sync::atomic::Ordering;
+
     crate::state::send_action(crate::controller::AppAction::Shutdown);
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Wait (bounded) for the controller to acknowledge shutdown — transfer
+    // cancellation and settings flushes happen on that thread. Previously we
+    // slept a fixed 500ms and hoped, which could exit mid-cleanup.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline
+        && !crate::state::shutdown_complete().load(Ordering::Acquire)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
     std::process::exit(0);
 }
 
@@ -240,15 +250,20 @@ pub async fn listen_for_wakeups() {
 #[cfg(windows)]
 pub fn send_wakeup_signal() {
     use std::fs::OpenOptions;
-    use std::time::Duration;
     request_wakeup();
-    const PIPE_NAME: &str = r"\\.\pipe\connected-desktop-single-instance";
-    for _ in 0..10 {
-        if let Ok(mut file) = OpenOptions::new().write(true).open(PIPE_NAME) {
-            use std::io::Write;
-            let _ = file.write_all(b"WAKE");
-            break;
+    // The retry loop below can block up to ~1 s while the pipe server isn't
+    // connectable yet; callers include the async broadcast-event loop, so run
+    // the retries on a detached thread instead of stalling event delivery.
+    std::thread::spawn(|| {
+        use std::io::Write;
+        use std::time::Duration;
+        const PIPE_NAME: &str = r"\\.\pipe\connected-desktop-single-instance";
+        for _ in 0..10 {
+            if let Ok(mut file) = OpenOptions::new().write(true).open(PIPE_NAME) {
+                let _ = file.write_all(b"WAKE");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    });
 }

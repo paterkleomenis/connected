@@ -7,11 +7,16 @@ final class IOSFilesystemProvider: FilesystemProviderCallback, @unchecked Sendab
     private let fileManager = FileManager.default
     private let rootURL: URL
     private let rootPath: String
+    /// Symlink-resolved form of the root: containment checks below must run
+    /// against this, otherwise `/var/...`-style roots (or a symlinked shared
+    /// folder) would fail their own prefix test.
+    private let rootCanonicalPath: String
 
     init(rootURL: URL) {
         let standardized = rootURL.standardizedFileURL
         self.rootURL = standardized
         self.rootPath = standardized.path
+        self.rootCanonicalPath = standardized.resolvingSymlinksInPath().path
     }
 
     func listDir(path: String) throws -> [FfiFsEntry] {
@@ -134,12 +139,19 @@ final class IOSFilesystemProvider: FilesystemProviderCallback, @unchecked Sendab
             current.appendingPathComponent(part)
         }.standardizedFileURL
 
-        let candidatePath = resolved.path
-        if candidatePath == rootPath || candidatePath.hasPrefix(rootPath + "/") {
-            return resolved
+        // Lexical sanitization alone is not enough: `standardizedFileURL`
+        // does NOT resolve symlinks, and every file operation below follows
+        // them. A symlink planted inside the shared root pointing outside it
+        // (into the app container, for instance) would otherwise let a
+        // trusted-but-hostile peer read or write arbitrary files. Resolve the
+        // real path and re-verify containment.
+        let canonicalPath = resolved.resolvingSymlinksInPath().path
+        guard canonicalPath == rootCanonicalPath
+                || canonicalPath.hasPrefix(rootCanonicalPath + "/") else {
+            throw filesystemError("Path escapes shared root: \(path)")
         }
 
-        throw filesystemError("Path escapes shared root: \(path)")
+        return resolved
     }
 
     private func makeEntry(for itemURL: URL) throws -> FfiFsEntry {

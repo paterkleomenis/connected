@@ -99,6 +99,18 @@ pub type Result<T> = std::result::Result<T, ConnectedError>;
 /// such as `ERROR_ACCESS_DENIED` (os error 5) and `ERROR_SHARING_VIOLATION`
 /// (os error 32), commonly caused by antivirus scanners or the Windows Search
 /// indexer briefly holding a file open.
+///
+/// Platform-gated: raw OS error numbers are per-platform. On Linux, error 5
+/// is `EIO` — a genuine fatal I/O error that must NOT be classified as
+/// transient and retried (only 32, `EAGAIN`-adjacent sharing-style conflicts,
+/// has no Linux meaning here either; Linux retryables are EAGAIN/EINTR which
+/// tokio already handles).
+#[cfg(windows)]
 pub fn is_transient_io_error(e: &std::io::Error) -> bool {
     matches!(e.raw_os_error(), Some(5) | Some(32))
+}
+
+#[cfg(not(windows))]
+pub fn is_transient_io_error(_e: &std::io::Error) -> bool {
+    false
 }

@@ -309,7 +309,7 @@ prepare-release VERSION:
 # Docker-based development (if needed later)
 [doc("Run commands in Docker (for consistent environment)")]
 docker-shell:
-    docker run --rm -it -v %CD%:/workspace -w /workspace rust:latest cmd /c echo Docker shell ready
+    {{ if os_family() == "windows" { "docker run --rm -it -v %CD%:/workspace -w /workspace rust:latest cmd /c echo Docker shell ready" } else { "docker run --rm -it -v $(pwd):/workspace -w /workspace rust:latest bash" } }}
 
 [doc("Cleans up WebView2 localized folders to prevent Microsoft Store ghost languages")]
 clean-webview-locales PROFILE="release":

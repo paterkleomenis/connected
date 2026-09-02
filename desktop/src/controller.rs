@@ -3,12 +3,12 @@ use crate::mpris_server::{MprisUpdate, send_mpris_update};
 use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
     SavedDeviceInfo, TransferStatus, add_actionable_notification, add_file_transfer_request,
-    add_notification, add_open_file_notification, get_active_incoming_transfer_id,
-    get_active_outgoing_transfer_id, get_auto_sync_messages, get_autostart_enabled_setting,
-    get_clipboard_sync_enabled, get_current_media, get_current_remote_files,
-    get_current_remote_path, get_device_name_setting, get_devices_store,
+    add_notification, add_open_file_notification, get_auto_sync_messages,
+    get_autostart_enabled_setting, get_clipboard_sync_enabled, get_current_media,
+    get_current_remote_files, get_current_remote_path, get_device_name_setting, get_devices_store,
     get_download_directory_setting, get_last_clipboard, get_last_remote_clipboard_content,
-    get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
+    get_last_remote_media_device_id, get_last_remote_update, get_live_incoming_transfer_ids,
+    get_live_outgoing_transfer_ids, get_media_enabled, get_pairing_mode_enabled_setting,
     get_pairing_mode_state, get_pairing_requests, get_pending_pairings, get_phone_call_log,
     get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
     get_remote_commands_enabled, get_remote_files_update, get_saved_devices_setting,
@@ -17,9 +17,10 @@ use crate::state::{
     remove_transfer_path, save_device_to_settings, set_active_call,
     set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
     set_autostart_enabled_setting, set_device_name_setting, set_discovery_active,
-    set_download_directory_setting, set_last_remote_clipboard_content, set_pairing_mode_state,
-    set_phone_call_log, set_phone_contacts, set_phone_conversations, set_phone_messages,
-    set_sdk_initialized, set_shared_folder_setting, set_transfer_status, store_transfer_path,
+    set_download_directory_setting, set_last_remote_clipboard_content,
+    set_pairing_mode_enabled_setting, set_pairing_mode_state, set_phone_call_log,
+    set_phone_contacts, set_phone_conversations, set_phone_messages, set_sdk_initialized,
+    set_shared_folder_setting, set_transfer_status, store_transfer_path,
 };
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -57,6 +58,12 @@ static MPRIS_NAMES_CACHE: Lazy<Mutex<(Vec<String>, Instant)>> =
 
 #[cfg(target_os = "linux")]
 const MPRIS_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// Handle of the currently-running media-state poller, so toggling media
+/// control off→on aborts the previous poller instead of stacking duplicates.
+static MEDIA_POLLER_HANDLE: once_cell::sync::Lazy<
+    std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
 
 /// Get cached MPRIS player names, refreshing if cache is stale.
 #[cfg(target_os = "linux")]
@@ -301,6 +308,17 @@ fn spawn_event_loop(
             .map(std::path::PathBuf::from)
             .or_else(dirs::download_dir)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
+        // The directory may have been deleted/moved since it was configured;
+        // recreate it so available_space() can stat it instead of failing every
+        // incoming transfer below.
+        if let Err(e) = std::fs::create_dir_all(&download_dir) {
+            tracing::warn!(
+                "Download dir {} unavailable ({}); skipping disk-space check",
+                download_dir.display(),
+                e
+            );
+            return Ok(());
+        }
         match fs2::available_space(&download_dir) {
             Ok(available) if available < size => {
                 let needed_mb = size as f64 / 1_048_576.0;
@@ -313,8 +331,14 @@ fn spawn_event_loop(
                 ))
             }
             Ok(_) => Ok(()),
+            // Cannot stat ≠ insufficient space — allow with a warning rather
+            // than silently rejecting every transfer.
             Err(e) => {
-                warn!("Failed to check disk space: {}", e);
+                tracing::warn!(
+                    "Disk-space check failed for {} ({}); allowing transfer",
+                    download_dir.display(),
+                    e
+                );
                 Ok(())
             }
         }
@@ -334,12 +358,16 @@ fn spawn_event_loop(
         // Track total file sizes per transfer for aggregate progress calculation
         let mut transfer_sizes: std::collections::HashMap<String, u64> =
             std::collections::HashMap::new();
-        // Queue of outgoing transfers that failed due to connection loss, keyed by device IP.
-        // When the device reconnects (DeviceFound), these are automatically retried.
-        let mut pending_retry: std::collections::HashMap<
-            String,
-            Vec<(std::path::PathBuf, String)>,
-        > = std::collections::HashMap::new();
+        // Queue of outgoing transfers that failed due to connection loss, keyed by
+        // the destination device IP they were originally sent to. When THAT device
+        // reconnects (DeviceFound), its transfers are automatically retried — never
+        // to a different peer that merely happens to come online.
+        let mut pending_retry: std::collections::HashMap<String, Vec<std::path::PathBuf>> =
+            std::collections::HashMap::new();
+        // Destination IP per outgoing transfer id (from TransferStarting), so a
+        // later failure can queue the retry against the correct recipient.
+        let mut transfer_targets: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
 
         loop {
             let event = match events.recv().await {
@@ -375,16 +403,10 @@ fn spawn_event_loop(
                     let mut store = get_devices_store().lock_or_recover();
                     store.insert(info.id.clone(), info);
 
-                    // Auto-retry any transfers that failed due to connection loss
-                    let retry_paths: Vec<std::path::PathBuf> = {
-                        let by_ip = pending_retry.remove(&dev_ip).unwrap_or_default();
-                        let by_fallback = pending_retry.remove("0.0.0.0").unwrap_or_default();
-                        by_ip
-                            .into_iter()
-                            .chain(by_fallback)
-                            .map(|(p, _)| p)
-                            .collect()
-                    };
+                    // Auto-retry any transfers that failed due to connection loss —
+                    // only for the device that actually reconnected.
+                    let retry_paths: Vec<std::path::PathBuf> =
+                        pending_retry.remove(&dev_ip).unwrap_or_default();
                     if !retry_paths.is_empty() {
                         info!(
                             "Device {} reconnected — retrying {} failed transfer(s)",
@@ -473,15 +495,25 @@ fn spawn_event_loop(
                     direction,
                     id,
                     total_size,
-                    ..
+                    peer_device,
                 } => {
                     use connected_core::events::TransferDirection;
                     transfer_sizes.insert(id.clone(), total_size);
                     if direction == TransferDirection::Incoming {
                         incoming_transfers.insert(id.clone(), (filename.clone(), 0.0));
+                        get_live_incoming_transfer_ids()
+                            .lock_or_recover()
+                            .insert(id.clone());
                         set_active_incoming_transfer_id(Some(id.clone()));
                     } else {
                         outgoing_transfers.insert(id.clone(), (filename.clone(), 0.0));
+                        get_live_outgoing_transfer_ids()
+                            .lock_or_recover()
+                            .insert(id.clone());
+                        // Remember the destination so a connection-loss retry is
+                        // only ever sent back to the same peer (core sets
+                        // peer_device to the target IP for outgoing transfers).
+                        transfer_targets.insert(id.clone(), peer_device.clone());
                         set_active_outgoing_transfer_id(Some(id.clone()));
                     }
                     *get_transfer_status().lock_or_recover() = TransferStatus::Starting {
@@ -566,8 +598,15 @@ fn spawn_event_loop(
                 }
                 ConnectedEvent::TransferCompleted { filename, id, .. } => {
                     transfer_sizes.remove(&id);
+                    transfer_targets.remove(&id);
                     let was_outgoing = outgoing_transfers.remove(&id).is_some();
                     let was_incoming = incoming_transfers.remove(&id).is_some();
+                    get_live_outgoing_transfer_ids()
+                        .lock_or_recover()
+                        .remove(&id);
+                    get_live_incoming_transfer_ids()
+                        .lock_or_recover()
+                        .remove(&id);
 
                     if was_outgoing || was_incoming {
                         // Keep active transfer ids aligned with live transfer maps
@@ -617,7 +656,10 @@ fn spawn_event_loop(
                             .map(PathBuf::from)
                             .or_else(dirs::download_dir)
                             .unwrap_or_else(|| PathBuf::from("."));
-                        let received_path = download_dir.join(&filename);
+                        // The event carries the RAW peer-supplied filename; core only
+                        // sanitizes at save time. Never join it into a path unsanitized.
+                        let safe_name = connected_core::file_transfer::sanitize_filename(&filename);
+                        let received_path = download_dir.join(&safe_name);
 
                         add_open_file_notification(
                             "Transfer Complete",
@@ -641,8 +683,15 @@ fn spawn_event_loop(
 
                     let was_outgoing = outgoing_transfers.remove(&id).is_some();
                     let was_incoming = incoming_transfers.remove(&id).is_some();
+                    get_live_outgoing_transfer_ids()
+                        .lock_or_recover()
+                        .remove(&id);
+                    get_live_incoming_transfer_ids()
+                        .lock_or_recover()
+                        .remove(&id);
 
-                    // Queue outgoing transfers that failed due to connection loss for auto-retry
+                    // Queue outgoing transfers that failed due to connection loss for
+                    // auto-retry, keyed by their ORIGINAL destination IP.
                     if was_outgoing && !is_cancelled {
                         let err_lower = error.to_lowercase();
                         let is_connection_error = err_lower.contains("timeout")
@@ -652,16 +701,33 @@ fn spawn_event_loop(
                             || err_lower.contains("refused")
                             || err_lower.contains("unreachable")
                             || err_lower.contains("aborted");
+                        let target_ip = transfer_targets.remove(&id);
                         if is_connection_error && let Some(path) = remove_transfer_path(&id) {
-                            pending_retry
-                                .entry("0.0.0.0".to_string())
-                                .or_default()
-                                .push((path, String::new()));
-                            info!(
-                                "Queued transfer {} for auto-retry on reconnect (error: {})",
-                                id, error
-                            );
+                            // If we never learned the destination (e.g. failure before
+                            // TransferStarting), do NOT auto-retry — sending to a guessed
+                            // recipient would be a privacy bug.
+                            match target_ip {
+                                Some(ip) => {
+                                    pending_retry.entry(ip).or_default().push(path);
+                                    info!(
+                                        "Queued transfer {} for auto-retry on reconnect (error: {})",
+                                        id, error
+                                    );
+                                }
+                                None => {
+                                    warn!(
+                                        "Transfer {} failed with connection error but no known \
+                                         destination; skipping auto-retry",
+                                        id
+                                    );
+                                    add_notification("Transfer Failed", &error, "");
+                                }
+                            }
+                        } else if !is_connection_error && target_ip.is_some() {
+                            transfer_targets.remove(&id);
                         }
+                    } else {
+                        transfer_targets.remove(&id);
                     }
 
                     if was_outgoing || was_incoming {
@@ -715,7 +781,11 @@ fn spawn_event_loop(
                     content,
                     from_device,
                 } => {
-                    set_system_clipboard(&content);
+                    // Clipboard writes are synchronous OS IPC and can block
+                    // indefinitely (e.g. a stalled clipboard owner on X11/Wayland);
+                    // keep them off the shared event loop.
+                    let clip = content.clone();
+                    tokio::task::spawn_blocking(move || set_system_clipboard(&clip));
                     *get_last_clipboard().lock_or_recover() = content.clone();
                     // Store the remote content to prevent echo loops
                     set_last_remote_clipboard_content(content.clone());
@@ -901,7 +971,6 @@ fn spawn_event_loop(
                                     #[cfg(target_os = "linux")]
                                     {
                                         let last_identity = _last_player_identity.clone();
-                                        use dbus::ffidisp::{BusType, Connection};
                                         use mpris::Player;
 
                                         // Volume commands are system-level and don't need
@@ -942,11 +1011,11 @@ fn spawn_event_loop(
                                             _ => {} // Playback commands need MPRIS below
                                         }
 
-                                        // Use cached MPRIS names to avoid repeated DBus queries
-                                        let mpris_names = match get_cached_mpris_names() {
-                                            Some(names) => names,
-                                            None => {
-                                                warn!("Could not get MPRIS player names");
+                                        // Use single PlayerFinder connection — avoids N DBus connections per tick (was 1 per player)
+                                        let finder = match mpris::PlayerFinder::new() {
+                                            Ok(f) => f,
+                                            Err(_) => {
+                                                warn!("Could not get MPRIS PlayerFinder");
                                                 return;
                                             }
                                         };
@@ -961,46 +1030,40 @@ fn spawn_event_loop(
 
                                         let mut generic_any: Option<Player> = None;
 
-                                        for name in &mpris_names {
-                                            if let Ok(p_conn) =
-                                                Connection::get_private(BusType::Session)
-                                                && let Ok(player) =
-                                                    Player::new(p_conn, name.clone(), 1500)
-                                            {
-                                                let identity = player.identity().to_string();
+                                        for player in finder.find_all().unwrap_or_default() {
+                                            let identity = player.identity().to_string();
 
-                                                let is_last = last_id.as_ref() == Some(&identity);
+                                            let is_last = last_id.as_ref() == Some(&identity);
 
-                                                match player.get_playback_status() {
-                                                    Ok(status) => match status {
-                                                        PlaybackStatus::Playing => {
-                                                            playing_player = Some(player);
+                                            match player.get_playback_status() {
+                                                Ok(status) => match status {
+                                                    PlaybackStatus::Playing => {
+                                                        playing_player = Some(player);
 
-                                                            break;
+                                                        break;
+                                                    }
+
+                                                    PlaybackStatus::Paused => {
+                                                        if is_last {
+                                                            preferred_player = Some(player);
+                                                        } else if generic_paused.is_none() {
+                                                            generic_paused = Some(player);
                                                         }
+                                                    }
 
-                                                        PlaybackStatus::Paused => {
-                                                            if is_last {
-                                                                preferred_player = Some(player);
-                                                            } else if generic_paused.is_none() {
-                                                                generic_paused = Some(player);
-                                                            }
-                                                        }
-
-                                                        _ => {
-                                                            if is_last {
-                                                                preferred_player = Some(player);
-                                                            } else if generic_any.is_none() {
-                                                                generic_any = Some(player);
-                                                            }
-                                                        }
-                                                    },
                                                     _ => {
                                                         if is_last {
                                                             preferred_player = Some(player);
                                                         } else if generic_any.is_none() {
                                                             generic_any = Some(player);
                                                         }
+                                                    }
+                                                },
+                                                _ => {
+                                                    if is_last {
+                                                        preferred_player = Some(player);
+                                                    } else if generic_any.is_none() {
+                                                        generic_any = Some(player);
                                                     }
                                                 }
                                             }
@@ -1072,8 +1135,11 @@ fn spawn_event_loop(
                                         {
                                             match cmd {
                                                 MediaCommand::VolumeUp
-                                                | MediaCommand::VolumeDown => {
-                                                    // Use system volume control since SMTC doesn't have volume
+                                                | MediaCommand::VolumeDown
+                                                | MediaCommand::Mute => {
+                                                    // Use system volume control since SMTC doesn't have volume.
+                                                    // Mute was previously routed to SMTC where it silently did
+                                                    // nothing, leaving windows_audio's working mute-toggle dead code.
                                                     return crate::windows_audio::control_system_volume(cmd);
                                                 }
                                                 _ => {
@@ -1513,7 +1579,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         handle.abort();
                     }
                     clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
-                    c.set_pairing_mode_persistent(true);
+                    // Restore the persisted pairing-mode preference instead of
+                    // force-enabling discoverability on every launch.
+                    let saved_pairing = get_pairing_mode_enabled_setting();
+                    c.set_pairing_mode_persistent(saved_pairing);
+                    set_pairing_mode_state(saved_pairing);
                 }
                 // Apply saved download directory to core
                 if let Some(c) = &client
@@ -1780,6 +1850,9 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if let Some(c) = &client {
                     c.set_pairing_mode_persistent(enabled);
                 }
+                // Persist the user's choice; previously it reset to "on" on
+                // every launch, silently re-enabling discoverability.
+                set_pairing_mode_enabled_setting(enabled);
             }
             AppAction::AcceptFileTransfer { transfer_id } => {
                 if let Some(c) = &client {
@@ -1836,33 +1909,49 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::CancelFileTransfer => {
                 if let Some(c) = &client {
-                    let outgoing_id = get_active_outgoing_transfer_id().lock_or_recover().clone();
-                    if let Some(id) = outgoing_id {
-                        let _ = c.cancel_file_transfer(&id);
-                        set_active_outgoing_transfer_id(None);
-                        remove_file_transfer_request(&id);
-                        set_transfer_status(TransferStatus::Cancelled {
-                            filename: String::from("File transfer"),
-                        });
-                        add_notification(
-                            "Transfer Cancelled",
-                            "Outgoing file transfer has been cancelled",
-                            "",
-                        );
-                        continue;
+                    // Cancel ALL live transfers, not just the most recent one:
+                    // the single-slot "active id" was overwritten by every new
+                    // TransferStarting/TransferProgress, so concurrent
+                    // transfers could never be cancelled once a later one
+                    // started. The live-transfer registries are the source of
+                    // truth.
+                    let outgoing_ids: Vec<String> = get_live_outgoing_transfer_ids()
+                        .lock_or_recover()
+                        .clone()
+                        .into_iter()
+                        .collect();
+                    let incoming_ids: Vec<String> = get_live_incoming_transfer_ids()
+                        .lock_or_recover()
+                        .clone()
+                        .into_iter()
+                        .collect();
+
+                    let mut cancelled_any = false;
+                    for id in &outgoing_ids {
+                        if c.cancel_file_transfer(id).is_ok() {
+                            cancelled_any = true;
+                        }
+                    }
+                    for id in &incoming_ids {
+                        if c.cancel_incoming_file_transfer(id).is_ok() {
+                            cancelled_any = true;
+                        }
                     }
 
-                    let incoming_id = get_active_incoming_transfer_id().lock_or_recover().clone();
-                    if let Some(id) = incoming_id {
-                        let _ = c.cancel_incoming_file_transfer(&id);
+                    if cancelled_any {
+                        set_active_outgoing_transfer_id(None);
                         set_active_incoming_transfer_id(None);
-                        remove_file_transfer_request(&id);
+                        get_live_outgoing_transfer_ids().lock_or_recover().clear();
+                        get_live_incoming_transfer_ids().lock_or_recover().clear();
+                        for id in outgoing_ids.iter().chain(incoming_ids.iter()) {
+                            remove_file_transfer_request(id);
+                        }
                         set_transfer_status(TransferStatus::Cancelled {
                             filename: String::from("File transfer"),
                         });
                         add_notification(
                             "Transfer Cancelled",
-                            "Incoming file transfer has been cancelled",
+                            "File transfer(s) have been cancelled",
                             "",
                         );
                     }
@@ -1911,7 +2000,13 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 .unwrap_or_else(|| {
                                     dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
                                 });
-                            let local_path = download_dir.join(&filename);
+                            // Security: `filename` originates from the remote peer's
+                            // directory listing. Sanitize before joining so a crafted
+                            // name ("../../.bashrc", absolute path) cannot escape the
+                            // download directory (path traversal / arbitrary write).
+                            let safe_filename =
+                                connected_core::file_transfer::sanitize_filename(&filename);
+                            let local_path = download_dir.join(&safe_filename);
 
                             add_notification(
                                 "Download",
@@ -1960,7 +2055,25 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 .fs_download_file(ip_addr, port, remote_path, local_path.clone())
                                 .await
                             {
-                                Ok(_) => {
+                                Ok(bytes) => {
+                                    // Cap previews to bound memory and DOM/base64 size;
+                                    // larger files should be transferred, not previewed.
+                                    const MAX_PREVIEW_BYTES: u64 = 32 * 1024 * 1024;
+                                    if bytes > MAX_PREVIEW_BYTES {
+                                        let _ = tokio::fs::remove_file(&local_path).await;
+                                        add_notification(
+                                            "Preview Too Large",
+                                            &format!(
+                                                "{} is {} MB — preview is limited to {} MB",
+                                                filename,
+                                                bytes / (1024 * 1024),
+                                                MAX_PREVIEW_BYTES / (1024 * 1024)
+                                            ),
+                                            "",
+                                        );
+                                        return;
+                                    }
+                                    // Read BEFORE deleting the temp file.
                                     let read_res = tokio::fs::read(&local_path).await;
                                     let _ = tokio::fs::remove_file(&local_path).await;
 
@@ -1974,6 +2087,8 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             mime_type: mime,
                                             data,
                                         });
+                                        *crate::state::get_preview_update().lock_or_recover() =
+                                            std::time::Instant::now();
                                     } else {
                                         add_notification("Preview", "Failed to read file", "");
                                     }
@@ -2020,11 +2135,18 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             AppAction::ToggleMediaControl { enabled, notify } => {
                 *get_media_enabled().lock_or_recover() = enabled;
                 if enabled {
+                    // Abort any previous poller before spawning a new one: a quick
+                    // off→on toggle otherwise leaves two live pollers broadcasting
+                    // duplicate state to peers (the old one only notices the flag
+                    // on its next tick, which adaptive backoff can stretch to ~5s).
+                    if let Some(old) = MEDIA_POLLER_HANDLE.lock_or_recover().take() {
+                        old.abort();
+                    }
                     info!("Media Poller Started");
                     if let Some(c) = &client {
                         let c = c.clone();
                         // Start MPRIS poller with longer interval to reduce CPU usage
-                        tokio::spawn(async move {
+                        let handle = tokio::spawn(async move {
                             // Use 2 second interval instead of 1 second to reduce CPU wakeups
                             let mut interval =
                                 tokio::time::interval(std::time::Duration::from_secs(2));
@@ -2223,12 +2345,19 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             }
                             info!("Media poller stopped");
                         });
+                        *MEDIA_POLLER_HANDLE.lock_or_recover() = Some(handle);
                         if notify {
                             add_notification("Media Control", "Media control enabled", "");
                         }
                     }
-                } else if notify {
-                    add_notification("Media Control", "Media control disabled", "");
+                } else {
+                    // Also stop any live poller promptly on explicit disable.
+                    if let Some(old) = MEDIA_POLLER_HANDLE.lock_or_recover().take() {
+                        old.abort();
+                    }
+                    if notify {
+                        add_notification("Media Control", "Media control disabled", "");
+                    }
                 }
             }
             AppAction::SendMediaCommand { ip, port, command } => {
@@ -2508,8 +2637,22 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             AppAction::RefreshDevices => {
                 if let Some(c) = &client {
                     info!("Lightweight discovery refresh requested by user");
-                    // Clear UI device store so user sees the refresh
+                    // Preserve trusted devices across the refresh: clearing the whole
+                    // store previously made offline-but-trusted peers vanish until
+                    // restart, removing the ability to see/manage them.
+                    let trusted_snapshot: Vec<DeviceInfo> = get_devices_store()
+                        .lock_or_recover()
+                        .values()
+                        .filter(|d| d.is_trusted)
+                        .cloned()
+                        .collect();
                     get_devices_store().lock_or_recover().clear();
+                    {
+                        let mut store = get_devices_store().lock_or_recover();
+                        for t in trusted_snapshot {
+                            store.insert(t.id.clone(), t);
+                        }
+                    }
                     c.refresh_discovery();
                     // Re-fetch after a short delay to let mDNS browse loop pick up responses
                     let c_refresh = c.clone();
@@ -2764,9 +2907,16 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if let Some(c) = &client {
                     c.cancel_all_file_transfers();
                 }
+                // Stop the media poller promptly so quit doesn't race it.
+                if let Some(old) = MEDIA_POLLER_HANDLE.lock_or_recover().take() {
+                    old.abort();
+                }
                 set_active_outgoing_transfer_id(None);
                 set_active_incoming_transfer_id(None);
                 set_transfer_status(TransferStatus::Idle);
+                // Ack so `quit_application` can exit deterministically instead
+                // of hoping a fixed 500ms sleep was enough.
+                crate::state::mark_shutdown_complete();
                 break;
             }
         }

@@ -55,9 +55,31 @@ class TelephonyProvider(private val context: Context) {
     private var smsReceiver: BroadcastReceiver? = null
     private var callStateReceiver: BroadcastReceiver? = null
     private var mmsObserver: ContentObserver? = null
-    private val observerHandler = Handler(Looper.getMainLooper())
+
+    // Dedicated background thread for MMS observer dispatches: the handler body
+    // queries providers and can read + base64 up to ~105 MB of attachment data.
+    // On the main looper this caused multi-hundred-MB allocations and disk IO on
+    // the UI thread (jank/OOM/ANR) whenever a photo MMS arrived in the foreground.
+    private var observerThread: android.os.HandlerThread? = null
+    private var observerHandler: Handler? = null
     private var pendingMmsDispatch: Runnable? = null
     private var lastNotifiedIncomingMmsId: String? = null
+
+    /** Get (or recreate) the background observer handler. Recreatable because
+     *  [unregisterReceivers] quits the thread and receivers may be registered
+     *  again later (telephony toggle). */
+    private fun ensureObserverHandler(): Handler {
+        val existing = observerHandler
+        val thread = observerThread
+        if (existing != null && thread != null && thread.isAlive) {
+            return existing
+        }
+        val newThread = android.os.HandlerThread("connected-mms-observer").apply { start() }
+        val newHandler = Handler(newThread.looper)
+        observerThread = newThread
+        observerHandler = newHandler
+        return newHandler
+    }
 
     fun setListener(listener: TelephonyListener?) {
         this.listener = listener
@@ -676,7 +698,8 @@ class TelephonyProvider(private val context: Context) {
     }
 
     private fun scheduleLatestIncomingMmsDispatch() {
-        pendingMmsDispatch?.let(observerHandler::removeCallbacks)
+        val handler = ensureObserverHandler()
+        pendingMmsDispatch?.let(handler::removeCallbacks)
 
         val runnable = Runnable {
             val latest = getLatestIncomingMmsMessage(context.contentResolver) ?: return@Runnable
@@ -689,7 +712,7 @@ class TelephonyProvider(private val context: Context) {
         }
 
         pendingMmsDispatch = runnable
-        observerHandler.postDelayed(runnable, 700)
+        handler.postDelayed(runnable, 700)
     }
 
     private fun normalizeMmsTimestamp(rawTimestamp: Long): Long {
@@ -1227,8 +1250,18 @@ class TelephonyProvider(private val context: Context) {
                 context.registerReceiver(smsReceiver, smsFilter)
             }
 
-            initializeIncomingMmsState(context.contentResolver)
-            mmsObserver = object : ContentObserver(observerHandler) {
+            // Run the initial MMS scan on the observer thread, NOT the caller's
+            // (main) thread: it queries providers and can read + base64 up to
+            // ~105 MB of attachment data for the newest inbox MMS — the exact
+            // workload the dedicated HandlerThread below was introduced for.
+            ensureObserverHandler().post {
+                try {
+                    initializeIncomingMmsState(context.contentResolver)
+                } catch (e: Exception) {
+                    android.util.Log.w("TelephonyProvider", "Initial MMS state scan failed: ${e.message}")
+                }
+            }
+            mmsObserver = object : ContentObserver(ensureObserverHandler()) {
                 override fun onChange(selfChange: Boolean, uri: Uri?) {
                     scheduleLatestIncomingMmsDispatch()
                 }
@@ -1316,7 +1349,7 @@ class TelephonyProvider(private val context: Context) {
             callStateReceiver = null
         }
 
-        pendingMmsDispatch?.let(observerHandler::removeCallbacks)
+        pendingMmsDispatch?.let { observerHandler?.removeCallbacks(it) }
         pendingMmsDispatch = null
         mmsObserver?.let { observer ->
             try {
@@ -1324,8 +1357,16 @@ class TelephonyProvider(private val context: Context) {
             } catch (_: Exception) {
                 // Ignore if not registered
             }
+            mmsObserver = null
         }
-        mmsObserver = null
         lastNotifiedIncomingMmsId = null
+
+        // Quit the observer thread so the process doesn't keep it alive. A
+        // later registerReceivers() recreates it via ensureObserverHandler().
+        observerThread?.let { t ->
+            if (t.isAlive) t.quitSafely()
+        }
+        observerThread = null
+        observerHandler = null
     }
 }

@@ -108,6 +108,7 @@ pub struct AppSettings {
     pub notifications_enabled: bool,
     pub show_tray_icon: bool,
     pub autostart_enabled: bool,
+    pub pairing_mode_enabled: bool,
     pub theme_mode: ThemeModeSetting,
     pub device_name: Option<String>,
     pub saved_devices: HashMap<String, SavedDeviceInfo>,
@@ -127,6 +128,9 @@ impl Default for AppSettings {
             notifications_enabled: true,
             show_tray_icon: true,
             autostart_enabled: false,
+            // Discoverability is opt-out but must PERSIST: silently re-enabling
+            // it on every launch defeated the user's security choice.
+            pairing_mode_enabled: true,
             theme_mode: ThemeModeSetting::System,
             device_name: None,
             saved_devices: HashMap::new(),
@@ -181,11 +185,30 @@ where
 
 pub fn load_settings() -> AppSettings {
     let path = get_settings_path();
-    if path.exists()
-        && let Ok(contents) = fs::read_to_string(&path)
-        && let Ok(settings) = serde_json::from_str(&contents)
-    {
-        return settings;
+    if path.exists() {
+        match fs::read_to_string(&path) {
+            Ok(contents) => match serde_json::from_str(&contents) {
+                Ok(settings) => return settings,
+                Err(e) => {
+                    // Back up the corrupt file instead of silently overwriting it
+                    // on next save — losing paired-device names/preferences with no
+                    // trace made recovery impossible.
+                    tracing::error!(
+                        "Corrupt settings file ({}); backing up and resetting to defaults",
+                        e
+                    );
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let backup = path.with_extension(format!("json.corrupt.{}", ts));
+                    if let Err(be) = fs::rename(&path, &backup) {
+                        tracing::warn!("Failed to back up corrupt settings file: {}", be);
+                    }
+                }
+            },
+            Err(e) => tracing::warn!("Failed to read settings file: {}", e),
+        }
     }
     AppSettings::default()
 }
@@ -238,11 +261,40 @@ pub fn get_app_settings() -> &'static Arc<Mutex<AppSettings>> {
     APP_SETTINGS.get_or_init(|| Arc::new(Mutex::new(load_settings())))
 }
 
+/// Serializes settings-file writers so concurrent updates cannot interleave.
+static SETTINGS_SAVE_LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
+
+static SHUTDOWN_COMPLETE: OnceLock<std::sync::atomic::AtomicBool> = OnceLock::new();
+
+pub fn mark_shutdown_complete() {
+    SHUTDOWN_COMPLETE
+        .get_or_init(|| std::sync::atomic::AtomicBool::new(false))
+        .store(true, std::sync::atomic::Ordering::Release);
+}
+
+pub fn shutdown_complete() -> &'static std::sync::atomic::AtomicBool {
+    SHUTDOWN_COMPLETE.get_or_init(|| std::sync::atomic::AtomicBool::new(false))
+}
+
 pub fn update_setting<F: FnOnce(&mut AppSettings)>(f: F) {
     let settings = get_app_settings();
-    let mut guard = settings.lock_or_recover();
-    f(&mut guard);
-    save_settings(&guard);
+    // Apply the mutation under the state lock, then hand the file write to a
+    // background thread:
+    //   1. retry sleeps (up to ~3.75s on Windows AV contention) never block
+    //      the caller — previously this froze the UI/render thread;
+    //   2. re-snapshotting *at write time* under the save lock means the file
+    //      always contains ALL applied changes, fixing the lost-update race
+    //      where two concurrent toggles each wrote stale full snapshots.
+    {
+        let mut guard = settings.lock_or_recover();
+        f(&mut guard);
+    }
+    let save_lock = SETTINGS_SAVE_LOCK.get_or_init(|| Arc::new(Mutex::new(())));
+    std::thread::spawn(move || {
+        let _guard = save_lock.lock_or_recover();
+        let latest = get_app_settings().lock_or_recover().clone();
+        save_settings(&latest);
+    });
 }
 
 pub fn get_saved_devices_setting() -> HashMap<String, SavedDeviceInfo> {
@@ -395,6 +447,14 @@ static REMOTE_FILES: OnceLock<Arc<Mutex<Option<Vec<FsEntry>>>>> = OnceLock::new(
 static REMOTE_PATH: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 static REMOTE_FILES_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 static PREVIEW_DATA: OnceLock<Arc<Mutex<Option<PreviewData>>>> = OnceLock::new();
+
+/// Timestamp of the last preview-data change. Lets the UI detect updates
+/// without cloning the (potentially multi-MB) payload every poll tick.
+static PREVIEW_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
+
+pub fn get_preview_update() -> &'static Arc<Mutex<std::time::Instant>> {
+    PREVIEW_UPDATE.get_or_init(|| Arc::new(Mutex::new(std::time::Instant::now())))
+}
 static MEDIA_ENABLED: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
 static PAIRING_MODE: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
 static CURRENT_MEDIA: OnceLock<Arc<Mutex<Option<RemoteMedia>>>> = OnceLock::new();
@@ -582,6 +642,31 @@ pub fn set_active_incoming_transfer_id(id: Option<String>) {
     *get_active_incoming_transfer_id().lock_or_recover() = id;
 }
 
+// ---------------------------------------------------------------------------
+// Live-transfer registries.
+//
+// The single "active" slots above are overwritten by every new transfer, so
+// with concurrent transfers the Cancel action could only ever reach the most
+// recent one. These sets track EVERY live transfer id (inserted on
+// TransferStarting, removed on Completed/Failed/Cancelled) and are the source
+// of truth for cancellation.
+// ---------------------------------------------------------------------------
+
+static LIVE_OUTGOING_TRANSFER_IDS: OnceLock<Arc<Mutex<std::collections::HashSet<String>>>> =
+    OnceLock::new();
+static LIVE_INCOMING_TRANSFER_IDS: OnceLock<Arc<Mutex<std::collections::HashSet<String>>>> =
+    OnceLock::new();
+
+pub fn get_live_outgoing_transfer_ids() -> &'static Arc<Mutex<std::collections::HashSet<String>>> {
+    LIVE_OUTGOING_TRANSFER_IDS
+        .get_or_init(|| Arc::new(Mutex::new(std::collections::HashSet::new())))
+}
+
+pub fn get_live_incoming_transfer_ids() -> &'static Arc<Mutex<std::collections::HashSet<String>>> {
+    LIVE_INCOMING_TRANSFER_IDS
+        .get_or_init(|| Arc::new(Mutex::new(std::collections::HashSet::new())))
+}
+
 /// Set transfer status with auto-reset after completion or failure.
 /// After Completed, Failed, or Cancelled status, automatically resets to Idle after a delay.
 pub fn set_transfer_status(status: TransferStatus) {
@@ -756,9 +841,14 @@ fn open_file_with_system(path: &std::path::Path) {
 #[cfg(target_os = "windows")]
 fn open_file_with_system(path: &std::path::Path) {
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    if let Err(e) = std::process::Command::new("cmd")
+    // Security: previously this went through `cmd /C start "" "<path>"`, which
+    // allowed quote-escaping out of the quoting for peer-influenced filenames
+    // (command injection). `explorer.exe <path>` passes the path as a single
+    // argv entry — no shell interpretation — and opens files with their
+    // default handler / folders in an Explorer window.
+    if let Err(e) = std::process::Command::new("explorer.exe")
         .creation_flags(CREATE_NO_WINDOW)
-        .args(["/C", "start", "", path.to_string_lossy().as_ref()])
+        .arg(path)
         .spawn()
     {
         tracing::warn!("Failed to open received file {}: {}", path.display(), e);
@@ -1096,6 +1186,14 @@ pub fn set_media_enabled_setting(enabled: bool) {
     update_setting(|s| s.media_enabled = enabled);
 }
 
+pub fn get_pairing_mode_enabled_setting() -> bool {
+    get_app_settings().lock_or_recover().pairing_mode_enabled
+}
+
+pub fn set_pairing_mode_enabled_setting(enabled: bool) {
+    update_setting(|s| s.pairing_mode_enabled = enabled);
+}
+
 pub fn get_remote_commands_enabled_setting() -> bool {
     get_app_settings().lock_or_recover().remote_commands_enabled
 }
@@ -1192,17 +1290,14 @@ pub fn get_transfer_file_paths() -> &'static Arc<Mutex<HashMap<String, PathBuf>>
 }
 
 pub fn store_transfer_path(transfer_id: String, path: PathBuf) {
-    if let Ok(mut map) = get_transfer_file_paths().lock() {
-        map.insert(transfer_id, path);
-    }
+    // lock_or_recover: a poisoned map here would silently disable auto-retry
+    // and cancel-mapping for every future transfer (the rest of the module
+    // recovers from poisoning — these two accessors were the outliers).
+    get_transfer_file_paths().lock_or_recover().insert(transfer_id, path);
 }
 
 pub fn remove_transfer_path(transfer_id: &str) -> Option<PathBuf> {
-    if let Ok(mut map) = get_transfer_file_paths().lock() {
-        map.remove(transfer_id)
-    } else {
-        None
-    }
+    get_transfer_file_paths().lock_or_recover().remove(transfer_id)
 }
 
 #[cfg(test)]

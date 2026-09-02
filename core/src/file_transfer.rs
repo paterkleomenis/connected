@@ -2,6 +2,7 @@ use crate::error::{ConnectedError, Result};
 // Use transport constants if public, or redefine
 use bytes::BytesMut;
 use quinn::{Connection, RecvStream, SendStream};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,14 +14,19 @@ use tracing::{debug, error, info, warn};
 
 // We need to match transport constants
 const STREAM_TYPE_FILE: u8 = 2;
-// 8MB chunks saturate a 1 Gbps LAN link with fewer round-trips while still
-// keeping cancellation responsive enough (sub-second on most connections).
-const BUFFER_SIZE: usize = 8 * 1024 * 1024;
+// 4MB chunks balance syscall overhead vs memory — saturates 1 Gbps LAN with
+// channel depth 4 (16MB in-flight) while keeping total worst-case < 256MB
+// (16 concurrent streams). Tuned for "as fast as possible" on WiFi 5/6 LAN.
+const BUFFER_SIZE: usize = 4 * 1024 * 1024;
 /// Timeout for receiving a data chunk during file transfer (30 seconds).
 /// If no data is received within this window, the peer is considered disconnected.
 const READ_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Maximum allowed incoming file size (100 GB). Transfers exceeding this are rejected.
 const MAX_INCOMING_FILE_SIZE: u64 = 100 * 1024 * 1024 * 1024;
+/// Maximum items in a single batch to prevent inode exhaustion.
+const MAX_BATCH_ITEMS: usize = 10_000;
+/// Maximum batch history guard - abort if peer claims absurd files_count.
+const MAX_BATCH_FILES_COUNT: u64 = 10_000;
 
 pub struct IncomingTransferConfig {
     pub progress_tx: Option<mpsc::UnboundedSender<TransferProgress>>,
@@ -615,7 +621,9 @@ impl FileTransfer {
                         let mut last_update = last_progress_update.lock();
                         if last_update.elapsed().as_millis() > 200 {
                             let _ = tx.send(TransferProgress::Progress {
-                                bytes_transferred: total_sent,
+                                // Clamp: repeated resumes across interrupted retries can double-count
+                                // resumed offsets; never report more than total_size.
+                                bytes_transferred: total_sent.min(total_size),
                                 total_size,
                             });
                             *last_update = std::time::Instant::now();
@@ -749,7 +757,9 @@ impl FileTransfer {
                         let mut last_update = last_progress_update.lock();
                         if last_update.elapsed().as_millis() > 200 {
                             let _ = tx.send(TransferProgress::Progress {
-                                bytes_transferred: total_sent,
+                                // Clamp: repeated resumes across interrupted retries can double-count
+                                // resumed offsets; never report more than total_size.
+                                bytes_transferred: total_sent.min(total_size),
                                 total_size,
                             });
                             *last_update = std::time::Instant::now();
@@ -772,9 +782,9 @@ impl FileTransfer {
             }
         }
 
-        // Stream large files concurrently using parallel sub-streams (limit to 6 concurrent transfers
-        // for better aggregate throughput on high-bandwidth LAN links)
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(6));
+        // Stream large files concurrently using parallel sub-streams (limit to 10 concurrent transfers
+        // for better aggregate throughput on WiFi 6 / 6E high-bandwidth LAN links)
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(10));
         let mut join_set = tokio::task::JoinSet::new();
 
         for (abs_path, rel_path, _is_dir, size) in large_files {
@@ -821,7 +831,9 @@ impl FileTransfer {
                             let mut last_update = last_progress_update.lock();
                             if last_update.elapsed().as_millis() > 200 {
                                 let _ = tx.send(TransferProgress::Progress {
-                                    bytes_transferred: total_sent,
+                                    // Clamp: repeated resumes across interrupted retries can double-count
+                                    // resumed offsets; never report more than total_size.
+                                    bytes_transferred: total_sent.min(total_size),
                                     total_size,
                                 });
                                 *last_update = std::time::Instant::now();
@@ -959,7 +971,9 @@ impl FileTransfer {
                             let mut last_update = last_progress_update.lock();
                             if last_update.elapsed().as_millis() > 200 {
                                 let _ = tx.send(TransferProgress::Progress {
-                                    bytes_transferred: total_sent,
+                                    // Clamp: repeated resumes across interrupted retries can double-count
+                                    // resumed offsets; never report more than total_size.
+                                    bytes_transferred: total_sent.min(total_size),
                                     total_size,
                                 });
                                 *last_update = std::time::Instant::now();
@@ -1730,6 +1744,19 @@ impl FileTransfer {
                     ));
                 }
 
+                if files_count > MAX_BATCH_FILES_COUNT {
+                    let reject = FileTransferMessage::Reject {
+                        reason: format!(
+                            "Batch too many files: {} exceeds maximum {}",
+                            files_count, MAX_BATCH_FILES_COUNT
+                        ),
+                    };
+                    let _ = send_message(&mut send, &reject).await;
+                    return Err(ConnectedError::TransferRejected(
+                        "Batch files_count too large".to_string(),
+                    ));
+                }
+
                 // If we need user approval, emit Pending first
                 if !auto_accept && let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Pending {
@@ -1798,8 +1825,27 @@ impl FileTransfer {
                 }
 
                 let save_dir = save_dir.as_ref();
+                let mut items_seen: usize = 0;
+                let mut bytes_seen: u64 = 0;
 
                 loop {
+                    // Enforce item count bound before reading next item
+                    if items_seen >= MAX_BATCH_ITEMS || items_seen as u64 >= files_count + 100 {
+                        // +100 slack allows for directory entries not counted in files_count
+                        let err_msg = format!(
+                            "Batch item limit exceeded: seen {} items (limit {} / files_count {})",
+                            items_seen, MAX_BATCH_ITEMS, files_count
+                        );
+                        error!("{}", err_msg);
+                        let _ = send_message(
+                            &mut send,
+                            &FileTransferMessage::Error {
+                                message: err_msg.clone(),
+                            },
+                        )
+                        .await;
+                        return Err(ConnectedError::Protocol(err_msg));
+                    }
                     if cancel_flag
                         .as_ref()
                         .is_some_and(|c| c.load(Ordering::Relaxed))
@@ -1841,6 +1887,23 @@ impl FileTransfer {
                                 send_message(&mut send, &reject_msg).await?;
                                 return Err(ConnectedError::Protocol(err_msg));
                             }
+
+                            // Track totals and enforce overall size bound
+                            if !is_dir {
+                                bytes_seen = bytes_seen.saturating_add(size);
+                                if bytes_seen > total_size.saturating_add(1024 * 1024) {
+                                    return Err(ConnectedError::Protocol(format!(
+                                        "Batch bytes exceed declared total_size: seen {} > declared {}",
+                                        bytes_seen, total_size
+                                    )));
+                                }
+                                if bytes_seen > MAX_INCOMING_FILE_SIZE {
+                                    return Err(ConnectedError::Protocol(
+                                        "Batch cumulative size exceeds maximum".to_string(),
+                                    ));
+                                }
+                            }
+                            items_seen += 1;
 
                             if is_dir {
                                 let item_path = save_dir.join(&relative_path);
@@ -1955,9 +2018,7 @@ pub(crate) async fn send_message<T: Serialize>(stream: &mut SendStream, message:
 }
 
 /// Receive a message from the stream (default 4 MB limit for control messages)
-pub(crate) async fn recv_message<T: for<'de> Deserialize<'de>>(
-    stream: &mut RecvStream,
-) -> Result<T> {
+pub(crate) async fn recv_message<T: DeserializeOwned>(stream: &mut RecvStream) -> Result<T> {
     recv_message_with_limit(stream, 4 * 1024 * 1024).await
 }
 
@@ -1968,7 +2029,7 @@ pub(crate) async fn recv_message<T: for<'de> Deserialize<'de>>(
 /// Reads in fixed-size chunks rather than allocating the full declared length
 /// up-front, so a malicious peer claiming a huge message length cannot force an
 /// immediate multi-gigabyte allocation (DoS via memory exhaustion).
-pub(crate) async fn recv_message_with_limit<T: for<'de> Deserialize<'de>>(
+pub(crate) async fn recv_message_with_limit<T: DeserializeOwned>(
     stream: &mut RecvStream,
     max_size: usize,
 ) -> Result<T> {
@@ -2007,7 +2068,7 @@ pub(crate) async fn recv_message_with_limit<T: for<'de> Deserialize<'de>>(
         remaining -= to_read;
     }
 
-    let message = serde_json::from_slice(&data)?;
+    let message = crate::codec::decode_message(&data)?;
     Ok(message)
 }
 
@@ -2025,7 +2086,17 @@ pub fn sanitize_filename(filename: &str) -> String {
                 '/' | '\\' | '\0' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
             )
         })
-        .take(255)
+        // Filesystem limits are 255 *bytes* (ext4/APFS), not chars — cap by
+        // encoded size so multi-byte names don't fail with ENAMETOOLONG.
+        .scan(0usize, |used, c| {
+            let len = c.len_utf8();
+            if *used + len <= 255 {
+                *used += len;
+                Some(c)
+            } else {
+                None
+            }
+        })
         .collect();
 
     // Strip leading dots to prevent creating hidden files (e.g. `.bashrc`,

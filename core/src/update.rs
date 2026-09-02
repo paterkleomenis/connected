@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateInfo {
     pub has_update: bool,
     pub latest_version: String,
@@ -77,7 +77,16 @@ impl UpdateChecker {
             semver::Version::parse(latest_version_str),
         ) {
             (Ok(current), Ok(latest)) => latest > current,
-            _ => latest_version_str != current_version,
+            // Fallback for non-semver strings: normalize (trim, drop a leading
+            // 'v') before comparing so "v3.2.7" == "3.2.7" doesn't report a
+            // phantom update.
+            _ => {
+                fn normalize_version(s: &str) -> &str {
+                    s.trim().trim_start_matches('v')
+                }
+                normalize_version(latest_version_str).to_lowercase()
+                    != normalize_version(&current_version).to_lowercase()
+            }
         };
 
         let platform_lower = platform.to_lowercase();
@@ -193,6 +202,26 @@ pub fn is_installed_via_aur() -> bool {
 /// the network drops mid-transfer. On Unix the temp file is created with
 /// owner-only permissions (0600).
 pub async fn download_to_file(url: &str, dest_path: &Path) -> Result<()> {
+    download_to_file_internal(url, dest_path, None).await
+}
+
+/// Download and verify SHA256 checksum if provided.
+/// If `expected_sha256` is Some, the hex digest is verified before the atomic rename.
+/// The check is case-insensitive and ignores surrounding whitespace.
+pub async fn download_to_file_verified(
+    url: &str,
+    dest_path: &Path,
+    expected_sha256: &str,
+) -> Result<()> {
+    download_to_file_internal(url, dest_path, Some(expected_sha256)).await
+}
+
+/// Internal download with optional SHA256 verification and collision-free temp name.
+async fn download_to_file_internal(
+    url: &str,
+    dest_path: &Path,
+    expected_sha256: Option<&str>,
+) -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent("Connected-App")
         .connect_timeout(Duration::from_secs(10))
@@ -214,12 +243,18 @@ pub async fn download_to_file(url: &str, dest_path: &Path) -> Result<()> {
     }
 
     // Write to a temp file in the same directory so rename is atomic (same filesystem).
+    // Use pid + uuid to avoid collisions when two concurrent downloads target the same dest.
     let tmp_path: PathBuf = {
         let file_name = dest_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("download");
-        let tmp_name = format!(".{}.tmp.{}", file_name, std::process::id());
+        let tmp_name = format!(
+            ".{}.tmp.{}-{}",
+            file_name,
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        );
         dest_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
@@ -227,7 +262,7 @@ pub async fn download_to_file(url: &str, dest_path: &Path) -> Result<()> {
     };
 
     // Scope the file so it is closed (and flushed) before the rename.
-    let download_result: Result<()> = async {
+    let download_result: Result<Option<String>> = async {
         let mut file = tokio::fs::File::create(&tmp_path).await?;
 
         // Restrict temp file permissions to owner-only on Unix.
@@ -238,24 +273,55 @@ pub async fn download_to_file(url: &str, dest_path: &Path) -> Result<()> {
             let _ = std::fs::set_permissions(&tmp_path, perms);
         }
 
+        // Optionally compute SHA256 while streaming
+        let mut hasher = if expected_sha256.is_some() {
+            use sha2::{Digest, Sha256};
+            Some(Sha256::new())
+        } else {
+            None
+        };
+
         while let Some(chunk) = resp
             .chunk()
             .await
             .map_err(|e| ConnectedError::Network(e.to_string()))?
         {
+            if let Some(ref mut h) = hasher {
+                use sha2::Digest;
+                h.update(&chunk);
+            }
             file.write_all(&chunk).await?;
         }
 
         file.flush().await?;
         file.sync_all().await?;
-        Ok(())
+        let hex = hasher.map(|h| {
+            use sha2::Digest;
+            h.finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        });
+        Ok(hex)
     }
     .await;
 
-    if let Err(e) = download_result {
-        // Best-effort cleanup of the temp file on failure.
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return Err(e);
+    let computed_hash = match download_result {
+        Ok(h) => h,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(e);
+        }
+    };
+
+    // Verify checksum if requested
+    if let (Some(expected), Some(computed)) = (expected_sha256, computed_hash.as_deref()) {
+        let expected_norm = expected.trim().to_ascii_lowercase();
+        let computed_norm = computed.trim().to_ascii_lowercase();
+        if expected_norm != computed_norm {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(ConnectedError::ChecksumMismatch);
+        }
     }
 
     // Atomic rename into place.
@@ -267,15 +333,53 @@ pub async fn download_to_file(url: &str, dest_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Fetch expected SHA256 for a GitHub release asset by trying `<url>.sha256`.
+/// Returns None if the sidecar is not available — caller should treat missing
+/// checksum as a warning, not a hard failure, for backward compatibility with
+/// older releases. For new releases, always publish the `.sha256` sidecar.
+pub async fn fetch_expected_sha256(asset_url: &str) -> Option<String> {
+    let sha_url = format!("{}.sha256", asset_url);
+    let client = reqwest::Client::builder()
+        .user_agent("Connected-App")
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .build()
+        .ok()?;
+    let resp = client.get(&sha_url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let text = resp.text().await.ok()?;
+    // SHA256 files are typically `<hex>  <filename>` or just `<hex>`
+    let hex = text.split_whitespace().next()?.trim();
+    if hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(hex.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
 /// Install a macOS update from a DMG download.
 ///
 /// Downloads the DMG to a temp file, mounts it, copies the .app bundle over the
 /// existing installation, unmounts, and relaunches the app.
 pub async fn install_macos_update(url: &str) -> Result<()> {
-    let dmg_path = PathBuf::from(format!("/tmp/connected-update-{}.dmg", std::process::id()));
+    let dmg_path = PathBuf::from(format!(
+        "/tmp/connected-update-{}-{}.dmg",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
 
-    // Download the DMG.
-    download_to_file(url, &dmg_path).await?;
+    // Download the DMG — verify checksum if sidecar is available.
+    if let Some(expected) = fetch_expected_sha256(url).await {
+        download_to_file_verified(url, &dmg_path, &expected).await?;
+    } else {
+        tracing::warn!(
+            "No SHA256 sidecar found for {}; downloading without verification (legacy release)",
+            url
+        );
+        download_to_file(url, &dmg_path).await?;
+    }
 
     // Find the current .app bundle by walking up from the executable.
     let app_path = find_current_app_bundle()?;
@@ -484,14 +588,27 @@ pub async fn install_linux_appimage_update(url: &str) -> Result<()> {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("connected-desktop");
-        let tmp_name = format!(".{}.tmp.{}", file_name, std::process::id());
+        let tmp_name = format!(
+            ".{}.tmp.{}-{}",
+            file_name,
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        );
         appimage
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(tmp_name)
     };
 
-    download_to_file(url, &tmp_path).await?;
+    if let Some(expected) = fetch_expected_sha256(url).await {
+        download_to_file_verified(url, &tmp_path, &expected).await?;
+    } else {
+        tracing::warn!(
+            "No SHA256 sidecar found for {}; downloading without verification (legacy release)",
+            url
+        );
+        download_to_file(url, &tmp_path).await?;
+    }
 
     // Make the new AppImage executable.
     #[cfg(unix)]
@@ -525,10 +642,21 @@ pub async fn install_linux_flatpak_update(url: &str) -> Result<()> {
     let downloads_dir = dirs::download_dir().unwrap_or_else(|| {
         PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
     });
-    let bundle_path =
-        downloads_dir.join(format!("connected-update-{}.flatpak", std::process::id()));
+    let bundle_path = downloads_dir.join(format!(
+        "connected-update-{}-{}.flatpak",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
 
-    download_to_file(url, &bundle_path).await?;
+    if let Some(expected) = fetch_expected_sha256(url).await {
+        download_to_file_verified(url, &bundle_path, &expected).await?;
+    } else {
+        tracing::warn!(
+            "No SHA256 sidecar found for {}; downloading without verification (legacy release)",
+            url
+        );
+        download_to_file(url, &bundle_path).await?;
+    }
 
     let bundle_str = bundle_path.to_str().unwrap_or_default();
 

@@ -6,8 +6,6 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 #[cfg(target_os = "android")]
 use std::net::Ipv4Addr;
-#[cfg(unix)]
-use std::os::fd::FromRawFd;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
@@ -703,8 +701,26 @@ pub enum ConnectedFfiError {
 
 impl From<ConnectedError> for ConnectedFfiError {
     fn from(err: ConnectedError) -> Self {
-        ConnectedFfiError::ConnectionError {
-            msg: err.to_string(),
+        match err {
+            ConnectedError::PeerNotTrusted => ConnectedFfiError::InvalidArgument {
+                msg: "Peer not trusted".to_string(),
+            },
+            ConnectedError::PeerBlocked => ConnectedFfiError::InvalidArgument {
+                msg: "Peer is blocked".to_string(),
+            },
+            ConnectedError::ChecksumMismatch => ConnectedFfiError::Internal {
+                msg: "Checksum mismatch".to_string(),
+            },
+            ConnectedError::Timeout(msg) => ConnectedFfiError::ConnectionError { msg },
+            ConnectedError::PingFailed(msg) => ConnectedFfiError::ConnectionError { msg },
+            ConnectedError::TransferRejected(msg) => ConnectedFfiError::Internal { msg },
+            ConnectedError::TransferFailed(msg) => ConnectedFfiError::Internal { msg },
+            ConnectedError::PairingFailed(msg) => ConnectedFfiError::Internal { msg },
+            ConnectedError::Protocol(msg) => ConnectedFfiError::Internal { msg },
+            ConnectedError::Filesystem(msg) => ConnectedFfiError::Internal { msg },
+            _ => ConnectedFfiError::ConnectionError {
+                msg: err.to_string(),
+            },
         }
     }
 }
@@ -884,18 +900,10 @@ pub fn initialize(
     bind_port: u16,
     storage_path: String,
 ) -> Result<(), ConnectedFfiError> {
-    // Check if already initialized
-    if INSTANCE.get_or_init(|| RwLock::new(None)).read().is_some() {
-        return Err(ConnectedFfiError::InitializationError {
-            msg: "Client already initialized".into(),
-        });
-    }
-
     init_android_logging();
 
     let runtime = get_runtime();
 
-    // Parse device type
     // Parse device type
     let dtype = connected_core::DeviceType::from_str(&device_type)
         .unwrap_or(connected_core::DeviceType::Unknown);
@@ -919,10 +927,7 @@ pub fn initialize(
 
     spawn_event_listener(client.clone(), runtime);
 
-    let lock = INSTANCE.get_or_init(|| RwLock::new(None));
-    *lock.write() = Some(client);
-
-    Ok(())
+    install_client(client, runtime)
 }
 
 #[uniffi::export]
@@ -933,16 +938,8 @@ pub fn initialize_with_ip(
     ip_address: String,
     storage_path: String,
 ) -> Result<(), ConnectedFfiError> {
-    // Check if already initialized
-    if INSTANCE.get_or_init(|| RwLock::new(None)).read().is_some() {
-        return Err(ConnectedFfiError::InitializationError {
-            msg: "Client already initialized".into(),
-        });
-    }
-
     init_android_logging();
     let runtime = get_runtime();
-    // Parse device type
     let dtype = connected_core::DeviceType::from_str(&device_type)
         .unwrap_or(connected_core::DeviceType::Unknown);
     let ip: std::net::IpAddr =
@@ -979,23 +976,57 @@ pub fn initialize_with_ip(
 
     spawn_event_listener(client.clone(), runtime);
 
+    install_client(client, runtime)
+}
+
+/// Atomically claim the singleton slot for [client].
+///
+/// Previously this was check-then-act across two separate lock acquisitions:
+/// two concurrent callers could BOTH pass the emptiness check, each build a
+/// full client (double port bind, duplicate mDNS actor, two event listeners),
+/// and the second write silently replace the first — leaking the loser's
+/// background tasks. Here construction happens first and only the slot claim
+/// is serialized: exactly one caller wins, the loser shuts its duplicate down.
+fn install_client(
+    client: std::sync::Arc<ConnectedClient>,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<(), ConnectedFfiError> {
     let lock = INSTANCE.get_or_init(|| RwLock::new(None));
-    *lock.write() = Some(client);
+    let mut guard = lock.write();
+    if guard.is_some() {
+        drop(guard);
+        runtime.block_on(client.shutdown());
+        return Err(ConnectedFfiError::InitializationError {
+            msg: "Client already initialized".into(),
+        });
+    }
+    *guard = Some(client);
+    drop(guard);
     Ok(())
 }
 
 static SHUTDOWN_FLAG: OnceLock<Arc<std::sync::atomic::AtomicBool>> = OnceLock::new();
+static SHUTDOWN_NOTIFY: OnceLock<Arc<tokio::sync::Notify>> = OnceLock::new();
 
 fn get_shutdown_flag() -> &'static Arc<std::sync::atomic::AtomicBool> {
     SHUTDOWN_FLAG.get_or_init(|| Arc::new(std::sync::atomic::AtomicBool::new(false)))
 }
 
+fn get_shutdown_notify() -> &'static Arc<tokio::sync::Notify> {
+    SHUTDOWN_NOTIFY.get_or_init(|| Arc::new(tokio::sync::Notify::new()))
+}
+
 fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
     let mut rx = client.subscribe();
-    let shutdown_flag = get_shutdown_flag().clone();
+    let shutdown_notify = get_shutdown_notify().clone();
     runtime.spawn(async move {
-        while !shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
-            match rx.recv().await {
+        loop {
+            tokio::select! {
+                _ = shutdown_notify.notified() => {
+                    info!("Event listener shutdown signal received");
+                    break;
+                }
+                result = rx.recv() => match result {
                 Ok(event) => match event {
                     ConnectedEvent::DeviceFound(d) => {
                         if let Some(cb) = DISCOVERY_CALLBACK.read().as_ref() {
@@ -1266,6 +1297,7 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                     info!("Event listener channel closed, stopping.");
                     break;
                 }
+                }
             }
         }
         info!("Event listener stopped");
@@ -1321,9 +1353,19 @@ pub fn inject_aware_socket(
 ) -> Result<(), ConnectedFfiError> {
     let client = get_client()?;
 
-    // Safety: fd is a valid file descriptor from Android's WiFi Aware data path.
-    // from_raw_fd takes ownership; the FD must remain open for the socket's lifetime.
-    let socket = unsafe { std::net::UdpSocket::from_raw_fd(fd) };
+    // Duplicate the FD before taking ownership so that a failure to set
+    // non-blocking does not close the caller's FD (Kotlin still owns it).
+    // BorrowedFd::try_clone_to_owned() performs a dup(2) under the hood.
+    let socket = {
+        let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+        let owned =
+            borrowed
+                .try_clone_to_owned()
+                .map_err(|e| ConnectedFfiError::InvalidArgument {
+                    msg: format!("Failed to dup FD: {}", e),
+                })?;
+        std::net::UdpSocket::from(owned)
+    };
 
     socket
         .set_nonblocking(true)
@@ -1692,13 +1734,20 @@ pub fn shutdown() {
 
     // Signal event listener to stop
     get_shutdown_flag().store(true, std::sync::atomic::Ordering::SeqCst);
+    get_shutdown_notify().notify_waiters();
 
-    // Clear callbacks first
+    // Clear callbacks first (ALL of them — stale media/telephony/remote-command
+    // or filesystem callbacks from a previous session would otherwise keep
+    // firing after re-initialization and leak their captured contexts).
     *DISCOVERY_CALLBACK.write() = None;
     *CLIPBOARD_CALLBACK.write() = None;
     *TRANSFER_CALLBACK.write() = None;
     *PAIRING_CALLBACK.write() = None;
     *UNPAIR_CALLBACK.write() = None;
+    *MEDIA_CALLBACK.write() = None;
+    *TELEPHONY_CALLBACK.write() = None;
+    *REMOTE_COMMANDS_CALLBACK.write() = None;
+    *FS_PROVIDER.write() = None;
     get_transfer_sizes().write().clear();
 
     // Get and shutdown the client properly

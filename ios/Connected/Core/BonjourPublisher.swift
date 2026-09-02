@@ -34,12 +34,14 @@ final class BonjourPublisher: NSObject {
     ///   - deviceId: Unique device UUID (from Rust core)
     ///   - txt: Additional TXT key-value pairs, e.g. `["type": "ios", "version": "1"]`
     func publish(name: String, port: Int32, deviceId: String, txt: [String: String] = [:]) {
-        lastPort = port
-        lastDeviceId = deviceId
-        lastTxt = txt
-
+        // Write the re-publish snapshot on the serial queue: the heartbeat
+        // closure reads these fields on `queue`, so writing them on the
+        // caller's thread was an unsynchronized data race.
         queue.async { [weak self] in
             guard let self else { return }
+            self.lastPort = port
+            self.lastDeviceId = deviceId
+            self.lastTxt = txt
 
             // Stop previous service
             self.service?.stop()
@@ -71,11 +73,22 @@ final class BonjourPublisher: NSObject {
     }
 
     /// Update only the TXT records (e.g. after a device rename).
+    ///
+    /// `setTXTRecord` replaces the ENTIRE record, so the required `id` key
+    /// must be re-added here — peers ignore services whose TXT lacks it,
+    /// which previously made a renamed device invisible until the next
+    /// heartbeat republished with the id restored.
     func updateTxt(name: String, txt: [String: String]) {
         queue.async { [weak self] in
-            guard let self, let svc = self.service else { return }
+            guard let self else { return }
+            guard let svc = self.service else {
+                // Nothing published yet — fall back to a full publish.
+                self.publishOnQueue(name: name, port: self.lastPort, deviceId: self.lastDeviceId, txt: txt)
+                return
+            }
 
             var allTxt = txt
+            allTxt["id"] = self.lastDeviceId
             allTxt["name"] = name
 
             let txtData = NetService.data(fromTXTRecord: allTxt.mapValues {
@@ -83,6 +96,33 @@ final class BonjourPublisher: NSObject {
             })
             svc.setTXTRecord(txtData)
         }
+    }
+
+    private func publishOnQueue(name: String, port: Int32, deviceId: String, txt: [String: String]) {
+        // Must already be on `queue`. Shared body used by publish/updateTxt.
+        service?.stop()
+        service?.delegate = nil
+
+        var allTxt = txt
+        allTxt["id"] = deviceId
+        allTxt["name"] = name
+
+        let svc = NetService(
+            domain: "local.",
+            type: "_connected._udp.",
+            name: name,
+            port: port
+        )
+        svc.delegate = self
+        svc.includesPeerToPeer = true
+
+        let txtData = NetService.data(fromTXTRecord: allTxt.mapValues {
+            $0.data(using: .utf8) ?? Data()
+        })
+        svc.setTXTRecord(txtData)
+        svc.publish()
+
+        service = svc
     }
 
     /// Stop publishing.  Called on shutdown or when the app enters background.
@@ -118,30 +158,8 @@ final class BonjourPublisher: NSObject {
 
     private func republish(name: String) {
         queue.async { [weak self] in
-            guard let self, lastPort != 0, !lastDeviceId.isEmpty else { return }
-            self.service?.stop()
-            self.service?.delegate = nil
-
-            var allTxt = lastTxt
-            allTxt["id"] = lastDeviceId
-            allTxt["name"] = name
-
-            let svc = NetService(
-                domain: "local.",
-                type: "_connected._udp.",
-                name: name,
-                port: lastPort
-            )
-            svc.delegate = self
-            svc.includesPeerToPeer = true
-
-            let txtData = NetService.data(fromTXTRecord: allTxt.mapValues {
-                $0.data(using: .utf8) ?? Data()
-            })
-            svc.setTXTRecord(txtData)
-            svc.publish()
-
-            self.service = svc
+            guard let self, self.lastPort != 0, !self.lastDeviceId.isEmpty else { return }
+            self.publishOnQueue(name: name, port: self.lastPort, deviceId: self.lastDeviceId, txt: self.lastTxt)
         }
     }
 }

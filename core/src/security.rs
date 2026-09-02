@@ -422,7 +422,7 @@ impl KeyStore {
         let data = serde_json::to_vec_pretty(&self.known_peers)
             .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
 
-        // M4: Atomic write — write to temp file, fsync, then rename over the target
+        // Atomic write — write to temp file, fsync, then rename over the target
         let final_path = self.storage_dir.join("known_peers.json");
         let tmp_path = self.storage_dir.join("known_peers.json.tmp");
 
@@ -529,19 +529,32 @@ impl KeyStore {
         device_id: Option<String>,
         name: Option<String>,
     ) -> Result<()> {
-        self.known_peers.peers.insert(
-            fingerprint.clone(),
-            PeerInfo {
+        let last_seen = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Merge instead of overwrite: callers that only know the fingerprint
+        // (device_id/name = None) must not erase previously stored metadata.
+        let entry = self
+            .known_peers
+            .peers
+            .entry(fingerprint.clone())
+            .or_insert_with(|| PeerInfo {
                 fingerprint,
-                status: PeerStatus::Trusted,
-                device_id,
-                name,
-                last_seen: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-            },
-        );
+                status: PeerStatus::Unpaired,
+                device_id: None,
+                name: None,
+                last_seen,
+            });
+        entry.status = PeerStatus::Trusted;
+        entry.last_seen = last_seen;
+        if device_id.is_some() {
+            entry.device_id = device_id;
+        }
+        if name.is_some() {
+            entry.name = name;
+        }
         self.save_peers()
     }
 

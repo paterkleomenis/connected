@@ -64,6 +64,10 @@ class ConnectedWifiAwareManager(private val context: Context) {
         private const val CLEANUP_INTERVAL_MS = 5_000L
         private const val PAIR_INTENT_TTL_MS = 30_000L
         private const val NETWORK_REQUEST_COOLDOWN_MS = 20_000L
+        // Watchdog bound for NAN data-path requests: without a system-side
+        // timeout, a request whose path never materializes would wedge its
+        // slot forever (see cleanupStaleState eviction).
+        private const val NETWORK_REQUEST_TIMEOUT_MS = 30_000L
         private const val IPPROTO_UDP = 17
 
         fun isSupported(context: Context): Boolean {
@@ -108,6 +112,8 @@ class ConnectedWifiAwareManager(private val context: Context) {
     @Volatile private var pairingTargetId: String? = null
     @Volatile private var lastAttachAttempt = 0L
     @Volatile private var attachRetryScheduled = false
+    /** Guards against the un-cancellable manager.attach() completing after stop(). */
+    @Volatile private var started = false
     @Volatile private var ignoredPublishTerminations = 0
     @Volatile private var ignoredSubscribeTerminations = 0
 
@@ -120,6 +126,14 @@ class ConnectedWifiAwareManager(private val context: Context) {
         }
 
         override fun onAttached(wifiAwareSession: WifiAwareSession) {
+            // attach() cannot be cancelled: if the system completes it after
+            // stop(), blindly adopting the session resurrected publish/
+            // subscribe sessions nothing would ever close.
+            if (!started) {
+                Log.d(TAG, "Attach completed after stop() — closing session")
+                wifiAwareSession.close()
+                return
+            }
             Log.d(TAG, "WiFi Aware attached")
             attachRetryScheduled = false
             session = wifiAwareSession
@@ -210,11 +224,13 @@ class ConnectedWifiAwareManager(private val context: Context) {
         ],
     )
     fun start() {
+        started = true
         attach()
         startCleanupLoop()
     }
 
     fun stop() {
+        started = false
         handler.removeCallbacksAndMessages(null)
         publishSession?.close()
         subscribeSession?.close()
@@ -679,16 +695,31 @@ class ConnectedWifiAwareManager(private val context: Context) {
                 reuseAddress = true
                 bind(InetSocketAddress(localPort))
             }
-            network.bindSocket(socket)
-            val boundPort = socket.localPort
-            val pfd = ParcelFileDescriptor.fromDatagramSocket(socket)
-            val fdNum = pfd.detachFd()
-            injectAwareSocket(fdNum, peerIpv6, peerScopeId, peerPort.toUShort())
-            connectedEndpoints[peer.deviceId] = Pair(peerIpv6, peerPort)
-            Log.d(
-                TAG,
-                "Injected WiFi Aware socket for ${peer.deviceId}: localPort=$boundPort, peer=[$peerIpv6%$peerScopeId]:$peerPort",
-            )
+            try {
+                network.bindSocket(socket)
+                val boundPort = socket.localPort
+                val pfd = ParcelFileDescriptor.fromDatagramSocket(socket)
+                val fdNum = pfd.detachFd()
+                // Ownership contract (see ffi injectAwareSocket): Rust dup(2)s
+                // the descriptor and never closes the caller's fd — the raw fd
+                // stays ours. Closing `socket` releases exactly our handle; the
+                // Rust-owned duplicate keeps the UDP socket alive. Without this,
+                // every reconnect cycle leaks a Java-side handle bound to the
+                // same SO_REUSEADDR port, making unicast delivery ambiguous.
+                socket.close()
+                injectAwareSocket(fdNum, peerIpv6, peerScopeId, peerPort.toUShort())
+                connectedEndpoints[peer.deviceId] = Pair(peerIpv6, peerPort)
+                Log.d(
+                    TAG,
+                    "Injected WiFi Aware socket for ${peer.deviceId}: localPort=$boundPort, peer=[$peerIpv6%$peerScopeId]:$peerPort",
+                )
+            } catch (e: Exception) {
+                // Error before/after injection: release OUR handle so failed
+                // binds don't leak descriptors. (Idempotent — close() twice is
+                // a no-op, covering the post-close inject-failure path.)
+                runCatching { socket.close() }
+                throw e
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to bind/inject WiFi Aware socket: ${e.message}", e)
             connectedPeers.remove(peer.deviceId)
@@ -724,6 +755,21 @@ class ConnectedWifiAwareManager(private val context: Context) {
             .onFailure { Log.w(TAG, "Failed to send WiFi Aware peer info: ${it.message}") }
     }
 
+    /**
+     * SECURITY NOTE: This PSK is derived deterministically from the two device
+     * IDs, which are broadcast in cleartext NAN service info, using a key
+     * embedded in the app binary. Any party running this app can therefore
+     * derive the same passphrase for any pair of discovered devices — the
+     * Aware-layer passphrase provides NO authentication against a determined
+     * attacker. Actual content protection rests on the QUIC/TLS layer above
+     * (certificate fingerprint pinning), which remains sound.
+     *
+     * A proper fix requires exchanging a per-pair random secret during the
+     * user-approved pairing handshake, persisting it in the keystore, and
+     * deriving the PSK from it for subsequent sessions — a cross-version
+     * protocol change that must coordinate both endpoints (and gracefully
+     * fall back for mixed fleets / first contact).
+     */
     private fun generatePairPsk(localId: String, peerId: String): String {
         val ids = listOf(localId, peerId).sorted().joinToString(":")
         val mac = Mac.getInstance("HmacSHA256")
@@ -769,9 +815,47 @@ class ConnectedWifiAwareManager(private val context: Context) {
                 peersByHandle.remove(peer.peerHandle)
             }
             lastPeerLogAt.remove(id)
-            networkRequestStartedAt.keys.removeIf { it.startsWith("$id:") }
+            evictNetworkRequestsFor(id, notifyLost = false)
             if (pendingPeerId == id) pendingPeerId = null
             if (pairingTargetId == id) pairingTargetId = null
+        }
+
+        // Watchdog: a NAN data-path request that never completes produces NO
+        // system callback (onUnavailable only fires for the timeout overloads
+        // we do not use). Without this eviction a single flaky peer wedges its
+        // connect slot forever — every retry short-circuits on the stale entry.
+        val expiredKeys = networkCallbacks.keys.filter { key ->
+            val startedAt = networkRequestStartedAt[key] ?: return@filter false
+            now - startedAt > NETWORK_REQUEST_TIMEOUT_MS
+        }
+        for (key in expiredKeys) {
+            val deviceId = key.substringBefore(':')
+            Log.w(TAG, "WiFi Aware network request timed out for $key — evicting")
+            evictNetworkRequest(key, deviceId, notifyLost = true)
+        }
+    }
+
+    /** Unregister + forget every in-flight network request for [deviceId]. */
+    private fun evictNetworkRequestsFor(deviceId: String, notifyLost: Boolean) {
+        val keys = networkCallbacks.keys.filter { it.startsWith("$deviceId:") }
+        for (key in keys) {
+            evictNetworkRequest(key, deviceId, notifyLost)
+        }
+    }
+
+    private fun evictNetworkRequest(key: String, deviceId: String, notifyLost: Boolean) {
+        val callback = networkCallbacks.remove(key) ?: return
+        networkRequestStartedAt.remove(key)
+        try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.unregisterNetworkCallback(callback)
+        } catch (_: Exception) {
+            // Already unregistered by the system (onLost/onUnavailable path)
+        }
+        connectedPeers.remove(deviceId)
+        connectedEndpoints.remove(deviceId)
+        if (notifyLost) {
+            handler.post { onAwareLost?.invoke(deviceId) }
         }
     }
 }

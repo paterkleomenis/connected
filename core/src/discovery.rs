@@ -14,11 +14,10 @@ use tracing::{debug, error, info, trace, warn};
 // QUIC runs over UDP, so we use UDP service type
 const SERVICE_TYPE: &str = "_connected._udp.local.";
 const BROWSE_TIMEOUT: Duration = Duration::from_millis(100);
-const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(10);
-const CLEANUP_INTERVAL: Duration = Duration::from_secs(5);
+const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(30);
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(10);
 const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
-const PROTOCOL_VERSION: u32 = 1;
-const MIN_COMPATIBLE_VERSION: u32 = 1;
+pub(crate) use crate::{MIN_COMPATIBLE_PROTOCOL_VERSION as MIN_COMPATIBLE_VERSION, PROTOCOL_VERSION};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DiscoverySource {
@@ -349,11 +348,17 @@ impl DiscoveryService {
         )?
         .enable_addr_auto();
 
-        loop {
+        // Retry `Again` (daemon command queue full) with a bounded number of
+        // attempts: an unbounded loop here could hang startup indefinitely if
+        // the daemon stays overloaded or is racing shutdown.
+        for attempt in 0..100 {
             match daemon.register(service_info.clone()) {
                 Ok(()) => break,
                 Err(mdns_sd::Error::Again) => {
-                    debug!("mDNS daemon queue full, retrying in 100ms");
+                    debug!(
+                        "mDNS daemon queue full, retrying in 100ms (attempt {})",
+                        attempt
+                    );
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => return Err(e.into()),
@@ -381,15 +386,33 @@ impl DiscoveryService {
 
     fn spawn_browse_loop(&self, event_tx: mpsc::UnboundedSender<DiscoveryEvent>) -> Result<()> {
         // Start browsing for services. The daemon's command queue may be temporarily
-        // full during startup while it processes interface setup.
-        let receiver = loop {
-            match self.daemon.browse(SERVICE_TYPE) {
-                Ok(r) => break r,
-                Err(mdns_sd::Error::Again) => {
-                    debug!("mDNS daemon queue full, retrying in 100ms");
-                    std::thread::sleep(Duration::from_millis(100));
+        // full during startup while it processes interface setup. Bounded retry:
+        // an unbounded loop could hang startup forever on a wedged daemon.
+        let receiver = {
+            let mut result = None;
+            for attempt in 0..100 {
+                match self.daemon.browse(SERVICE_TYPE) {
+                    Ok(r) => {
+                        result = Some(r);
+                        break;
+                    }
+                    Err(mdns_sd::Error::Again) => {
+                        debug!(
+                            "mDNS daemon queue full, retrying in 100ms (attempt {})",
+                            attempt
+                        );
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    Err(e) => return Err(e.into()),
                 }
-                Err(e) => return Err(e.into()),
+            }
+            match result {
+                Some(r) => r,
+                None => {
+                    return Err(crate::error::ConnectedError::Network(
+                        "mDNS daemon queue remained full after 100 attempts".to_string(),
+                    ));
+                }
             }
         };
         let local_id = self.local_device.id.clone();
@@ -475,9 +498,12 @@ impl DiscoveryService {
                     if announced_reannounce.load(Ordering::SeqCst) {
                         let device =
                             Self::device_snapshot(&local_device_reannounce, &local_name_reannounce);
+                        // Re-register the same service — mdns-sd replaces the existing record
+                        // without sending a ServiceRemoved. Do NOT unregister first, otherwise
+                        // peers see DeviceLost/DeviceFound flapping every 5s.
                         match Self::do_announce(&daemon_clone, &device) {
+                            Ok(()) => debug!("Re-announced device on mDNS"),
                             Err(e) => debug!("mDNS re-announce failed: {}", e),
-                            _ => debug!("Re-announced device on mDNS"),
                         }
                     }
                     std::thread::sleep(REANNOUNCE_INTERVAL);
@@ -740,6 +766,7 @@ impl DiscoveryService {
         Self::transition_event(&device_id, prev_source, prev_device, new_source, new_device)
     }
 
+    #[allow(dead_code)]
     fn remove_endpoint_locked(
         devices: &mut HashMap<String, TrackedDevice>,
         device_id: &str,
@@ -1065,12 +1092,13 @@ impl DiscoveryService {
             );
         }
 
-        let device = Device::new(
+        let device = Device::new_with_version(
             device_id.clone(),
             device_name.clone(),
             ip,
             info.port,
             device_type,
+            version,
         );
 
         let ip_str = ip.to_string();
@@ -1142,7 +1170,7 @@ impl DiscoveryService {
     fn handle_service_removed(
         fullname: &str,
         discovered: &Arc<RwLock<HashMap<String, TrackedDevice>>>,
-        event_tx: &mpsc::UnboundedSender<DiscoveryEvent>,
+        _event_tx: &mpsc::UnboundedSender<DiscoveryEvent>,
     ) {
         debug!("ServiceRemoved: {}", fullname);
 
@@ -1164,18 +1192,28 @@ impl DiscoveryService {
             return;
         };
 
-        let event = {
+        // Never immediately remove on ServiceRemoved — debounce to avoid flapping.
+        // Old v1 peers do unregister+register for re-announce; mdns-sd also expires
+        // SRV records with colliding ` (2)` suffixes. Immediate removal causes
+        // DeviceLost every 5s (seen as 1s flapping). Let cleanup handle stale after timeout.
+        {
             let mut devices = discovered.write();
-            Self::remove_endpoint_locked(&mut devices, &device_id, DiscoverySource::Discovered)
-        };
-
-        if let Some(event) = event {
-            if let DiscoveryEvent::DeviceLost(_) = &event {
-                info!("Device left: ({})", device_id);
+            if let Some(tracked) = devices.get_mut(&device_id)
+                && let Some(discovered) = tracked.discovered.as_mut()
+            {
+                // Refresh last_seen to now — keep device alive for full stale timeout.
+                // If peer truly left, no further ServiceResolved will arrive and
+                // cleanup will remove after DEVICE_STALE_TIMEOUT (30s).
+                discovered.last_seen = Instant::now();
+                debug!(
+                    "Ignored ServiceRemoved for {} — refreshed last_seen, will expire in {}s if not rediscovered",
+                    device_id,
+                    DEVICE_STALE_TIMEOUT.as_secs()
+                );
+                return;
             }
-            if let Err(e) = event_tx.send(event) {
-                tracing::warn!("Event dropped: {:?}", e);
-            }
+            // No discovered endpoint, nothing to do
+            debug!("Ignored ServiceRemoved for unknown device {}", device_id);
         }
     }
 
@@ -1222,6 +1260,22 @@ impl DiscoveryService {
             .read()
             .get(id)
             .and_then(|tracked| tracked.active_device())
+    }
+
+    pub fn get_device_version(&self, id: &str) -> u32 {
+        self.get_device_by_id(id)
+            .map(|d| d.protocol_version)
+            .unwrap_or(1)
+    }
+
+    pub fn get_version_for_ip(&self, ip: IpAddr) -> u32 {
+        self.discovered_devices
+            .read()
+            .values()
+            .filter_map(|t| t.active_device())
+            .find(|d| d.ip_addr() == Some(ip))
+            .map(|d| d.protocol_version)
+            .unwrap_or(1)
     }
 
     pub fn clear_discovered_devices(&self) -> Vec<String> {

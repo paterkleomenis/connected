@@ -172,9 +172,13 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        // Only cleanup if we are NOT running as a service
-        if (!ConnectedService.isRunning) {
-            connectedApp.cleanup()
+        // Only tear down when the activity is truly finishing AND we are not
+        // running as a service. Configuration changes (rotation, theme change,
+        // split-screen resize) also destroy the activity — shutting down
+        // discovery/transfers/the Rust core for those was wrong, and the
+        // synchronous cleanup blocked the main thread mid-rotation.
+        if (isFinishing && !ConnectedService.isRunning) {
+            connectedApp.cleanupAsync()
         }
         super.onDestroy()
     }

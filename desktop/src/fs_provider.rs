@@ -113,8 +113,10 @@ impl FilesystemProvider for DesktopFilesystemProvider {
             let file_type = entry
                 .file_type()
                 .map_err(connected_core::ConnectedError::Io)?;
+            // Use symlink_metadata to avoid leaking target size for symlinks.
             let metadata = entry
-                .metadata()
+                .path()
+                .symlink_metadata()
                 .map_err(connected_core::ConnectedError::Io)?;
             let file_name = entry.file_name().to_string_lossy().to_string();
 
@@ -129,7 +131,12 @@ impl FilesystemProvider for DesktopFilesystemProvider {
                 FsEntryType::File
             };
 
-            let size = metadata.len();
+            // For symlinks, don't leak target size — report 0.
+            let size = if file_type.is_symlink() {
+                0
+            } else {
+                metadata.len()
+            };
             let modified = metadata
                 .modified()
                 .ok()
@@ -263,19 +270,23 @@ impl FilesystemProvider for DesktopFilesystemProvider {
 
         // We use a closure to map image errors to our error type
         let generate = || -> std::result::Result<Vec<u8>, Box<dyn std::error::Error>> {
-            // Check image dimensions before fully decoding to prevent memory exhaustion
-            // from extremely large images.
-            let reader = image::ImageReader::open(&full_path)?;
-            let (width, height) = reader.into_dimensions()?;
-            if width > MAX_THUMBNAIL_DIMENSION || height > MAX_THUMBNAIL_DIMENSION {
-                return Err(format!(
-                    "Image too large for thumbnail: {}x{} (max {}x{})",
-                    width, height, MAX_THUMBNAIL_DIMENSION, MAX_THUMBNAIL_DIMENSION
-                )
-                .into());
-            }
+            // Enforce dimension limits INSIDE the decoder instead of the old
+            // check-then-reopen pattern: the previous code opened the file
+            // once to read the header dimensions and then re-opened it for
+            // decoding, so a file swapped between the two opens bypassed the
+            // guard entirely (memory-exhaustion DoS). Decoder limits are
+            // enforced atomically during the single decode.
+            let mut reader = image::ImageReader::open(&full_path)?.with_guessed_format()?;
+            // Limits is non-exhaustive: start from Default and override fields.
+            let mut limits = image::Limits::default();
+            limits.max_image_width = Some(MAX_THUMBNAIL_DIMENSION);
+            limits.max_image_height = Some(MAX_THUMBNAIL_DIMENSION);
+            // Tighten the allocation budget too (default 512 MiB is still
+            // generous for a 96px thumbnail).
+            limits.max_alloc = Some(64 * 1024 * 1024);
+            reader.limits(limits);
 
-            let img = image::open(&full_path)?;
+            let img = reader.decode()?;
             let thumb = img.thumbnail(96, 96);
 
             let mut buffer = std::io::Cursor::new(Vec::new());

@@ -63,13 +63,11 @@ class ConnectedService : Service() {
             connectedApp.cancelFileTransfer()
         }
 
-        // If there are still active transfers after cancellation, keep the
-        // process alive so they can complete in the background.
-        if (connectedApp.hasActiveTransfers()) {
-            Log.d("ConnectedService", "Transfers still active — keeping foreground alive")
-            updateNotification("Connected", "Transfer in progress...", -1)
-            return
-        }
+        // NOTE: the system destroys the service regardless — there is no veto.
+        // The previous early `return` skipped super.onDestroy() (leaking the
+        // service token) and skipped full cleanup while producing only a zombie
+        // notification. We always tear down properly here; background transfer
+        // completion is handled by the cancellation messages sent above.
 
         // No active transfers — normal cleanup
         stopForeground(STOP_FOREGROUND_REMOVE)

@@ -344,8 +344,17 @@ final class ConnectedAppModel: ObservableObject {
         !trustedDeviceIds.isEmpty
     }
 
+    /// Set synchronously on the MainActor while background initialization is
+    /// in flight. Without it, `.task`, scenePhase-active and onOpenURL can all
+    /// pass the `isInitialized` guard during the same launch burst and race
+    /// overlapping FFI initialize()/startDiscovery() sequences.
+    private var isInitializing = false
+
     func initializeIfNeeded() {
-        guard !isInitialized else { return }
+        guard !isInitialized, !isInitializing else { return }
+        // Synchronous check-and-set on the MainActor: no second caller can
+        // observe the window between the guard and this line.
+        isInitializing = true
 
         let currentName = deviceName
         let fileManager = FileManager.default
@@ -979,12 +988,35 @@ final class ConnectedAppModel: ObservableObject {
         }
     }
 
+    /// Security: strips path components from a remote-supplied filename so it
+    /// cannot traverse outside the intended directory when appended
+    /// (`../../x`, absolute paths, separators, hidden dotfiles).
+    private static func sanitizedDownloadName(_ raw: String) -> String {
+        var name = raw.replacingOccurrences(of: "\\", with: "/")
+        if let lastSlash = name.lastIndex(of: "/") {
+            name = String(name[name.index(after: lastSlash)...])
+        }
+        name = name.split(separator: "/", omittingEmptySubsequences: true)
+            .filter { $0 != ".." && $0 != "." }
+            .joined(separator: "_")
+        while name.hasPrefix(".") {
+            name.removeFirst()
+        }
+        name = name.filter { !$0.isASCII || ($0.asciiValue.map { $0 > 0x1F } ?? true) }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "download" : String(trimmed.prefix(255))
+    }
+
     func downloadRemoteEntry(_ entry: FfiFsEntry) {
         guard let device = browsingDevice ?? activeDevice else { return }
 
-        let localPath = downloadRoot.appendingPathComponent(entry.name).path
+        // Security: `entry.name` originates from the remote peer's listing.
+        // Sanitize before appending so a crafted name cannot escape the
+        // download root (path traversal / arbitrary write).
+        let safeName = Self.sanitizedDownloadName(entry.name)
+        let localPath = downloadRoot.appendingPathComponent(safeName).path
         browserDownloadProgress = BrowserDownloadProgressState(
-            currentFile: entry.name,
+            currentFile: safeName,
             bytesDownloaded: 0,
             totalBytes: max(entry.size, 1),
             isFolder: entry.entryType == .directory

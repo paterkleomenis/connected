@@ -184,7 +184,9 @@ class ConnectedApp(private val context: Context) {
     val pendingPairing = mutableStateListOf<String>() // Set of pending Device IDs
     val pendingShareUris = mutableStateListOf<String>()
 
-    private val pendingPairingAwaitingIp = mutableSetOf<String>()
+    // Thread-safe: mutated from FFI callback threads AND the main thread.
+    private val pendingPairingAwaitingIp: MutableSet<String> =
+        java.util.concurrent.ConcurrentHashMap.newKeySet()
     private val activeWifiAwareEndpoints = ConcurrentHashMap<String, Long>()
 
     // Stores pending file transfers with timestamp for cleanup: deviceId -> (timestamp, queue of file paths)
@@ -299,7 +301,9 @@ class ConnectedApp(private val context: Context) {
     val currentMediaTitle = mutableStateOf("Not Playing")
     val currentMediaArtist = mutableStateOf("")
     val currentMediaPlaying = mutableStateOf(false)
+    @Volatile
     private var lastMediaSourceDevice: String? = null
+    @Volatile
     private var lastBroadcastMediaState: MediaState? = null
 
     data class PairingRequest(val deviceName: String, val fingerprint: String, val deviceId: String)
@@ -323,11 +327,48 @@ class ConnectedApp(private val context: Context) {
 
     /** Tracks whether the currently active file transfer is outgoing (upload) or incoming (download).
      *  Used by onTransferProgress to show the correct notification title. */
+    @Volatile
     private var isCurrentTransferOutgoing = false
 
+    /** Idempotence guard for [initialize] — it runs from both MainActivity and
+     *  ConnectedService, and a second invocation would double-register receivers,
+     *  re-acquire the multicast lock and duplicate background jobs.
+     *  Written only on [lifecycleExecutor]; volatile for cross-thread reads. */
+    @Volatile
+    private var initialized = false
+
+    /**
+     * Serial executor for lifecycle operations ([initialize] / [cleanup]).
+     *
+     * Running them here guarantees:
+     *  1. Heavy native/FFI init and teardown never run on the main thread
+     *     (previously exceeded the 5 s ANR window on cold start).
+     *  2. Activity.onCreate racing Service.onCreate can no longer double-init:
+     *     each queued task re-checks [initialized] when it actually runs.
+     *  3. Service.onDestroy's detached cleanup thread can no longer interleave
+     *     with a concurrent re-initialize (the old "isRunning=false immediately,
+     *     cleanup later" window shut down the core under live UI).
+     */
+    private val lifecycleExecutor =
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "connected-lifecycle").apply { isDaemon = true }
+        }
+
     private var scopeJob = kotlinx.coroutines.SupervisorJob()
+
+    /** Logs uncaught coroutine failures instead of crashing the process.
+     *  Telephony fetches (contacts/conversations/messages) run in bare
+     *  `scope.launch` blocks; a provider throw (e.g. SQLiteException) used to
+     *  escape as an uncaught exception and kill the app. */
+    private val coroutineExceptionHandler =
+        kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
+            Log.e("ConnectedApp", "Uncaught coroutine exception", throwable)
+        }
+
     private var scope =
-        kotlinx.coroutines.CoroutineScope(Dispatchers.IO + scopeJob)
+        kotlinx.coroutines.CoroutineScope(
+            Dispatchers.IO + scopeJob + coroutineExceptionHandler
+        )
 
     val unpairNotification = mutableStateOf<String?>(null)
 
@@ -438,6 +479,11 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
+    /** Serializes SDK restarts; only one cleanup+initialize cycle runs at a time. */
+    private val sdkRestartLock = Any()
+    @Volatile
+    private var sdkRestartInProgress = false
+
     fun restartSdk() {
         val now = System.currentTimeMillis()
         if (now - lastSdkRestart < sdkRestartDebounceMs) {
@@ -445,9 +491,34 @@ class ConnectedApp(private val context: Context) {
             return
         }
         lastSdkRestart = now
+        synchronized(sdkRestartLock) {
+            if (sdkRestartInProgress) {
+                Log.d("ConnectedApp", "Skipping SDK restart (already in progress)")
+                return
+            }
+            sdkRestartInProgress = true
+        }
         Log.d("ConnectedApp", "Restarting SDK to bind to new network interface...")
-        cleanup()
-        initialize()
+        // The cleanup+initialize cycle runs on the dedicated lifecycle thread:
+        // cleanup() busy-waits up to 3 s, deletes temp files and blocks in FFI
+        // shutdown; initialize() does native init + file IO. On the main thread
+        // this exceeded the 5 s ANR window whenever Wi-Fi toggled during an
+        // active transfer.
+        lifecycleExecutor.execute {
+            try {
+                if (initialized) {
+                    doCleanup()
+                    initialized = false
+                }
+                doInitialize()
+                initialized = true
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "SDK restart failed", e)
+                initialized = false
+            } finally {
+                synchronized(sdkRestartLock) { sdkRestartInProgress = false }
+            }
+        }
     }
 
     /** Lightweight discovery refresh: clears cached devices, restarts mDNS browse, and re-announces. */
@@ -608,12 +679,14 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun stopWifiAwareManager() {
-        if (hasProximityPermissions()) {
-            try {
-                wifiAwareManager?.stop()
-            } catch (e: SecurityException) {
-                Log.w("ConnectedApp", "Failed to stop WiFi Aware manager: permission denied", e)
-            }
+        // stop() itself is permission-free (session close + callback
+        // unregister): gating it on proximity permissions previously leaked
+        // Aware sessions, network callbacks and the cleanup loop whenever the
+        // user revoked location between start and stop.
+        try {
+            wifiAwareManager?.stop()
+        } catch (e: SecurityException) {
+            Log.w("ConnectedApp", "Failed to stop WiFi Aware manager: permission denied", e)
         }
         wifiAwareManager = null
     }
@@ -760,10 +833,11 @@ class ConnectedApp(private val context: Context) {
         ) {
             val lastAccepted = autoAcceptFingerprints[fromFingerprint]
             if (lastAccepted != null && System.currentTimeMillis() - lastAccepted < 30000) {
-                // Auto-accept (window is 30 seconds since last activity)
+                // Auto-accept within a FIXED 30-second window after the user's
+                // explicit "Accept All". The window is deliberately NOT extended
+                // here or in onTransferStarting: a rolling window let a malicious
+                // paired device stream files unprompted indefinitely.
                 Log.d("ConnectedApp", "Auto-accepting $filename from $fromDevice ($fromFingerprint)")
-                // Update timestamp to extend window
-                autoAcceptFingerprints[fromFingerprint] = System.currentTimeMillis()
                 val request = TransferRequest(transferId, filename, fileSize, fromDevice, fromFingerprint)
                 acceptTransfer(request)
                 return
@@ -785,15 +859,9 @@ class ConnectedApp(private val context: Context) {
             totalSize: ULong,
             isOutgoing: Boolean
         ) {
-            if (!isOutgoing) {
-                // For incoming transfers, extend the auto-accept window if active
-                val fingerprint = pendingTransferRequests.find { it.id == transferId }?.fromFingerprint
-                fingerprint?.let { fp ->
-                    if (autoAcceptFingerprints.containsKey(fp)) {
-                        autoAcceptFingerprints[fp] = System.currentTimeMillis()
-                    }
-                }
-            }
+            // NOTE: the auto-accept window is intentionally NOT extended here.
+            // A rolling window let a compromised paired device keep pushing
+            // files without prompts for as long as it kept transferring.
 
             synchronized(transferTrackingLock) {
                 if (isOutgoing) {
@@ -826,36 +894,63 @@ class ConnectedApp(private val context: Context) {
         override fun onTransferCompleted(transferId: String, filename: String, totalSize: ULong) {
             isCurrentTransferOutgoing = false
             markTransferFinished(transferId)
+
+            // Security: sanitize the peer-supplied name ONCE at this boundary so
+            // every downstream consumer (folder check, Downloads move, open URI,
+            // deletion of the private copy, notifications) operates on a bare
+            // name that cannot traverse outside our storage.
+            val safeName = sanitizeRemoteFileName(filename)
+
             val hasMoreTransfers = hasAnyActiveTransfers()
+            val displayName = safeName ?: filename
             transferStatus.value = if (hasMoreTransfers) {
                 "Transferring..."
             } else {
-                "Completed: $filename"
+                "Completed: $displayName"
             }
-            // The transfer may be a single file OR a folder (e.g. Desktop → Android folder push).
-            // moveToDownloads() only handles single files and silently swallows the failure
-            // when given a directory, so branch on whether the completed item is a directory.
-            val isFolder = File(downloadDir, filename).isDirectory
-            val savedUri: Uri? = if (isFolder) {
-                moveFolderToDownloads(filename)
-                null
-            } else {
-                moveToDownloads(filename)
-            }
-            val openUri = resolveOpenUriForCompletedTransfer(savedUri, filename)
-            Log.d("ConnectedApp", "Completed transfer URI for $filename: $openUri")
-            showCompletionNotification(filename, openUri?.toString(), getMimeType(filename))
 
-            if (!hasMoreTransfers) {
-                ConnectedService.restoreDefaultForegroundNotification()
-                cleanupAllPendingTempFiles()
-                cleanupStreamingTempDirectory()
-                cleanupOrphanedCacheZipFiles()
+            // Offload ALL disk work to the IO dispatcher. This callback runs on
+            // the Rust event-listener thread, which also dispatches progress
+            // events, pairing prompts and incoming-transfer notifications — a
+            // multi-GB MediaStore/SAF copy here used to freeze every event until
+            // it finished. (The browser-download path got the same treatment
+            // earlier; this path was missed.)
+            scope.launch(Dispatchers.IO) {
+                // The transfer may be a single file OR a folder (e.g. Desktop → Android folder push).
+                // moveToDownloads() only handles single files and silently swallows the failure
+                // when given a directory, so branch on whether the completed item is a directory.
+                val savedUri: Uri? = if (safeName == null) {
+                    Log.w("ConnectedApp", "Ignoring completed transfer with unsafe filename '$filename'")
+                    null
+                } else {
+                    try {
+                        val isFolder = resolveSafeSource(safeName)?.isDirectory == true
+                        if (isFolder) {
+                            moveFolderToDownloads(safeName)
+                            null
+                        } else {
+                            moveToDownloads(safeName)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("ConnectedApp", "Failed to move completed transfer '$displayName' to Downloads", e)
+                        null
+                    }
+                }
+                val openUri = safeName?.let { resolveOpenUriForCompletedTransfer(savedUri, it) }
+                Log.d("ConnectedApp", "Completed transfer URI for $displayName: $openUri")
+                showCompletionNotification(displayName, openUri?.toString(), getMimeType(displayName))
+
+                if (!hasMoreTransfers) {
+                    ConnectedService.restoreDefaultForegroundNotification()
+                    cleanupAllPendingTempFiles()
+                    cleanupStreamingTempDirectory()
+                    cleanupOrphanedCacheZipFiles()
+                }
             }
 
             scope.launch {
                 delay(2000)
-                if (!hasAnyActiveTransfers() && transferStatus.value.startsWith("Completed: $filename")) {
+                if (!hasAnyActiveTransfers() && transferStatus.value.startsWith("Completed: $displayName")) {
                     transferStatus.value = "Idle"
                 }
             }
@@ -925,10 +1020,8 @@ class ConnectedApp(private val context: Context) {
             return savedUri
         }
 
-        val fallbackFile = File(downloadDir, filename)
-        if (!fallbackFile.exists()) {
-            return null
-        }
+        // Never join the raw peer-supplied name into a path.
+        val fallbackFile = resolveSafeSource(filename) ?: return null
 
         return try {
             FileProvider.getUriForFile(context, "${context.packageName}.provider", fallbackFile)
@@ -1216,12 +1309,34 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun initialize() {
-        try {
-            // Recreate coroutine scope if it was canceled during cleanup
-            if (scopeJob.isCancelled) {
-                scopeJob = kotlinx.coroutines.SupervisorJob()
-                scope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + scopeJob)
+        // Idempotence + serialization: the actual work runs on the dedicated
+        // lifecycle thread (see [lifecycleExecutor]). Duplicate/concurrent
+        // callers are absorbed by the re-check below.
+        lifecycleExecutor.execute {
+            if (initialized) {
+                Log.d("ConnectedApp", "initialize() skipped — already initialized")
+                return@execute
             }
+            try {
+                doInitialize()
+                // Mark fully initialized only after every registration succeeded,
+                // so a partial failure can be retried by the next caller.
+                initialized = true
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Initialization failed", e)
+                initialized = false
+            }
+        }
+    }
+
+    private fun doInitialize() {
+        // Recreate coroutine scope if it was canceled during cleanup
+        if (scopeJob.isCancelled) {
+            scopeJob = kotlinx.coroutines.SupervisorJob()
+            scope = kotlinx.coroutines.CoroutineScope(
+                Dispatchers.IO + scopeJob + coroutineExceptionHandler
+            )
+        }
 
             val wifiManager =
                 context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
@@ -1311,18 +1426,42 @@ class ConnectedApp(private val context: Context) {
                     delay(60_000) // Check every minute
                     val cutoff = System.currentTimeMillis() - 300_000 // 5 minute timeout
                     pendingFileTransfersAwaitingIp.entries.removeIf { (_, pair) ->
-                        val (timestamp, _) = pair
-                        timestamp < cutoff
+                        val (timestamp, queue) = pair
+                        if (timestamp < cutoff) {
+                            // Expired without the peer ever connecting — delete the
+                            // queued temp copies too, otherwise multi-GB shares
+                            // accumulated on disk until app relaunch.
+                            queue.forEach { pathStr ->
+                                try {
+                                    val f = java.io.File(pathStr)
+                                    if (f.exists() && f.delete()) {
+                                        pendingTempFilesForCleanup.remove(pathStr)
+                                        Log.d("ConnectedApp", "Deleted expired queued temp file: ${f.name}")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w("ConnectedApp", "Failed to delete expired temp file: $pathStr", e)
+                                }
+                            }
+                            true
+                        } else {
+                            false
+                        }
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e("ConnectedApp", "Initialization failed", e)
-        }
     }
 
     fun cleanup() {
-        Log.d("ConnectedApp", "Cleaning up resources")
+        // Serialized with initialize() on the lifecycle thread so a service
+        // teardown can never interleave with a concurrent re-init.
+        lifecycleExecutor.execute {
+            Log.d("ConnectedApp", "Cleaning up resources")
+            initialized = false
+            doCleanup()
+        }
+    }
+
+    private fun doCleanup() {
 
         // Cancel active file transfers gracefully so the peer receives a
         // Cancel message and can clean up partial data.
@@ -1410,6 +1549,17 @@ class ConnectedApp(private val context: Context) {
         android.os.Handler(android.os.Looper.getMainLooper()).post(action)
     }
 
+    /**
+     * Run [cleanup] off the caller's thread. cleanup() busy-waits up to 3 s for
+     * transfer cancellation and then blocks in the FFI shutdown — calling it
+     * synchronously from Activity.onDestroy risked ANR (input timeout is 5 s).
+     * The work itself runs on [lifecycleExecutor]; this alias exists for
+     * call-site clarity.
+     */
+    fun cleanupAsync() {
+        cleanup()
+    }
+
     private fun transferRequestFromIntent(intent: Intent): TransferRequest? {
         val transferId = intent.getStringExtra(EXTRA_TRANSFER_ID) ?: return null
         val filename = intent.getStringExtra(EXTRA_FILENAME).orEmpty()
@@ -1452,10 +1602,15 @@ class ConnectedApp(private val context: Context) {
     private fun showTransferNotification(request: TransferRequest) {
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        val channelId = "connected_transfer_channel"
+        // Dedicated HIGH-importance channel for user prompts: notification
+        // channels are immutable after first creation, so sharing one ID
+        // between heads-up requests and silent progress updates made whichever
+        // registered first win — either silencing prompts or interrupting on
+        // every progress tick.
+        val channelId = "connected_transfer_requests"
         val channel = android.app.NotificationChannel(
             channelId,
-            "File Transfers",
+            "File Transfer Requests",
             android.app.NotificationManager.IMPORTANCE_HIGH
         )
         notificationManager.createNotificationChannel(channel)
@@ -1617,9 +1772,9 @@ class ConnectedApp(private val context: Context) {
     private fun showProgressNotification(title: String, current: Long, total: Long) {
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        val channelId = "connected_transfer_channel"
-
-        // Ensure channel exists (needed for outgoing transfers that skip showTransferNotification)
+        // Silent progress channel, separate from the HIGH-importance request
+        // channel (channel settings are immutable once created).
+        val channelId = "connected_transfer_progress"
         try {
             val channel = android.app.NotificationChannel(
                 channelId,
@@ -1669,7 +1824,7 @@ class ConnectedApp(private val context: Context) {
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
-        val channelId = "connected_transfer_channel"
+        val channelId = "connected_transfer_progress"
         val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setContentTitle("Download Complete")
             .setContentText(filename)
@@ -1757,7 +1912,7 @@ class ConnectedApp(private val context: Context) {
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         notificationManager.cancel(NOTIFICATION_ID_PROGRESS)
-        val channelId = "connected_transfer_channel"
+        val channelId = "connected_transfer_progress"
         val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setContentTitle("Download Failed")
             .setContentText(error)
@@ -1768,21 +1923,63 @@ class ConnectedApp(private val context: Context) {
         notificationManager.notify(NOTIFICATION_ID_COMPLETE, notification)
     }
 
+    /**
+     * Security: `filename` arrives from the remote peer over the network.
+     * Strip every directory component so the result can never escape
+     * [downloadDir] via path traversal ("../../x", "/abs/path", "..\\x"),
+     * and reject names that are empty, "." or "..".
+     */
+    private fun sanitizeRemoteFileName(filename: String): String? {
+        val name = File(filename.trim()).name
+        return if (name.isEmpty() || name == "." || name == "..") null else name
+    }
+
+    /**
+     * Defense-in-depth: true only when [target]'s canonical path resolves
+     * inside [dir]. Guards against symlink tricks even for already-bare names.
+     */
+    private fun isInsideDir(dir: File, target: File): Boolean = try {
+        target.canonicalPath.startsWith(dir.canonicalPath + File.separator)
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * Resolve a peer-supplied completed-transfer name to a file inside
+     * [downloadDir], or null if the name is unsafe / the file is missing /
+     * it resolves outside the download directory.
+     */
+    private fun resolveSafeSource(filename: String): File? {
+        val safeName = sanitizeRemoteFileName(filename) ?: return null
+        val f = File(downloadDir, safeName)
+        if (!f.exists()) return null
+        if (!isInsideDir(downloadDir, f)) {
+            Log.e("ConnectedApp", "Refusing path outside download dir for '$filename'")
+            return null
+        }
+        return f
+    }
+
     private fun moveToDownloads(filename: String): Uri? {
-        val sourceFile = File(downloadDir, filename)
+        val safeName = sanitizeRemoteFileName(filename) ?: return null
+        val sourceFile = File(downloadDir, safeName)
         if (!sourceFile.exists()) return null
+        if (!isInsideDir(downloadDir, sourceFile)) {
+            Log.e("ConnectedApp", "Refusing path outside download dir for '$filename'")
+            return null
+        }
 
         // If a custom download directory is set, save there via SAF
         val customUri = customDownloadUri.value
         if (customUri != null) {
-            return moveToCustomDir(sourceFile, filename, customUri)
+            return moveToCustomDir(sourceFile, safeName, customUri)
         }
 
         // Default: save to public Downloads via MediaStore
         try {
             val contentValues = android.content.ContentValues().apply {
-                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, getMimeType(filename))
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, getMimeType(safeName))
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     put(
                         android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
@@ -1817,7 +2014,7 @@ class ConnectedApp(private val context: Context) {
                 runOnMainThread {
                     android.widget.Toast.makeText(
                         context,
-                        "Saved to Downloads: $filename",
+                        "Saved to Downloads: $safeName",
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -1872,8 +2069,18 @@ class ConnectedApp(private val context: Context) {
     }
 
     private fun moveFolderToDownloads(folderName: String) {
-        val sourceFolder = File(downloadDir, folderName)
+        // Normalize once so RELATIVE_PATH / destFolder / toasts all use the bare name.
+        val safeFolderName = sanitizeRemoteFileName(folderName)
+            ?: run {
+                Log.w("ConnectedApp", "Ignoring completed folder transfer with unsafe name '$folderName'")
+                return
+            }
+        val sourceFolder = File(downloadDir, safeFolderName)
         if (!sourceFolder.exists() || !sourceFolder.isDirectory) return
+        if (!isInsideDir(downloadDir, sourceFolder)) {
+            Log.e("ConnectedApp", "Refusing path outside download dir for '$folderName'")
+            return
+        }
 
         // If a custom download directory is set, save there via SAF
         val customUri = customDownloadUri.value
@@ -1881,13 +2088,13 @@ class ConnectedApp(private val context: Context) {
             try {
                 val dir = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, customUri)
                 if (dir != null) {
-                    copyFolderToCustomDir(sourceFolder, dir, folderName)
+                    copyFolderToCustomDir(sourceFolder, dir, safeFolderName)
                     sourceFolder.deleteRecursively()
-                    Log.i("ConnectedApp", "Moved folder to custom dir: $folderName")
+                    Log.i("ConnectedApp", "Moved folder to custom dir: $safeFolderName")
                     runOnMainThread {
                         android.widget.Toast.makeText(
                             context,
-                            "Saved folder to ${getDownloadDirDisplayName()}: $folderName",
+                            "Saved folder to ${getDownloadDirDisplayName()}: $safeFolderName",
                             android.widget.Toast.LENGTH_LONG
                         ).show()
                     }
@@ -1902,23 +2109,27 @@ class ConnectedApp(private val context: Context) {
             val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
                 android.os.Environment.DIRECTORY_DOWNLOADS
             )
-            val destFolder = File(downloadsDir, folderName)
+            val destFolder = File(downloadsDir, safeFolderName)
             var moved = false
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 // Scoped storage: MediaStore is the sanctioned API and preserves the
                 // nested RELATIVE_PATH (Download/<folderName>) on standard Android.
-                copyFolderToDownloadsMediaStore(sourceFolder, folderName)
+                copyFolderToDownloadsMediaStore(sourceFolder, safeFolderName)
 
                 // Verify the files actually landed inside the subfolder. Some device
                 // ROMs silently flatten RELATIVE_PATH into Download/, dropping the
                 // containing folder. Confirm before deleting the private source.
+                // MediaProvider normalizes RELATIVE_PATH with a TRAILING SLASH
+                // ("Download/Foo/") — an exact-equality query without it always
+                // returned 0 rows on Q+, making every folder move look failed,
+                // skipping the private-copy cleanup and duplicating entries.
                 val resolver = context.contentResolver
                 val placed = resolver.query(
                     android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                     arrayOf(android.provider.MediaStore.MediaColumns._ID),
                     "${android.provider.MediaStore.MediaColumns.RELATIVE_PATH} = ?",
-                    arrayOf("${android.os.Environment.DIRECTORY_DOWNLOADS}/$folderName"),
+                    arrayOf("${android.os.Environment.DIRECTORY_DOWNLOADS}/$safeFolderName/"),
                     null
                 )?.use { it.count } ?: 0
                 moved = placed > 0
@@ -1944,7 +2155,7 @@ class ConnectedApp(private val context: Context) {
             if (moved) {
                 // Only remove the private copy once the public one is confirmed.
                 sourceFolder.deleteRecursively()
-                Log.i("ConnectedApp", "Moved folder to Downloads: $folderName")
+                Log.i("ConnectedApp", "Moved folder to Downloads: $safeFolderName")
             } else {
                 Log.w(
                     "ConnectedApp",
@@ -2577,12 +2788,15 @@ class ConnectedApp(private val context: Context) {
     private val telephonyListener = object : TelephonyProvider.TelephonyListener {
         override fun onCallStateChanged(call: FfiActiveCall?) {
             activeCall.value = call
-            // Broadcast update to connected devices if trusted
-            devices.forEach { device ->
-                if (isDeviceTrusted(device)) {
-                    try {
-                        sendActiveCallUpdate(device.ip, device.port, call)
-                    } catch (_: Exception) {
+            // Blocking FFI sends — dispatch off the receiver thread.
+            scope.launch(Dispatchers.IO) {
+                // Broadcast update to connected devices if trusted
+                devices.forEach { device ->
+                    if (isDeviceTrusted(device)) {
+                        try {
+                            sendActiveCallUpdate(device.ip, device.port, call)
+                        } catch (_: Exception) {
+                        }
                     }
                 }
             }
@@ -2594,12 +2808,14 @@ class ConnectedApp(private val context: Context) {
                     currentMessages.add(message)
                 }
             }
-            // Broadcast to connected devices if trusted
-            devices.forEach { device ->
-                if (isDeviceTrusted(device)) {
-                    try {
-                        notifyNewSms(device.ip, device.port, message)
-                    } catch (_: Exception) {
+            // Blocking FFI sends — dispatch off the receiver thread.
+            scope.launch(Dispatchers.IO) {
+                devices.forEach { device ->
+                    if (isDeviceTrusted(device)) {
+                        try {
+                            notifyNewSms(device.ip, device.port, message)
+                        } catch (_: Exception) {
+                        }
                     }
                 }
             }
@@ -3017,11 +3233,14 @@ class ConnectedApp(private val context: Context) {
         if (lastBroadcastMediaState?.title == state.title && lastBroadcastMediaState?.playing == state.playing) return
         lastBroadcastMediaState = state
 
-        devices.forEach { device ->
-            if (isDeviceTrusted(device)) {
-                try {
-                    sendMediaState(device.ip, device.port, state)
-                } catch (_: Exception) {
+        // Blocking FFI sends — the caller is a MediaSession listener thread.
+        scope.launch(Dispatchers.IO) {
+            devices.forEach { device ->
+                if (isDeviceTrusted(device)) {
+                    try {
+                        sendMediaState(device.ip, device.port, state)
+                    } catch (_: Exception) {
+                    }
                 }
             }
         }
@@ -3222,8 +3441,22 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun downloadRemoteFile(device: DiscoveredDevice, remotePath: String) {
-        val fileName = File(remotePath).name
+        // Security: the name comes from the remote peer's listing — sanitize
+        // and verify containment before writing (path traversal guard).
+        val fileName = sanitizeRemoteFileName(File(remotePath).name)
+            ?: run {
+                android.widget.Toast.makeText(
+                    context,
+                    "Refusing unsafe file name",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                return
+            }
         val destFile = File(downloadDir, fileName)
+        if (!isInsideDir(downloadDir, destFile)) {
+            Log.e("ConnectedApp", "Refusing download outside download dir: '$fileName'")
+            return
+        }
 
         // Show initial progress
         browserDownloadProgress.value = BrowserDownloadProgress(
@@ -3248,9 +3481,13 @@ class ConnectedApp(private val context: Context) {
             override fun onDownloadCompleted(totalBytes: ULong) {
                 runOnMainThread {
                     browserDownloadProgress.value = null
-                    moveToDownloads(fileName)
                     android.widget.Toast.makeText(context, "Downloaded $fileName", android.widget.Toast.LENGTH_SHORT)
                         .show()
+                }
+                // The Downloads move copies the whole file via MediaStore/SAF —
+                // keep it off the UI thread (multi-GB downloads froze the app here).
+                scope.launch(Dispatchers.IO) {
+                    moveToDownloads(fileName)
                 }
             }
 
@@ -3270,7 +3507,16 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun downloadRemoteFolder(device: DiscoveredDevice, remotePath: String) {
-        val folderName = File(remotePath).name
+        // Security: sanitize the remote-supplied folder name (path traversal guard).
+        val folderName = sanitizeRemoteFileName(File(remotePath).name)
+            ?: run {
+                android.widget.Toast.makeText(
+                    context,
+                    "Refusing unsafe folder name",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                return
+            }
 
         // Show initial progress
         browserDownloadProgress.value = BrowserDownloadProgress(
@@ -3295,12 +3541,15 @@ class ConnectedApp(private val context: Context) {
             override fun onDownloadCompleted(totalBytes: ULong) {
                 runOnMainThread {
                     browserDownloadProgress.value = null
-                    moveFolderToDownloads(folderName)
                     android.widget.Toast.makeText(
                         context,
                         "Downloaded folder $folderName",
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
+                }
+                // Recursive MediaStore copy — off the UI thread.
+                scope.launch(Dispatchers.IO) {
+                    moveFolderToDownloads(folderName)
                 }
             }
 
@@ -3666,9 +3915,15 @@ class ConnectedApp(private val context: Context) {
 
     fun unpairDeviceById(deviceId: String) {
         scope.launch(Dispatchers.IO) {
-            pendingPairing.remove(deviceId)
+            // Compose snapshot lists are NOT thread-safe for structural
+            // modification — confine all list mutations to the main thread.
+            // (pendingPairingAwaitingIp / activeWifiAwareEndpoints are
+            // concurrent collections and safe from IO threads.)
+            runOnMainThread {
+                pendingPairing.remove(deviceId)
+                activeWifiAwareEndpoints.remove(deviceId)
+            }
             pendingPairingAwaitingIp.remove(deviceId)
-            activeWifiAwareEndpoints.remove(deviceId)
             try {
                 uniffi.connected_ffi.unpairDeviceById(deviceId)
                 runOnMainThread {

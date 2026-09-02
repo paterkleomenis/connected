@@ -35,29 +35,38 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     }));
 
     // Sync state from global stores
+    let mut last_preview_update =
+        use_signal(|| *crate::state::get_preview_update().lock_or_recover());
     use_future(move || async move {
         loop {
-            // Get data from global mutexes
-            let (global_update, thumbnails_ts, new_files, new_path, new_preview) = {
+            // Get data from global mutexes. The preview payload is only cloned
+            // when its timestamp actually changed — cloning multi-MB preview
+            // data every tick caused constant memcpy churn.
+            let (global_update, thumbnails_ts, new_files, new_path) = {
                 let files_update = *get_remote_files_update().lock_or_recover();
                 let thumbs_update = *get_thumbnails_update().lock_or_recover();
                 let files_list = get_current_remote_files().lock_or_recover().clone();
                 let path = get_current_remote_path().lock_or_recover().clone();
-                let preview = get_preview_data().lock_or_recover().clone();
-                (files_update, thumbs_update, files_list, path, preview)
+                (files_update, thumbs_update, files_list, path)
             };
+            let preview_ts = *crate::state::get_preview_update().lock_or_recover();
+            let preview_changed = preview_ts != *last_preview_update.read();
+            if preview_changed {
+                let new_preview = get_preview_data().lock_or_recover().clone();
+                *last_preview_update.write() = preview_ts;
 
-            // Update preview if changed
-            let current_preview = preview_content.read();
-            let should_update_preview = match (current_preview.as_ref(), new_preview.as_ref()) {
-                (None, Some(_)) | (Some(_), None) => true,
-                (Some(c), Some(n)) => c.filename != n.filename,
-                (None, None) => false,
-            };
-            drop(current_preview);
+                // Update preview if changed
+                let current_preview = preview_content.read();
+                let should_update_preview = match (current_preview.as_ref(), new_preview.as_ref()) {
+                    (None, Some(_)) | (Some(_), None) => true,
+                    (Some(c), Some(n)) => c.filename != n.filename,
+                    (None, None) => false,
+                };
+                drop(current_preview);
 
-            if should_update_preview {
-                preview_content.set(new_preview);
+                if should_update_preview {
+                    preview_content.set(new_preview);
+                }
             }
 
             // Update files if changed

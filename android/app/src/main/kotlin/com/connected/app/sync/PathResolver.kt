@@ -18,11 +18,54 @@ import androidx.core.net.toUri
 object PathResolver {
 
     /**
+     * Defense-in-depth against forged share intents: canonicalize [candidate]
+     * (resolving any "../", symlinks and duplicate separators) and require the
+     * result to live inside one of [roots]. Returns the canonical path or null.
+     *
+     * Without this, a malicious app can hand us a crafted
+     * content://com.android.externalstorage.documents URI whose doc-id
+     * contains "../"; the kernel resolves the dot segments during open, so
+     * resolving the "real path" blindly would let this app read arbitrary
+     * traversable files (including its own private storage) and forward them
+     * to paired devices.
+     */
+    private fun canonicalizeInside(candidate: String, vararg roots: String): String? {
+        return try {
+            val canonical = File(candidate).canonicalFile.absolutePath
+            val inside = roots.any { root ->
+                val canonicalRoot = File(root).canonicalFile.absolutePath.trimEnd('/')
+                canonical == canonicalRoot || canonical.startsWith("$canonicalRoot/")
+            }
+            if (inside) canonical else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Standard storage roots a resolvable share-target file may live in. */
+    private fun allowedRoots(context: Context): List<String> {
+        val roots = mutableListOf<String>()
+        Environment.getExternalStorageDirectory()?.absolutePath?.let { roots.add(it) }
+        // Secondary volumes (SD cards) via their volume roots, derived from the
+        // app's per-volume external dirs (…/<volume>/Android/data/<pkg>/files).
+        context.getExternalFilesDirs(null)?.forEach { dir ->
+            var current: File? = dir
+            while (current != null && current.name != "Android") {
+                current = current.parentFile ?: break
+            }
+            current?.parentFile?.absolutePath?.let { if (!roots.contains(it)) roots.add(it) }
+        }
+        return roots
+    }
+
+    /**
      * Attempts to resolve a content URI to a real file path.
      * Returns null if the URI cannot be resolved to a local file path
-     * (e.g., cloud storage, remote content).
+     * (e.g., cloud storage, remote content) or if the resolved path escapes
+     * the device's shared-storage roots (possible with forged URIs).
      */
     fun resolveRealPath(context: Context, uri: Uri): String? {
+        val roots = allowedRoots(context).toTypedArray()
         return try {
             when {
                 // DocumentProvider
@@ -35,17 +78,18 @@ object PathResolver {
                             val type = split[0]
 
                             if ("primary".equals(type, ignoreCase = true)) {
+                                val root = Environment.getExternalStorageDirectory().absolutePath
                                 if (split.size > 1) {
-                                    "${Environment.getExternalStorageDirectory()}/${split[1]}"
+                                    canonicalizeInside("$root/${split[1]}", *roots)
                                 } else {
-                                    Environment.getExternalStorageDirectory().absolutePath
+                                    canonicalizeInside(root, *roots)
                                 }
                             } else {
                                 // Secondary storage (SD card) - try to resolve
                                 if (split.size > 1) {
                                     val sdCardPath = getSdCardPath(context, type)
                                     if (sdCardPath != null) {
-                                        "$sdCardPath/${split[1]}"
+                                        canonicalizeInside("$sdCardPath/${split[1]}", "$sdCardPath")
                                     } else {
                                         null
                                     }
@@ -61,14 +105,16 @@ object PathResolver {
 
                             // Try numeric ID first
                             if (id.startsWith("raw:")) {
-                                // Raw path
-                                id.substring(4)
+                                // Raw path — still containment-checked below so a
+                                // forged "raw:/data/..." cannot escape shared storage.
+                                canonicalizeInside(id.substring(4), *roots)
                             } else if (id.all { it.isDigit() }) {
                                 val contentUri = ContentUris.withAppendedId(
                                     "content://downloads/public_downloads".toUri(),
                                     id.toLong()
                                 )
                                 getDataColumn(context, contentUri, null, null)
+                                    ?.let { canonicalizeInside(it, *roots) }
                             } else {
                                 null
                             }
@@ -91,6 +137,7 @@ object PathResolver {
                                 val selection = "_id=?"
                                 val selectionArgs = arrayOf(split[1])
                                 getDataColumn(context, contentUri, selection, selectionArgs)
+                                    ?.let { canonicalizeInside(it, *roots) }
                             } else {
                                 null
                             }
@@ -103,12 +150,12 @@ object PathResolver {
                 // MediaStore (not document URI)
                 "content".equals(uri.scheme, ignoreCase = true) -> {
                     // Try to get from MediaStore
-                    getDataColumn(context, uri, null, null)
+                    getDataColumn(context, uri, null, null)?.let { canonicalizeInside(it, *roots) }
                 }
 
                 // File URI
                 "file".equals(uri.scheme, ignoreCase = true) -> {
-                    uri.path
+                    uri.path?.let { canonicalizeInside(it, *roots) }
                 }
 
                 else -> null

@@ -14,14 +14,23 @@ class MediaObserverService : NotificationListenerService() {
     private val sessionsChangedListener =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers -> processControllers(controllers) }
 
+    // Track the currently-registered callback + its controller so we can
+    // unregister before registering a new one. Registering a fresh anonymous
+    // callback on every sessions-changed event leaked callbacks (each holding
+    // the controller and delivering stale events) for the service's lifetime.
+    private var activeController: MediaController? = null
+    private var activeControllerCallback: MediaController.Callback? = null
+
     private fun processControllers(controllers: List<MediaController>?) {
         if (controllers.isNullOrEmpty()) return
 
         // Prefer the first active controller (usually the one playing or last played)
         val controller = controllers.firstOrNull() ?: return
 
-        // Register callback for this controller
-        controller.registerCallback(object : MediaController.Callback() {
+        // Re-registering on a different controller? Drop the old callback.
+        unregisterActiveCallback()
+
+        val callback = object : MediaController.Callback() {
             override fun onPlaybackStateChanged(state: PlaybackState?) {
                 broadcastState(controller)
             }
@@ -29,10 +38,24 @@ class MediaObserverService : NotificationListenerService() {
             override fun onMetadataChanged(metadata: android.media.MediaMetadata?) {
                 broadcastState(controller)
             }
-        })
+        }
+        controller.registerCallback(callback)
+        activeController = controller
+        activeControllerCallback = callback
 
         // Initial broadcast
         broadcastState(controller)
+    }
+
+    private fun unregisterActiveCallback() {
+        val cb = activeControllerCallback ?: return
+        try {
+            activeController?.unregisterCallback(cb)
+        } catch (_: Exception) {
+            // Controller already died — nothing to unregister
+        }
+        activeController = null
+        activeControllerCallback = null
     }
 
     private fun broadcastState(controller: MediaController) {
@@ -67,6 +90,7 @@ class MediaObserverService : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        unregisterActiveCallback()
         super.onDestroy()
         sessionManager?.removeOnActiveSessionsChangedListener(sessionsChangedListener)
     }

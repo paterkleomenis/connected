@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Security: the Rust core's pairing identity (identity.json) and trusted-peer
+    store (known_peers.json) must never leave the device. Restoring them onto
+    another device would clone this device's pairing identity, enabling silent
+    impersonation toward previously trusted peers.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="external" path="identity.json" />
+        <exclude domain="external" path="known_peers.json" />
+        <exclude domain="device-transfer" path="identity.json" />
+        <exclude domain="device-transfer" path="known_peers.json" />
+    </cloud-backup>
+</data-extraction-rules>

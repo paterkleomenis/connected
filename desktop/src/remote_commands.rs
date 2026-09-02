@@ -45,7 +45,12 @@ fn open_url(url: &str) -> std::io::Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        run("cmd", &["/C", "start", "", url])
+        // Security: previously `cmd /C start "" <url>`. Even with argv-level
+        // quoting, cmd interprets `&`/`|`/`^` etc., so a crafted URL from a
+        // peer (e.g. https://x/?a="&calc&") achieved command execution
+        // (BatBadBut-class bug). explorer.exe receives the URL as a single
+        // argv entry and hands it to the default browser.
+        run("explorer.exe", &[url])
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

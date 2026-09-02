@@ -47,10 +47,14 @@ object AppUpdater {
      * Returns UpdateInfo if a newer version is found, null otherwise.
      */
     suspend fun checkForUpdate(currentVersion: String): UpdateInfo? = withContext(Dispatchers.IO) {
+        var connection: HttpURLConnection? = null
         try {
             val url = URL(GITHUB_RELEASES_URL)
-            val connection = url.openConnection() as HttpURLConnection
+            connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
+            // Without these, a stalled response pins this coroutine forever.
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 15_000
             connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
 
             if (connection.responseCode == HttpURLConnection.HTTP_OK) {
@@ -88,6 +92,8 @@ object AppUpdater {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to check for updates", e)
+        } finally {
+            connection?.disconnect()
         }
         return@withContext null
     }

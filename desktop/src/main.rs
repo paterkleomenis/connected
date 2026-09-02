@@ -1,6 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(non_snake_case)]
 
+// Faster allocator for file-transfer hot path — safe, no unsafe in user code.
+// On Linux/Windows/macOS mimalloc reduces fragmentation for 4MB pipelined buffers.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod autostart;
 mod components;
 mod controller;
@@ -52,17 +58,42 @@ fn format_timestamp(ts: u64) -> String {
         format!("{}d ago", diff_secs / 86400)
     } else {
         let secs = ts / 1000;
-        let datetime = UNIX_EPOCH + Duration::from_secs(secs);
+        // checked_add: `ts` is peer-supplied (SMS/call-log timestamps) and a
+        // crafted huge value previously overflowed `UNIX_EPOCH + Duration`,
+        // panicking the UI thread while rendering a conversation list.
+        let Some(datetime) = UNIX_EPOCH.checked_add(Duration::from_secs(secs)) else {
+            return "Unknown".to_string();
+        };
         if let Ok(dur) = datetime.duration_since(UNIX_EPOCH) {
             let days = dur.as_secs() / 86400;
-            let years = 1970 + days / 365;
-            let remaining = days % 365;
-            let months = remaining / 30 + 1;
-            let day = remaining % 30 + 1;
-            format!("{}/{}/{}", months, day, years % 100)
+            // Proper civil-from-days conversion (Howard Hinnant's algorithm):
+            // the previous 365-day/30-month approximation drifted by weeks.
+            let z = days as i64 + 719_468;
+            let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+            let doe = (z - era * 146_097) as u64; // [0, 146096]
+            let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+            let y = yoe as i64 + era * 400;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+            let mp = (5 * doy + 2) / 153; // [0, 11]
+            let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+            let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+            let years = if m <= 2 { y + 1 } else { y };
+            format!("{}/{}/{}", m, d, years % 100)
         } else {
             "Unknown".to_string()
         }
+    }
+}
+
+/// Only mark a Dioxus signal dirty when its value actually changed.
+///
+/// The 500 ms UI poller previously called `.set()` unconditionally on most
+/// signals; `set` marks the signal dirty WITHOUT equality checking, which
+/// forced a full re-diff of the entire component tree twice every second even
+/// when nothing changed.
+fn poller_set<T: PartialEq + Clone + 'static>(mut signal: dioxus::prelude::Signal<T>, value: T) {
+    if signal.read().clone() != value {
+        signal.set(value);
     }
 }
 
@@ -1055,13 +1086,19 @@ fn create_firewall_rules(exe_path: &str) -> bool {
 fn request_elevated_firewall_install(exe_path: &std::path::Path) -> bool {
     let exe_str = exe_path.to_string_lossy();
 
+    // Security: the path is interpolated into a PowerShell single-quoted
+    // string; a literal `'` in the install path would break out of the
+    // quoting and allow arbitrary elevated arguments. PowerShell escapes a
+    // single quote inside single quotes by doubling it.
+    let ps_safe_path = exe_str.replace('\'', "''");
+
     // Start-Process -Verb RunAs triggers UAC.
     // -Wait blocks until the elevated process exits.
     // -WindowStyle Hidden should prevent a console window flash,
     //  but because it doesn't, we handle it below
     let ps_command = format!(
         "Start-Process -FilePath '{}' -ArgumentList '{}' -Verb RunAs -Wait -WindowStyle Hidden",
-        exe_str, FIREWALL_INSTALL_ARG,
+        ps_safe_path, FIREWALL_INSTALL_ARG,
     );
 
     // Actual window hiding
@@ -1093,7 +1130,17 @@ fn request_elevated_firewall_install(exe_path: &std::path::Path) -> bool {
 /// Creates all firewall rules and exits immediately
 #[cfg(target_os = "windows")]
 fn run_firewall_install_and_exit() -> ! {
-    let exe_path = std::env::current_exe().unwrap_or_default();
+    // Security: never fall back to an empty path — a firewall rule with an
+    // empty application scope applies to EVERY process on the machine.
+    let exe_path = match std::env::current_exe() {
+        Ok(p) if !p.as_os_str().is_empty() => p,
+        _ => {
+            eprintln!(
+                "Cannot determine executable path; refusing to create unrestricted firewall rules"
+            );
+            std::process::exit(1);
+        }
+    };
     let code = if create_firewall_rules(&exe_path.to_string_lossy()) {
         0
     } else {
@@ -1375,7 +1422,7 @@ fn App() -> Element {
     let mut device_detail_tab = use_signal(|| "clipboard".to_string());
     let mut transfer_status = use_signal(|| TransferStatus::Idle);
     let mut clipboard_sync_enabled = use_signal(get_clipboard_sync_enabled);
-    let mut notifications = use_signal(Vec::<Notification>::new);
+    let notifications = use_signal(Vec::<Notification>::new);
     let mut show_send_dialog = use_signal(|| false);
     let mut send_dialog_is_folder = use_signal(|| false);
     let mut send_target_device = use_signal(|| None::<DeviceInfo>);
@@ -1385,29 +1432,29 @@ fn App() -> Element {
 
     // Note: discovery_active is now tracked via global state in state.rs
     // (is_sdk_initialized() and is_discovery_active())
-    let mut media_enabled = use_signal(get_media_enabled_setting);
+    let media_enabled = use_signal(get_media_enabled_setting);
     let mut remote_commands_enabled = use_signal(get_remote_commands_enabled_setting);
     // Fix #17: Consolidate four separate media signals into one struct signal.
     // These were all derived from the same `get_current_media()` global state
     // and updated together in the polling loop — four signals for one source.
-    let mut current_media = use_signal(CurrentMediaUi::default);
+    let current_media = use_signal(CurrentMediaUi::default);
 
     // Pairing State
-    let mut pairing_mode = use_signal(|| *get_pairing_mode_state().lock_or_recover());
-    let mut pairing_requests = use_signal(Vec::<PairingRequest>::new);
-    let mut file_transfer_requests = use_signal(Vec::<FileTransferRequest>::new);
+    let pairing_mode = use_signal(|| *get_pairing_mode_state().lock_or_recover());
+    let pairing_requests = use_signal(Vec::<PairingRequest>::new);
+    let file_transfer_requests = use_signal(Vec::<FileTransferRequest>::new);
 
     // Telephony State
     let mut phone_sub_tab = use_signal(|| "messages".to_string());
-    let mut phone_contacts = use_signal(Vec::<connected_core::telephony::Contact>::new);
-    let mut phone_conversations = use_signal(Vec::<connected_core::telephony::Conversation>::new);
-    let mut phone_call_log = use_signal(Vec::<connected_core::telephony::CallLogEntry>::new);
+    let phone_contacts = use_signal(Vec::<connected_core::telephony::Contact>::new);
+    let phone_conversations = use_signal(Vec::<connected_core::telephony::Conversation>::new);
+    let phone_call_log = use_signal(Vec::<connected_core::telephony::CallLogEntry>::new);
     let mut selected_conversation = use_signal(|| None::<String>);
     let mut phone_messages = use_signal(Vec::<connected_core::telephony::SmsMessage>::new);
     let mut last_message_count = use_signal(|| 0usize);
     let mut sms_compose_text = use_signal(String::new);
-    let mut active_call = use_signal(|| None::<connected_core::telephony::ActiveCall>);
-    let mut update_info = use_signal(|| None::<UpdateInfo>);
+    let active_call = use_signal(|| None::<connected_core::telephony::ActiveCall>);
+    let update_info = use_signal(|| None::<UpdateInfo>);
 
     // Auto-sync settings (loaded from persistent storage)
     let mut auto_sync_messages = use_signal(get_auto_sync_messages);
@@ -1551,9 +1598,9 @@ fn App() -> Element {
         > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
         let tray_icon = use_hook(|| {
-            let mut map = action_map.lock().unwrap();
+            let mut map = action_map.lock_or_recover();
             let (menu, show) = build_tray_menu(&mut map);
-            show_item_handle.lock().unwrap().replace(show);
+            show_item_handle.lock_or_recover().replace(show);
 
             #[cfg(target_os = "macos")]
             let icon = {
@@ -1586,9 +1633,9 @@ fn App() -> Element {
                 // Read the signal so Dioxus tracks it as an effect dependency;
                 // without this, the closure never re-runs when devices change.
                 dl.read();
-                let mut map = action_map.lock().unwrap();
+                let mut map = action_map.lock_or_recover();
                 let (menu, show) = build_tray_menu(&mut map);
-                show_item_handle.lock().unwrap().replace(show);
+                show_item_handle.lock_or_recover().replace(show);
                 tray_icon_rebuild.set_menu(Some(Box::new(menu)));
             }));
         }
@@ -1599,7 +1646,7 @@ fn App() -> Element {
             let action_map = action_map.clone();
             dioxus::desktop::use_muda_event_handler(move |event| {
                 let action = {
-                    let map = action_map.lock().unwrap();
+                    let map = action_map.lock_or_recover();
                     map.get(&event.id).cloned()
                 };
                 match action {
@@ -1751,7 +1798,7 @@ fn App() -> Element {
                     let visible = wake_window.is_visible();
                     if visible != last_visible {
                         last_visible = visible;
-                        if let Some(item) = show_item_handle.lock().unwrap().as_ref() {
+                        if let Some(item) = show_item_handle.lock_or_recover().as_ref() {
                             item.set_text(if visible { "Hide" } else { "Open" });
                         }
                     }
@@ -1832,12 +1879,12 @@ fn App() -> Element {
                     let now = std::time::Instant::now();
                     notifs.retain(|n| now.duration_since(n.timestamp).as_secs() < 5);
                 }
-                notifications.set(get_notifications().lock_or_recover().clone());
+                poller_set(notifications, get_notifications().lock_or_recover().clone());
 
                 // Update Pairing Requests
                 {
                     let reqs = get_pairing_requests().lock_or_recover().clone();
-                    pairing_requests.set(reqs);
+                    poller_set(pairing_requests, reqs);
                 }
 
                 // Update File Transfer Requests
@@ -1848,21 +1895,31 @@ fn App() -> Element {
                     let reqs_map = get_file_transfer_requests().lock_or_recover();
                     let mut reqs: Vec<FileTransferRequest> = reqs_map.values().cloned().collect();
                     reqs.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
-                    file_transfer_requests.set(reqs);
+                    drop(reqs_map);
+                    poller_set(file_transfer_requests, reqs);
                 }
 
                 // Update Telephony State
-                phone_contacts.set(get_phone_contacts().lock_or_recover().clone());
-                phone_conversations.set(get_phone_conversations().lock_or_recover().clone());
-                phone_call_log.set(get_phone_call_log().lock_or_recover().clone());
-                active_call.set(get_active_call().lock_or_recover().clone());
+                poller_set(
+                    phone_contacts,
+                    get_phone_contacts().lock_or_recover().clone(),
+                );
+                poller_set(
+                    phone_conversations,
+                    get_phone_conversations().lock_or_recover().clone(),
+                );
+                poller_set(
+                    phone_call_log,
+                    get_phone_call_log().lock_or_recover().clone(),
+                );
+                poller_set(active_call, get_active_call().lock_or_recover().clone());
                 // Update messages for selected conversation
                 if let Some(thread_id) = selected_conversation.read().clone()
                     && let Some(msgs) = get_phone_messages().lock_or_recover().get(&thread_id)
                 {
                     let new_count = msgs.len();
                     let old_count = *last_message_count.read();
-                    phone_messages.set(msgs.clone());
+                    poller_set(phone_messages, msgs.clone());
                     // Auto-scroll when messages first load or when new messages arrive
                     if new_count > 0 && new_count != old_count {
                         spawn(async move {
@@ -1898,10 +1955,13 @@ fn App() -> Element {
                 }
 
                 // Update Media State
-                media_enabled.set(*get_media_enabled().lock_or_recover());
-                remote_commands_enabled.set(*get_remote_commands_enabled().lock_or_recover());
-                if let Some(media) = get_current_media().lock_or_recover().clone() {
-                    current_media.set(CurrentMediaUi {
+                poller_set(media_enabled, *get_media_enabled().lock_or_recover());
+                poller_set(
+                    remote_commands_enabled,
+                    *get_remote_commands_enabled().lock_or_recover(),
+                );
+                let media_ui = if let Some(media) = get_current_media().lock_or_recover().clone() {
+                    CurrentMediaUi {
                         title: media
                             .state
                             .title
@@ -1912,18 +1972,19 @@ fn App() -> Element {
                             .unwrap_or_else(|| "Unknown Artist".to_string()),
                         playing: media.state.playing,
                         source_device_id: media.source_device_id,
-                    });
+                    }
                 } else {
-                    current_media.set(CurrentMediaUi::default());
-                }
+                    CurrentMediaUi::default()
+                };
+                poller_set(current_media, media_ui);
 
-                pairing_mode.set(*get_pairing_mode_state().lock_or_recover());
-                autostart_enabled.set(get_autostart_enabled_setting());
+                poller_set(pairing_mode, *get_pairing_mode_state().lock_or_recover());
+                poller_set(autostart_enabled, get_autostart_enabled_setting());
 
                 // Update Info
                 {
                     let info = get_update_info().lock_or_recover().clone();
-                    update_info.set(info);
+                    poller_set(update_info, info);
                 }
 
                 // Increased from 200ms to 500ms to reduce CPU usage
@@ -2460,7 +2521,12 @@ fn App() -> Element {
                                                 } else {
                                                     0.0
                                                 };
-                                                let eta_secs = (*total_bytes - *bytes_processed).checked_div(*speed_bytes_per_sec).unwrap_or(0);
+                                                // saturating_sub: aggregate progress can
+                                                // transiently overshoot total_bytes.
+                                                let eta_secs = (*total_bytes)
+                                                    .saturating_sub(*bytes_processed)
+                                                    .checked_div((*speed_bytes_per_sec).max(1))
+                                                    .unwrap_or(0);
                                                 let eta_str = if eta_secs >= 3600 {
                                                     format!("{}:{:02}:{:02}", eta_secs / 3600, (eta_secs % 3600) / 60, eta_secs % 60)
                                                 } else if eta_secs >= 60 {

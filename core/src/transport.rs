@@ -289,15 +289,21 @@ impl Drop for ConnectingGuard {
         if let Ok(mut set) = self.connecting.try_lock() {
             set.remove(&self.addr);
         } else {
-            // Lock is contended — spawn a background task to guarantee cleanup.
-            // Without this, the address leaks in the `connecting` set and all
-            // future connection attempts to it will hang waiting for a slot that
-            // is never freed.
+            // Lock is contended — try to spawn a background task to guarantee cleanup.
+            // If the Tokio runtime is already shut down (e.g. during shutdown), spawning
+            // would panic — in that case the process is exiting anyway so the leak is harmless.
             let connecting = self.connecting.clone();
             let addr = self.addr;
-            tokio::spawn(async move {
-                connecting.lock().await.remove(&addr);
-            });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    connecting.lock().await.remove(&addr);
+                });
+            } else {
+                tracing::debug!(
+                    "ConnectingGuard: runtime gone, leaking connecting entry for {} (shutdown)",
+                    addr
+                );
+            }
         }
     }
 }
@@ -320,6 +326,20 @@ pub struct QuicTransport {
 }
 
 impl QuicTransport {
+    /// Application-close reason reserved for *genuine* unpair flows.
+    /// The remote side interprets a connection closed with this exact reason
+    /// as "the peer unpaired me", so it must NEVER be used for routine
+    /// invalidations (stale connections, retries, ping failures) — doing so
+    /// would silently destroy pairing state on both sides.
+    pub const CLOSE_REASON_UNPAIRED: &'static [u8] = b"unpaired";
+    /// Application-close reason for routine connection invalidation (retries,
+    /// stale cache entries, transient failures). Deliberately distinct from
+    /// [`Self::CLOSE_REASON_UNPAIRED`] so the remote does not treat it as an
+    /// unpair signal.
+    pub const CLOSE_REASON_STALE: &'static [u8] = b"stale";
+    /// Application-close reason used when we actively reject a pairing attempt.
+    pub const CLOSE_REASON_REJECTED: &'static [u8] = b"pairing-rejected";
+
     fn bind_udp_socket(bind_addr: SocketAddr) -> std::io::Result<std::net::UdpSocket> {
         let domain = if bind_addr.is_ipv4() {
             Domain::IPV4
@@ -700,9 +720,7 @@ impl QuicTransport {
         let mut transport = TransportConfig::default();
         transport.initial_rtt(Duration::from_millis(INITIAL_RTT_MS));
         transport.max_idle_timeout(Some(
-            Duration::from_secs(MAX_IDLE_TIMEOUT_SECS)
-                .try_into()
-                .unwrap(),
+            VarInt::from_u32((MAX_IDLE_TIMEOUT_SECS * 1000) as u32).into(),
         ));
         transport.keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL_SECS)));
         transport.max_concurrent_bidi_streams(VarInt::from_u32(MAX_CONCURRENT_BIDI_STREAMS));
@@ -816,23 +834,34 @@ impl QuicTransport {
         };
 
         if already_connecting {
-            // Another task is connecting — back off, then re-check the cache.
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            // Another task is connecting — wait up to CONNECT_TIMEOUT for it to finish,
+            // matching the loop in `connect_allow_unknown` to avoid duplicate dials.
+            let start = Instant::now();
+            while start.elapsed() < CONNECT_TIMEOUT {
+                tokio::time::sleep(Duration::from_millis(50)).await;
 
-            // Re-check cache (separate scope so the guard is dropped before any await).
-            let cached = {
-                let mut cache = self.connection_cache.write();
-                cache.get(&addr)
-            };
-            if let Some(conn) = cached {
-                debug!(
-                    "Reusing connection to {} (created by concurrent task)",
-                    addr
-                );
-                return Ok(conn);
+                let cached = {
+                    let mut cache = self.connection_cache.write();
+                    cache.get(&addr)
+                };
+                if let Some(conn) = cached {
+                    debug!(
+                        "Reusing connection to {} (created by concurrent task)",
+                        addr
+                    );
+                    return Ok(conn);
+                }
+
+                // Check if the other task failed and cleared the flag
+                if !self.connecting.lock().await.contains(&canonical) {
+                    break;
+                }
             }
             // Still no connection — claim the slot ourselves.
-            self.connecting.lock().await.insert(canonical);
+            {
+                let mut in_progress = self.connecting.lock().await;
+                in_progress.insert(canonical);
+            }
         }
 
         // Guard: always remove from `connecting` when we leave this scope.
@@ -922,6 +951,15 @@ impl QuicTransport {
                     // Other task finished with error, we should try ourselves now
                     break;
                 }
+            }
+
+            // Mirror `connect()`: claim the slot ourselves before dialing.
+            // Without this, our own attempt would be invisible to concurrent
+            // callers (duplicate dials) and the ConnectingGuard below would
+            // prematurely delete another task's in-progress marker on drop.
+            {
+                let mut in_progress = self.connecting.lock().await;
+                in_progress.insert(canonical);
             }
         }
 
@@ -1094,7 +1132,7 @@ impl QuicTransport {
         let connection = self.connect(target_addr).await?;
 
         let (mut send, mut recv) = connection.open_bi().await.map_err(|e| {
-            self.invalidate_connection(&target_addr, b"unpaired");
+            self.invalidate_connection(&target_addr, Self::CLOSE_REASON_STALE);
             ConnectedError::Connection(e.to_string())
         })?;
 
@@ -1114,20 +1152,20 @@ impl QuicTransport {
 
         let response = timeout(PING_TIMEOUT, async {
             let mut len_buf = [0u8; 4];
-            recv.read_exact(&mut len_buf).await?;
+            recv.read_exact(&mut len_buf)
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
             let msg_len = u32::from_be_bytes(len_buf) as usize;
             if msg_len > MAX_MESSAGE_SIZE {
-                return Err(quinn::ReadExactError::FinishedEarly(0));
+                return Err(std::io::Error::other("ping response exceeds size limit"));
             }
-            let mut data = vec![0u8; msg_len];
-            recv.read_exact(&mut data).await?;
-            Ok(data)
+            Self::read_chunked(&mut recv, msg_len).await
         })
         .await;
 
         match response {
             Ok(Ok(data)) => {
-                let message: Message = serde_json::from_slice(&data)?;
+                let message: Message = crate::codec::decode_message(&data)?;
                 match message {
                     Message::Pong {
                         from_id,
@@ -1152,11 +1190,11 @@ impl QuicTransport {
                 }
             }
             Ok(Err(e)) => {
-                self.invalidate_connection(&target_addr, b"unpaired");
+                self.invalidate_connection(&target_addr, Self::CLOSE_REASON_STALE);
                 Err(ConnectedError::PingFailed(e.to_string()))
             }
             Err(_) => {
-                self.invalidate_connection(&target_addr, b"unpaired");
+                self.invalidate_connection(&target_addr, Self::CLOSE_REASON_STALE);
                 Err(ConnectedError::Timeout("Ping timeout".to_string()))
             }
         }
@@ -1210,6 +1248,32 @@ impl QuicTransport {
         Ok(())
     }
 
+    /// Read exactly `len` bytes from `recv`, growing the buffer incrementally
+    /// in fixed-size chunks instead of allocating `len` bytes up-front.
+    ///
+    /// Security: a malicious peer controls `len` (the frame header). Reading
+    /// chunk-by-chunk bounds peak memory to the bytes *actually received*
+    /// rather than the declared length, preventing trivial memory-exhaustion
+    /// DoS (e.g. 256 concurrent streams each declaring 100 MB frames).
+    pub(crate) async fn read_chunked(
+        recv: &mut RecvStream,
+        len: usize,
+    ) -> std::io::Result<Vec<u8>> {
+        const CHUNK_SIZE: usize = 64 * 1024;
+        let mut data: Vec<u8> = Vec::new();
+        let mut remaining = len;
+        while remaining > 0 {
+            let to_read = remaining.min(CHUNK_SIZE);
+            let start = data.len();
+            data.resize(start + to_read, 0);
+            recv.read_exact(&mut data[start..])
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            remaining -= to_read;
+        }
+        Ok(data)
+    }
+
     async fn handle_connection(
         connection: Connection,
         remote_addr: SocketAddr,
@@ -1258,13 +1322,14 @@ impl QuicTransport {
                                     return;
                                 }
 
-                                let mut data = vec![0u8; msg_len];
+                                // Chunked read: never trust the declared length with a
+                                // single up-front allocation (see read_chunked docs).
+                                let data = match Self::read_chunked(&mut recv, msg_len).await {
+                                    Ok(d) => d,
+                                    Err(_) => return,
+                                };
 
-                                if recv.read_exact(&mut data).await.is_err() {
-                                    return;
-                                }
-
-                                let message: Message = match serde_json::from_slice(&data) {
+                                let message: Message = match crate::codec::decode_message(&data) {
                                     Ok(m) => m,
                                     Err(e) => {
                                         debug!("Failed to parse message: {}", e);
@@ -1327,7 +1392,7 @@ impl QuicTransport {
                         remote_addr, reason
                     );
 
-                    if reason.reason == b"unpaired".as_slice() {
+                    if reason.reason == Self::CLOSE_REASON_UNPAIRED {
                         let (device_id_opt, already_unpaired) = {
                             let ks = key_store.read();
                             let info = ks.get_peer_info(&fingerprint).and_then(|p| p.device_id);
@@ -1390,6 +1455,24 @@ impl QuicTransport {
         stream_type: u8,
     ) -> Result<(SendStream, RecvStream)> {
         let connection = self.connect(addr).await?;
+
+        let (mut send, recv) = connection.open_bi().await?;
+
+        send.write_all(&[stream_type]).await?;
+
+        Ok((send, recv))
+    }
+
+    /// Open a control stream on a connection that explicitly tolerates unknown
+    /// peer certificates. Used for outbound pairing handshakes so that
+    /// initiating a pair does not have to flip the global pairing-mode flag
+    /// (which would leave a 120 s accept-anyone window open on every attempt).
+    pub async fn open_stream_allow_unknown(
+        &self,
+        addr: SocketAddr,
+        stream_type: u8,
+    ) -> Result<(SendStream, RecvStream)> {
+        let connection = self.connect_allow_unknown(addr).await?;
 
         let (mut send, recv) = connection.open_bi().await?;
 

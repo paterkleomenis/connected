@@ -45,9 +45,14 @@ class AndroidFilesystemProvider(private val context: Context, private val rootUr
         val canonical = resolved.canonicalFile
 
         // Verify the canonical path is still under the root directory
-        // This prevents symlink attacks that could escape the root
+        // This prevents symlink attacks that could escape the root.
+        // Compare WITH a trailing separator: a plain prefix check would also
+        // accept sibling directories like "<root>_private/x".
         val rootCanonical = rootFile!!.canonicalFile
-        if (!canonical.absolutePath.startsWith(rootCanonical.absolutePath)) {
+        val rootPrefix = rootCanonical.absolutePath + File.separator
+        if (canonical.absolutePath != rootCanonical.absolutePath &&
+            !canonical.absolutePath.startsWith(rootPrefix)
+        ) {
             throw FilesystemException.Generic("Path escapes root directory: $path")
         }
 
