@@ -1834,15 +1834,7 @@ impl ConnectedClient {
     }
 
     async fn send_clipboard_inner(&self, addr: SocketAddr, text: String) -> Result<()> {
-        const MAX_CLIPBOARD_SIZE: usize = 4 * 1024 * 1024; // 4 MB cap to prevent OOM on receiver
-        if text.len() > MAX_CLIPBOARD_SIZE {
-            return Err(ConnectedError::Protocol(format!(
-                "Clipboard too large: {} bytes exceeds {} bytes limit",
-                text.len(),
-                MAX_CLIPBOARD_SIZE
-            )));
-        }
-
+        // No clipboard size limit on dev — allow arbitrary payloads (user requested).
         // Establish the connection / open a stream FIRST so that we have a live
         // TLS session from which we can extract the peer's certificate fingerprint.
         // Previously, the trust check ran before `open_stream`, which meant that
@@ -3248,36 +3240,26 @@ impl ConnectedClient {
                         });
                     }
                     Message::Clipboard { text } => {
-                        const MAX_CLIPBOARD_SIZE: usize = 4 * 1024 * 1024;
-                        if text.len() > MAX_CLIPBOARD_SIZE {
-                            warn!(
-                                "Ignored oversized clipboard from {} at {} ({} bytes > {} limit)",
-                                fingerprint,
-                                addr,
-                                text.len(),
-                                MAX_CLIPBOARD_SIZE
-                            );
+                        // No clipboard size limit on dev — accept any size (user requested).
+                        // Single KeyStore snapshot for trust check + name lookup
+                        let (is_trusted, from_device) = {
+                            let ks = key_store.read();
+                            let trusted = ks.is_trusted(&fingerprint);
+                            let name = ks
+                                .get_peer_name(&fingerprint)
+                                .unwrap_or_else(|| "Unknown".to_string());
+                            (trusted, name)
+                        };
+                        if is_trusted {
+                            let _ = event_tx.send(ConnectedEvent::ClipboardReceived {
+                                content: text,
+                                from_device,
+                            });
                         } else {
-                            // Single KeyStore snapshot for trust check + name lookup
-                            let (is_trusted, from_device) = {
-                                let ks = key_store.read();
-                                let trusted = ks.is_trusted(&fingerprint);
-                                let name = ks
-                                    .get_peer_name(&fingerprint)
-                                    .unwrap_or_else(|| "Unknown".to_string());
-                                (trusted, name)
-                            };
-                            if is_trusted {
-                                let _ = event_tx.send(ConnectedEvent::ClipboardReceived {
-                                    content: text,
-                                    from_device,
-                                });
-                            } else {
-                                warn!(
-                                    "Ignored clipboard from untrusted peer {} at {}",
-                                    fingerprint, addr
-                                );
-                            }
+                            warn!(
+                                "Ignored clipboard from untrusted peer {} at {}",
+                                fingerprint, addr
+                            );
                         }
                     }
                     Message::MediaControl(media_msg) => {

@@ -22,10 +22,14 @@ const BUFFER_SIZE: usize = 4 * 1024 * 1024;
 /// If no data is received within this window, the peer is considered disconnected.
 const READ_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Maximum allowed incoming file size (100 GB). Transfers exceeding this are rejected.
+/// Dev override: unlimited on dev branch — constants retained for reference / main merge.
+#[allow(dead_code)]
 const MAX_INCOMING_FILE_SIZE: u64 = 100 * 1024 * 1024 * 1024;
 /// Maximum items in a single batch to prevent inode exhaustion.
+#[allow(dead_code)]
 const MAX_BATCH_ITEMS: usize = 10_000;
 /// Maximum batch history guard - abort if peer claims absurd files_count.
+#[allow(dead_code)]
 const MAX_BATCH_FILES_COUNT: u64 = 10_000;
 
 pub struct IncomingTransferConfig {
@@ -1364,26 +1368,7 @@ impl FileTransfer {
                     filename, size
                 );
 
-                // M2: Reject transfers that exceed the maximum allowed size to prevent disk exhaustion.
-                if size > MAX_INCOMING_FILE_SIZE {
-                    let reject = FileTransferMessage::Reject {
-                        reason: format!(
-                            "File too large: {} bytes exceeds maximum allowed {} bytes",
-                            size, MAX_INCOMING_FILE_SIZE
-                        ),
-                    };
-                    let _ = send_message(&mut send, &reject).await;
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Failed {
-                            error: format!("File too large ({} bytes)", size),
-                        });
-                    }
-                    return Err(ConnectedError::TransferRejected(format!(
-                        "File size {} exceeds maximum allowed {}",
-                        size, MAX_INCOMING_FILE_SIZE
-                    )));
-                }
-
+                // Dev: no file size limit (user requested unlimited files/size).
                 // If we need user approval, emit Pending first
                 if !auto_accept && let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Pending {
@@ -1726,37 +1711,7 @@ impl FileTransfer {
                     name, files_count, total_size, is_directory
                 );
 
-                if total_size > MAX_INCOMING_FILE_SIZE {
-                    let reject = FileTransferMessage::Reject {
-                        reason: format!(
-                            "Batch too large: {} bytes exceeds maximum allowed {} bytes",
-                            total_size, MAX_INCOMING_FILE_SIZE
-                        ),
-                    };
-                    let _ = send_message(&mut send, &reject).await;
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Failed {
-                            error: format!("Batch too large ({} bytes)", total_size),
-                        });
-                    }
-                    return Err(ConnectedError::TransferRejected(
-                        "Batch too large".to_string(),
-                    ));
-                }
-
-                if files_count > MAX_BATCH_FILES_COUNT {
-                    let reject = FileTransferMessage::Reject {
-                        reason: format!(
-                            "Batch too many files: {} exceeds maximum {}",
-                            files_count, MAX_BATCH_FILES_COUNT
-                        ),
-                    };
-                    let _ = send_message(&mut send, &reject).await;
-                    return Err(ConnectedError::TransferRejected(
-                        "Batch files_count too large".to_string(),
-                    ));
-                }
-
+                // Dev: no batch size / files_count limit (user requested unlimited).
                 // If we need user approval, emit Pending first
                 if !auto_accept && let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Pending {
@@ -1825,27 +1780,9 @@ impl FileTransfer {
                 }
 
                 let save_dir = save_dir.as_ref();
-                let mut items_seen: usize = 0;
-                let mut bytes_seen: u64 = 0;
-
+                // Dev: no limit tracking (unlimited files/size).
                 loop {
-                    // Enforce item count bound before reading next item
-                    if items_seen >= MAX_BATCH_ITEMS || items_seen as u64 >= files_count + 100 {
-                        // +100 slack allows for directory entries not counted in files_count
-                        let err_msg = format!(
-                            "Batch item limit exceeded: seen {} items (limit {} / files_count {})",
-                            items_seen, MAX_BATCH_ITEMS, files_count
-                        );
-                        error!("{}", err_msg);
-                        let _ = send_message(
-                            &mut send,
-                            &FileTransferMessage::Error {
-                                message: err_msg.clone(),
-                            },
-                        )
-                        .await;
-                        return Err(ConnectedError::Protocol(err_msg));
-                    }
+                    // Dev: no MAX_BATCH_ITEMS limit (user requested unlimited).
                     if cancel_flag
                         .as_ref()
                         .is_some_and(|c| c.load(Ordering::Relaxed))
@@ -1888,22 +1825,7 @@ impl FileTransfer {
                                 return Err(ConnectedError::Protocol(err_msg));
                             }
 
-                            // Track totals and enforce overall size bound
-                            if !is_dir {
-                                bytes_seen = bytes_seen.saturating_add(size);
-                                if bytes_seen > total_size.saturating_add(1024 * 1024) {
-                                    return Err(ConnectedError::Protocol(format!(
-                                        "Batch bytes exceed declared total_size: seen {} > declared {}",
-                                        bytes_seen, total_size
-                                    )));
-                                }
-                                if bytes_seen > MAX_INCOMING_FILE_SIZE {
-                                    return Err(ConnectedError::Protocol(
-                                        "Batch cumulative size exceeds maximum".to_string(),
-                                    ));
-                                }
-                            }
-                            items_seen += 1;
+                            // Dev: unlimited — no cumulative tracking.
 
                             if is_dir {
                                 let item_path = save_dir.join(&relative_path);

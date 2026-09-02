@@ -2486,20 +2486,7 @@ class ConnectedApp(private val context: Context) {
                     return@launch
                 }
 
-                // Validate file size
-                val maxFileSize = 100L * 1024 * 1024 * 1024 // 100GB
-                if (fileSize > maxFileSize) {
-                    runOnMainThread {
-                        transferStatus.value = "Idle"
-                        android.widget.Toast.makeText(
-                            context,
-                            "File too large: ${fileSize / (1024 * 1024 * 1024)}GB exceeds 100GB limit",
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
-                    }
-                    return@launch
-                }
-
+                // Dev: no file size limit (user requested unlimited).
                 // Try to resolve the real file path to avoid unnecessary temp copy
                 val realPath = PathResolver.resolveRealPath(context, uri)
                 val canUseDirectPath = realPath?.let { PathResolver.isFileAccessible(it) } == true
@@ -3723,21 +3710,8 @@ class ConnectedApp(private val context: Context) {
                         compressionProgress.value = null
                     }
 
-                    // Validate ZIP file size
+                    // Dev: no ZIP size limit (user requested unlimited).
                     val zipSize = zipFile.length()
-                    val maxFileSize = 100L * 1024 * 1024 * 1024 // 100GB
-                    if (zipSize > maxFileSize) {
-                        runOnMainThread {
-                            android.widget.Toast.makeText(
-                                context,
-                                "Folder too large: ${zipSize / (1024 * 1024 * 1024)}GB exceeds 100GB limit",
-                                android.widget.Toast.LENGTH_LONG
-                            ).show()
-                        }
-                        zipFile.delete()
-                        return@launch
-                    }
-
                     Log.d("ConnectedApp", "Sending folder ZIP: ${zipFile.name}, size: ${zipSize / (1024 * 1024)}MB")
 
                     if (isSyntheticIp(device.ip)) {
