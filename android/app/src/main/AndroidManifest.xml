@@ -14,6 +14,11 @@
         android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"
     />
 
+    <!-- Required since API 26 for the in-app self-update flow (sideloading the
+         downloaded APK). Without it, ACTION_VIEW package install intents are
+         silently refused. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <uses-permission
         android:name="android.permission.ACCESS_COARSE_LOCATION"
         android:maxSdkVersion="32"
@@ -121,6 +126,8 @@
 
     <application
         android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/full_backup_content"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher"
@@ -162,6 +169,9 @@
                     android:name="com.connected.app.sync.ACTION_REJECT_TRANSFER"
                 />
                 <action
+                    android:name="com.connected.app.sync.ACTION_CANCEL_TRANSFER"
+                />
+                <action
                     android:name="com.connected.app.sync.ACTION_ACCEPT_ALL_TRANSFERS"
                 />
                 <action
@@ -190,7 +200,9 @@
             </intent-filter>
         </receiver>
 
-        <receiver android:name=".UpdateReceiver" android:exported="true">
+        <!-- DOWNLOAD_COMPLETE is delivered package-targeted by DownloadManager;
+             no need to be exported to other apps. -->
+        <receiver android:name=".UpdateReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
             </intent-filter>

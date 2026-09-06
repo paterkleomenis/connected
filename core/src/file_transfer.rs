@@ -19,8 +19,99 @@ const BUFFER_SIZE: usize = 8 * 1024 * 1024;
 /// Timeout for receiving a data chunk during file transfer (30 seconds).
 /// If no data is received within this window, the peer is considered disconnected.
 const READ_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-/// Maximum allowed incoming file size (100 GB). Transfers exceeding this are rejected.
+/// Maximum allowed incoming file size (100 GiB). This is intentionally large
+/// for normal desktop use, while preventing a malformed request from reserving
+/// an effectively unbounded amount of disk space.
 const MAX_INCOMING_FILE_SIZE: u64 = 100 * 1024 * 1024 * 1024;
+const MAX_INCOMING_BATCH_FILES: u64 = 100_000;
+
+fn validate_incoming_size(size: u64) -> Result<()> {
+    if size > MAX_INCOMING_FILE_SIZE {
+        return Err(ConnectedError::Protocol(format!(
+            "Incoming transfer is too large: {} bytes (max {} bytes)",
+            size, MAX_INCOMING_FILE_SIZE
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) async fn create_dir_all_no_symlinks(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty() {
+        return Err(ConnectedError::Filesystem(
+            "Directory path is empty".to_string(),
+        ));
+    }
+
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        use std::path::Component;
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                current.push(component.as_os_str());
+            }
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                return Err(ConnectedError::Filesystem(
+                    "Directory path contains '..'".to_string(),
+                ));
+            }
+        }
+
+        match tokio::fs::symlink_metadata(&current).await {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(ConnectedError::Filesystem(format!(
+                        "Refusing unsafe directory component: {}",
+                        current.display()
+                    )));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match tokio::fs::create_dir(&current).await {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(ConnectedError::Io(error)),
+                }
+
+                let metadata = tokio::fs::symlink_metadata(&current)
+                    .await
+                    .map_err(ConnectedError::Io)?;
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(ConnectedError::Filesystem(format!(
+                        "Refusing unsafe directory component: {}",
+                        current.display()
+                    )));
+                }
+            }
+            Err(error) => return Err(ConnectedError::Io(error)),
+        }
+    }
+    Ok(())
+}
+
+async fn open_part_file(path: &Path, resume: bool) -> Result<File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(!resume).truncate(!resume);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path).await.map_err(ConnectedError::Io)
+}
+
+fn validate_resume_offset(offset: u64, file_size: u64) -> Result<()> {
+    if offset > file_size {
+        return Err(ConnectedError::Protocol(format!(
+            "Resume offset {} exceeds file size {}",
+            offset, file_size
+        )));
+    }
+    Ok(())
+}
 
 pub struct IncomingTransferConfig {
     pub progress_tx: Option<mpsc::UnboundedSender<TransferProgress>>,
@@ -275,6 +366,8 @@ impl FileTransfer {
                     ));
                 }
             }
+
+            validate_resume_offset(offset, file_size)?;
 
             // Seek to offset if resuming
             if offset > 0 {
@@ -636,6 +729,8 @@ impl FileTransfer {
                 }
             };
 
+            validate_resume_offset(offset, size)?;
+
             if size == 0 || offset >= size {
                 let checksum = if size > 0 {
                     let mut file = File::open(&abs_path).await.map_err(ConnectedError::Io)?;
@@ -841,6 +936,8 @@ impl FileTransfer {
                         ));
                     }
                 };
+
+                validate_resume_offset(offset, size)?;
 
                 if size == 0 || offset >= size {
                     let checksum = if size > 0 {
@@ -1067,14 +1164,17 @@ impl FileTransfer {
     ) -> Result<()> {
         let item_path = save_dir.join(relative_path);
         if let Some(parent) = item_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(ConnectedError::Io)?;
+            create_dir_all_no_symlinks(parent).await?;
         }
 
         let part_path = PathBuf::from(format!("{}.part", item_path.to_string_lossy()));
         let mut offset = 0;
-        if let Ok(metadata) = tokio::fs::metadata(&part_path).await {
+        if let Ok(metadata) = tokio::fs::symlink_metadata(&part_path).await {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(ConnectedError::Filesystem(
+                    "Refusing unsafe partial transfer path".to_string(),
+                ));
+            }
             let len = metadata.len();
             if len < size {
                 offset = len;
@@ -1084,10 +1184,9 @@ impl FileTransfer {
         }
 
         if offset == 0
-            && tokio::fs::metadata(&item_path)
-                .await
-                .map(|m| m.len() == size)
-                .unwrap_or(false)
+            && let Ok(metadata) = tokio::fs::symlink_metadata(&item_path).await
+            && metadata.is_file()
+            && metadata.len() == size
         {
             offset = size;
         }
@@ -1112,7 +1211,10 @@ impl FileTransfer {
                 };
 
             let our_checksum = if size > 0 {
-                let path_to_hash = if part_path.exists() {
+                let path_to_hash = if tokio::fs::symlink_metadata(&part_path)
+                    .await
+                    .is_ok_and(|metadata| metadata.is_file())
+                {
                     &part_path
                 } else {
                     &item_path
@@ -1140,7 +1242,10 @@ impl FileTransfer {
                 return Err(ConnectedError::ChecksumMismatch);
             }
 
-            if part_path.exists() {
+            if tokio::fs::symlink_metadata(&part_path)
+                .await
+                .is_ok_and(|metadata| metadata.is_file())
+            {
                 tokio::fs::rename(&part_path, &item_path)
                     .await
                     .map_err(ConnectedError::Io)?;
@@ -1150,17 +1255,7 @@ impl FileTransfer {
             return Ok(());
         }
 
-        let raw_file = if offset > 0 {
-            tokio::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(&part_path)
-                .await
-                .map_err(ConnectedError::Io)?
-        } else {
-            File::create(&part_path).await.map_err(ConnectedError::Io)?
-        };
+        let raw_file = open_part_file(&part_path, offset > 0).await?;
         let mut file = tokio::io::BufWriter::with_capacity(BUFFER_SIZE, raw_file);
 
         if offset > 0 {
@@ -1284,6 +1379,9 @@ impl FileTransfer {
             approved_batches,
         } = config;
 
+        let save_dir = save_dir.as_ref().to_path_buf();
+        create_dir_all_no_symlinks(&save_dir).await?;
+
         // Read Request
         let request: FileTransferMessage = recv_message(&mut recv).await?;
 
@@ -1315,6 +1413,7 @@ impl FileTransfer {
                     ));
                 };
 
+                validate_incoming_size(size)?;
                 if !is_safe_relative_path(&relative_path) {
                     let err_msg =
                         format!("Directory traversal attempt detected: {}", relative_path);
@@ -1350,26 +1449,7 @@ impl FileTransfer {
                     filename, size
                 );
 
-                // M2: Reject transfers that exceed the maximum allowed size to prevent disk exhaustion.
-                if size > MAX_INCOMING_FILE_SIZE {
-                    let reject = FileTransferMessage::Reject {
-                        reason: format!(
-                            "File too large: {} bytes exceeds maximum allowed {} bytes",
-                            size, MAX_INCOMING_FILE_SIZE
-                        ),
-                    };
-                    let _ = send_message(&mut send, &reject).await;
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Failed {
-                            error: format!("File too large ({} bytes)", size),
-                        });
-                    }
-                    return Err(ConnectedError::TransferRejected(format!(
-                        "File size {} exceeds maximum allowed {}",
-                        size, MAX_INCOMING_FILE_SIZE
-                    )));
-                }
-
+                validate_incoming_size(size)?;
                 // If we need user approval, emit Pending first
                 if !auto_accept && let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Pending {
@@ -1407,7 +1487,7 @@ impl FileTransfer {
 
                 // Sanitize filename and avoid overwriting existing files
                 let mut safe_filename = sanitize_filename(&filename);
-                let save_dir = save_dir.as_ref();
+                let save_dir = &save_dir;
                 let mut save_path = save_dir.join(&safe_filename);
 
                 // If the target exists, generate a unique name: "name (1).ext"
@@ -1503,7 +1583,9 @@ impl FileTransfer {
                 // Check if we can resume from a partial .part file
                 let part_path = PathBuf::from(format!("{}.part", save_path.to_string_lossy()));
                 let mut offset = 0;
-                if let Ok(metadata) = tokio::fs::metadata(&part_path).await {
+                if let Ok(metadata) = tokio::fs::symlink_metadata(&part_path).await
+                    && metadata.is_file()
+                {
                     let len = metadata.len();
                     if len < size {
                         offset = len;
@@ -1527,17 +1609,7 @@ impl FileTransfer {
                 }
 
                 // Create or open the partial file
-                let raw_file = if offset > 0 {
-                    tokio::fs::OpenOptions::new()
-                        .write(true)
-                        .create(true)
-                        .truncate(false)
-                        .open(&part_path)
-                        .await
-                        .map_err(ConnectedError::Io)?
-                } else {
-                    File::create(&part_path).await.map_err(ConnectedError::Io)?
-                };
+                let raw_file = open_part_file(&part_path, offset > 0).await?;
                 let mut file = tokio::io::BufWriter::with_capacity(BUFFER_SIZE, raw_file);
 
                 if offset > 0 {
@@ -1712,24 +1784,13 @@ impl FileTransfer {
                     name, files_count, total_size, is_directory
                 );
 
-                if total_size > MAX_INCOMING_FILE_SIZE {
-                    let reject = FileTransferMessage::Reject {
-                        reason: format!(
-                            "Batch too large: {} bytes exceeds maximum allowed {} bytes",
-                            total_size, MAX_INCOMING_FILE_SIZE
-                        ),
-                    };
-                    let _ = send_message(&mut send, &reject).await;
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(TransferProgress::Failed {
-                            error: format!("Batch too large ({} bytes)", total_size),
-                        });
-                    }
-                    return Err(ConnectedError::TransferRejected(
-                        "Batch too large".to_string(),
-                    ));
+                validate_incoming_size(total_size)?;
+                if files_count > MAX_INCOMING_BATCH_FILES {
+                    return Err(ConnectedError::Protocol(format!(
+                        "Batch contains too many files: {} (max {})",
+                        files_count, MAX_INCOMING_BATCH_FILES
+                    )));
                 }
-
                 // If we need user approval, emit Pending first
                 if !auto_accept && let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Pending {
@@ -1764,9 +1825,7 @@ impl FileTransfer {
                 }
 
                 if let Some(ref approved) = approved_batches {
-                    approved
-                        .write()
-                        .insert(batch_id.clone(), save_dir.as_ref().to_path_buf());
+                    approved.write().insert(batch_id.clone(), save_dir.clone());
                 }
 
                 struct ApprovedBatchGuard {
@@ -1797,7 +1856,8 @@ impl FileTransfer {
                     });
                 }
 
-                let save_dir = save_dir.as_ref();
+                let mut received_files = 0u64;
+                let mut received_bytes = 0u64;
 
                 loop {
                     if cancel_flag
@@ -1829,6 +1889,30 @@ impl FileTransfer {
                             is_dir,
                             size,
                         } => {
+                            if is_dir {
+                                if size != 0 {
+                                    return Err(ConnectedError::Protocol(
+                                        "Directory batch item must have size 0".to_string(),
+                                    ));
+                                }
+                            } else {
+                                validate_incoming_size(size)?;
+                                received_files =
+                                    received_files.checked_add(1).ok_or_else(|| {
+                                        ConnectedError::Protocol(
+                                            "Batch file count overflow".to_string(),
+                                        )
+                                    })?;
+                                received_bytes =
+                                    received_bytes.checked_add(size).ok_or_else(|| {
+                                        ConnectedError::Protocol("Batch size overflow".to_string())
+                                    })?;
+                                if received_files > files_count || received_bytes > total_size {
+                                    return Err(ConnectedError::Protocol(
+                                        "Batch item totals exceed the declared batch".to_string(),
+                                    ));
+                                }
+                            }
                             if !is_safe_relative_path(&relative_path) {
                                 let err_msg = format!(
                                     "Directory traversal attempt detected: {}",
@@ -1844,15 +1928,13 @@ impl FileTransfer {
 
                             if is_dir {
                                 let item_path = save_dir.join(&relative_path);
-                                tokio::fs::create_dir_all(&item_path)
-                                    .await
-                                    .map_err(ConnectedError::Io)?;
+                                create_dir_all_no_symlinks(&item_path).await?;
                                 send_message(&mut send, &FileTransferMessage::ItemAck).await?;
                             } else {
                                 Self::receive_file_payload(
                                     &mut send,
                                     &mut recv,
-                                    save_dir,
+                                    &save_dir,
                                     &relative_path,
                                     size,
                                     &cancel_flag,
@@ -1862,6 +1944,12 @@ impl FileTransfer {
                             }
                         }
                         FileTransferMessage::Complete { .. } => {
+                            if received_files != files_count || received_bytes != total_size {
+                                return Err(ConnectedError::Protocol(format!(
+                                    "Batch totals do not match declaration: received {} files / {} bytes, expected {} files / {} bytes",
+                                    received_files, received_bytes, files_count, total_size
+                                )));
+                            }
                             send_message(&mut send, &FileTransferMessage::Ack).await?;
                             if let Some(ref tx) = progress_tx {
                                 let _ = tx.send(TransferProgress::Completed {
@@ -1925,15 +2013,18 @@ async fn pre_hash_resume(path: &Path, offset: u64) -> Result<(blake3::Hasher, u6
 
 /// Helper function to validate path relative to the download directory to prevent directory traversal
 pub fn is_safe_relative_path(path: &str) -> bool {
+    if path.is_empty() || path.len() > 4096 || path.contains('\0') {
+        return false;
+    }
     let normalized = path.replace('\\', "/");
-    if normalized.starts_with('/') {
+    if normalized.starts_with('/') || normalized.ends_with('/') {
         return false;
     }
     for segment in normalized.split('/') {
-        if segment == ".." {
+        if segment.is_empty() || segment == "." || segment == ".." {
             return false;
         }
-        if segment.contains(':') {
+        if segment.contains(':') || segment.chars().any(char::is_control) {
             return false;
         }
     }
@@ -2102,7 +2193,7 @@ fn has_plausible_extension(filename: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_filename;
+    use super::{is_safe_relative_path, sanitize_filename};
 
     #[test]
     fn strips_android_uuid_suffix() {
@@ -2122,5 +2213,28 @@ mod tests {
     #[test]
     fn preserves_legitimate_numeric_filename_parts() {
         assert_eq!(sanitize_filename("invoice-2024.pdf"), "invoice-2024.pdf");
+    }
+
+    #[test]
+    fn rejects_resume_offset_beyond_file_size() {
+        assert!(super::validate_resume_offset(10, 10).is_ok());
+        assert!(super::validate_resume_offset(11, 10).is_err());
+    }
+
+    #[test]
+    fn rejects_unsafe_relative_paths() {
+        assert!(is_safe_relative_path("folder/file.txt"));
+        assert!(!is_safe_relative_path(""));
+        assert!(!is_safe_relative_path("."));
+        assert!(!is_safe_relative_path("folder/../file.txt"));
+        assert!(!is_safe_relative_path(r"folder\..\file.txt"));
+        assert!(!is_safe_relative_path("/absolute/file.txt"));
+        assert!(!is_safe_relative_path("C:/absolute/file.txt"));
+    }
+
+    #[test]
+    fn enforces_incoming_transfer_limit() {
+        assert!(super::validate_incoming_size(super::MAX_INCOMING_FILE_SIZE).is_ok());
+        assert!(super::validate_incoming_size(super::MAX_INCOMING_FILE_SIZE + 1).is_err());
     }
 }

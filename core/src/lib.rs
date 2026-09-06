@@ -1,6 +1,7 @@
 pub mod ios_paths;
 
 pub mod client;
+pub mod codec;
 pub mod device;
 pub mod discovery;
 pub mod error;
@@ -33,3 +34,11 @@ pub use update::{
     UpdateChecker, UpdateInfo, download_to_file, install_linux_appimage_update,
     install_macos_update,
 };
+
+/// Wire-protocol version advertised via mDNS TXT records and embedded in
+/// newly created `Device`s. Single source of truth: bumping this constant is
+/// the ONLY change needed to move the protocol version — `discovery.rs` uses
+/// it for announce/compat checks and `device.rs` stamps it into new devices.
+pub const PROTOCOL_VERSION: u32 = 2;
+/// Oldest peer protocol version we still interoperate with.
+pub const MIN_COMPATIBLE_PROTOCOL_VERSION: u32 = 1;

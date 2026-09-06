@@ -3,23 +3,24 @@ use crate::mpris_server::{MprisUpdate, send_mpris_update};
 use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
     SavedDeviceInfo, TransferStatus, add_actionable_notification, add_file_transfer_request,
-    add_notification, add_open_file_notification, get_active_incoming_transfer_id,
+    add_notification, add_open_file_notification, flush_settings, get_active_incoming_transfer_id,
     get_active_outgoing_transfer_id, get_auto_sync_messages, get_autostart_enabled_setting,
     get_clipboard_sync_enabled, get_current_media, get_current_remote_files,
     get_current_remote_path, get_device_name_setting, get_devices_store,
     get_download_directory_setting, get_last_clipboard, get_last_remote_clipboard_content,
     get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
-    get_pairing_mode_state, get_pairing_requests, get_pending_pairings, get_phone_call_log,
-    get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_commands_enabled, get_remote_files_update, get_saved_devices_setting,
-    get_transfer_status, is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced,
-    mark_messages_synced, remove_device_from_settings, remove_file_transfer_request,
-    remove_transfer_path, save_device_to_settings, set_active_call,
+    get_pairing_mode_enabled_setting, get_pairing_mode_state, get_pairing_requests,
+    get_pending_pairings, get_phone_call_log, get_phone_conversations, get_phone_data_update,
+    get_phone_messages, get_preview_data, get_remote_commands_enabled, get_remote_files_update,
+    get_saved_devices_setting, get_transfer_status, is_auto_accept_enabled, mark_calls_synced,
+    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
+    remove_file_transfer_request, remove_transfer_path, save_device_to_settings, set_active_call,
     set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
     set_autostart_enabled_setting, set_device_name_setting, set_discovery_active,
-    set_download_directory_setting, set_last_remote_clipboard_content, set_pairing_mode_state,
-    set_phone_call_log, set_phone_contacts, set_phone_conversations, set_phone_messages,
-    set_sdk_initialized, set_shared_folder_setting, set_transfer_status, store_transfer_path,
+    set_download_directory_setting, set_last_remote_clipboard_content,
+    set_pairing_mode_enabled_setting, set_pairing_mode_state, set_phone_call_log,
+    set_phone_contacts, set_phone_conversations, set_phone_messages, set_sdk_initialized,
+    set_shared_folder_setting, set_transfer_status, store_transfer_path,
 };
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::telephony::{CallAction, TelephonyMessage};
@@ -1513,7 +1514,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         handle.abort();
                     }
                     clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
-                    c.set_pairing_mode_persistent(true);
+                    c.set_pairing_mode_persistent(get_pairing_mode_enabled_setting());
                 }
                 // Apply saved download directory to core
                 if let Some(c) = &client
@@ -1777,6 +1778,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 }
             }
             AppAction::SetPairingMode(enabled) => {
+                set_pairing_mode_enabled_setting(enabled);
                 if let Some(c) = &client {
                     c.set_pairing_mode_persistent(enabled);
                 }
@@ -2764,6 +2766,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 if let Some(c) = &client {
                     c.cancel_all_file_transfers();
                 }
+                flush_settings();
                 set_active_outgoing_transfer_id(None);
                 set_active_incoming_transfer_id(None);
                 set_transfer_status(TransferStatus::Idle);

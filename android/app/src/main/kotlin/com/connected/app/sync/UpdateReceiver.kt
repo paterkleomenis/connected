@@ -4,6 +4,9 @@ import android.app.DownloadManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.util.Log
 
 class UpdateReceiver : BroadcastReceiver() {
@@ -19,10 +22,28 @@ class UpdateReceiver : BroadcastReceiver() {
     private fun installApk(context: Context, downloadId: Long) {
         try {
             val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            downloadManager.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
+                if (!cursor.moveToFirst()) return
+                val status = cursor.getInt(
+                    cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
+                )
+                if (status != DownloadManager.STATUS_SUCCESSFUL) return
+            }
             val uri = downloadManager.getUriForDownloadedFile(downloadId) ?: return
             
             val mimeType = downloadManager.getMimeTypeForDownloadedFile(downloadId)
             if (mimeType != "application/vnd.android.package-archive") return
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                !context.packageManager.canRequestPackageInstalls()
+            ) {
+                val settingsIntent = Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${context.packageName}")
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(settingsIntent)
+                return
+            }
 
             val installIntent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)

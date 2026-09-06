@@ -8,7 +8,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 #[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+use windows::Win32::Storage::FileSystem::{
+    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+};
+#[cfg(windows)]
+use windows::core::PCWSTR;
 
 /// Restrict a file or directory so that only the current user can access it.
 ///
@@ -422,7 +430,7 @@ impl KeyStore {
         let data = serde_json::to_vec_pretty(&self.known_peers)
             .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
 
-        // M4: Atomic write — write to temp file, fsync, then rename over the target
+        // Atomic write — write to temp file, fsync, then rename over the target
         let final_path = self.storage_dir.join("known_peers.json");
         let tmp_path = self.storage_dir.join("known_peers.json.tmp");
 
@@ -501,7 +509,7 @@ impl KeyStore {
 
         let mut last_err = None;
         for attempt in 0..=MAX_RETRIES {
-            match std::fs::rename(from, to) {
+            match Self::replace_file(from, to) {
                 Ok(()) => return Ok(()),
                 Err(e) if is_transient_io_error(&e) && attempt < MAX_RETRIES => {
                     warn!(
@@ -523,25 +531,60 @@ impl KeyStore {
         })))
     }
 
+    #[allow(unsafe_code)]
+    fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            let from_wide: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+            let to_wide: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+            unsafe {
+                MoveFileExW(
+                    PCWSTR(from_wide.as_ptr()),
+                    PCWSTR(to_wide.as_ptr()),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            }
+            .map_err(|e| std::io::Error::from_raw_os_error(e.code().0))
+        }
+
+        #[cfg(not(windows))]
+        {
+            std::fs::rename(from, to)
+        }
+    }
+
     pub fn trust_peer(
         &mut self,
         fingerprint: String,
         device_id: Option<String>,
         name: Option<String>,
     ) -> Result<()> {
-        self.known_peers.peers.insert(
-            fingerprint.clone(),
-            PeerInfo {
+        let last_seen = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Merge instead of overwrite: callers that only know the fingerprint
+        // (device_id/name = None) must not erase previously stored metadata.
+        let entry = self
+            .known_peers
+            .peers
+            .entry(fingerprint.clone())
+            .or_insert_with(|| PeerInfo {
                 fingerprint,
-                status: PeerStatus::Trusted,
-                device_id,
-                name,
-                last_seen: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-            },
-        );
+                status: PeerStatus::Unpaired,
+                device_id: None,
+                name: None,
+                last_seen,
+            });
+        entry.status = PeerStatus::Trusted;
+        entry.last_seen = last_seen;
+        if device_id.is_some() {
+            entry.device_id = device_id;
+        }
+        if name.is_some() {
+            entry.name = name;
+        }
         self.save_peers()
     }
 

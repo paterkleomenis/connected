@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pre-Android 12 equivalent of data_extraction_rules.xml: keep the pairing
+     identity and trusted-peer store out of backups. -->
+<full-backup-content>
+    <exclude domain="external" path="identity.json" />
+    <exclude domain="external" path="known_peers.json" />
+</full-backup-content>
