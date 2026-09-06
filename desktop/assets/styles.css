@@ -1862,6 +1862,11 @@ body {
     user-select: none;
 }
 
+.hidden-toggle {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
 .search-input,
 .sort-select,
 .dir-btn {

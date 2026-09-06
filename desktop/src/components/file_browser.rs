@@ -32,6 +32,12 @@ impl SortKey {
     const ALL: [SortKey; 3] = [SortKey::Name, SortKey::Size, SortKey::Date];
 }
 
+/// A file is considered hidden when its name starts with a dot.
+/// Kept consistent with the remote search walk in `controller.rs`.
+fn is_hidden(name: &str) -> bool {
+    name.starts_with('.')
+}
+
 /// The entries a click action should operate on: deep search results while
 /// searching (falling back to the current directory until they arrive),
 /// otherwise the plain listing — name-filtered when a query is active.
@@ -40,6 +46,7 @@ fn owned_visible_entries(
     files: &Signal<Option<Vec<FsEntry>>>,
     search_results: &Signal<Option<Vec<FsEntry>>>,
     query: &str,
+    show_hidden: bool,
 ) -> Vec<FsEntry> {
     let mut source = if query.is_empty() {
         files.read().clone().unwrap_or_default()
@@ -52,6 +59,9 @@ fn owned_visible_entries(
     if !query.is_empty() {
         source.retain(|e| e.name.to_lowercase().contains(query));
     }
+    if !show_hidden {
+        source.retain(|e| !is_hidden(&e.name));
+    }
     source
 }
 
@@ -61,10 +71,11 @@ fn toggle_all_visible(
     search: Signal<String>,
     sort_key: Signal<SortKey>,
     sort_asc: Signal<bool>,
+    show_hidden: bool,
     mut selected: Signal<HashSet<String>>,
 ) {
     let query = search.read().trim().to_lowercase();
-    let mut vis = owned_visible_entries(&files, &search_results, &query);
+    let mut vis = owned_visible_entries(&files, &search_results, &query, show_hidden);
     vis.sort_by(|a, b| compare_entries(a, b, *sort_key.read(), *sort_asc.read()));
     let all_now = !vis.is_empty() && vis.iter().all(|e| selected.read().contains(&e.path));
     let mut sel = selected.write();
@@ -81,10 +92,11 @@ fn visible_selected_snapshot(
     search: Signal<String>,
     sort_key: Signal<SortKey>,
     sort_asc: Signal<bool>,
+    show_hidden: bool,
     selected: Signal<HashSet<String>>,
 ) -> Vec<FsEntry> {
     let query = search.read().trim().to_lowercase();
-    let mut vis = owned_visible_entries(&files, &search_results, &query);
+    let mut vis = owned_visible_entries(&files, &search_results, &query, show_hidden);
     let sel = selected.read();
     vis.retain(|e| sel.contains(&e.path));
     drop(sel);
@@ -128,6 +140,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let mut sort_key = use_signal(|| SortKey::Name);
     let mut sort_asc = use_signal(|| true);
     let mut sort_open = use_signal(|| false);
+    let mut show_hidden = use_signal(|| false);
     let mut search_results = use_signal(|| Option::<Vec<FsEntry>>::None);
     let mut last_search_update = use_signal(|| *get_remote_search_update().lock_or_recover());
 
@@ -232,6 +245,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let eff_device = device.clone();
     use_effect(move || {
         let entries_opt = files.read();
+        let show = *show_hidden.read();
         if let Some(entries) = entries_opt.as_ref() {
             let thumbs = current_thumbnails.read();
             let mut to_request = Vec::new();
@@ -239,6 +253,10 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
             {
                 let requested = requested_thumbnails.read();
                 for entry in entries {
+                    // Don't scan hidden files for thumbnails while they are hidden.
+                    if !show && is_hidden(&entry.name) {
+                        continue;
+                    }
                     let is_image = ["jpg", "jpeg", "png", "gif", "webp", "bmp"].contains(
                         &entry
                             .name
@@ -326,16 +344,18 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
         }
     });
 
-    // Dispatch a debounced recursive search when the query changes
+    // Dispatch a debounced recursive search when the query or hidden
+    // visibility changes so hidden files are not scanned while hidden.
     let search_device = device.clone();
     use_effect(move || {
         let query = search.read().trim().to_string();
+        let include_hidden = *show_hidden.read();
         let ip = search_device.ip.clone();
         let port = search_device.port;
         spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            // Superseded by newer keystrokes — skip
-            if search.read().trim() != query {
+            // Superseded by newer keystrokes or a visibility toggle — skip
+            if search.read().trim() != query || *show_hidden.read() != include_hidden {
                 return;
             }
             if query.is_empty() {
@@ -360,6 +380,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 path,
                 query,
                 request_id,
+                include_hidden,
             });
         });
     });
@@ -375,6 +396,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let search_val = search.read();
     let sort_key_val = *sort_key.read();
     let sort_asc_val = *sort_asc.read();
+    let show_hidden_val = *show_hidden.read();
     let search_results_val = search_results.read();
 
     // The visible listing: deep search results while searching (falling back
@@ -391,6 +413,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
             entries
                 .iter()
                 .filter(|e| e.name.to_lowercase().contains(query.as_str()))
+                .filter(|e| show_hidden_val || !is_hidden(&e.name))
                 .collect()
         })
         .unwrap_or_default();
@@ -462,6 +485,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                 search,
                                 sort_key,
                                 sort_asc,
+                                *show_hidden.read(),
                                 selected,
                             )
                         },
@@ -475,6 +499,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     search,
                                     sort_key,
                                     sort_asc,
+                                    *show_hidden.read(),
                                     selected,
                                 )
                             },
@@ -532,6 +557,35 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                         },
                         Icon { icon: IconType::ArrowRight, size: 14, color: "currentColor".to_string() }
                     }
+                    span {
+                        class: "selection-toggle hidden-toggle",
+                        title: "Show hidden files (dotfiles). When off, hidden files are hidden and skipped during search.",
+                        onclick: move |_| {
+                            let next = !*show_hidden.read();
+                            show_hidden.set(next);
+                            if !next {
+                                selected.write().retain(|p| {
+                                    let name = p.rsplit('/').next().unwrap_or(p.as_str());
+                                    !name.starts_with('.')
+                                });
+                            }
+                        },
+                        SelectionCheckbox {
+                            checked: show_hidden_val,
+                            partial: false,
+                            on_toggle: move |_| {
+                                let next = !*show_hidden.read();
+                                show_hidden.set(next);
+                                if !next {
+                                    selected.write().retain(|p| {
+                                        let name = p.rsplit('/').next().unwrap_or(p.as_str());
+                                        !name.starts_with('.')
+                                    });
+                                }
+                            },
+                        }
+                        span { class: "selection-label", "Hidden" }
+                    }
                     if selected_count > 0 {
                         span { class: "selection-count", "{selected_count} selected" }
                         button {
@@ -546,6 +600,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                         search,
                                         sort_key,
                                         sort_asc,
+                                        *show_hidden.read(),
                                         selected,
                                     );
                                     if !chosen.is_empty() {

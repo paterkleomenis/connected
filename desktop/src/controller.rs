@@ -202,6 +202,7 @@ pub enum AppAction {
         path: String,
         query: String,
         request_id: u64,
+        include_hidden: bool,
     },
     DownloadFile {
         ip: String,
@@ -2040,6 +2041,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 path,
                 query,
                 request_id,
+                include_hidden,
             } => {
                 if let Some(c) = &client {
                     let c = c.clone();
@@ -2077,13 +2079,16 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 };
 
                                 for entry in entries {
-                                    // Don't descend into hidden directories unless
-                                    // the user is explicitly searching for them.
+                                    // When hidden files are unchecked, skip them
+                                    // entirely: no match and no descent, so hidden
+                                    // subtrees are never scanned (no extra
+                                    // remote calls, no results).
+                                    if !include_hidden && entry.name.starts_with('.') {
+                                        continue;
+                                    }
                                     let recurse =
                                         matches!(entry.entry_type, FsEntryType::Directory)
-                                            && depth < MAX_DEPTH
-                                            && (query.starts_with('.')
-                                                || !entry.name.starts_with('.'));
+                                            && depth < MAX_DEPTH;
                                     let matched = !q.is_empty()
                                         && entry.name.to_lowercase().contains(q.as_str());
 
