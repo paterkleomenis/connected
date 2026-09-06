@@ -37,7 +37,10 @@ impl std::str::FromStr for DeviceType {
             "macos" => Ok(DeviceType::MacOS),
             "unknown" => Ok(DeviceType::Unknown),
             "" => Err(()),
-            _ => Err(()),
+            // Discovery data is peer-controlled and may contain a newer
+            // platform label. Preserve the historical tolerant behavior and
+            // let callers represent it as Unknown instead of failing parsing.
+            _ => Ok(DeviceType::Unknown),
         }
     }
 }
@@ -100,7 +103,7 @@ impl Device {
             ip: ip.to_string(),
             port,
             device_type,
-            protocol_version,
+            protocol_version: protocol_version.max(crate::MIN_COMPATIBLE_PROTOCOL_VERSION),
         }
     }
 

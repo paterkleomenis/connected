@@ -63,13 +63,9 @@ class ConnectedService : Service() {
             connectedApp.cancelFileTransfer()
         }
 
-        // NOTE: the system destroys the service regardless — there is no veto.
-        // The previous early `return` skipped super.onDestroy() (leaking the
-        // service token) and skipped full cleanup while producing only a zombie
-        // notification. We always tear down properly here; background transfer
-        // completion is handled by the cancellation messages sent above.
-
-        // No active transfers — normal cleanup
+        // onDestroy cannot postpone service destruction by returning. Always
+        // release the service resources; durable transfers need a worker or a
+        // separately managed foreground service instead.
         stopForeground(STOP_FOREGROUND_REMOVE)
         Thread {
             try {

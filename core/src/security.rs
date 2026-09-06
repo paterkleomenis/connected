@@ -8,7 +8,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 #[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+use windows::Win32::Storage::FileSystem::{
+    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+};
+#[cfg(windows)]
+use windows::core::PCWSTR;
 
 /// Restrict a file or directory so that only the current user can access it.
 ///
@@ -501,7 +509,7 @@ impl KeyStore {
 
         let mut last_err = None;
         for attempt in 0..=MAX_RETRIES {
-            match std::fs::rename(from, to) {
+            match Self::replace_file(from, to) {
                 Ok(()) => return Ok(()),
                 Err(e) if is_transient_io_error(&e) && attempt < MAX_RETRIES => {
                     warn!(
@@ -521,6 +529,28 @@ impl KeyStore {
         Err(ConnectedError::Io(last_err.unwrap_or_else(|| {
             std::io::Error::other("rename retry exhausted without an underlying error")
         })))
+    }
+
+    #[allow(unsafe_code)]
+    fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            let from_wide: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+            let to_wide: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+            unsafe {
+                MoveFileExW(
+                    PCWSTR(from_wide.as_ptr()),
+                    PCWSTR(to_wide.as_ptr()),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            }
+            .map_err(|e| std::io::Error::from_raw_os_error(e.code().0))
+        }
+
+        #[cfg(not(windows))]
+        {
+            std::fs::rename(from, to)
+        }
     }
 
     pub fn trust_peer(

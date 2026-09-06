@@ -5,12 +5,20 @@ use connected_core::{Device, MediaState, UpdateInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::panic::Location;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(windows)]
+use windows::Win32::Storage::FileSystem::{
+    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+};
+#[cfg(windows)]
+use windows::core::PCWSTR;
 
 /// Counter for tracking poison recovery events (useful for telemetry/debugging)
 static POISON_RECOVERY_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -183,6 +191,34 @@ where
     }))
 }
 
+/// Replace a file atomically on every supported platform.
+///
+/// `std::fs::rename` replaces an existing destination on Unix, but normally
+/// fails with `ERROR_ALREADY_EXISTS` on Windows. `MoveFileExW` provides the
+/// equivalent replace semantics there and also asks Windows to flush the
+/// metadata update.
+#[allow(unsafe_code)]
+fn replace_file(tmp_path: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        let from: Vec<u16> = tmp_path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe {
+            MoveFileExW(
+                PCWSTR(from.as_ptr()),
+                PCWSTR(to.as_ptr()),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        }
+        .map_err(|e| std::io::Error::from_raw_os_error(e.code().0))
+    }
+
+    #[cfg(not(windows))]
+    {
+        fs::rename(tmp_path, path)
+    }
+}
+
 pub fn load_settings() -> AppSettings {
     let path = get_settings_path();
     if path.exists() {
@@ -252,7 +288,7 @@ pub fn save_settings(settings: &AppSettings) {
         }
     }
 
-    if let Err(e) = retry_io(|| fs::rename(&tmp_path, &path)) {
+    if let Err(e) = retry_io(|| replace_file(&tmp_path, &path)) {
         tracing::error!("Failed to rename settings temp file: {}", e);
     }
 }
@@ -263,18 +299,8 @@ pub fn get_app_settings() -> &'static Arc<Mutex<AppSettings>> {
 
 /// Serializes settings-file writers so concurrent updates cannot interleave.
 static SETTINGS_SAVE_LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
-
-static SHUTDOWN_COMPLETE: OnceLock<std::sync::atomic::AtomicBool> = OnceLock::new();
-
-pub fn mark_shutdown_complete() {
-    SHUTDOWN_COMPLETE
-        .get_or_init(|| std::sync::atomic::AtomicBool::new(false))
-        .store(true, std::sync::atomic::Ordering::Release);
-}
-
-pub fn shutdown_complete() -> &'static std::sync::atomic::AtomicBool {
-    SHUTDOWN_COMPLETE.get_or_init(|| std::sync::atomic::AtomicBool::new(false))
-}
+static SETTINGS_SAVE_PENDING: AtomicBool = AtomicBool::new(false);
+static SETTINGS_SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub fn update_setting<F: FnOnce(&mut AppSettings)>(f: F) {
     let settings = get_app_settings();
@@ -289,12 +315,47 @@ pub fn update_setting<F: FnOnce(&mut AppSettings)>(f: F) {
         let mut guard = settings.lock_or_recover();
         f(&mut guard);
     }
+    SETTINGS_SAVE_GENERATION.fetch_add(1, Ordering::AcqRel);
+
+    // Coalesce bursts of setting changes into one writer thread. The previous
+    // implementation created one OS thread per UI update, which could create
+    // hundreds of threads while a control was being dragged or toggled.
+    if SETTINGS_SAVE_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
     let save_lock = SETTINGS_SAVE_LOCK.get_or_init(|| Arc::new(Mutex::new(())));
     std::thread::spawn(move || {
-        let _guard = save_lock.lock_or_recover();
-        let latest = get_app_settings().lock_or_recover().clone();
-        save_settings(&latest);
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let generation = SETTINGS_SAVE_GENERATION.load(Ordering::Acquire);
+            let latest = get_app_settings().lock_or_recover().clone();
+            let _guard = save_lock.lock_or_recover();
+            save_settings(&latest);
+            drop(_guard);
+
+            if SETTINGS_SAVE_GENERATION.load(Ordering::Acquire) == generation {
+                SETTINGS_SAVE_PENDING.store(false, Ordering::Release);
+                // Close the race where an update arrives immediately after the
+                // equality check: either that updater starts a new worker, or this
+                // worker claims the pending state and performs another save.
+                if SETTINGS_SAVE_GENERATION.load(Ordering::Acquire) != generation
+                    && !SETTINGS_SAVE_PENDING.swap(true, Ordering::AcqRel)
+                {
+                    continue;
+                }
+                break;
+            }
+        }
     });
+}
+
+/// Persist the latest in-memory settings before application shutdown.
+pub fn flush_settings() {
+    let save_lock = SETTINGS_SAVE_LOCK.get_or_init(|| Arc::new(Mutex::new(())));
+    let _guard = save_lock.lock_or_recover();
+    let latest = get_app_settings().lock_or_recover().clone();
+    save_settings(&latest);
 }
 
 pub fn get_saved_devices_setting() -> HashMap<String, SavedDeviceInfo> {
@@ -1293,11 +1354,15 @@ pub fn store_transfer_path(transfer_id: String, path: PathBuf) {
     // lock_or_recover: a poisoned map here would silently disable auto-retry
     // and cancel-mapping for every future transfer (the rest of the module
     // recovers from poisoning — these two accessors were the outliers).
-    get_transfer_file_paths().lock_or_recover().insert(transfer_id, path);
+    get_transfer_file_paths()
+        .lock_or_recover()
+        .insert(transfer_id, path);
 }
 
 pub fn remove_transfer_path(transfer_id: &str) -> Option<PathBuf> {
-    get_transfer_file_paths().lock_or_recover().remove(transfer_id)
+    get_transfer_file_paths()
+        .lock_or_recover()
+        .remove(transfer_id)
 }
 
 #[cfg(test)]

@@ -17,7 +17,9 @@ const BROWSE_TIMEOUT: Duration = Duration::from_millis(100);
 const DEVICE_STALE_TIMEOUT: Duration = Duration::from_secs(30);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(10);
 const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
-pub(crate) use crate::{MIN_COMPATIBLE_PROTOCOL_VERSION as MIN_COMPATIBLE_VERSION, PROTOCOL_VERSION};
+pub(crate) use crate::{
+    MIN_COMPATIBLE_PROTOCOL_VERSION as MIN_COMPATIBLE_VERSION, PROTOCOL_VERSION,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DiscoverySource {
@@ -363,6 +365,12 @@ impl DiscoveryService {
                 }
                 Err(e) => return Err(e.into()),
             }
+
+            if attempt == 99 {
+                return Err(crate::error::ConnectedError::Network(
+                    "mDNS daemon queue remained full after 100 attempts".to_string(),
+                ));
+            }
         }
         Ok(())
     }
@@ -695,6 +703,17 @@ impl DiscoveryService {
 
         match source {
             DiscoverySource::Connected => {
+                // A connection update created by an older call site may not
+                // carry negotiated discovery metadata. Keep the conservative
+                // (older) version already learned from mDNS rather than
+                // silently upgrading a legacy peer to the v2 codec.
+                if let Some(discovered) = tracked.discovered.as_ref()
+                    && discovered.device.protocol_version < device.protocol_version
+                {
+                    device.protocol_version = discovered.device.protocol_version;
+                }
+                let mut endpoint = endpoint;
+                endpoint.device = device.clone();
                 tracked.connected = Some(endpoint);
 
                 // Keep discovered metadata in sync so source failover does not
@@ -985,11 +1004,22 @@ impl DiscoveryService {
         }
 
         // Check protocol version compatibility
-        let version = info
-            .txt_properties
-            .get("version")
-            .and_then(|v| v.val_str().parse::<u32>().ok())
-            .unwrap_or(0);
+        // v1 peers did not advertise a version TXT record. Treat an omitted
+        // field as v1, while rejecting an explicitly malformed value.
+        let version = match info.txt_properties.get("version") {
+            None => MIN_COMPATIBLE_VERSION,
+            Some(value) => match value.val_str().parse::<u32>() {
+                Ok(version) => version,
+                Err(_) => {
+                    warn!(
+                        "Ignoring device with malformed protocol version {:?}: {}",
+                        value.val_str(),
+                        info.fullname
+                    );
+                    return;
+                }
+            },
+        };
 
         if version < MIN_COMPATIBLE_VERSION {
             warn!(
@@ -1268,12 +1298,12 @@ impl DiscoveryService {
             .unwrap_or(1)
     }
 
-    pub fn get_version_for_ip(&self, ip: IpAddr) -> u32 {
+    pub fn get_version_for_endpoint(&self, ip: IpAddr, port: u16) -> u32 {
         self.discovered_devices
             .read()
             .values()
             .filter_map(|t| t.active_device())
-            .find(|d| d.ip_addr() == Some(ip))
+            .find(|d| d.ip_addr() == Some(ip) && d.port == port)
             .map(|d| d.protocol_version)
             .unwrap_or(1)
     }

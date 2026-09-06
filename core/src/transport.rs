@@ -38,9 +38,15 @@ const MAX_IDLE_TIMEOUT_SECS: u64 = 20;
 const KEEP_ALIVE_INTERVAL_SECS: u64 = 15;
 const MAX_CONCURRENT_BIDI_STREAMS: u32 = 256; // Increased for better parallelism
 const MAX_CONCURRENT_UNI_STREAMS: u32 = 256; // Increased for better parallelism
+const MAX_IN_FLIGHT_STREAM_HANDLERS: usize = 32;
+const STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024; // 64MB per stream
 const CONNECTION_RECEIVE_WINDOW: u32 = 256 * 1024 * 1024; // 256MB per connection
 const SEND_WINDOW: u64 = 128 * 1024 * 1024; // 128MB send window for high-speed LAN
+
+fn default_protocol_version() -> u32 {
+    crate::MIN_COMPATIBLE_PROTOCOL_VERSION
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
@@ -56,10 +62,14 @@ pub enum Message {
         device_id: String,
         device_name: String,
         listening_port: u16,
+        #[serde(default = "default_protocol_version")]
+        protocol_version: u32,
     },
     HandshakeAck {
         device_id: String,
         device_name: String,
+        #[serde(default = "default_protocol_version")]
+        protocol_version: u32,
     },
     HandshakeReject {
         device_id: String,
@@ -137,9 +147,9 @@ struct CachedConnection {
 
 #[derive(Clone)]
 struct TransportHandlers {
-    message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message, Option<SendStream>)>,
-    file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
-    fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
+    message_tx: mpsc::Sender<(SocketAddr, String, Message, Option<SendStream>)>,
+    file_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
+    fs_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
 }
 
 impl ConnectionCache {
@@ -554,9 +564,9 @@ impl QuicTransport {
     /// Shared accept loop for both main and WiFi Aware endpoints.
     async fn accept_loop(
         endpoint: Endpoint,
-        message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message, Option<SendStream>)>,
-        file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
-        fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
+        message_tx: mpsc::Sender<(SocketAddr, String, Message, Option<SendStream>)>,
+        file_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
+        fs_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
         local_id: String,
         connection_cache: Arc<RwLock<ConnectionCache>>,
         key_store: Arc<RwLock<KeyStore>>,
@@ -834,12 +844,11 @@ impl QuicTransport {
         };
 
         if already_connecting {
-            // Another task is connecting — wait up to CONNECT_TIMEOUT for it to finish,
-            // matching the loop in `connect_allow_unknown` to avoid duplicate dials.
-            let start = Instant::now();
-            while start.elapsed() < CONNECT_TIMEOUT {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-
+            // Another task owns the dial. Wait for it to publish a connection or
+            // release the marker. If it remains stuck, fail this caller instead
+            // of starting a second dial against the same peer.
+            let deadline = Instant::now() + CONNECT_TIMEOUT;
+            loop {
                 let cached = {
                     let mut cache = self.connection_cache.write();
                     cache.get(&addr)
@@ -852,16 +861,28 @@ impl QuicTransport {
                     return Ok(conn);
                 }
 
-                // Check if the other task failed and cleared the flag
-                if !self.connecting.lock().await.contains(&canonical) {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(ConnectedError::Timeout(format!(
+                        "Another connection attempt to {} is still in progress",
+                        addr
+                    )));
+                }
+
+                tokio::time::sleep((deadline - now).min(Duration::from_millis(50))).await;
+                let mut in_progress = self.connecting.lock().await;
+                if !in_progress.contains(&canonical) {
+                    // The previous owner finished unsuccessfully. Atomically
+                    // claim the slot before dialing so a third caller cannot
+                    // race us into a duplicate connection.
+                    in_progress.insert(canonical);
                     break;
                 }
             }
-            // Still no connection — claim the slot ourselves.
-            {
-                let mut in_progress = self.connecting.lock().await;
-                in_progress.insert(canonical);
-            }
+        } else {
+            // The initial caller already owns the marker. The guard below will
+            // release it on every success and failure path.
+            debug!("Reserved connection slot for {}", addr);
         }
 
         // Guard: always remove from `connecting` when we leave this scope.
@@ -914,9 +935,7 @@ impl QuicTransport {
                 return Ok(conn);
             }
         }
-        // cache guard is dropped here — no parking_lot guard held across awaits.
 
-        // Prevent TOCTOU race (same pattern as `connect`).
         let already_connecting = {
             let mut in_progress = self.connecting.lock().await;
             if in_progress.contains(&canonical) {
@@ -928,11 +947,15 @@ impl QuicTransport {
         };
 
         if already_connecting {
-            // Wait for the other task to finish connecting or timeout
-            let start = Instant::now();
-            while start.elapsed() < CONNECT_TIMEOUT {
-                tokio::time::sleep(Duration::from_millis(50)).await;
+            let deadline = Instant::now() + CONNECT_TIMEOUT;
+            loop {
+                let mut in_progress = self.connecting.lock().await;
+                if !in_progress.contains(&canonical) {
+                    in_progress.insert(canonical);
+                    break;
+                }
 
+                drop(in_progress);
                 let cached = {
                     let mut cache = self.connection_cache.write();
                     cache.get(&addr)
@@ -945,12 +968,14 @@ impl QuicTransport {
                     return Ok(conn);
                 }
 
-                // Check if the other task failed and removed the flag
-                let in_progress = self.connecting.lock().await;
-                if !in_progress.contains(&canonical) {
-                    // Other task finished with error, we should try ourselves now
-                    break;
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(ConnectedError::Timeout(format!(
+                        "Another connection attempt to {} is still in progress",
+                        addr
+                    )));
                 }
+                tokio::time::sleep((deadline - now).min(Duration::from_millis(50))).await;
             }
 
             // Mirror `connect()`: claim the slot ourselves before dialing.
@@ -1208,9 +1233,9 @@ impl QuicTransport {
 
     pub async fn start_server(
         &self,
-        message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message, Option<SendStream>)>,
-        file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
-        fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
+        message_tx: mpsc::Sender<(SocketAddr, String, Message, Option<SendStream>)>,
+        file_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
+        fs_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
     ) -> Result<()> {
         {
             let mut handlers = self.handlers.write();
@@ -1252,9 +1277,8 @@ impl QuicTransport {
     /// in fixed-size chunks instead of allocating `len` bytes up-front.
     ///
     /// Security: a malicious peer controls `len` (the frame header). Reading
-    /// chunk-by-chunk bounds peak memory to the bytes *actually received*
-    /// rather than the declared length, preventing trivial memory-exhaustion
-    /// DoS (e.g. 256 concurrent streams each declaring 100 MB frames).
+    /// chunk-by-chunk avoids a single up-front allocation; the total remains
+    /// bounded by the transport's `MAX_MESSAGE_SIZE` frame limit.
     pub(crate) async fn read_chunked(
         recv: &mut RecvStream,
         len: usize,
@@ -1277,23 +1301,31 @@ impl QuicTransport {
     async fn handle_connection(
         connection: Connection,
         remote_addr: SocketAddr,
-        message_tx: mpsc::UnboundedSender<(SocketAddr, String, Message, Option<SendStream>)>,
-        file_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
-        fs_stream_tx: mpsc::UnboundedSender<(String, SendStream, RecvStream)>,
+        message_tx: mpsc::Sender<(SocketAddr, String, Message, Option<SendStream>)>,
+        file_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
+        fs_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
         local_id: String,
         key_store: Arc<RwLock<KeyStore>>,
     ) -> Result<()> {
         let mut fingerprint =
             Self::get_peer_fingerprint(&connection).unwrap_or_else(|| "unknown".to_string());
+        let stream_semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT_STREAM_HANDLERS));
 
         loop {
             match connection.accept_bi().await {
                 Ok((send, mut recv)) => {
+                    let stream_permit = match stream_semaphore.clone().acquire_owned().await {
+                        Ok(permit) => permit,
+                        Err(_) => break,
+                    };
                     // Read Stream Type
 
                     let mut type_buf = [0u8; 1];
 
-                    if recv.read_exact(&mut type_buf).await.is_err() {
+                    let header_result =
+                        tokio::time::timeout(STREAM_HEADER_TIMEOUT, recv.read_exact(&mut type_buf))
+                            .await;
+                    if header_result.is_err() || header_result.is_ok_and(|result| result.is_err()) {
                         continue;
                     }
 
@@ -1310,6 +1342,7 @@ impl QuicTransport {
                             let lid = local_id.clone();
 
                             tokio::spawn(async move {
+                                let _stream_permit = stream_permit;
                                 let mut len_buf = [0u8; 4];
 
                                 if recv.read_exact(&mut len_buf).await.is_err() {
@@ -1358,10 +1391,11 @@ impl QuicTransport {
                                         }
                                     }
                                     Message::Handshake { .. } => {
-                                        let _ = tx.send((remote_addr, fp, message, Some(send)));
+                                        let _ =
+                                            tx.send((remote_addr, fp, message, Some(send))).await;
                                     }
                                     _ => {
-                                        let _ = tx.send((remote_addr, fp, message, None));
+                                        let _ = tx.send((remote_addr, fp, message, None)).await;
                                     }
                                 }
                             });
@@ -1371,13 +1405,15 @@ impl QuicTransport {
                             // Hand off the stream to the file handler
 
                             info!("Received File Stream from {}", fingerprint);
+                            let _stream_permit = stream_permit;
 
-                            let _ = file_stream_tx.send((fingerprint.clone(), send, recv));
+                            let _ = file_stream_tx.send((fingerprint.clone(), send, recv)).await;
                         }
 
                         Self::STREAM_TYPE_FS => {
                             info!("Received Filesystem Stream from {}", fingerprint);
-                            let _ = fs_stream_tx.send((fingerprint.clone(), send, recv));
+                            let _stream_permit = stream_permit;
+                            let _ = fs_stream_tx.send((fingerprint.clone(), send, recv)).await;
                         }
 
                         _ => {
@@ -1409,12 +1445,14 @@ impl QuicTransport {
                                 "Peer {} ({}) disconnected with 'unpaired' reason. Triggering unpair.",
                                 device_id, fingerprint
                             );
-                            let _ = message_tx.send((
-                                remote_addr,
-                                fingerprint.clone(),
-                                Message::DeviceUnpaired { device_id },
-                                None,
-                            ));
+                            let _ = message_tx
+                                .send((
+                                    remote_addr,
+                                    fingerprint.clone(),
+                                    Message::DeviceUnpaired { device_id },
+                                    None,
+                                ))
+                                .await;
                         } else {
                             warn!(
                                 "Peer closed with 'unpaired' but device_id not found for fingerprint {}",
@@ -1746,5 +1784,34 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
 
     fn root_hint_subjects(&self) -> &[DistinguishedName] {
         &[]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Message;
+
+    #[test]
+    fn legacy_handshake_without_version_defaults_to_v1() {
+        let mut value = serde_json::to_value(Message::Handshake {
+            device_id: "peer".to_string(),
+            device_name: "Peer".to_string(),
+            listening_port: 44444,
+            protocol_version: 1,
+        })
+        .expect("handshake should serialize");
+        value
+            .get_mut("Handshake")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("handshake should be externally tagged")
+            .remove("protocol_version");
+
+        let decoded: Message = serde_json::from_value(value).expect("legacy handshake decodes");
+        match decoded {
+            Message::Handshake {
+                protocol_version, ..
+            } => assert_eq!(protocol_version, 1),
+            _ => panic!("expected handshake"),
+        }
     }
 }

@@ -839,6 +839,7 @@ dependencies = [
  "bytes",
  "dirs",
  "if-addrs",
+ "libc",
  "mdns-sd",
  "mime_guess",
  "parking_lot",
@@ -857,6 +858,7 @@ dependencies = [
  "tracing",
  "uuid",
  "walkdir",
+ "windows 0.62.2",
  "zip",
 ]
 
@@ -893,6 +895,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "webview2-com-sys 0.39.1",
  "windows 0.62.2",
@@ -3430,9 +3433,9 @@ dependencies = [
 
 [[package]]
 name = "mdns-sd"
-version = "0.21.0"
+version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba97b4c886eea3c2823388120d92063c011ac866919ffc4200a0e4b1642a54a5"
+checksum = "b0a19dd805348943831582c4d9e6921c66de689127d6b27665a4e155c2117799"
 dependencies = [
  "fastrand",
  "flume",
@@ -5690,7 +5693,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

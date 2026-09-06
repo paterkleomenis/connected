@@ -26,10 +26,21 @@ pub fn execute_remote_command(command: RemoteCommand) {
 }
 
 fn open_url(url: &str) -> std::io::Result<()> {
-    if !url.starts_with("http://") && !url.starts_with("https://") {
+    const MAX_REMOTE_URL_LENGTH: usize = 4096;
+    if url.is_empty() || url.len() > MAX_REMOTE_URL_LENGTH || url.chars().any(char::is_control) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "Only http and https URLs can be opened remotely",
+            "Remote URL is empty, too long, or contains control characters",
+        ));
+    }
+
+    let parsed = url::Url::parse(url).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Remote URL is malformed")
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Only absolute http and https URLs can be opened remotely",
         ));
     }
 
@@ -192,6 +203,12 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 
         let err = open_url("ftp://example.com").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+        let err = open_url("https://example.com\nxdg-open evil").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+        let err = open_url("https://").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

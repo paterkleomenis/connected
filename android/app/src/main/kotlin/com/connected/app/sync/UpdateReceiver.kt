@@ -45,28 +45,28 @@ class UpdateReceiver : BroadcastReceiver() {
             }
 
             val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-
-            // Only prompt the installer for downloads that actually succeeded —
-            // a failed/partial APK would just produce a cryptic installer error.
-            // NOTE: DownloadManager has no public CONTENT_URI constant; queries
-            // go through the provider's "my_downloads" content URI.
-            val downloadsUri = Uri.parse("content://downloads/my_downloads")
-            val status = context.contentResolver.query(
-                downloadsUri,
-                arrayOf(DownloadManager.COLUMN_STATUS),
-                "${DownloadManager.COLUMN_ID} = ?",
-                arrayOf(downloadId.toString()),
-                null
-            )?.use { c -> if (c.moveToFirst()) c.getInt(0) else -1 } ?: -1
-            if (status != DownloadManager.STATUS_SUCCESSFUL) {
-                Log.w("UpdateReceiver", "Download $downloadId not successful (status=$status); skipping install")
-                return
+            downloadManager.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
+                if (!cursor.moveToFirst()) return
+                val status = cursor.getInt(
+                    cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
+                )
+                if (status != DownloadManager.STATUS_SUCCESSFUL) return
             }
-
             val uri = downloadManager.getUriForDownloadedFile(downloadId) ?: return
 
             val mimeType = downloadManager.getMimeTypeForDownloadedFile(downloadId)
             if (mimeType != "application/vnd.android.package-archive") return
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                !context.packageManager.canRequestPackageInstalls()
+            ) {
+                val settingsIntent = Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${context.packageName}")
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(settingsIntent)
+                return
+            }
 
             val installIntent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)

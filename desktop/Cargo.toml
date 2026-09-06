@@ -12,6 +12,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # async-std removed - migrated to tokio
 tokio = { version = "1", features = ["full"] }
+mimalloc = "0.1"
 futures-util = "0.3"
 connected-core = { path = "../core" }
 dirs = "6.0"
@@ -23,6 +24,7 @@ mime_guess.workspace = true
 base64 = "0.23"
 image = "0.25"
 uuid = { workspace = true }
+url = "2"
 notify-rust = "4.11"
 fs2 = "0.4"
 single-instance = { git = "https://github.com/WLBF/single-instance", version = "0.3", rev = "b3fae2c90a24f4a53e5944fc2ab828c1c35944cb" }
@@ -55,6 +57,7 @@ windows = { version = "0.62", features = [
   "Win32_System_Com_StructuredStorage",
   "Win32_System_LibraryLoader",
   "Win32_System_Variant",
+  "Win32_Storage_FileSystem",
   "Win32_UI_WindowsAndMessaging",
 ] }
 windows_firewall = "0.8"

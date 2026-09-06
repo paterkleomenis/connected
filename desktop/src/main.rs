@@ -97,6 +97,14 @@ fn poller_set<T: PartialEq + Clone + 'static>(mut signal: dioxus::prelude::Signa
     }
 }
 
+fn clamp_transfer_percent(percent: f32) -> f32 {
+    if percent.is_finite() {
+        percent.clamp(0.0, 100.0)
+    } else {
+        0.0
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod tray {
     pub struct ConnectedTray {
@@ -122,7 +130,7 @@ mod tray {
             for size in [16u32, 22, 24, 32, 48, 64] {
                 let rgba = super::render_connected_tray_icon_rgba(size);
                 let mut argb = Vec::with_capacity((size * size * 4) as usize);
-                for px in rgba.as_chunks::<4>().0 {
+                for px in rgba.chunks_exact(4) {
                     let r = px[0];
                     let g = px[1];
                     let b = px[2];
@@ -1810,6 +1818,7 @@ fn App() -> Element {
                     .values()
                     .cloned()
                     .collect();
+                list.sort_by(|a, b| a.id.cmp(&b.id));
 
                 // Apply pending state
                 {
@@ -1862,7 +1871,7 @@ fn App() -> Element {
                     TransferStatus::Starting { .. } => 1,
                     TransferStatus::InProgress { percent, .. } => {
                         // Multiply by 10 to get tenths of a percent for finer granularity
-                        2 + ((*percent * 10.0) as u64)
+                        2 + (clamp_transfer_percent(*percent) * 10.0) as u64
                     }
                     TransferStatus::Completed { .. } => 1000,
                     TransferStatus::Failed { .. } => 1001,
@@ -2229,7 +2238,9 @@ fn App() -> Element {
                             }
                         }
                     },
-                    TransferStatus::InProgress { filename, percent } => rsx! {
+                    TransferStatus::InProgress { filename, percent } => {
+                        let percent = clamp_transfer_percent(*percent);
+                        rsx! {
                         div { class: "global-transfer",
                             div { class: "global-transfer-icon", Icon { icon: IconType::Sync, size: 20, color: "var(--accent)".to_string() } }
                             div { class: "global-transfer-info",
@@ -2245,6 +2256,7 @@ fn App() -> Element {
                                 Icon { icon: IconType::Close, size: 14, color: "var(--error)".to_string() }
                             }
                         }
+                        }
                     },
                     TransferStatus::Compressing {
                         filename, current_file, files_processed, total_files,
@@ -2253,6 +2265,7 @@ fn App() -> Element {
                         let percent = if *total_bytes > 0 {
                             (*bytes_processed as f32 / *total_bytes as f32) * 100.0
                         } else { 0.0 };
+                        let percent = clamp_transfer_percent(percent);
                         rsx! {
                             div { class: "global-transfer",
                                 div { class: "global-transfer-icon", Icon { icon: IconType::Sync, size: 20, color: "var(--accent)".to_string() } }
@@ -2521,6 +2534,7 @@ fn App() -> Element {
                                                 } else {
                                                     0.0
                                                 };
+                                                let percent = clamp_transfer_percent(percent);
                                                 // saturating_sub: aggregate progress can
                                                 // transiently overshoot total_bytes.
                                                 let eta_secs = (*total_bytes)
@@ -2626,7 +2640,9 @@ fn App() -> Element {
                                                     }
                                                 }
                                             },
-                                            TransferStatus::InProgress { filename, percent } => rsx! {
+                                            TransferStatus::InProgress { filename, percent } => {
+                                                let percent = clamp_transfer_percent(*percent);
+                                                rsx! {
                                                 div {
                                                     class: "transfer-active",
                                                     div { class: "transfer-info",
@@ -2648,6 +2664,7 @@ fn App() -> Element {
                                                         Icon { icon: IconType::Close, size: 16, color: "var(--error)".to_string() }
                                                         span { " Cancel Transfer" }
                                                     }
+                                                }
                                                 }
                                             },
                                             TransferStatus::Completed { filename } => rsx! {
