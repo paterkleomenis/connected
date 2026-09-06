@@ -394,6 +394,8 @@ static TRANSFER_FILE_PATHS: OnceLock<Arc<Mutex<HashMap<String, std::path::PathBu
 static REMOTE_FILES: OnceLock<Arc<Mutex<Option<Vec<FsEntry>>>>> = OnceLock::new();
 static REMOTE_PATH: OnceLock<Arc<Mutex<String>>> = OnceLock::new();
 static REMOTE_FILES_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
+static REMOTE_SEARCH: OnceLock<Arc<Mutex<RemoteSearchState>>> = OnceLock::new();
+static REMOTE_SEARCH_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
 static PREVIEW_DATA: OnceLock<Arc<Mutex<Option<PreviewData>>>> = OnceLock::new();
 static MEDIA_ENABLED: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
 static PAIRING_MODE: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
@@ -953,6 +955,23 @@ pub fn get_current_remote_path() -> &'static Arc<Mutex<String>> {
 
 pub fn get_remote_files_update() -> &'static Arc<Mutex<std::time::Instant>> {
     REMOTE_FILES_UPDATE.get_or_init(|| Arc::new(Mutex::new(std::time::Instant::now())))
+}
+
+/// State for the recursive remote file search in the file browser.
+/// `request_id` lets stale searches abort themselves when a newer
+/// request has been issued.
+#[derive(Debug, Clone, Default)]
+pub struct RemoteSearchState {
+    pub request_id: u64,
+    pub results: Option<Vec<FsEntry>>,
+}
+
+pub fn get_remote_search() -> &'static Arc<Mutex<RemoteSearchState>> {
+    REMOTE_SEARCH.get_or_init(|| Arc::new(Mutex::new(RemoteSearchState::default())))
+}
+
+pub fn get_remote_search_update() -> &'static Arc<Mutex<std::time::Instant>> {
+    REMOTE_SEARCH_UPDATE.get_or_init(|| Arc::new(Mutex::new(std::time::Instant::now())))
 }
 
 pub fn get_preview_data() -> &'static Arc<Mutex<Option<PreviewData>>> {

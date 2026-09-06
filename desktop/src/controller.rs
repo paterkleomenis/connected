@@ -11,15 +11,16 @@ use crate::state::{
     get_last_remote_media_device_id, get_last_remote_update, get_media_enabled,
     get_pairing_mode_state, get_pairing_requests, get_pending_pairings, get_phone_call_log,
     get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_commands_enabled, get_remote_files_update, get_saved_devices_setting,
-    get_transfer_status, is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced,
-    mark_messages_synced, remove_device_from_settings, remove_file_transfer_request,
-    remove_transfer_path, save_device_to_settings, set_active_call,
-    set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
-    set_autostart_enabled_setting, set_device_name_setting, set_discovery_active,
-    set_download_directory_setting, set_last_remote_clipboard_content, set_pairing_mode_state,
-    set_phone_call_log, set_phone_contacts, set_phone_conversations, set_phone_messages,
-    set_sdk_initialized, set_shared_folder_setting, set_transfer_status, store_transfer_path,
+    get_remote_commands_enabled, get_remote_files_update, get_remote_search,
+    get_remote_search_update, get_saved_devices_setting, get_transfer_status,
+    is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced, mark_messages_synced,
+    remove_device_from_settings, remove_file_transfer_request, remove_transfer_path,
+    save_device_to_settings, set_active_call, set_active_incoming_transfer_id,
+    set_active_outgoing_transfer_id, set_autostart_enabled_setting, set_device_name_setting,
+    set_discovery_active, set_download_directory_setting, set_last_remote_clipboard_content,
+    set_pairing_mode_state, set_phone_call_log, set_phone_contacts, set_phone_conversations,
+    set_phone_messages, set_sdk_initialized, set_shared_folder_setting, set_transfer_status,
+    store_transfer_path,
 };
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::filesystem::{FsEntry, FsEntryType};
@@ -148,6 +149,13 @@ pub enum AppAction {
         ip: String,
         port: u16,
         path: String,
+    },
+    SearchRemote {
+        ip: String,
+        port: u16,
+        path: String,
+        query: String,
+        request_id: u64,
     },
     DownloadFile {
         ip: String,
@@ -1901,6 +1909,91 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     });
                 }
             }
+            AppAction::SearchRemote {
+                ip,
+                port,
+                path,
+                query,
+                request_id,
+            } => {
+                if let Some(c) = &client {
+                    let c = c.clone();
+                    tokio::spawn(async move {
+                        if let Ok(ip_addr) = ip.parse() {
+                            // Bounded breadth-first walk from `path` so a broad
+                            // query cannot hammer the remote device forever.
+                            const MAX_DIRS: usize = 300;
+                            const MAX_RESULTS: usize = 500;
+                            const MAX_DEPTH: u8 = 5;
+
+                            let q = query.to_lowercase();
+                            let mut results: Vec<FsEntry> = Vec::new();
+                            let mut queue = std::collections::VecDeque::from([(path, 0u8)]);
+                            let mut visited_dirs = 0usize;
+
+                            while let Some((dir, depth)) = queue.pop_front() {
+                                // A newer request superseded this one — bail out.
+                                if get_remote_search().lock_or_recover().request_id != request_id {
+                                    return;
+                                }
+                                if visited_dirs >= MAX_DIRS || results.len() >= MAX_RESULTS {
+                                    break;
+                                }
+                                visited_dirs += 1;
+
+                                let entries = match tokio::time::timeout(
+                                    std::time::Duration::from_secs(5),
+                                    c.fs_list_dir(ip_addr, port, dir),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(entries)) => entries,
+                                    _ => continue,
+                                };
+
+                                for entry in entries {
+                                    // Don't descend into hidden directories unless
+                                    // the user is explicitly searching for them.
+                                    let recurse =
+                                        matches!(entry.entry_type, FsEntryType::Directory)
+                                            && depth < MAX_DEPTH
+                                            && (query.starts_with('.')
+                                                || !entry.name.starts_with('.'));
+                                    let matched = !q.is_empty()
+                                        && entry.name.to_lowercase().contains(q.as_str());
+
+                                    if recurse {
+                                        // When the entry is both a match and a recursion
+                                        // target, only its path needs duplicating.
+                                        let path = if matched {
+                                            results.push(FsEntry {
+                                                path: entry.path.clone(),
+                                                ..entry
+                                            });
+                                            entry.path
+                                        } else {
+                                            entry.path
+                                        };
+                                        queue.push_back((path, depth + 1));
+                                    } else if matched {
+                                        results.push(entry);
+                                    }
+                                }
+                            }
+
+                            // Commit only if still the active request.
+                            {
+                                let mut state = get_remote_search().lock_or_recover();
+                                if state.request_id != request_id {
+                                    return;
+                                }
+                                state.results = Some(results);
+                            }
+                            *get_remote_search_update().lock_or_recover() = Instant::now();
+                        }
+                    });
+                }
+            }
             AppAction::DownloadFile {
                 ip,
                 port,
@@ -2013,7 +2106,10 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                             let (title, message) = match (failed, skipped, downloaded) {
                                 // Clean run
-                                (0, 0, _) => ("Download Succeeded", format!("Downloaded {downloaded} items")),
+                                (0, 0, _) => (
+                                    "Download Succeeded",
+                                    format!("Downloaded {downloaded} items"),
+                                ),
                                 // Everything came through, but some entries were not downloadable types
                                 (0, _, _) => (
                                     "Download Succeeded",
