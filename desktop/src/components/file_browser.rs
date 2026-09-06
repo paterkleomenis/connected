@@ -29,15 +29,6 @@ impl SortKey {
         }
     }
 
-    fn from_label(s: &str) -> Option<Self> {
-        match s {
-            "Name" => Some(SortKey::Name),
-            "Size" => Some(SortKey::Size),
-            "Date" => Some(SortKey::Date),
-            _ => None,
-        }
-    }
-
     const ALL: [SortKey; 3] = [SortKey::Name, SortKey::Size, SortKey::Date];
 }
 
@@ -136,6 +127,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let mut search = use_signal(String::new);
     let mut sort_key = use_signal(|| SortKey::Name);
     let mut sort_asc = use_signal(|| true);
+    let mut sort_open = use_signal(|| false);
     let mut search_results = use_signal(|| Option::<Vec<FsEntry>>::None);
     let mut last_search_update = use_signal(|| *get_remote_search_update().lock_or_recover());
 
@@ -415,7 +407,10 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     rsx! {
         div {
             class: "file-browser",
-            onclick: move |_| context_menu.set(None),
+            onclick: move |_| {
+                context_menu.set(None);
+                sort_open.set(false);
+            },
 
             div {
                 class: "browser-header",
@@ -493,17 +488,37 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                         value: "{search_val}",
                         oninput: move |e| search.set(e.value()),
                     }
-                    select {
-                        class: "sort-select",
-                        title: "Sort entries by",
-                        value: "{sort_key_val:?}",
-                        onchange: move |e| {
-                            if let Some(key) = SortKey::from_label(&e.value()) {
-                                sort_key.set(key);
+                    div {
+                        class: "sort-dropdown",
+                        button {
+                            class: "sort-dropdown-btn",
+                            title: "Sort entries by",
+                            onclick: move |evt: Event<MouseData>| {
+                                evt.stop_propagation();
+                                sort_open.toggle();
+                            },
+                            span { class: "sort-dropdown-label", "{sort_key_val.label()}" }
+                            span {
+                                class: if *sort_open.read() { "sort-dropdown-chevron open" } else { "sort-dropdown-chevron" },
+                                "▾"
                             }
-                        },
-                        for key in SortKey::ALL {
-                            option { value: "{key:?}", "{key.label()}" }
+                        }
+                        if *sort_open.read() {
+                            div {
+                                class: "sort-dropdown-menu",
+                                onclick: move |evt: Event<MouseData>| evt.stop_propagation(),
+                                for key in SortKey::ALL {
+                                    div {
+                                        class: if key == sort_key_val { "sort-dropdown-item active" } else { "sort-dropdown-item" },
+                                        onclick: move |evt: Event<MouseData>| {
+                                            evt.stop_propagation();
+                                            sort_key.set(key);
+                                            sort_open.set(false);
+                                        },
+                                        "{key.label()}"
+                                    }
+                                }
+                            }
                         }
                     }
                     button {

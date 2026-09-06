@@ -2367,6 +2367,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::ClosePreview => {
                 *get_preview_data().lock_or_recover() = None;
+                *crate::state::get_preview_update().lock_or_recover() = std::time::Instant::now();
             }
             AppAction::ToggleMediaControl { enabled, notify } => {
                 *get_media_enabled().lock_or_recover() = enabled;

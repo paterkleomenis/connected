@@ -8,6 +8,7 @@
    ============================================================================ */
 
 :root {
+    color-scheme: dark;
     /* Dark Theme Colors (Default) */
     --bg-primary: #000000;
     --bg-secondary: #1c1c1e;
@@ -106,6 +107,7 @@
 
 /* Light Mode tokens for theme selector */
 .app-container.theme-light {
+    color-scheme: light;
     --bg-primary: #f5f5f7;
     --bg-secondary: #ffffff;
     --bg-tertiary: #e8e8ed;
@@ -140,6 +142,7 @@
 /* System mode follows OS color preference */
 @media (prefers-color-scheme: light) {
     .app-container.theme-system {
+        color-scheme: light;
         --bg-primary: #f5f5f7;
         --bg-secondary: #ffffff;
         --bg-tertiary: #e8e8ed;
@@ -1888,6 +1891,103 @@ body {
 .sort-select {
     padding: 0 var(--space-2);
     cursor: pointer;
+    /* Harden native select against OS light-theme rendering (white-on-white).
+       The file browser now uses a custom .sort-dropdown, this is a fallback. */
+    color-scheme: dark;
+    appearance: auto;
+}
+
+.app-container.theme-light .sort-select {
+    color-scheme: light;
+}
+
+.sort-select option {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+/* Custom sort dropdown — fully theme-controlled, avoids native
+   <select> rendering white-on-white in some WebViews (Linux WebKitGTK). */
+.sort-dropdown {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.sort-dropdown-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 32px;
+    box-sizing: border-box;
+    padding: 0 var(--space-3);
+    min-width: 96px;
+    justify-content: space-between;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    outline: none;
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.sort-dropdown-btn:hover {
+    border-color: var(--border-strong);
+    background: var(--bg-hover);
+}
+
+.sort-dropdown-btn:focus-visible {
+    border-color: var(--accent);
+}
+
+.sort-dropdown-label {
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.sort-dropdown-chevron {
+    font-size: 12px;
+    line-height: 1;
+    color: var(--text-secondary);
+    transition: transform var(--transition-fast);
+}
+
+.sort-dropdown-chevron.open {
+    transform: rotate(180deg);
+}
+
+.sort-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 120px;
+    z-index: 2000;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    animation: context-menu-pop 0.15s ease-out;
+}
+
+.sort-dropdown-item {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    white-space: nowrap;
+}
+
+.sort-dropdown-item:hover {
+    background: var(--accent-light);
+}
+
+.sort-dropdown-item.active {
+    background: var(--accent-light);
+    font-weight: 600;
 }
 
 .dir-btn {
