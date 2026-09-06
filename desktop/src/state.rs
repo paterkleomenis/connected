@@ -358,6 +358,19 @@ pub fn flush_settings() {
     save_settings(&latest);
 }
 
+/// Set once the controller has finished shutdown cleanup (transfer
+/// cancellation + settings flush) so `quit_application` can exit
+/// deterministically instead of sleeping a fixed duration and hoping.
+static SHUTDOWN_COMPLETE: AtomicBool = AtomicBool::new(false);
+
+pub fn shutdown_complete() -> &'static AtomicBool {
+    &SHUTDOWN_COMPLETE
+}
+
+pub fn mark_shutdown_complete() {
+    SHUTDOWN_COMPLETE.store(true, Ordering::Release);
+}
+
 pub fn get_saved_devices_setting() -> HashMap<String, SavedDeviceInfo> {
     get_app_settings().lock_or_recover().saved_devices.clone()
 }
