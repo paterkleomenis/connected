@@ -44,10 +44,6 @@ const STREAM_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024; // 64MB per stream
 const CONNECTION_RECEIVE_WINDOW: u32 = 256 * 1024 * 1024; // 256MB per connection
 const SEND_WINDOW: u64 = 128 * 1024 * 1024; // 128MB send window for high-speed LAN
 
-fn default_protocol_version() -> u32 {
-    crate::MIN_COMPATIBLE_PROTOCOL_VERSION
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     Ping {
@@ -62,13 +58,11 @@ pub enum Message {
         device_id: String,
         device_name: String,
         listening_port: u16,
-        #[serde(default = "default_protocol_version")]
         protocol_version: u32,
     },
     HandshakeAck {
         device_id: String,
         device_name: String,
-        #[serde(default = "default_protocol_version")]
         protocol_version: u32,
     },
     HandshakeReject {
@@ -1169,7 +1163,7 @@ impl QuicTransport {
             timestamp,
         };
 
-        let ping_data = serde_json::to_vec(&ping)?;
+        let ping_data = crate::codec::encode_message(&ping)?;
         let len_bytes = (ping_data.len() as u32).to_be_bytes();
         send.write_all(&len_bytes).await?;
         send.write_all(&ping_data).await?;
@@ -1382,7 +1376,7 @@ impl QuicTransport {
                                             timestamp: *timestamp,
                                         };
 
-                                        if let Ok(pong_data) = serde_json::to_vec(&pong) {
+                                        if let Ok(pong_data) = crate::codec::encode_message(&pong) {
                                             let len_bytes = (pong_data.len() as u32).to_be_bytes();
                                             let mut send = send;
                                             let _ = send.write_all(&len_bytes).await;
@@ -1792,12 +1786,12 @@ mod tests {
     use super::Message;
 
     #[test]
-    fn legacy_handshake_without_version_defaults_to_v1() {
+    fn handshake_without_version_is_rejected() {
         let mut value = serde_json::to_value(Message::Handshake {
             device_id: "peer".to_string(),
             device_name: "Peer".to_string(),
             listening_port: 44444,
-            protocol_version: 1,
+            protocol_version: crate::PROTOCOL_VERSION,
         })
         .expect("handshake should serialize");
         value
@@ -1806,12 +1800,6 @@ mod tests {
             .expect("handshake should be externally tagged")
             .remove("protocol_version");
 
-        let decoded: Message = serde_json::from_value(value).expect("legacy handshake decodes");
-        match decoded {
-            Message::Handshake {
-                protocol_version, ..
-            } => assert_eq!(protocol_version, 1),
-            _ => panic!("expected handshake"),
-        }
+        assert!(serde_json::from_value::<Message>(value).is_err());
     }
 }

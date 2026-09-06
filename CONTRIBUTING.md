@@ -26,7 +26,10 @@ Alternatively, install/make sure you have the required tools:
 - Rust stable with the repository toolchain (we recommend using Rustup)
 - `just`
 - `pre-commit`
-
+```bash
+sudo pacman -S just
+sudo pacman -S python-pre-commit
+```
 Useful platform tools:
 
 - Android: Android Studio, Android SDK, and `cargo-ndk`

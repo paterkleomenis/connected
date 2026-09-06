@@ -36,9 +36,8 @@ pub use update::{
 };
 
 /// Wire-protocol version advertised via mDNS TXT records and embedded in
-/// newly created `Device`s. Single source of truth: bumping this constant is
-/// the ONLY change needed to move the protocol version — `discovery.rs` uses
-/// it for announce/compat checks and `device.rs` stamps it into new devices.
-pub const PROTOCOL_VERSION: u32 = 2;
-/// Oldest peer protocol version we still interoperate with.
-pub const MIN_COMPATIBLE_PROTOCOL_VERSION: u32 = 1;
+/// newly created `Device`s. This release intentionally starts a new protocol
+/// generation: the control codec is postcard-only and old peers are rejected.
+pub const PROTOCOL_VERSION: u32 = 3;
+/// Only the current protocol generation is supported.
+pub const MIN_COMPATIBLE_PROTOCOL_VERSION: u32 = PROTOCOL_VERSION;

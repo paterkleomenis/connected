@@ -140,7 +140,7 @@ fn decode_fuzz_random_bytes_never_panics() {
         for _ in 0..len {
             data.push((next() & 0xFF) as u8);
         }
-        // Bias some buffers toward bincode-magic prefixes.
+        // Bias some buffers toward the current postcard marker.
         if !data.is_empty() && next() % 3 == 0 {
             data[0] = 0x01;
         }
@@ -150,44 +150,28 @@ fn decode_fuzz_random_bytes_never_panics() {
 
 #[test]
 fn decode_fuzz_structurally_valid_but_hostile_lengths() {
-    // bincode fixint: String = u64 len + bytes; Vec<u32> = u64 len + items.
-    // Claim huge lengths with almost no backing data — decoder must error,
-    // not hang or OOM.
-    let mut crafted = vec![0x01u8]; // MAGIC_BINCODE
-    crafted.extend_from_slice(&u64::MAX.to_le_bytes()); // string len
-    crafted.extend_from_slice(b"tiny");
-    assert!(decode_message::<Probe>(&crafted).is_err());
-
-    // Valid short string then absurd vec length.
-    let mut crafted = vec![0x01u8];
-    crafted.extend_from_slice(&4u64.to_le_bytes());
-    crafted.extend_from_slice(b"hola");
-    crafted.extend_from_slice(&u64::MAX.to_le_bytes()); // vec len
+    // Postcard uses varints for lengths. Claim a huge string with almost no
+    // backing data — decoding must error, not hang or OOM.
+    let mut crafted = vec![0x02u8]; // MAGIC_POSTCARD
+    crafted.extend_from_slice(&[0xff; 10]);
     assert!(decode_message::<Probe>(&crafted).is_err());
 }
 
 #[test]
-fn encode_decode_roundtrip_v1_and_v2() {
+fn encode_decode_roundtrip_current_protocol() {
     let msg = Probe {
         text: "roundtrip ✓".into(),
         items: (0..1000).collect(),
     };
-    let v2 = encode_message(&msg, 2).unwrap();
-    let v1 = encode_message(&msg, 1).unwrap();
-    assert_eq!(decode_message::<Probe>(&v2).unwrap(), msg);
-    assert_eq!(decode_message::<Probe>(&v1).unwrap(), msg);
+    let encoded = encode_message(&msg).unwrap();
+    assert_eq!(decode_message::<Probe>(&encoded).unwrap(), msg);
 
-    // Bincode wins on text-heavy payloads (no JSON escaping / key repetition).
+    // The compact postcard frame should stay close to the payload size even
+    // for text-heavy messages.
     let texty = Probe {
         text: "payload-\"quoted\"-with-{braces}".repeat(20),
         items: vec![],
     };
-    let t2 = encode_message(&texty, 2).unwrap();
-    let t1 = encode_message(&texty, 1).unwrap();
-    assert!(
-        t2.len() < t1.len(),
-        "bincode {} vs json {}",
-        t2.len(),
-        t1.len()
-    );
+    let encoded = encode_message(&texty).unwrap();
+    assert!(encoded.len() < texty.text.len() + 100);
 }

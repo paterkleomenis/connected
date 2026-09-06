@@ -2053,7 +2053,7 @@ pub fn is_safe_relative_path(path: &str) -> bool {
 
 /// Send a message over the stream
 pub(crate) async fn send_message<T: Serialize>(stream: &mut SendStream, message: &T) -> Result<()> {
-    let data = serde_json::to_vec(message)?;
+    let data = crate::codec::encode_message(message)?;
     let len: u32 = data.len().try_into().map_err(|_| {
         ConnectedError::Protocol(format!(
             "Message too large to send: {} bytes exceeds u32::MAX",

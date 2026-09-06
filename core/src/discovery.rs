@@ -703,10 +703,9 @@ impl DiscoveryService {
 
         match source {
             DiscoverySource::Connected => {
-                // A connection update created by an older call site may not
-                // carry negotiated discovery metadata. Keep the conservative
-                // (older) version already learned from mDNS rather than
-                // silently upgrading a legacy peer to the v2 codec.
+                // A connection update may not carry discovery metadata. Keep
+                // the conservative protocol version already learned from mDNS
+                // rather than upgrading a peer implicitly.
                 if let Some(discovered) = tracked.discovered.as_ref()
                     && discovered.device.protocol_version < device.protocol_version
                 {
@@ -1003,11 +1002,17 @@ impl DiscoveryService {
             debug!("  TXT property: {}={}", prop.key(), prop.val_str());
         }
 
-        // Check protocol version compatibility
-        // v1 peers did not advertise a version TXT record. Treat an omitted
-        // field as v1, while rejecting an explicitly malformed value.
+        // Check protocol version compatibility. Every current peer must
+        // advertise the protocol generation explicitly; missing versions are
+        // legacy peers and are rejected because the wire format changed.
         let version = match info.txt_properties.get("version") {
-            None => MIN_COMPATIBLE_VERSION,
+            None => {
+                warn!(
+                    "Ignoring device without a protocol version: {}",
+                    info.fullname
+                );
+                return;
+            }
             Some(value) => match value.val_str().parse::<u32>() {
                 Ok(version) => version,
                 Err(_) => {
@@ -1223,9 +1228,9 @@ impl DiscoveryService {
         };
 
         // Never immediately remove on ServiceRemoved — debounce to avoid flapping.
-        // Old v1 peers do unregister+register for re-announce; mdns-sd also expires
+        // mdns-sd can unregister/register during re-announcement and expires
         // SRV records with colliding ` (2)` suffixes. Immediate removal causes
-        // DeviceLost every 5s (seen as 1s flapping). Let cleanup handle stale after timeout.
+        // DeviceLost flapping. Let cleanup handle stale entries after timeout.
         {
             let mut devices = discovered.write();
             if let Some(tracked) = devices.get_mut(&device_id)

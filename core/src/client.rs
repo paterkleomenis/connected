@@ -1322,8 +1322,7 @@ impl ConnectedClient {
             reason,
         };
 
-        let data = serde_json::to_vec(&msg)
-            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let data = crate::codec::encode_message(&msg)?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         if send.write_all(&len_bytes).await.is_err() || send.write_all(&data).await.is_err() {
@@ -1383,10 +1382,6 @@ impl ConnectedClient {
 
     pub fn get_trusted_peers(&self) -> Vec<crate::security::PeerInfo> {
         self.key_store.read().get_trusted_peers()
-    }
-
-    fn peer_version_for_endpoint(&self, ip: IpAddr, port: u16) -> u32 {
-        self.discovery.get_version_for_endpoint(ip, port)
     }
 
     pub async fn send_ping(&self, target_ip: IpAddr, target_port: u16) -> Result<u64> {
@@ -1521,8 +1516,7 @@ impl ConnectedClient {
             protocol_version: crate::PROTOCOL_VERSION,
         };
 
-        let data = serde_json::to_vec(&msg)
-            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let data = crate::codec::encode_message(&msg)?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -1549,7 +1543,7 @@ impl ConnectedClient {
                 }
                 // Chunked read: bound memory to bytes actually received.
                 let data = QuicTransport::read_chunked(&mut recv, msg_len).await?;
-                let response: Message = serde_json::from_slice(&data)?;
+                let response: Message = crate::codec::decode_message(&data)?;
                 Ok(response)
             }
             .await;
@@ -1778,8 +1772,7 @@ impl ConnectedClient {
             protocol_version: crate::PROTOCOL_VERSION,
         };
 
-        let data = serde_json::to_vec(&msg)
-            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let data = crate::codec::encode_message(&msg)?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -1818,8 +1811,7 @@ impl ConnectedClient {
             device_id: self.local_device.id.clone(),
         };
 
-        let data = serde_json::to_vec(&msg)
-            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+        let data = crate::codec::encode_message(&msg)?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         if send.write_all(&len_bytes).await.is_err() || send.write_all(&data).await.is_err() {
@@ -1902,8 +1894,7 @@ impl ConnectedClient {
 
         let msg = Message::Clipboard { text };
 
-        let peer_version = self.peer_version_for_endpoint(addr.ip(), addr.port());
-        let data = crate::codec::encode_message(&msg, peer_version)?;
+        let data = crate::codec::encode_message(&msg)?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -1984,8 +1975,7 @@ impl ConnectedClient {
 
         let msg = Message::MediaControl(msg);
 
-        let peer_version = self.peer_version_for_endpoint(addr.ip(), addr.port());
-        let data = crate::codec::encode_message(&msg, peer_version)?;
+        let data = crate::codec::encode_message(&msg)?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -2066,8 +2056,7 @@ impl ConnectedClient {
 
         let msg = Message::RemoteCommand(msg);
 
-        let peer_version = self.peer_version_for_endpoint(addr.ip(), addr.port());
-        let data = crate::codec::encode_message(&msg, peer_version)?;
+        let data = crate::codec::encode_message(&msg)?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -2152,8 +2141,7 @@ impl ConnectedClient {
 
         let msg = Message::Telephony(msg.clone());
 
-        let peer_version = self.peer_version_for_endpoint(addr.ip(), addr.port());
-        let data = crate::codec::encode_message(&msg, peer_version)?;
+        let data = crate::codec::encode_message(&msg)?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -2771,7 +2759,7 @@ impl ConnectedClient {
                                         let msg = Message::DeviceUnpaired {
                                             device_id: local_device_id.clone(),
                                         };
-                                        if let Ok(data) = serde_json::to_vec(&msg) {
+                                        if let Ok(data) = crate::codec::encode_message(&msg) {
                                             let len_bytes = (data.len() as u32).to_be_bytes();
                                             let _ = send.write_all(&len_bytes).await;
                                             let _ = send.write_all(&data).await;
@@ -2959,7 +2947,7 @@ impl ConnectedClient {
                                         device_name: local_name.read().clone(),
                                         protocol_version: crate::PROTOCOL_VERSION,
                                     };
-                                    if let Ok(data) = serde_json::to_vec(&msg) {
+                                    if let Ok(data) = crate::codec::encode_message(&msg) {
                                         let len_bytes = (data.len() as u32).to_be_bytes();
                                         if send.write_all(&len_bytes).await.is_ok() {
                                             let _ = send.write_all(&data).await;
@@ -3075,7 +3063,7 @@ impl ConnectedClient {
                                     device_name: local_name.read().clone(),
                                     protocol_version: crate::PROTOCOL_VERSION,
                                 };
-                                if let Ok(data) = serde_json::to_vec(&msg) {
+                                if let Ok(data) = crate::codec::encode_message(&msg) {
                                     let len_bytes = (data.len() as u32).to_be_bytes();
                                     if send.write_all(&len_bytes).await.is_ok() {
                                         let _ = send.write_all(&data).await;
@@ -3166,7 +3154,7 @@ impl ConnectedClient {
                                         device_name: local_name.read().clone(),
                                         protocol_version: crate::PROTOCOL_VERSION,
                                     };
-                                    if let Ok(data) = serde_json::to_vec(&msg) {
+                                    if let Ok(data) = crate::codec::encode_message(&msg) {
                                         let len_bytes = (data.len() as u32).to_be_bytes();
                                         if send.write_all(&len_bytes).await.is_ok() {
                                             let _ = send.write_all(&data).await;
@@ -3844,7 +3832,6 @@ impl ConnectedClient {
             if let Some(ip) = device.ip_addr() {
                 let port = device.port;
                 let txt = text.clone();
-                let peer_version = device.protocol_version;
                 let t = transport.clone();
                 let ks = key_store.clone();
 
@@ -3891,7 +3878,7 @@ impl ConnectedClient {
                     }
 
                     let msg = Message::Clipboard { text: txt };
-                    if let Ok(data) = crate::codec::encode_message(&msg, peer_version) {
+                    if let Ok(data) = crate::codec::encode_message(&msg) {
                         let len_bytes = (data.len() as u32).to_be_bytes();
                         let _ = send.write_all(&len_bytes).await;
                         let _ = send.write_all(&data).await;
