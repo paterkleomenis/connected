@@ -79,7 +79,6 @@ async fn open_hardened_download_file(local_path: &std::path::Path) -> Result<tok
     create_options.custom_flags(libc::O_NOFOLLOW);
     #[cfg(windows)]
     {
-        use std::os::windows::fs::OpenOptionsExt;
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         create_options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
@@ -93,7 +92,6 @@ async fn open_hardened_download_file(local_path: &std::path::Path) -> Result<tok
             overwrite_options.custom_flags(libc::O_NOFOLLOW);
             #[cfg(windows)]
             {
-                use std::os::windows::fs::OpenOptionsExt;
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 overwrite_options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }

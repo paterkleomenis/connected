@@ -32,7 +32,7 @@ pub fn control_system_volume(cmd: MediaCommand) -> windows::core::Result<()> {
                 }
             }
         }
-        let _guard = (!changed_mode).then(ComGuard);
+        let _guard = (!changed_mode).then(|| ComGuard);
 
         // Get the default audio endpoint
         let enumerator = CoCreateInstance::<_, windows::Win32::Media::Audio::IMMDeviceEnumerator>(

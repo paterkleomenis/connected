@@ -98,7 +98,6 @@ async fn open_part_file(path: &Path, resume: bool) -> Result<File> {
     options.custom_flags(libc::O_NOFOLLOW);
     #[cfg(windows)]
     {
-        use std::os::windows::fs::OpenOptionsExt;
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
