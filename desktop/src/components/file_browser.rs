@@ -2,13 +2,124 @@ use crate::components::icon::{Icon, IconType, get_file_icon_type};
 use crate::controller::AppAction;
 use crate::state::{
     DeviceInfo, LockOrRecover, PreviewData, get_current_remote_files, get_current_remote_path,
-    get_preview_data, get_remote_files_update, get_thumbnails, get_thumbnails_update, send_action,
+    get_preview_data, get_remote_files_update, get_remote_search, get_remote_search_update,
+    get_thumbnails, get_thumbnails_update, send_action,
 };
 use crate::utils::format_file_size;
 use base64::Engine as _;
 use connected_core::filesystem::{FsEntry, FsEntryType};
 use dioxus::prelude::*;
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+
+/// Keys the file browser entries can be sorted by.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SortKey {
+    Name,
+    Size,
+    Date,
+}
+
+impl SortKey {
+    fn label(self) -> &'static str {
+        match self {
+            SortKey::Name => "Name",
+            SortKey::Size => "Size",
+            SortKey::Date => "Date",
+        }
+    }
+
+    fn from_label(s: &str) -> Option<Self> {
+        match s {
+            "Name" => Some(SortKey::Name),
+            "Size" => Some(SortKey::Size),
+            "Date" => Some(SortKey::Date),
+            _ => None,
+        }
+    }
+
+    const ALL: [SortKey; 3] = [SortKey::Name, SortKey::Size, SortKey::Date];
+}
+
+/// The entries a click action should operate on: deep search results while
+/// searching (falling back to the current directory until they arrive),
+/// otherwise the plain listing — name-filtered when a query is active.
+/// Sorting is applied by the caller since it needs the sort signals.
+fn owned_visible_entries(
+    files: &Signal<Option<Vec<FsEntry>>>,
+    search_results: &Signal<Option<Vec<FsEntry>>>,
+    query: &str,
+) -> Vec<FsEntry> {
+    let mut source = if query.is_empty() {
+        files.read().clone().unwrap_or_default()
+    } else {
+        match search_results.read().as_ref() {
+            Some(results) => results.clone(),
+            None => files.read().clone().unwrap_or_default(),
+        }
+    };
+    if !query.is_empty() {
+        source.retain(|e| e.name.to_lowercase().contains(query));
+    }
+    source
+}
+
+fn toggle_all_visible(
+    files: Signal<Option<Vec<FsEntry>>>,
+    search_results: Signal<Option<Vec<FsEntry>>>,
+    search: Signal<String>,
+    sort_key: Signal<SortKey>,
+    sort_asc: Signal<bool>,
+    mut selected: Signal<HashSet<String>>,
+) {
+    let query = search.read().trim().to_lowercase();
+    let mut vis = owned_visible_entries(&files, &search_results, &query);
+    vis.sort_by(|a, b| compare_entries(a, b, *sort_key.read(), *sort_asc.read()));
+    let all_now = !vis.is_empty() && vis.iter().all(|e| selected.read().contains(&e.path));
+    let mut sel = selected.write();
+    if all_now {
+        sel.clear();
+    } else {
+        sel.extend(vis.iter().map(|e| e.path.clone()));
+    }
+}
+
+fn visible_selected_snapshot(
+    files: Signal<Option<Vec<FsEntry>>>,
+    search_results: Signal<Option<Vec<FsEntry>>>,
+    search: Signal<String>,
+    sort_key: Signal<SortKey>,
+    sort_asc: Signal<bool>,
+    selected: Signal<HashSet<String>>,
+) -> Vec<FsEntry> {
+    let query = search.read().trim().to_lowercase();
+    let mut vis = owned_visible_entries(&files, &search_results, &query);
+    let sel = selected.read();
+    vis.retain(|e| sel.contains(&e.path));
+    drop(sel);
+    vis.sort_by(|a, b| compare_entries(a, b, *sort_key.read(), *sort_asc.read()));
+    vis
+}
+
+/// Directories always come first, then the chosen key. `asc` only flips
+/// the chosen key, not the directory grouping.
+fn compare_entries(a: &FsEntry, b: &FsEntry, key: SortKey, asc: bool) -> Ordering {
+    let dir_a = matches!(a.entry_type, FsEntryType::Directory);
+    let dir_b = matches!(b.entry_type, FsEntryType::Directory);
+    if dir_a != dir_b {
+        return if dir_a {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        };
+    }
+    let ord = match key {
+        SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        SortKey::Size => a.size.cmp(&b.size),
+        SortKey::Date => a.modified.unwrap_or(0).cmp(&b.modified.unwrap_or(0)),
+    };
+    if asc { ord } else { ord.reverse() }
+}
 
 #[component]
 pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
@@ -19,6 +130,14 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let mut context_menu = use_signal(|| Option::<(String, String, i32, i32)>::None);
     let mut preview_content = use_signal(|| Option::<PreviewData>::None);
     let mut video_fullscreen = use_signal(|| false);
+    let mut selected = use_signal(HashSet::<String>::new);
+
+    // Search & sort state
+    let mut search = use_signal(String::new);
+    let mut sort_key = use_signal(|| SortKey::Name);
+    let mut sort_asc = use_signal(|| true);
+    let mut search_results = use_signal(|| Option::<Vec<FsEntry>>::None);
+    let mut last_search_update = use_signal(|| *get_remote_search_update().lock_or_recover());
 
     // Thumbnail state
     let mut current_thumbnails = use_signal(HashMap::<String, String>::new); // path -> base64
@@ -42,12 +161,13 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
             // Get data from global mutexes. The preview payload is only cloned
             // when its timestamp actually changed — cloning multi-MB preview
             // data every tick caused constant memcpy churn.
-            let (global_update, thumbnails_ts, new_files, new_path) = {
+            let (global_update, thumbnails_ts, new_files, new_path, search_ts) = {
                 let files_update = *get_remote_files_update().lock_or_recover();
                 let thumbs_update = *get_thumbnails_update().lock_or_recover();
                 let files_list = get_current_remote_files().lock_or_recover().clone();
                 let path = get_current_remote_path().lock_or_recover().clone();
-                (files_update, thumbs_update, files_list, path)
+                let search_ts = *get_remote_search_update().lock_or_recover();
+                (files_update, thumbs_update, files_list, path, search_ts)
             };
             let preview_ts = *crate::state::get_preview_update().lock_or_recover();
             let preview_changed = preview_ts != *last_preview_update.read();
@@ -74,11 +194,21 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 files.set(new_files);
                 last_update_seen.set(global_update);
                 loading.set(false);
+                selected.write().clear();
             }
 
             // Update path if changed
             if new_path != *current_path.read() {
                 current_path.set(new_path);
+                // Navigating invalidates any active search
+                search.set(String::new());
+            }
+
+            // Sync search results if updated
+            if search_ts != *last_search_update.read() {
+                let results = std::mem::take(&mut get_remote_search().lock_or_recover().results);
+                search_results.set(results);
+                last_search_update.set(search_ts);
             }
 
             // Sync thumbnails if updated
@@ -204,6 +334,44 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
         }
     });
 
+    // Dispatch a debounced recursive search when the query changes
+    let search_device = device.clone();
+    use_effect(move || {
+        let query = search.read().trim().to_string();
+        let ip = search_device.ip.clone();
+        let port = search_device.port;
+        spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            // Superseded by newer keystrokes — skip
+            if search.read().trim() != query {
+                return;
+            }
+            if query.is_empty() {
+                let mut state = get_remote_search().lock_or_recover();
+                state.request_id += 1;
+                state.results = None;
+                drop(state);
+                search_results.set(None);
+                return;
+            }
+            let path = current_path.read().clone();
+            let request_id = {
+                let mut state = get_remote_search().lock_or_recover();
+                state.request_id += 1;
+                state.results = None;
+                state.request_id
+            };
+            search_results.set(None);
+            send_action(AppAction::SearchRemote {
+                ip,
+                port,
+                path,
+                query,
+                request_id,
+            });
+        });
+    });
+
     // Read signals once at the top of render to minimize borrow time
     let current_path_val = current_path.read();
     let files_val = files.read();
@@ -211,6 +379,38 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
     let thumbnails_val = current_thumbnails.read();
     let preview_val = preview_content.read();
     let context_menu_val = context_menu.read();
+    let selected_val = selected.read();
+    let search_val = search.read();
+    let sort_key_val = *sort_key.read();
+    let sort_asc_val = *sort_asc.read();
+    let search_results_val = search_results.read();
+
+    // The visible listing: deep search results while searching (falling back
+    // to the current directory until they arrive), otherwise the plain listing.
+    let query = search_val.trim().to_lowercase();
+    let searching = !query.is_empty();
+    let source_entries: Option<&Vec<FsEntry>> = if searching {
+        search_results_val.as_ref().or(files_val.as_ref())
+    } else {
+        files_val.as_ref()
+    };
+    let mut visible: Vec<&FsEntry> = source_entries
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|e| e.name.to_lowercase().contains(query.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    visible.sort_by(|a, b| compare_entries(a, b, sort_key_val, sort_asc_val));
+
+    let show_selection_bar =
+        !loading_val && (searching || files_val.as_ref().is_some_and(|e| !e.is_empty()));
+    let selected_count = visible
+        .iter()
+        .filter(|e| selected_val.contains(&e.path))
+        .count();
+    let all_selected = !visible.is_empty() && visible.len() == selected_count;
 
     rsx! {
         div {
@@ -255,6 +455,107 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                 span { class: "path-display", "{current_path_val}" }
             }
 
+            if show_selection_bar {
+                div {
+                    class: "selection-bar",
+                    span {
+                        class: "selection-toggle",
+                        onclick: move |_| {
+                            toggle_all_visible(
+                                files,
+                                search_results,
+                                search,
+                                sort_key,
+                                sort_asc,
+                                selected,
+                            )
+                        },
+                        SelectionCheckbox {
+                            checked: all_selected,
+                            partial: selected_count > 0 && !all_selected,
+                            on_toggle: move |_| {
+                                toggle_all_visible(
+                                    files,
+                                    search_results,
+                                    search,
+                                    sort_key,
+                                    sort_asc,
+                                    selected,
+                                )
+                            },
+                        }
+                        span { class: "selection-label", "Select all" }
+                    }
+                    input {
+                        class: "search-input",
+                        r#type: "text",
+                        placeholder: "Search current folder and subfolders...",
+                        value: "{search_val}",
+                        oninput: move |e| search.set(e.value()),
+                    }
+                    select {
+                        class: "sort-select",
+                        title: "Sort entries by",
+                        value: "{sort_key_val:?}",
+                        onchange: move |e| {
+                            if let Some(key) = SortKey::from_label(&e.value()) {
+                                sort_key.set(key);
+                            }
+                        },
+                        for key in SortKey::ALL {
+                            option { value: "{key:?}", "{key.label()}" }
+                        }
+                    }
+                    button {
+                        class: "dir-btn",
+                        title: if sort_asc_val { "Ascending" } else { "Descending" },
+                        onclick: move |_| sort_asc.toggle(),
+                        style: if sort_asc_val {
+                            "transform: rotate(-90deg);"
+                        } else {
+                            "transform: rotate(90deg);"
+                        },
+                        Icon { icon: IconType::ArrowRight, size: 14, color: "currentColor".to_string() }
+                    }
+                    if selected_count > 0 {
+                        span { class: "selection-count", "{selected_count} selected" }
+                        button {
+                            class: "secondary-button",
+                            onclick: {
+                                let ip = device.ip.clone();
+                                let port = device.port;
+                                move |_| {
+                                    let chosen = visible_selected_snapshot(
+                                        files,
+                                        search_results,
+                                        search,
+                                        sort_key,
+                                        sort_asc,
+                                        selected,
+                                    );
+                                    if !chosen.is_empty() {
+                                        send_action(AppAction::DownloadEntries {
+                                            ip: ip.clone(),
+                                            port,
+                                            entries: chosen,
+                                        });
+                                    }
+                                    selected.write().clear();
+                                }
+                            },
+                            Icon { icon: IconType::Download, size: 14, color: "currentColor".to_string() }
+                            span { " Download" }
+                        }
+                        button {
+                            class: "secondary-button",
+                            onclick: move |_| selected.write().clear(),
+                            Icon { icon: IconType::Close, size: 12, color: "currentColor".to_string() }
+                            span { " Clear" }
+                        }
+                    }
+                }
+            }
+
             if loading_val {
                 div {
                     class: "loading",
@@ -265,10 +566,18 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                     }
                     span { "Loading files..." }
                 }
-            } else if let Some(entries) = files_val.as_ref() {
+            } else if files_val.is_some() || searching {
                 div {
                     class: "file-list",
-                    if current_path_val.as_str() != "/" {
+                    if searching && search_results_val.is_none() {
+                        div { class: "search-status", "Searching for \"{search_val}\"..." }
+                    }
+                    if searching
+                        && search_results_val.as_ref().is_some_and(|r| r.is_empty())
+                    {
+                        div { class: "search-status", "No matches" }
+                    }
+                    if !searching && current_path_val.as_str() != "/" {
                         div {
                             class: "file-entry directory",
                             onclick: {
@@ -296,6 +605,7 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                     }
                                 }
                             },
+                            span { class: "checkbox-spacer" }
                             span {
                                 class: "icon",
                                 Icon { icon: IconType::Folder, size: 18, color: "var(--accent)".to_string() }
@@ -304,12 +614,26 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                             span { class: "size", "" }
                         }
                     }
-                    for entry in entries {
+                    for entry in visible {
                         {
+                            let rel_parent: &str = if searching {
+                                entry.path
+                                    .strip_prefix(current_path_val.trim_end_matches('/'))
+                                    .unwrap_or(&entry.path)
+                                    .trim_start_matches('/')
+                                    .rsplit_once('/')
+                                    .map(|(d, _)| d)
+                                    .unwrap_or("")
+                            } else {
+                                ""
+                            };
                             let entry_class = match entry.entry_type {
                                 FsEntryType::Directory => "file-entry directory",
                                 _ => "file-entry file",
                             };
+                            let entry_checked = selected_val.contains(&entry.path);
+                            let selected_suffix =
+                                if entry_checked { " selected" } else { "" };
                             let icon_type = match entry.entry_type {
                                 FsEntryType::Directory => IconType::Folder,
                                 _ => get_file_icon_type(&entry.name),
@@ -318,10 +642,11 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                 FsEntryType::Directory => "var(--accent)",
                                 _ => "var(--text-secondary)",
                             };
+                            let entry_path_for_toggle = entry.path.clone();
 
                             rsx! {
                                 div {
-                                    class: "{entry_class}",
+                                    class: "{entry_class}{selected_suffix}",
                                     onclick: {
                                         let entry = entry.clone();
                                         let ip = device.ip.clone();
@@ -359,6 +684,16 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                             }
                                         }
                                     },
+                                    SelectionCheckbox {
+                                        checked: entry_checked,
+                                        partial: false,
+                                        on_toggle: move |_| {
+                                            let mut sel = selected.write();
+                                            if !sel.remove(&entry_path_for_toggle) {
+                                                sel.insert(entry_path_for_toggle.clone());
+                                            }
+                                        },
+                                    },
                                     span {
                                         class: "icon",
                                         if let Some(thumbnail_data) = thumbnails_val.get(&entry.path) {
@@ -370,7 +705,13 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                                             Icon { icon: icon_type, size: 18, color: icon_color.to_string() }
                                         }
                                     }
-                                    span { class: "name", "{entry.name}" }
+                                    span {
+                                        class: "name",
+                                        "{entry.name}"
+                                        if !rel_parent.is_empty() {
+                                            span { class: "entry-path", " · {rel_parent}" }
+                                        }
+                                    }
                                     span { class: "size", "{format_file_size(entry.size)}" }
                                 }
                             }
@@ -540,6 +881,33 @@ pub fn FileBrowser(device: DeviceInfo, on_close: EventHandler<()>) -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn SelectionCheckbox(checked: bool, partial: bool, on_toggle: EventHandler<()>) -> Element {
+    let class = if checked {
+        "checkbox checked"
+    } else if partial {
+        "checkbox partial"
+    } else {
+        "checkbox"
+    };
+
+    rsx! {
+        button {
+            class: "{class}",
+            title: "Select",
+            onclick: move |evt: Event<MouseData>| {
+                evt.stop_propagation();
+                on_toggle.call(());
+            },
+            if checked {
+                Icon { icon: IconType::Check, size: 12, color: "currentColor".to_string() }
+            } else if partial {
+                span { class: "checkbox-dash" }
             }
         }
     }
