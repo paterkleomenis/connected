@@ -179,4 +179,3 @@ git checkout -b feat/xyz dev
 ```
 
 To bring `main` hotfixes into `dev`: `git checkout dev && git merge main` or `git rebase main`.
-

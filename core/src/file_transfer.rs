@@ -2030,10 +2030,17 @@ pub fn is_safe_relative_path(path: &str) -> bool {
         return false;
     }
     let normalized = path.replace('\\', "/");
-    if normalized.starts_with('/') || normalized.ends_with('/') {
+    if normalized.starts_with('/') {
         return false;
     }
-    for segment in normalized.split('/') {
+    // Directory entries may be represented with one trailing separator. Keep
+    // accepting that form, while still rejecting roots, repeated separators,
+    // and empty interior components.
+    let components = normalized.strip_suffix('/').unwrap_or(&normalized);
+    if components.is_empty() {
+        return false;
+    }
+    for segment in components.split('/') {
         if segment.is_empty() || segment == "." || segment == ".." {
             return false;
         }
@@ -2245,8 +2252,11 @@ mod tests {
     #[test]
     fn rejects_unsafe_relative_paths() {
         assert!(is_safe_relative_path("folder/file.txt"));
+        assert!(is_safe_relative_path("folder/"));
         assert!(!is_safe_relative_path(""));
         assert!(!is_safe_relative_path("."));
+        assert!(!is_safe_relative_path("/"));
+        assert!(!is_safe_relative_path("folder//"));
         assert!(!is_safe_relative_path("folder/../file.txt"));
         assert!(!is_safe_relative_path(r"folder\..\file.txt"));
         assert!(!is_safe_relative_path("/absolute/file.txt"));

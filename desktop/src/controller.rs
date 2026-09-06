@@ -3,15 +3,16 @@ use crate::mpris_server::{MprisUpdate, send_mpris_update};
 use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
     SavedDeviceInfo, TransferStatus, add_actionable_notification, add_file_transfer_request,
-    add_notification, add_open_file_notification, flush_settings, get_auto_sync_messages, get_autostart_enabled_setting,
-    get_clipboard_sync_enabled, get_current_media, get_current_remote_files,
-    get_current_remote_path, get_device_name_setting, get_devices_store,
+    add_notification, add_open_file_notification, flush_settings, get_auto_sync_messages,
+    get_autostart_enabled_setting, get_clipboard_sync_enabled, get_current_media,
+    get_current_remote_files, get_current_remote_path, get_device_name_setting, get_devices_store,
     get_download_directory_setting, get_last_clipboard, get_last_remote_clipboard_content,
     get_last_remote_media_device_id, get_last_remote_update, get_live_incoming_transfer_ids,
-    get_live_outgoing_transfer_ids, get_media_enabled, get_pairing_mode_enabled_setting, get_pairing_mode_state, get_pairing_requests,
-    get_pending_pairings, get_phone_call_log, get_phone_conversations, get_phone_data_update,
-    get_phone_messages, get_preview_data, get_remote_commands_enabled, get_remote_files_update,
-    get_remote_search, get_remote_search_update, get_saved_devices_setting, get_transfer_status,
+    get_live_outgoing_transfer_ids, get_media_enabled, get_pairing_mode_enabled_setting,
+    get_pairing_mode_state, get_pairing_requests, get_pending_pairings, get_phone_call_log,
+    get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
+    get_remote_commands_enabled, get_remote_files_update, get_remote_search,
+    get_remote_search_update, get_saved_devices_setting, get_transfer_status,
     is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced, mark_messages_synced,
     remove_device_from_settings, remove_file_transfer_request, remove_transfer_path,
     save_device_to_settings, set_active_call, set_active_incoming_transfer_id,
@@ -42,7 +43,8 @@ use connected_core::{
 use mpris::PlaybackStatus;
 #[cfg(target_os = "linux")]
 use once_cell::sync::Lazy;
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use std::sync::Mutex;
@@ -58,6 +60,45 @@ static MPRIS_NAMES_CACHE: Lazy<Mutex<(Vec<String>, Instant)>> =
 
 #[cfg(target_os = "linux")]
 const MPRIS_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// Choose a safe, non-overwriting destination for a remotely named file.
+///
+/// Remote directory listings are untrusted input. Sanitizing the leaf before
+/// joining it prevents traversal, while reserving names in this batch prevents
+/// two search results with the same basename from overwriting one another.
+fn unique_download_path(
+    download_dir: &Path,
+    remote_name: &str,
+    reserved: &mut HashSet<PathBuf>,
+) -> PathBuf {
+    let safe_name = connected_core::file_transfer::sanitize_filename(remote_name);
+    let safe_path = Path::new(&safe_name);
+    let stem = safe_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unnamed");
+    let extension = safe_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+
+    for suffix in 0u64.. {
+        let candidate_name = if suffix == 0 {
+            safe_name.clone()
+        } else {
+            format!("{stem} ({suffix}){extension}")
+        };
+        let candidate = download_dir.join(candidate_name);
+        if !candidate.exists() && reserved.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+
+    unreachable!("download filename suffix space exhausted")
+}
 
 /// Handle of the currently-running media-state poller, so toggling media
 /// control off→on aborts the previous poller instead of stacking duplicates.
@@ -2150,6 +2191,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             let mut downloaded = 0usize;
                             let mut failed = 0usize;
                             let mut skipped = 0usize;
+                            let mut reserved_paths = HashSet::new();
                             for entry in entries {
                                 let FsEntry {
                                     name,
@@ -2171,7 +2213,11 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                         .map(|_| ())
                                     }
                                     FsEntryType::File => {
-                                        let local_path = download_dir.join(&name);
+                                        let local_path = unique_download_path(
+                                            &download_dir,
+                                            &name,
+                                            &mut reserved_paths,
+                                        );
                                         c.fs_download_file(ip_addr, port, path, local_path)
                                             .await
                                             .map(|_| ())

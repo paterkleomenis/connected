@@ -37,10 +37,11 @@ impl std::str::FromStr for DeviceType {
             "macos" => Ok(DeviceType::MacOS),
             "unknown" => Ok(DeviceType::Unknown),
             "" => Err(()),
-            // Discovery data is peer-controlled and may contain a newer
-            // platform label. Preserve the historical tolerant behavior and
-            // let callers represent it as Unknown instead of failing parsing.
-            _ => Ok(DeviceType::Unknown),
+            // Callers that consume peer-controlled discovery data can choose
+            // to fall back to Unknown explicitly. Keeping parsing strict makes
+            // invalid labels visible at the API boundary and protects the
+            // string contract used by the FFI layer.
+            _ => Err(()),
         }
     }
 }

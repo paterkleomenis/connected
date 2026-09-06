@@ -1,12 +1,20 @@
 use connected_core::security::KeyStore;
 use connected_core::{ConnectedClient, DeviceType};
+use std::net::{IpAddr, Ipv4Addr};
 
 #[tokio::test]
 async fn test_client_initialization() {
     let device_name = String::from("Test-Desktop");
     let port = 45000;
 
-    let client = ConnectedClient::new(device_name.clone(), DeviceType::Unknown, port, None).await;
+    let client = ConnectedClient::new_with_ip(
+        device_name.clone(),
+        DeviceType::Unknown,
+        port,
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        None,
+    )
+    .await;
 
     assert!(client.is_ok(), "Client failed to initialize");
     let client = client.unwrap();
@@ -30,10 +38,11 @@ async fn test_client_identity_persists_across_restart() {
     std::fs::create_dir_all(&storage).expect("create storage dir");
 
     // Use distinct ports so two sequential clients don't fight over a socket.
-    let first = ConnectedClient::new(
+    let first = ConnectedClient::new_with_ip(
         "Restart-A".to_string(),
         DeviceType::Linux,
         45001,
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
         Some(storage.clone()),
     )
     .await
@@ -45,10 +54,11 @@ async fn test_client_identity_persists_across_restart() {
     // Give the OS a moment to release the UDP socket.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    let second = ConnectedClient::new(
+    let second = ConnectedClient::new_with_ip(
         "Restart-B".to_string(),
         DeviceType::Linux,
         45002,
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
         Some(storage.clone()),
     )
     .await
