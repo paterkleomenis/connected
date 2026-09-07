@@ -15,9 +15,7 @@ import android.os.Looper
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Telephony
-import android.telecom.TelecomManager
 import android.telephony.SmsManager
-import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
@@ -48,12 +46,10 @@ class TelephonyProvider(private val context: Context) {
 
     interface TelephonyListener {
         fun onNewSmsReceived(message: FfiSmsMessage)
-        fun onCallStateChanged(call: FfiActiveCall?)
     }
 
     private var listener: TelephonyListener? = null
     private var smsReceiver: BroadcastReceiver? = null
-    private var callStateReceiver: BroadcastReceiver? = null
     private var mmsObserver: ContentObserver? = null
 
     // Dedicated background thread for MMS observer dispatches: the handler body
@@ -118,34 +114,13 @@ class TelephonyProvider(private val context: Context) {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun hasPhonePermission(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.CALL_PHONE
-        ) == PackageManager.PERMISSION_GRANTED &&
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.READ_PHONE_STATE
-                ) == PackageManager.PERMISSION_GRANTED
-    }
-
-    fun hasAnswerPhoneCallsPermission(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ANSWER_PHONE_CALLS
-        ) == PackageManager.PERMISSION_GRANTED
-    }
-
     fun getRequiredPermissions(): Array<String> {
         return arrayOf(
             Manifest.permission.READ_CONTACTS,
             Manifest.permission.READ_SMS,
             Manifest.permission.SEND_SMS,
             Manifest.permission.RECEIVE_SMS,
-            Manifest.permission.READ_CALL_LOG,
-            Manifest.permission.CALL_PHONE,
-            Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.ANSWER_PHONE_CALLS
+            Manifest.permission.READ_CALL_LOG
         )
     }
 
@@ -1072,110 +1047,29 @@ class TelephonyProvider(private val context: Context) {
     }
 
     // ========================================================================
-    // Phone Calls
+    // Helpers
     // ========================================================================
 
-    fun initiateCall(number: String): Boolean {
-        return try {
-            if (!hasPhonePermission()) {
-                return false
-            }
+    /**
+     * Opens the system dialer with a number prefilled. ACTION_DIAL deliberately
+     * requires the user to confirm the call and does not require CALL_PHONE.
+     */
+    fun openDialer(number: String): Boolean {
+        val trimmedNumber = number.trim()
+        if (trimmedNumber.isEmpty()) {
+            return false
+        }
 
-            val intent = Intent(Intent.ACTION_CALL).apply {
-                data = "tel:$number".toUri()
+        return try {
+            val intent = Intent(Intent.ACTION_DIAL).apply {
+                data = Uri.fromParts("tel", trimmedNumber, null)
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             context.startActivity(intent)
             true
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    fun performCallAction(action: CallAction): Boolean {
-        return try {
-            // Check for ANSWER_PHONE_CALLS permission before performing actions
-            if (!hasAnswerPhoneCallsPermission()) {
-                Log.w("TelephonyProvider", "ANSWER_PHONE_CALLS permission not granted")
-                return false
-            }
-
-            val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-
-            when (action) {
-                CallAction.Answer -> {
-                    try {
-                        // Use reflection to avoid deprecation warning for acceptRingingCall
-                        val method = telecomManager.javaClass.getMethod("acceptRingingCall")
-                        method.invoke(telecomManager)
-                        Log.d("TelephonyProvider", "Call answered via TelecomManager")
-                        true
-                    } catch (e: Exception) {
-                        Log.w("TelephonyProvider", "Failed to answer call: ${e.message}")
-                        false
-                    }
-                }
-
-                CallAction.Reject, CallAction.HangUp -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        try {
-                            // Use reflection to avoid deprecation warning for endCall
-                            val method = telecomManager.javaClass.getMethod("endCall")
-                            val result = method.invoke(telecomManager) as? Boolean ?: false
-                            Log.d("TelephonyProvider", "Call ended via TelecomManager: $result")
-                            result
-                        } catch (e: Exception) {
-                            Log.w("TelephonyProvider", "Failed to end call: ${e.message}")
-                            false
-                        }
-                    } else {
-                        // For older versions, we'd need to use reflection or ITelephony
-                        Log.w("TelephonyProvider", "End call not supported on this Android version")
-                        false
-                    }
-                }
-
-                CallAction.Mute, CallAction.Unmute, CallAction.Hold, CallAction.Unhold, is CallAction.SendDtmf -> {
-                    // These actions require additional implementation via InCallService
-                    Log.w("TelephonyProvider", "Call action $action not yet implemented")
-                    false
-                }
-            }
-        } catch (e: SecurityException) {
-            Log.e("TelephonyProvider", "Security exception performing call action: ${e.message}")
-            false
         } catch (e: Exception) {
-            Log.e("TelephonyProvider", "Exception performing call action: ${e.message}")
+            Log.w("TelephonyProvider", "Unable to open the system dialer: ${e.message}")
             false
-        }
-    }
-
-    // ========================================================================
-    // Helpers
-    // ========================================================================
-
-    private fun getLastIncomingCallNumber(): String {
-        if (!hasCallLogPermission()) return ""
-
-        try {
-            val cursor = context.contentResolver.query(
-                CallLog.Calls.CONTENT_URI,
-                arrayOf(CallLog.Calls.NUMBER),
-                "${CallLog.Calls.TYPE} = ?",
-                arrayOf(CallLog.Calls.INCOMING_TYPE.toString()),
-                "${CallLog.Calls.DATE} DESC LIMIT 1"
-            )
-
-            return cursor?.use {
-                if (it.moveToFirst()) {
-                    it.getString(0) ?: ""
-                } else {
-                    ""
-                }
-            } ?: ""
-        } catch (e: Exception) {
-            Log.e("TelephonyProvider", "Error getting last call number", e)
-            return ""
         }
     }
 
@@ -1280,54 +1174,6 @@ class TelephonyProvider(private val context: Context) {
             }
         }
 
-        // Call State Receiver
-        if (hasPhonePermission()) {
-            callStateReceiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context?, intent: Intent?) {
-                    if (intent?.action == TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
-                        val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE)
-                        // Use string literal to avoid deprecation warning for EXTRA_INCOMING_NUMBER
-                        var number = intent.getStringExtra("incoming_number") ?: ""
-
-                        // Fallback to CallLog if number is missing (Android 9+)
-                        if (number.isEmpty() && state == TelephonyManager.EXTRA_STATE_RINGING) {
-                            // Small delay might be needed for CallLog to update, but we try anyway
-                            number = getLastIncomingCallNumber()
-                        }
-
-                        val activeCall = when (state) {
-                            TelephonyManager.EXTRA_STATE_RINGING -> FfiActiveCall(
-                                number = number,
-                                contactName = getContactNameForNumber(number),
-                                state = ActiveCallState.RINGING,
-                                duration = 0u,
-                                isIncoming = true
-                            )
-
-                            TelephonyManager.EXTRA_STATE_OFFHOOK -> FfiActiveCall(
-                                number = number,
-                                contactName = getContactNameForNumber(number),
-                                state = ActiveCallState.CONNECTED,
-                                duration = 0u,
-                                isIncoming = true
-                            )
-
-                            TelephonyManager.EXTRA_STATE_IDLE -> null
-                            else -> null
-                        }
-
-                        listener?.onCallStateChanged(activeCall)
-                    }
-                }
-            }
-
-            val callFilter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(callStateReceiver, callFilter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                context.registerReceiver(callStateReceiver, callFilter)
-            }
-        }
     }
 
     fun unregisterReceivers() {
@@ -1338,15 +1184,6 @@ class TelephonyProvider(private val context: Context) {
                 // Ignore if not registered
             }
             smsReceiver = null
-        }
-
-        callStateReceiver?.let {
-            try {
-                context.unregisterReceiver(it)
-            } catch (_: Exception) {
-                // Ignore if not registered
-            }
-            callStateReceiver = null
         }
 
         pendingMmsDispatch?.let { observerHandler?.removeCallbacks(it) }

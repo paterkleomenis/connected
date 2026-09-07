@@ -76,7 +76,6 @@ import uniffi.connected_ffi.requestDownloadFolder
 import uniffi.connected_ffi.requestGetThumbnail
 import uniffi.connected_ffi.requestListDir
 import uniffi.connected_ffi.requestMessages
-import uniffi.connected_ffi.sendActiveCallUpdate
 import uniffi.connected_ffi.sendCallLog
 import uniffi.connected_ffi.sendClipboard
 import uniffi.connected_ffi.sendContacts
@@ -2773,22 +2772,6 @@ class ConnectedApp(private val context: Context) {
 
     // Telephony callbacks
     private val telephonyListener = object : TelephonyProvider.TelephonyListener {
-        override fun onCallStateChanged(call: FfiActiveCall?) {
-            activeCall.value = call
-            // Blocking FFI sends — dispatch off the receiver thread.
-            scope.launch(Dispatchers.IO) {
-                // Broadcast update to connected devices if trusted
-                devices.forEach { device ->
-                    if (isDeviceTrusted(device)) {
-                        try {
-                            sendActiveCallUpdate(device.ip, device.port, call)
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
-            }
-        }
-
         override fun onNewSmsReceived(message: FfiSmsMessage) {
             runOnMainThread {
                 if (selectedConversationThreadId.value == null || selectedConversationThreadId.value == message.threadId) {
@@ -2944,15 +2927,18 @@ class ConnectedApp(private val context: Context) {
         override fun onInitiateCallRequest(fromDevice: String, fromIp: String, fromPort: UShort, number: String) {
             if (!isTelephonyEnabled.value) return
             runOnMainThread {
-                telephonyProvider.initiateCall(number)
+                if (!telephonyProvider.openDialer(number)) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Unable to open the phone dialer",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
 
         override fun onCallActionRequest(fromDevice: String, fromIp: String, fromPort: UShort, action: CallAction) {
-            if (!isTelephonyEnabled.value) return
-            runOnMainThread {
-                telephonyProvider.performCallAction(action)
-            }
+            Log.w("ConnectedApp", "Ignoring remote call action $action from $fromDevice; call control is not supported")
         }
 
         override fun onActiveCallUpdate(fromDevice: String, call: FfiActiveCall?) {

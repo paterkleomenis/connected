@@ -13,7 +13,7 @@ Currently available for **Linux** (AppImage, AUR, Flatpak), **Mac**, **Windows**
 
 ## Features
 
-- **Cross-Platform**: Seamlessly transfer files, sync clipboards, make and answer calls, send and receive messages, and control media between Android, iOS, Linux, Mac and Windows devices.
+- **Cross-Platform**: Seamlessly transfer files, sync clipboards, synchronize SMS and call history, request user-confirmed outgoing calls, and control media between Android, iOS, Linux, Mac and Windows devices.
 - **Offline Functionality**: You can also use it without an internet connection on supported Android devices via WiFi Aware, plus local network discovery when a network is available.
 - **High Speed**: Powered by the QUIC protocol.
 - **Zero Config**: Auto-discovery via mDNS and WiFi Aware.

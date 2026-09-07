@@ -1205,9 +1205,7 @@ fun SettingsScreen(
                 // Check telephony permissions
                 hasTelephonyPermissions = connectedApp.telephonyProvider.hasContactsPermission() &&
                         connectedApp.telephonyProvider.hasSmsPermission() &&
-                        connectedApp.telephonyProvider.hasCallLogPermission() &&
-                        connectedApp.telephonyProvider.hasPhonePermission() &&
-                        connectedApp.telephonyProvider.hasAnswerPhoneCallsPermission()
+                        connectedApp.telephonyProvider.hasCallLogPermission()
 
                 // Check pending full access
                 if (pendingFullAccess && connectedApp.isFullAccessGranted()) {
@@ -1271,9 +1269,9 @@ fun SettingsScreen(
             title = { Text("Phone Link Permission") },
             text = {
                 Text(
-                    "Connected requires SMS and Call Log permissions to synchronize your messages and calls with your linked desktop device.\n\n" +
+                    "Connected requires Contacts, SMS, and Call Log permissions to synchronize your messages and call history with your linked desktop device.\n\n" +
                     "This allows you to read, receive, and reply to SMS messages, as well as view your call history directly from your computer.\n\n" +
-                    "Because messages and calls are synchronized in real-time, Connected will access this data in the background, even when the app is closed or not in use.\n\n" +
+                    "Phone Link is optional and can be disabled at any time. Data is accessed only to provide the enabled synchronization feature.\n\n" +
                     "All data is transferred directly between your devices over your local network using end-to-end encryption. No data is ever sent to remote servers or third parties."
                 )
             },
@@ -1677,7 +1675,7 @@ fun SettingsScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Phone Link", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "SMS, calls, and contacts sync",
+                                "SMS, call history, and contacts sync",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1709,14 +1707,6 @@ fun SettingsScreen(
                         PermissionStatusRow(
                             label = "Call Log",
                             granted = connectedApp.telephonyProvider.hasCallLogPermission()
-                        )
-                        PermissionStatusRow(
-                            label = "Phone",
-                            granted = connectedApp.telephonyProvider.hasPhonePermission()
-                        )
-                        PermissionStatusRow(
-                            label = "Answer Calls",
-                            granted = connectedApp.telephonyProvider.hasAnswerPhoneCallsPermission()
                         )
                     }
 

@@ -25,14 +25,14 @@ This Privacy Policy describes how Connected ("we", "our", or "the app") collects
 - **Location**: Required on older Android versions for nearby Wi-Fi discovery (we do not track or store your location)
 - **Storage**: For reading/writing files during file transfers
 - **Notifications**: For media playback monitoring and sync notifications
-- **Phone**: For call management and SMS features
-- **Contacts**: For displaying contact information during calls and messaging
+- **Phone Link**: For SMS and call-history synchronization
+- **Contacts**: For displaying contact information in call history and messaging
 
 ## How We Use Your Information
 
 We use collected information only to provide app features and improve reliability:
 - Enabling file transfer and synchronization between your devices
-- Providing Phone Link functionality (calls, SMS, contact display)
+- Providing Phone Link functionality (SMS, call-history synchronization, contact display, and user-confirmed dialer requests)
 - Clipboard synchronization between devices
 - Media playback synchronization
 - Device discovery and connection management
@@ -83,9 +83,10 @@ If you have questions about this policy, contact us:
 | ACCESS_NETWORK_STATE | Check network connectivity status |
 | NEARBY_WIFI_DEVICES | WiFi Aware discovery and pairing on Android 13+ |
 | ACCESS_COARSE/FINE_LOCATION | Required by older Android versions for nearby Wi-Fi discovery |
-| READ_CONTACTS | Display contact names during calls and messaging |
+| READ_CONTACTS | Display contact names during call-history and messaging synchronization |
 | READ_SMS/SEND_SMS/RECEIVE_SMS | SMS synchronization between devices |
-| READ_CALL_LOG/CALL_PHONE | Call log sync and call management |
+| READ_CALL_LOG | Call-history synchronization between linked devices |
+| No call-control permission | Outgoing call requests open the system dialer for user confirmation |
 | READ_MEDIA_IMAGES/VIDEO/AUDIO | File transfer of media files |
 | MANAGE_EXTERNAL_STORAGE | Full file access for comprehensive file transfers |
 | POST_NOTIFICATIONS | Display transfer and sync notifications |

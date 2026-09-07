@@ -9,23 +9,22 @@ use crate::state::{
     get_download_directory_setting, get_last_clipboard, get_last_remote_clipboard_content,
     get_last_remote_media_device_id, get_last_remote_update, get_live_incoming_transfer_ids,
     get_live_outgoing_transfer_ids, get_media_enabled, get_pairing_mode_enabled_setting,
-    get_pairing_mode_state, get_pairing_requests, get_pending_pairings, get_phone_call_log,
-    get_phone_conversations, get_phone_data_update, get_phone_messages, get_preview_data,
-    get_remote_commands_enabled, get_remote_files_update, get_remote_search,
-    get_remote_search_update, get_saved_devices_setting, get_transfer_status,
-    is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced, mark_messages_synced,
-    remove_device_from_settings, remove_file_transfer_request, remove_transfer_path,
-    save_device_to_settings, set_active_call, set_active_incoming_transfer_id,
-    set_active_outgoing_transfer_id, set_autostart_enabled_setting, set_device_name_setting,
-    set_discovery_active, set_download_directory_setting, set_last_remote_clipboard_content,
+    get_pairing_mode_state, get_pairing_requests, get_pending_pairings, get_phone_conversations,
+    get_phone_data_update, get_phone_messages, get_preview_data, get_remote_commands_enabled,
+    get_remote_files_update, get_remote_search, get_remote_search_update,
+    get_saved_devices_setting, get_transfer_status, is_auto_accept_enabled, mark_calls_synced,
+    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
+    remove_file_transfer_request, remove_transfer_path, save_device_to_settings,
+    set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
+    set_autostart_enabled_setting, set_device_name_setting, set_discovery_active,
+    set_download_directory_setting, set_last_remote_clipboard_content,
     set_pairing_mode_enabled_setting, set_pairing_mode_state, set_phone_call_log,
     set_phone_contacts, set_phone_conversations, set_phone_messages, set_sdk_initialized,
     set_shared_folder_setting, set_transfer_status, store_transfer_path,
 };
 use crate::utils::{get_hostname, get_system_clipboard, set_system_clipboard};
 use connected_core::filesystem::{FsEntry, FsEntryType};
-use connected_core::telephony::{CallAction, TelephonyMessage};
-use connected_core::telephony::{CallLogEntry, CallType};
+use connected_core::telephony::TelephonyMessage;
 #[cfg(not(target_os = "windows"))]
 use connected_core::update::UpdateChecker;
 #[cfg(target_os = "macos")]
@@ -272,11 +271,6 @@ pub enum AppAction {
         ip: String,
         port: u16,
         number: String,
-    },
-    SendCallAction {
-        ip: String,
-        port: u16,
-        action: CallAction,
     },
     RefreshDiscovery,
     RefreshDevices,
@@ -1478,45 +1472,14 @@ fn spawn_event_loop(
                             mark_calls_synced();
                             // Silent sync - no notification needed
                         }
-                        TelephonyMessage::ActiveCallUpdate { call } => {
-                            use connected_core::telephony::ActiveCallState;
-
-                            if let Some(ref c) = call {
-                                let caller = c.contact_name.clone().unwrap_or(c.number.clone());
-                                let now_ms = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis();
-
-                                // If call ended, add to call log
-                                if c.state == ActiveCallState::Ended {
-                                    let entry = CallLogEntry {
-                                        id: format!("call_{}", now_ms),
-                                        number: c.number.clone(),
-                                        contact_name: c.contact_name.clone(),
-                                        call_type: if c.is_incoming {
-                                            CallType::Incoming
-                                        } else {
-                                            CallType::Outgoing
-                                        },
-                                        timestamp: now_ms as u64,
-                                        duration: c.duration,
-                                        is_read: false,
-                                    };
-                                    // Add to beginning of call log
-                                    let mut log = get_phone_call_log().lock_or_recover();
-                                    log.insert(0, entry);
-                                } else {
-                                    add_notification(
-                                        "Phone Call",
-                                        &format!("{:?} call from {}", c.state, caller),
-                                        "",
-                                    );
-                                }
-                            }
-                            // Store the active call state
-                            set_active_call(call.clone());
-                        }
+                        // Remote call control is not supported (Play policy:
+                        // SMS + call-history sync only, outgoing calls via
+                        // system dialer). `ActiveCallUpdate` is ignored to keep
+                        // old-protocol peers from popping dead Answer/End UI.
+                        TelephonyMessage::ActiveCallUpdate { .. } => {}
+                        // `CallAction` is never sent by this client anymore;
+                        // ignore inbound call-control messages for the same reason.
+                        TelephonyMessage::CallAction { .. } => {}
                         _ => {
                             // Other telephony messages (requests, etc.)
                         }
@@ -2815,35 +2778,18 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                             };
                             match c.send_telephony(ip_addr, port, msg).await {
                                 Ok(_) => {
-                                    info!("Call initiation request sent to {}:{}", ip, port);
+                                    info!("Dialer request sent to {}:{}", ip, port);
                                     add_notification(
                                         "Phone",
-                                        &format!("Calling {}...", number),
+                                        &format!(
+                                            "Dialer request sent for {} — confirm the call on your phone.",
+                                            number
+                                        ),
                                         "",
                                     );
                                 }
                                 Err(e) => {
                                     error!("Failed to initiate call: {}", e);
-                                    add_notification("Phone", &format!("Failed: {}", e), "");
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-            AppAction::SendCallAction { ip, port, action } => {
-                if let Some(c) = &client {
-                    let c = c.clone();
-                    tokio::spawn(async move {
-                        if let Ok(ip_addr) = ip.parse() {
-                            let action_name = format!("{:?}", action);
-                            let msg = TelephonyMessage::CallAction { action };
-                            match c.send_telephony(ip_addr, port, msg).await {
-                                Ok(_) => {
-                                    info!("Call action {} sent to {}:{}", action_name, ip, port);
-                                }
-                                Err(e) => {
-                                    error!("Failed to send call action: {}", e);
                                     add_notification("Phone", &format!("Failed: {}", e), "");
                                 }
                             }

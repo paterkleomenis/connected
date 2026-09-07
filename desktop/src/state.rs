@@ -1,6 +1,6 @@
 use connected_core::error::is_transient_io_error;
 use connected_core::filesystem::FsEntry;
-use connected_core::telephony::{ActiveCall, CallLogEntry, Contact, Conversation, SmsMessage};
+use connected_core::telephony::{CallLogEntry, Contact, Conversation, SmsMessage};
 use connected_core::{Device, MediaState, UpdateInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -550,7 +550,6 @@ static PHONE_CONVERSATIONS: OnceLock<Arc<Mutex<Vec<Conversation>>>> = OnceLock::
 static PHONE_MESSAGES: OnceLock<MessagesMap> = OnceLock::new();
 static PHONE_CALL_LOG: OnceLock<Arc<Mutex<Vec<CallLogEntry>>>> = OnceLock::new();
 static PHONE_DATA_UPDATE: OnceLock<Arc<Mutex<std::time::Instant>>> = OnceLock::new();
-static ACTIVE_CALL: OnceLock<Arc<Mutex<Option<ActiveCall>>>> = OnceLock::new();
 
 // Track which device's phone data we have cached
 static PHONE_DATA_DEVICE_ID: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
@@ -1194,16 +1193,6 @@ pub fn set_phone_messages(thread_id: String, messages: Vec<SmsMessage>) {
 
 pub fn set_phone_call_log(entries: Vec<CallLogEntry>) {
     *get_phone_call_log().lock_or_recover() = entries;
-    *get_phone_data_update().lock_or_recover() = std::time::Instant::now();
-}
-
-// Active call state
-pub fn get_active_call() -> &'static Arc<Mutex<Option<ActiveCall>>> {
-    ACTIVE_CALL.get_or_init(|| Arc::new(Mutex::new(None)))
-}
-
-pub fn set_active_call(call: Option<ActiveCall>) {
-    *get_active_call().lock_or_recover() = call;
     *get_phone_data_update().lock_or_recover() = std::time::Instant::now();
 }
 

@@ -29,7 +29,6 @@ use state::{
 };
 
 use components::{DeviceCard, FileBrowser, FileDialog, Icon, IconType};
-use connected_core::telephony::{ActiveCallState, CallAction};
 use connected_core::{DeviceType, MediaCommand, UpdateInfo};
 use controller::{AppAction, app_controller};
 use dioxus::prelude::*;
@@ -1461,7 +1460,6 @@ fn App() -> Element {
     let mut phone_messages = use_signal(Vec::<connected_core::telephony::SmsMessage>::new);
     let mut last_message_count = use_signal(|| 0usize);
     let mut sms_compose_text = use_signal(String::new);
-    let active_call = use_signal(|| None::<connected_core::telephony::ActiveCall>);
     let update_info = use_signal(|| None::<UpdateInfo>);
 
     // Auto-sync settings (loaded from persistent storage)
@@ -1921,7 +1919,6 @@ fn App() -> Element {
                     phone_call_log,
                     get_phone_call_log().lock_or_recover().clone(),
                 );
-                poller_set(active_call, get_active_call().lock_or_recover().clone());
                 // Update messages for selected conversation
                 if let Some(thread_id) = selected_conversation.read().clone()
                     && let Some(msgs) = get_phone_messages().lock_or_recover().get(&thread_id)
@@ -2912,7 +2909,7 @@ fn App() -> Element {
                                                         }
                                                     },
                                                     Icon { icon: IconType::Call, size: 16, color: "currentColor".to_string() }
-                                                    span { " Calls" }
+                                                    span { " Call history" }
                                                 }
                                             }
                                             button {
@@ -3196,7 +3193,7 @@ fn App() -> Element {
                                                 class: "phone-content",
                                                 div {
                                                     class: "phone-header",
-                                                    h4 { "Call Log" }
+                                                    h4 { "Call history" }
                                                     if !*auto_sync_calls.read() {
                                                         button {
                                                             class: "sync-button",
@@ -3218,6 +3215,11 @@ fn App() -> Element {
                                                             span { " Sync" }
                                                         }
                                                     }
+                                                }
+                                                div {
+                                                    class: "phone-note",
+                                                    span { class: "note-icon", Icon { icon: IconType::Warning, size: 16, color: "var(--text-tertiary)".to_string() } }
+                                                    span { "Outgoing calls open the phone dialer for confirmation. Answering or ending calls from the desktop is not supported." }
                                                 }
 
                                                 if phone_call_log.read().is_empty() {
@@ -3272,6 +3274,7 @@ fn App() -> Element {
                                                                         }
                                                                         button {
                                                                             class: "call-action",
+                                                                            title: "Open dialer on phone",
                                                                             onclick: {
                                                                                 let number = call.number.clone();
                                                                                 let device_id = device.id.clone();
@@ -3375,7 +3378,7 @@ fn App() -> Element {
                                                                             if !phone.is_empty() {
                                                                                 button {
                                                                                     class: "contact-action",
-                                                                                    title: "Call",
+                                                                                    title: "Open dialer on phone",
                                                                                     onclick: {
                                                                                         let number = phone.clone();
                                                                                         let device_id = device.id.clone();
@@ -4128,150 +4131,6 @@ fn App() -> Element {
                                         }
                                     }
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Incoming/Active Call Modal
-            if let Some(call) = active_call.read().clone() {
-                div {
-                    class: "modal-overlay call-overlay",
-                    div {
-                        class: "modal-content call-modal",
-                        // Call state header
-                        div {
-                            class: "call-modal-header",
-                            match call.state {
-                                ActiveCallState::Ringing => rsx! {
-                                    div { class: "call-state-icon ringing", Icon { icon: IconType::Call, size: 48, color: "currentColor".to_string() } }
-                                    h3 { "Incoming Call" }
-                                },
-                                ActiveCallState::Dialing => rsx! {
-                                    div { class: "call-state-icon dialing", Icon { icon: IconType::NavPhone, size: 48, color: "currentColor".to_string() } }
-                                    h3 { "Dialing..." }
-                                },
-                                ActiveCallState::Connected => rsx! {
-                                    div { class: "call-state-icon connected", Icon { icon: IconType::VolumeUp, size: 48, color: "currentColor".to_string() } }
-                                    h3 { "Call in Progress" }
-                                },
-                                ActiveCallState::OnHold => rsx! {
-                                    div { class: "call-state-icon on-hold", Icon { icon: IconType::Pause, size: 48, color: "currentColor".to_string() } }
-                                    h3 { "On Hold" }
-                                },
-                                ActiveCallState::Ended => rsx! {
-                                    div { class: "call-state-icon ended", Icon { icon: IconType::Unpair, size: 48, color: "currentColor".to_string() } }
-                                    h3 { "Call Ended" }
-                                },
-                            }
-                        }
-
-                        // Caller info
-                        div {
-                            class: "call-caller-info",
-                            div {
-                                class: "call-avatar",
-                                {call.contact_name.as_ref().and_then(|n| n.chars().next()).unwrap_or('?').to_string()}
-                            }
-                            div {
-                                class: "call-caller-details",
-                                p {
-                                    class: "call-caller-name",
-                                    {call.contact_name.clone().unwrap_or_else(|| call.number.clone())}
-                                }
-                                p {
-                                    class: "call-caller-number",
-                                    {call.number.clone()}
-                                }
-                            }
-                        }
-
-                        // Call duration for connected calls
-                        if call.state == ActiveCallState::Connected && call.duration > 0 {
-                            div {
-                                class: "call-duration",
-                                {format!("{}:{:02}", call.duration / 60, call.duration % 60)}
-                            }
-                        }
-
-                        // Action buttons
-                        div {
-                            class: "call-modal-actions",
-                            match call.state {
-                                ActiveCallState::Ringing => {
-                                    // Show Answer and Reject buttons for incoming ringing calls
-                                    rsx! {
-                                        button {
-                                            class: "call-button reject",
-                                            onclick: {
-                                                let selected = selected_device.read().clone();
-                                                move |_| {
-                                                    if let Some(ref device) = selected {
-                                                        action_tx.send(AppAction::SendCallAction {
-                                                            ip: device.ip.clone(),
-                                                            port: device.port,
-                                                            action: CallAction::Reject,
-                                                        });
-                                                    }
-                                                }
-                                            },
-                                            span { class: "call-btn-icon", Icon { icon: IconType::Unpair, size: 20, color: "currentColor".to_string() } }
-                                            span { "Reject" }
-                                        }
-                                        button {
-                                            class: "call-button answer",
-                                            onclick: {
-                                                let selected = selected_device.read().clone();
-                                                move |_| {
-                                                    if let Some(ref device) = selected {
-                                                        action_tx.send(AppAction::SendCallAction {
-                                                            ip: device.ip.clone(),
-                                                            port: device.port,
-                                                            action: CallAction::Answer,
-                                                        });
-                                                    }
-                                                }
-                                            },
-                                            span { class: "call-btn-icon", Icon { icon: IconType::Call, size: 20, color: "currentColor".to_string() } }
-                                            span { "Answer" }
-                                        }
-                                    }
-                                },
-                                ActiveCallState::Connected | ActiveCallState::OnHold | ActiveCallState::Dialing => {
-                                    // Show End Call button for active calls
-                                    rsx! {
-                                        button {
-                                            class: "call-button end-call",
-                                            onclick: {
-                                                let selected = selected_device.read().clone();
-                                                move |_| {
-                                                    if let Some(ref device) = selected {
-                                                        action_tx.send(AppAction::SendCallAction {
-                                                            ip: device.ip.clone(),
-                                                            port: device.port,
-                                                            action: CallAction::HangUp,
-                                                        });
-                                                    }
-                                                }
-                                            },
-                                            span { class: "call-btn-icon", Icon { icon: IconType::Unpair, size: 20, color: "currentColor".to_string() } }
-                                            span { "End Call" }
-                                        }
-                                    }
-                                },
-                                ActiveCallState::Ended => {
-                                    // Show dismiss button for ended calls
-                                    rsx! {
-                                        button {
-                                            class: "call-button dismiss",
-                                            onclick: move |_| {
-                                                set_active_call(None);
-                                            },
-                                            span { "Dismiss" }
-                                        }
-                                    }
-                                },
                             }
                         }
                     }

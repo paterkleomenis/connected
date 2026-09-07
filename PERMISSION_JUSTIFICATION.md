@@ -12,7 +12,7 @@
 Connected is a cross-platform device synchronization app that enables users to:
 1. Transfer files between their devices on the same local network
 2. Synchronize clipboard content between devices
-3. Link phones to desktop computers for SMS, calls, and media sync
+3. Link phones to desktop computers for SMS and call-history synchronization
 4. Monitor and sync media playback between devices
 
 All communication happens directly between user-owned devices on the local network. **No data is sent to remote servers.**
@@ -64,21 +64,7 @@ All communication happens directly between user-owned devices on the local netwo
 
 ---
 
-### 4. Phone Permission (`CALL_PHONE`)
-
-**Core Feature:** Phone Link - Initiate Calls from Desktop
-
-**Why needed:**
-- Allow users to initiate phone calls from their linked desktop device
-- Provide dial-back functionality from the desktop interface
-
-**How users benefit:** Convenience of placing calls from the computer interface while using the phone's cellular connection.
-
-**Alternative considered:** We could use an intent to open the dialer with a pre-filled number (`ACTION_DIAL`), but this requires manual user confirmation. `CALL_PHONE` enables a seamless experience matching native Phone Link apps.
-
----
-
-### 5. External Storage (`MANAGE_EXTERNAL_STORAGE`)
+### 4. External Storage (`MANAGE_EXTERNAL_STORAGE`)
 
 **Core Feature:** File Transfer
 
@@ -93,7 +79,7 @@ All communication happens directly between user-owned devices on the local netwo
 
 ---
 
-### 6. Battery Optimization (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`)
+### 5. Battery Optimization (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`)
 
 **Core Feature:** Persistent Device Connection
 
@@ -108,7 +94,7 @@ All communication happens directly between user-owned devices on the local netwo
 
 ---
 
-### 7. Location Permissions (`ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`)
+### 6. Location Permissions (`ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`)
 
 **Core Feature:** WiFi Aware Device Discovery
 
@@ -123,7 +109,7 @@ All communication happens directly between user-owned devices on the local netwo
 
 ---
 
-### 8. Notification Listener (`BIND_NOTIFICATION_LISTENER_SERVICE`)
+### 7. Notification Listener (`BIND_NOTIFICATION_LISTENER_SERVICE`)
 
 **Core Feature:** Media Playback Sync
 
@@ -145,7 +131,6 @@ All communication happens directly between user-owned devices on the local netwo
 | SMS | SMS content & metadata | No (in-memory only during sync) | Only to user's linked devices |
 | Contacts | Contact names & numbers | No (looked up on-demand) | Only to user's linked devices |
 | Call Log | Call history | No (in-memory only during sync) | Only to user's linked devices |
-| Phone | Phone numbers for dialing | No | N/A (initiates calls) |
 | Storage | User-selected files | No (transferred directly) | Only to user's linked devices |
 | Location | None | None | None |
 | Notifications | Media playback info | No (in-memory only) | Only to user's linked devices |

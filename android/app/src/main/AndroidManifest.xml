@@ -79,7 +79,12 @@
 
 
 
-    <!-- Telephony permissions for Phone Link feature -->
+    <!--
+        Permissions used by the Phone Link cross-device synchronization feature.
+        Keep this set limited to SMS and call-history synchronization. Android
+        call-control permissions are intentionally not requested: controlling
+        calls remotely is outside the Play cross-device synchronization use case.
+    -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission
         android:name="android.permission.READ_SMS"
@@ -97,9 +102,6 @@
         android:name="android.permission.READ_CALL_LOG"
         tools:ignore="SmsAndCallLogPolicy"
     />
-    <uses-permission android:name="android.permission.CALL_PHONE" />
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
 
     <!-- For monitoring media playback -->
     <uses-permission
