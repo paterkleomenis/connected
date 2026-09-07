@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Retained for the `sideload` flavor (GitHub/website/direct APK):
+         enables the in-app self-update flow (DownloadManager + ACTION_VIEW
+         install intent). Already declared in main; repeated here to make the
+         sideload requirement explicit. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+</manifest>

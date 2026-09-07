@@ -574,10 +574,10 @@ jobs:
           read-only: ${{ github.ref != 'refs/heads/main' }}
           arguments: |
             --build-cache
-            assembleStandaloneDebug
+            assembleSideloadDebug
 
       - name: Prepare Android artifact
-        run: cp android/app/build/outputs/apk/standalone/debug/app-standalone-debug.apk connected-android.apk
+        run: cp android/app/build/outputs/apk/sideload/debug/app-sideload-debug.apk connected-android.apk
 
       - name: Upload Android Build
         uses: actions/upload-artifact@v7

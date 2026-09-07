@@ -78,10 +78,10 @@ configure<ApplicationExtension> {
 
     flavorDimensions += "distribution"
     productFlavors {
-        create("play") {
+        create("playStore") {
             dimension = "distribution"
         }
-        create("standalone") {
+        create("sideload") {
             dimension = "distribution"
         }
     }
@@ -143,6 +143,7 @@ configure<ApplicationExtension> {
     buildFeatures {
         compose = true
         resValues = true
+        buildConfig = true
     }
 
     lint {

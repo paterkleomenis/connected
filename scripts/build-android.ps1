@@ -18,11 +18,11 @@ if ($env:OS -eq "Windows_NT") {
     Write-Host "🔗 Generating UniFFI bindings..." -ForegroundColor Cyan
     .\gradlew.bat :app:generateBindingsRelease
 
-    Write-Host "🚀 Compiling release build..." -ForegroundColor Cyan
-    .\gradlew.bat assembleRelease
+    Write-Host "🚀 Compiling release build (sideload APK)..." -ForegroundColor Cyan
+    .\gradlew.bat assembleSideloadRelease
 
-    Write-Host "📱 Building Android App Bundle (AAB)..." -ForegroundColor Cyan
-    .\gradlew.bat bundleRelease
+    Write-Host "📱 Building Android App Bundle (AAB, playStore)..." -ForegroundColor Cyan
+    .\gradlew.bat bundlePlayStoreRelease
 
     Write-Host "✅ Build complete!" -ForegroundColor Green
 } else {

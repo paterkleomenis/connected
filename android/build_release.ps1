@@ -87,12 +87,12 @@ Write-Host "🔗 Generating UniFFI bindings..." -ForegroundColor Cyan
 .\gradlew.bat :app:generateBindingsRelease
 Write-Host ""
 
-# Compile release build (Play flavor for Play Store)
+# Compile release build (playStore flavor for Play Store)
 Write-Host "🚀 Compiling release build..." -ForegroundColor Cyan
-.\gradlew.bat assemblePlayRelease
+.\gradlew.bat assemblePlayStoreRelease
 Write-Host ""
 
-$PlayApk = "app\build\outputs\apk\play\release\app-play-release.apk"
+$PlayApk = "app\build\outputs\apk\playStore\release\app-playStore-release.apk"
 
 # Check if build was successful
 if (Test-Path $PlayApk) {
@@ -108,9 +108,9 @@ if (Test-Path $PlayApk) {
 
     # Try to build AAB
     Write-Host "📱 Building Android App Bundle (AAB)..." -ForegroundColor Cyan
-    .\gradlew.bat bundlePlayRelease
+    .\gradlew.bat bundlePlayStoreRelease
 
-    $PlayAab = "app\build\outputs\bundle\playRelease\app-play-release.aab"
+    $PlayAab = "app\build\outputs\bundle\playStoreRelease\app-playStore-release.aab"
     if (Test-Path $PlayAab) {
         Write-Host "✅ Release AAB built successfully!" -ForegroundColor Green
         Write-Host "📁 Location: $PlayAab" -ForegroundColor Cyan

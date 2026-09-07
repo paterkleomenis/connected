@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Strip self-update permission for Google Play distribution.
+         Play Console flags REQUEST_INSTALL_PACKAGES as a sensitive
+         permission requiring a declaration; the playStore flavor must
+         never request it (updates come via Play itself). -->
+    <uses-permission
+        android:name="android.permission.REQUEST_INSTALL_PACKAGES"
+        tools:node="remove" />
+</manifest>

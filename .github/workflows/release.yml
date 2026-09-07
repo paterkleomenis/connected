@@ -365,11 +365,11 @@ jobs:
           read-only: true
           arguments: |
             --build-cache
-            assembleStandaloneRelease
-            bundlePlayRelease
+            assembleSideloadRelease
+            bundlePlayStoreRelease
 
       - name: Prepare Android APK artifact
-        run: cp android/app/build/outputs/apk/standalone/release/app-standalone-release.apk connected-android.apk
+        run: cp android/app/build/outputs/apk/sideload/release/app-sideload-release.apk connected-android.apk
 
       # Using v7 with archive: false means NO 'name:' key
       - name: Upload Android APK Artifact
@@ -379,7 +379,7 @@ jobs:
           archive: false
 
       - name: Prepare Android AAB artifact
-        run: cp android/app/build/outputs/bundle/playRelease/app-play-release.aab connected-android.aab
+        run: cp android/app/build/outputs/bundle/playStoreRelease/app-playStore-release.aab connected-android.aab
 
       # Using v7 with archive: false means NO 'name:' key
       - name: Upload Android AAB Artifact

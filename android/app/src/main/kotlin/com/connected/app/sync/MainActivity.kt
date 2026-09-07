@@ -1170,7 +1170,8 @@ fun SettingsScreen(
     }
 
     LaunchedEffect(Unit) {
-        if (!AppUpdater.isPlayStoreInstall(context) && currentVersion != "Unknown") {
+        // Self-update check is sideload-flavor only; playStore builds update via Google Play.
+        if (AppUpdater.isSelfUpdateAllowed(context) && currentVersion != "Unknown") {
             isCheckingUpdate = true
             updateInfo = AppUpdater.checkForUpdate(currentVersion)
             isCheckingUpdate = false
@@ -1876,27 +1877,42 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    if (updateInfo != null) {
+                    if (BuildConfig.FLAVOR == "sideload") {
+                        if (updateInfo != null) {
+                            Button(
+                                onClick = {
+                                    updateInfo?.let {
+                                        AppUpdater.downloadUpdate(context, it.downloadUrl, it.versionName)
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Update to ${updateInfo!!.versionName}")
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        } else if (isCheckingUpdate) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Checking for updates...", style = MaterialTheme.typography.bodySmall)
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    } else {
+                        // playStore flavor: no direct APK installs; send users to Play.
                         Button(
-                            onClick = {
-                                updateInfo?.let {
-                                    AppUpdater.downloadUpdate(context, it.downloadUrl, it.versionName)
-                                }
-                            },
+                            onClick = { AppUpdater.openPlayStoreListing(context) },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.primary,
                                 contentColor = MaterialTheme.colorScheme.onPrimary
                             ),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Update to ${updateInfo!!.versionName}")
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                    } else if (isCheckingUpdate) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Checking for updates...", style = MaterialTheme.typography.bodySmall)
+                            Text("View in Play Store")
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                     }

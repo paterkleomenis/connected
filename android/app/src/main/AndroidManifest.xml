@@ -16,7 +16,11 @@
 
     <!-- Required since API 26 for the in-app self-update flow (sideloading the
          downloaded APK). Without it, ACTION_VIEW package install intents are
-         silently refused. -->
+         silently refused.
+         Declared here so the `sideload` flavor inherits it (see also
+         src/sideload/AndroidManifest.xml). Stripped from the `playStore`
+         flavor via tools:node="remove" in src/playStore/AndroidManifest.xml
+         so Play Console never sees it. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <uses-permission

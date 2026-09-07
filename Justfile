@@ -274,25 +274,25 @@ run-desktop-release:
 #    docker compose -f packaging/docker/docker-compose.yml down
 
 # Android-specific commands
-[doc("Build Android debug APK")]
+[doc("Build Android debug APK (sideload flavor)")]
 build-android-apk:
-    {{ if os_family() == "windows" { "cd /d android && gradlew.bat assembleDebug" } else { "cd android && ./gradlew assembleDebug" } }}
+    {{ if os_family() == "windows" { "cd /d android && gradlew.bat assembleSideloadDebug" } else { "cd android && ./gradlew assembleSideloadDebug" } }}
 
-[doc("Build Android release APK")]
+[doc("Build Android release APK (sideload flavor)")]
 build-android-release:
-    {{ if os_family() == "windows" { "cd /d android && gradlew.bat assembleRelease" } else { "cd android && ./gradlew assembleRelease" } }}
+    {{ if os_family() == "windows" { "cd /d android && gradlew.bat assembleSideloadRelease" } else { "cd android && ./gradlew assembleSideloadRelease" } }}
 
-[doc("Install Android debug APK to connected device")]
+[doc("Install Android debug APK to connected device (sideload flavor)")]
 install-android:
-    {{ if os_family() == "windows" { "cd /d android && gradlew.bat installDebug" } else { "cd android && ./gradlew installDebug" } }}
+    {{ if os_family() == "windows" { "cd /d android && gradlew.bat installSideloadDebug" } else { "cd android && ./gradlew installSideloadDebug" } }}
 
-[doc("Generate only the Android App Bundle (AAB)")]
+[doc("Generate only the Android App Bundle (AAB, playStore flavor)")]
 build-android-bundle:
-    {{ if os_family() == "windows" { "cd /d android && gradlew.bat bundleRelease" } else { "cd android && ./gradlew bundleRelease" } }}
+    {{ if os_family() == "windows" { "cd /d android && gradlew.bat bundlePlayStoreRelease" } else { "cd android && ./gradlew bundlePlayStoreRelease" } }}
 
-[doc("Lint check Android release build")]
+[doc("Lint check Android release build (sideload flavor)")]
 lint-android:
-    {{ if os_family() == "windows" { "cd /d android && gradlew.bat lintRelease" } else { "cd android && ./gradlew lintRelease" } }}
+    {{ if os_family() == "windows" { "cd /d android && gradlew.bat lintSideloadRelease" } else { "cd android && ./gradlew lintSideloadRelease" } }}
 
 # Android Play Store release
 [doc("Build Android release for Play Store (APK + AAB)")]

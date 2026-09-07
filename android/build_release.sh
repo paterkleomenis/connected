@@ -94,12 +94,12 @@ echo "🔗 Generating UniFFI bindings..."
 ./gradlew :app:generateBindingsRelease
 echo ""
 
-# Compile release build (Play flavor for Play Store)
+# Compile release build (playStore flavor for Play Store)
 echo "🚀 Compiling release build..."
-./gradlew assemblePlayRelease
+./gradlew assemblePlayStoreRelease
 echo ""
 
-PLAY_APK="app/build/outputs/apk/play/release/app-play-release.apk"
+PLAY_APK="app/build/outputs/apk/playStore/release/app-playStore-release.apk"
 
 # Check if build was successful
 if [ -f "$PLAY_APK" ]; then
@@ -114,9 +114,9 @@ if [ -f "$PLAY_APK" ]; then
 
     # Try to build AAB
     echo "📱 Building Android App Bundle (AAB)..."
-    ./gradlew bundlePlayRelease
+    ./gradlew bundlePlayStoreRelease
 
-    PLAY_AAB="app/build/outputs/bundle/playRelease/app-play-release.aab"
+    PLAY_AAB="app/build/outputs/bundle/playStoreRelease/app-playStore-release.aab"
     if [ -f "$PLAY_AAB" ]; then
         echo "✅ Release AAB built successfully!"
         echo "📁 Location: $PLAY_AAB"

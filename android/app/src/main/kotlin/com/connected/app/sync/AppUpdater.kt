@@ -21,6 +21,53 @@ data class UpdateInfo(
 object AppUpdater {
     private const val TAG = "AppUpdater"
     private const val GITHUB_RELEASES_URL = "https://api.github.com/repos/paterkleomenis/connected/releases/latest"
+    const val PLAY_STORE_PACKAGE = "com.connected.app.sync"
+    const val PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=$PLAY_STORE_PACKAGE"
+
+    /**
+     * True for the `sideload` product flavor (GitHub/website/direct APK),
+     * which retains REQUEST_INSTALL_PACKAGES and the self-update flow.
+     * False for the `playStore` flavor, where direct APK installs are
+     * forbidden by Play policy (updates come via Play itself).
+     */
+    val isSideloadFlavor: Boolean
+        get() = BuildConfig.FLAVOR == "sideload"
+
+    /**
+     * Whether the direct-APK self-update flow is allowed in this build.
+     * Flavor is the source of truth; the installer-package check is kept
+     * as defense-in-depth (e.g. sideload APK later re-distributed via Play).
+     */
+    fun isSelfUpdateAllowed(context: Context): Boolean {
+        if (!isSideloadFlavor) return false
+        return !isPlayStoreInstall(context)
+    }
+
+    /**
+     * Redirects Play-flavor users to the Play Store listing instead of
+     * offering a direct APK download.
+     */
+    fun openPlayStoreListing(context: Context) {
+        try {
+            val marketIntent = android.content.Intent(
+                android.content.Intent.ACTION_VIEW,
+                "market://details?id=$PLAY_STORE_PACKAGE".toUri()
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(marketIntent)
+        } catch (e: android.content.ActivityNotFoundException) {
+            try {
+                val webIntent = android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    PLAY_STORE_URL.toUri()
+                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(webIntent)
+            } catch (e2: Exception) {
+                Log.e(TAG, "Failed to open Play Store listing", e2)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open Play Store listing", e)
+        }
+    }
 
     /**
      * Checks if the app was installed from the Play Store.
@@ -47,6 +94,8 @@ object AppUpdater {
      * Returns UpdateInfo if a newer version is found, null otherwise.
      */
     suspend fun checkForUpdate(currentVersion: String): UpdateInfo? = withContext(Dispatchers.IO) {
+        // Play Store builds must never hit the GitHub APK self-update path.
+        if (!isSideloadFlavor) return@withContext null
         var connection: HttpURLConnection? = null
         try {
             val url = URL(GITHUB_RELEASES_URL)
@@ -102,8 +151,14 @@ object AppUpdater {
      * Downloads the APK and triggers install once completed via DownloadManager.
      */
     fun downloadUpdate(context: Context, downloadUrl: String, versionName: String) {
+        // No-op on Play builds: updates are delivered by Google Play.
+        if (!isSideloadFlavor) {
+            Log.i(TAG, "Self-update blocked on playStore flavor; redirecting to Play")
+            openPlayStoreListing(context)
+            return
+        }
         try {
-            val request = DownloadManager.Request(  downloadUrl.toUri())
+            val request = DownloadManager.Request(downloadUrl.toUri())
                 .setTitle("Downloading Connected $versionName")
                 .setDescription("Downloading app update")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)

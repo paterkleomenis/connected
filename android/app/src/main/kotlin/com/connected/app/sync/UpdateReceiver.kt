@@ -11,6 +11,9 @@ import android.util.Log
 
 class UpdateReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        // Direct APK installs are sideload-flavor only. The playStore flavor
+        // strips REQUEST_INSTALL_PACKAGES, so ignore downloads there.
+        if (BuildConfig.FLAVOR != "sideload") return
         if (intent.action == DownloadManager.ACTION_DOWNLOAD_COMPLETE) {
             val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
             if (downloadId != -1L) {
