@@ -2,7 +2,7 @@ Connected is a high-speed, offline, cross-platform app that bridges the gap betw
 
 Features:
 
-• Cross-platform: transfer files, sync clipboards, make and answer calls, send and receive messages, and control media between Android, iOS, Linux, Mac and Windows devices.
+• Cross-platform: transfer files, sync clipboards, synchronize SMS and call history, request user-confirmed outgoing calls, and control media between Android, iOS, Linux, Mac and Windows devices.
 • Offline functionality: use it without an internet connection on supported Android devices via WiFi Aware, plus local-network discovery when a network is available.
 • High speed: powered by the QUIC protocol (the same protocol behind HTTP/3).
 • Zero config: auto-discovery via mDNS and WiFi Aware.
