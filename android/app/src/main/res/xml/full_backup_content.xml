@@ -4,4 +4,6 @@
 <full-backup-content>
     <exclude domain="external" path="identity.json" />
     <exclude domain="external" path="known_peers.json" />
+    <exclude domain="file" path="identity.json" />
+    <exclude domain="file" path="known_peers.json" />
 </full-backup-content>
