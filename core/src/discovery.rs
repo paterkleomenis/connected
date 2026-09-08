@@ -1002,17 +1002,9 @@ impl DiscoveryService {
             debug!("  TXT property: {}={}", prop.key(), prop.val_str());
         }
 
-        // Check protocol version compatibility. Every current peer must
-        // advertise the protocol generation explicitly; missing versions are
-        // legacy peers and are rejected because the wire format changed.
+        // v1 peers predate the version TXT record and use raw JSON.
         let version = match info.txt_properties.get("version") {
-            None => {
-                warn!(
-                    "Ignoring device without a protocol version: {}",
-                    info.fullname
-                );
-                return;
-            }
+            None => MIN_COMPATIBLE_VERSION,
             Some(value) => match value.val_str().parse::<u32>() {
                 Ok(version) => version,
                 Err(_) => {

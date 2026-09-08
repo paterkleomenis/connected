@@ -36,7 +36,7 @@ pub struct FsEntry {
     pub modified: Option<u64>, // Unix timestamp in seconds
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum FilesystemMessage {
     ListDirRequest {
         path: String,

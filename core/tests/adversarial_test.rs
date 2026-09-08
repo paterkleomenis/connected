@@ -163,8 +163,8 @@ fn encode_decode_roundtrip_current_protocol() {
         text: "roundtrip ✓".into(),
         items: (0..1000).collect(),
     };
-    let encoded = encode_message(&msg).unwrap();
-    assert_eq!(decode_message::<Probe>(&encoded).unwrap(), msg);
+    let encoded = encode_message(&msg, connected_core::PROTOCOL_VERSION).unwrap();
+    assert_eq!(decode_message::<Probe>(&encoded).unwrap().0, msg);
 
     // The compact postcard frame should stay close to the payload size even
     // for text-heavy messages.
@@ -172,6 +172,6 @@ fn encode_decode_roundtrip_current_protocol() {
         text: "payload-\"quoted\"-with-{braces}".repeat(20),
         items: vec![],
     };
-    let encoded = encode_message(&texty).unwrap();
+    let encoded = encode_message(&texty, connected_core::PROTOCOL_VERSION).unwrap();
     assert!(encoded.len() < texty.text.len() + 100);
 }

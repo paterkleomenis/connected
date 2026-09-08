@@ -123,7 +123,7 @@ pub struct IncomingTransferConfig {
         Option<Arc<parking_lot::RwLock<std::collections::HashMap<String, PathBuf>>>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum FileTransferMessage {
     /// Request to send a file
     SendRequest {
@@ -211,11 +211,15 @@ pub enum TransferProgress {
 
 pub struct FileTransfer {
     connection: Connection,
+    peer_version: u32,
 }
 
 impl FileTransfer {
-    pub fn new(connection: Connection) -> Self {
-        Self { connection }
+    pub fn new(connection: Connection, peer_version: u32) -> Self {
+        Self {
+            connection,
+            peer_version,
+        }
     }
 
     /// Send a file or folder to the connected peer using a new multiplexed stream
@@ -336,7 +340,7 @@ impl FileTransfer {
                 mime_type: mime_guess::from_path(&path).first().map(|m| m.to_string()),
             };
 
-            send_message(&mut send, &request).await?;
+            send_message(&mut send, &request, self.peer_version).await?;
 
             // Wait for accept/reject/resume
             let response: FileTransferMessage = recv_message(&mut recv).await?;
@@ -478,7 +482,7 @@ impl FileTransfer {
             // Send completion with checksum
             let checksum = hasher.finalize().to_string();
             let complete = FileTransferMessage::Complete { checksum };
-            send_message(&mut send, &complete).await?;
+            send_message(&mut send, &complete, self.peer_version).await?;
 
             // Wait for acknowledgment
             let ack: FileTransferMessage = recv_message(&mut recv).await?;
@@ -601,7 +605,7 @@ impl FileTransfer {
             files_count,
             is_directory,
         };
-        send_message(&mut send, &request).await?;
+        send_message(&mut send, &request, self.peer_version).await?;
 
         // Wait for accept/reject
         let response: FileTransferMessage = recv_message(&mut recv).await?;
@@ -641,7 +645,8 @@ impl FileTransfer {
                 .as_ref()
                 .is_some_and(|c| c.load(Ordering::Relaxed))
             {
-                let _ = send_message(&mut send, &FileTransferMessage::Cancel).await;
+                let _ =
+                    send_message(&mut send, &FileTransferMessage::Cancel, self.peer_version).await;
                 if let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Cancelled);
                 }
@@ -653,7 +658,7 @@ impl FileTransfer {
                 is_dir,
                 size,
             };
-            send_message(&mut send, &item_msg).await?;
+            send_message(&mut send, &item_msg, self.peer_version).await?;
 
             let item_resp: FileTransferMessage = recv_message(&mut recv).await?;
             match item_resp {
@@ -682,7 +687,8 @@ impl FileTransfer {
                 .as_ref()
                 .is_some_and(|c| c.load(Ordering::Relaxed))
             {
-                let _ = send_message(&mut send, &FileTransferMessage::Cancel).await;
+                let _ =
+                    send_message(&mut send, &FileTransferMessage::Cancel, self.peer_version).await;
                 if let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Cancelled);
                 }
@@ -694,7 +700,7 @@ impl FileTransfer {
                 is_dir,
                 size,
             };
-            send_message(&mut send, &item_msg).await?;
+            send_message(&mut send, &item_msg, self.peer_version).await?;
 
             let item_resp: FileTransferMessage = recv_message(&mut recv).await?;
             let offset = match item_resp {
@@ -751,7 +757,12 @@ impl FileTransfer {
                     blake3::hash(&[]).to_string()
                 };
 
-                send_message(&mut send, &FileTransferMessage::ItemComplete { checksum }).await?;
+                send_message(
+                    &mut send,
+                    &FileTransferMessage::ItemComplete { checksum },
+                    self.peer_version,
+                )
+                .await?;
                 match recv_message(&mut recv).await? {
                     FileTransferMessage::ItemAck => {}
                     FileTransferMessage::Error { message } => {
@@ -825,7 +836,12 @@ impl FileTransfer {
                         .is_some_and(|c| c.load(Ordering::Relaxed))
                     {
                         read_task.abort();
-                        let _ = send_message(&mut send, &FileTransferMessage::Cancel).await;
+                        let _ = send_message(
+                            &mut send,
+                            &FileTransferMessage::Cancel,
+                            self.peer_version,
+                        )
+                        .await;
                         if let Some(ref tx) = progress_tx {
                             let _ = tx.send(TransferProgress::Cancelled);
                         }
@@ -861,7 +877,12 @@ impl FileTransfer {
             }
 
             let checksum = hasher.finalize().to_string();
-            send_message(&mut send, &FileTransferMessage::ItemComplete { checksum }).await?;
+            send_message(
+                &mut send,
+                &FileTransferMessage::ItemComplete { checksum },
+                self.peer_version,
+            )
+            .await?;
 
             match recv_message(&mut recv).await? {
                 FileTransferMessage::ItemAck => {}
@@ -876,6 +897,7 @@ impl FileTransfer {
         // for better aggregate throughput on WiFi 6 / 6E high-bandwidth LAN links)
         let semaphore = Arc::new(tokio::sync::Semaphore::new(10));
         let mut join_set = tokio::task::JoinSet::new();
+        let peer_version = self.peer_version;
 
         for (abs_path, rel_path, _is_dir, size) in large_files {
             let connection = self.connection.clone();
@@ -906,7 +928,7 @@ impl FileTransfer {
                     relative_path: rel_path.clone(),
                     size,
                 };
-                send_message(&mut sub_send, &stream_msg).await?;
+                send_message(&mut sub_send, &stream_msg, peer_version).await?;
 
                 let item_resp: FileTransferMessage = recv_message(&mut sub_recv).await?;
                 let offset = match item_resp {
@@ -966,6 +988,7 @@ impl FileTransfer {
                     send_message(
                         &mut sub_send,
                         &FileTransferMessage::ItemComplete { checksum },
+                        peer_version,
                     )
                     .await?;
                     match recv_message(&mut sub_recv).await? {
@@ -1043,7 +1066,12 @@ impl FileTransfer {
                             .is_some_and(|c| c.load(Ordering::Relaxed))
                         {
                             read_task.abort();
-                            let _ = send_message(&mut sub_send, &FileTransferMessage::Cancel).await;
+                            let _ = send_message(
+                                &mut sub_send,
+                                &FileTransferMessage::Cancel,
+                                peer_version,
+                            )
+                            .await;
                             return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
                         }
 
@@ -1080,6 +1108,7 @@ impl FileTransfer {
                 send_message(
                     &mut sub_send,
                     &FileTransferMessage::ItemComplete { checksum },
+                    peer_version,
                 )
                 .await?;
 
@@ -1126,7 +1155,7 @@ impl FileTransfer {
                 _ = cancel_check_interval.tick() => {
                     if cancel_flag.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
                         join_set.abort_all();
-                        let _ = send_message(&mut send, &FileTransferMessage::Cancel).await;
+                        let _ = send_message(&mut send, &FileTransferMessage::Cancel, peer_version).await;
                         if let Some(ref tx) = progress_tx {
                             let _ = tx.send(TransferProgress::Cancelled);
                         }
@@ -1140,7 +1169,7 @@ impl FileTransfer {
         let complete = FileTransferMessage::Complete {
             checksum: "batch".to_string(),
         };
-        send_message(&mut send, &complete).await?;
+        send_message(&mut send, &complete, peer_version).await?;
 
         match recv_message(&mut recv).await? {
             FileTransferMessage::Ack => {
@@ -1169,7 +1198,7 @@ impl FileTransfer {
         relative_path: &str,
         size: u64,
         cancel_flag: &Option<Arc<std::sync::atomic::AtomicBool>>,
-        _progress_tx: &Option<mpsc::UnboundedSender<TransferProgress>>,
+        peer_version: u32,
     ) -> Result<()> {
         let item_path = save_dir.join(relative_path);
         if let Some(parent) = item_path.parent() {
@@ -1205,7 +1234,7 @@ impl FileTransfer {
         } else {
             FileTransferMessage::Accept
         };
-        send_message(send, &accept_item).await?;
+        send_message(send, &accept_item, peer_version).await?;
 
         if offset == size {
             // Skip streaming, wait for ItemComplete
@@ -1247,7 +1276,7 @@ impl FileTransfer {
                 let error = FileTransferMessage::Error {
                     message: "Checksum mismatch".to_string(),
                 };
-                send_message(send, &error).await?;
+                send_message(send, &error, peer_version).await?;
                 return Err(ConnectedError::ChecksumMismatch);
             }
 
@@ -1260,7 +1289,7 @@ impl FileTransfer {
                     .map_err(ConnectedError::Io)?;
             }
 
-            send_message(send, &FileTransferMessage::ItemAck).await?;
+            send_message(send, &FileTransferMessage::ItemAck, peer_version).await?;
             return Ok(());
         }
 
@@ -1297,7 +1326,7 @@ impl FileTransfer {
                 .as_ref()
                 .is_some_and(|c| c.load(Ordering::Relaxed))
             {
-                let _ = send_message(send, &FileTransferMessage::Cancel).await;
+                let _ = send_message(send, &FileTransferMessage::Cancel, peer_version).await;
                 return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
             }
 
@@ -1354,14 +1383,14 @@ impl FileTransfer {
                     let error = FileTransferMessage::Error {
                         message: "Checksum mismatch".to_string(),
                     };
-                    send_message(send, &error).await?;
+                    send_message(send, &error, peer_version).await?;
                     return Err(ConnectedError::ChecksumMismatch);
                 }
 
                 tokio::fs::rename(&part_path, &item_path)
                     .await
                     .map_err(ConnectedError::Io)?;
-                send_message(send, &FileTransferMessage::ItemAck).await?;
+                send_message(send, &FileTransferMessage::ItemAck, peer_version).await?;
                 Ok(())
             }
             _ => Err(ConnectedError::Protocol(
@@ -1392,7 +1421,11 @@ impl FileTransfer {
         create_dir_all_no_symlinks(&save_dir).await?;
 
         // Read Request
-        let request: FileTransferMessage = recv_message(&mut recv).await?;
+        let (request, wire_format) = recv_message_with_limit(&mut recv, 4 * 1024 * 1024).await?;
+        let response_version = match wire_format {
+            crate::codec::WireFormat::V1Json => 1,
+            crate::codec::WireFormat::Postcard => crate::PROTOCOL_VERSION,
+        };
 
         match request {
             FileTransferMessage::BatchItemStream {
@@ -1416,7 +1449,7 @@ impl FileTransfer {
                     let reject = FileTransferMessage::Reject {
                         reason: "Batch not approved or active".to_string(),
                     };
-                    send_message(&mut send, &reject).await?;
+                    send_message(&mut send, &reject, response_version).await?;
                     return Err(ConnectedError::TransferRejected(
                         "Batch not approved".to_string(),
                     ));
@@ -1430,7 +1463,7 @@ impl FileTransfer {
                     let reject_msg = FileTransferMessage::Reject {
                         reason: "Security violation".to_string(),
                     };
-                    send_message(&mut send, &reject_msg).await?;
+                    send_message(&mut send, &reject_msg, response_version).await?;
                     return Err(ConnectedError::Protocol(err_msg));
                 }
 
@@ -1441,7 +1474,7 @@ impl FileTransfer {
                     &relative_path,
                     size,
                     &cancel_flag,
-                    &progress_tx,
+                    response_version,
                 )
                 .await?;
 
@@ -1485,7 +1518,7 @@ impl FileTransfer {
                     let reject = FileTransferMessage::Reject {
                         reason: "User declined".to_string(),
                     };
-                    send_message(&mut send, &reject).await?;
+                    send_message(&mut send, &reject, response_version).await?;
                     if let Some(ref tx) = progress_tx {
                         let _ = tx.send(TransferProgress::Cancelled);
                     }
@@ -1510,6 +1543,7 @@ impl FileTransfer {
                             &FileTransferMessage::Reject {
                                 reason: "Failed to prepare file".to_string(),
                             },
+                            response_version,
                         )
                         .await;
                         if let Some(ref tx) = progress_tx {
@@ -1556,6 +1590,7 @@ impl FileTransfer {
                                     &FileTransferMessage::Reject {
                                         reason: "Failed to prepare file".to_string(),
                                     },
+                                    response_version,
                                 )
                                 .await;
                                 if let Some(ref tx) = progress_tx {
@@ -1578,6 +1613,7 @@ impl FileTransfer {
                             &FileTransferMessage::Reject {
                                 reason: "Failed to prepare file".to_string(),
                             },
+                            response_version,
                         )
                         .await;
                         if let Some(ref tx) = progress_tx {
@@ -1607,7 +1643,7 @@ impl FileTransfer {
                     FileTransferMessage::Accept
                 };
 
-                send_message(&mut send, &accept_msg).await?;
+                send_message(&mut send, &accept_msg, response_version).await?;
 
                 // Now notify that transfer is starting
                 if let Some(ref tx) = progress_tx {
@@ -1654,7 +1690,9 @@ impl FileTransfer {
                         .as_ref()
                         .is_some_and(|c| c.load(Ordering::Relaxed))
                     {
-                        let _ = send_message(&mut send, &FileTransferMessage::Cancel).await;
+                        let _ =
+                            send_message(&mut send, &FileTransferMessage::Cancel, response_version)
+                                .await;
                         if let Some(ref tx) = progress_tx {
                             let _ = tx.send(TransferProgress::Cancelled);
                         }
@@ -1739,7 +1777,7 @@ impl FileTransfer {
                             let error = FileTransferMessage::Error {
                                 message: "Checksum mismatch".to_string(),
                             };
-                            send_message(&mut send, &error).await?;
+                            send_message(&mut send, &error, response_version).await?;
                             return Err(ConnectedError::ChecksumMismatch);
                         }
 
@@ -1749,7 +1787,7 @@ impl FileTransfer {
                             .map_err(ConnectedError::Io)?;
 
                         let ack = FileTransferMessage::Ack;
-                        send_message(&mut send, &ack).await?;
+                        send_message(&mut send, &ack, response_version).await?;
 
                         if let Some(ref tx) = progress_tx {
                             let _ = tx.send(TransferProgress::Completed {
@@ -1824,7 +1862,7 @@ impl FileTransfer {
                     let reject = FileTransferMessage::Reject {
                         reason: "User declined".to_string(),
                     };
-                    send_message(&mut send, &reject).await?;
+                    send_message(&mut send, &reject, response_version).await?;
                     if let Some(ref tx) = progress_tx {
                         let _ = tx.send(TransferProgress::Cancelled);
                     }
@@ -1856,7 +1894,7 @@ impl FileTransfer {
                     approved_batches: approved_batches.clone(),
                 };
 
-                send_message(&mut send, &FileTransferMessage::Accept).await?;
+                send_message(&mut send, &FileTransferMessage::Accept, response_version).await?;
 
                 if let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Starting {
@@ -1874,7 +1912,9 @@ impl FileTransfer {
                         .as_ref()
                         .is_some_and(|c| c.load(Ordering::Relaxed))
                     {
-                        let _ = send_message(&mut send, &FileTransferMessage::Cancel).await;
+                        let _ =
+                            send_message(&mut send, &FileTransferMessage::Cancel, response_version)
+                                .await;
                         return Err(ConnectedError::TransferFailed(
                             "Cancelled by receiver".to_string(),
                         ));
@@ -1932,7 +1972,7 @@ impl FileTransfer {
                                 let reject_msg = FileTransferMessage::Reject {
                                     reason: "Security violation".to_string(),
                                 };
-                                send_message(&mut send, &reject_msg).await?;
+                                send_message(&mut send, &reject_msg, response_version).await?;
                                 return Err(ConnectedError::Protocol(err_msg));
                             }
 
@@ -1941,7 +1981,12 @@ impl FileTransfer {
                             if is_dir {
                                 let item_path = save_dir.join(&relative_path);
                                 create_dir_all_no_symlinks(&item_path).await?;
-                                send_message(&mut send, &FileTransferMessage::ItemAck).await?;
+                                send_message(
+                                    &mut send,
+                                    &FileTransferMessage::ItemAck,
+                                    response_version,
+                                )
+                                .await?;
                             } else {
                                 Self::receive_file_payload(
                                     &mut send,
@@ -1950,7 +1995,7 @@ impl FileTransfer {
                                     &relative_path,
                                     size,
                                     &cancel_flag,
-                                    &progress_tx,
+                                    response_version,
                                 )
                                 .await?;
                             }
@@ -1962,7 +2007,8 @@ impl FileTransfer {
                                     received_files, received_bytes, files_count, total_size
                                 )));
                             }
-                            send_message(&mut send, &FileTransferMessage::Ack).await?;
+                            send_message(&mut send, &FileTransferMessage::Ack, response_version)
+                                .await?;
                             if let Some(ref tx) = progress_tx {
                                 let _ = tx.send(TransferProgress::Completed {
                                     filename: name.clone(),
@@ -2051,8 +2097,12 @@ pub fn is_safe_relative_path(path: &str) -> bool {
 }
 
 /// Send a message over the stream
-pub(crate) async fn send_message<T: Serialize>(stream: &mut SendStream, message: &T) -> Result<()> {
-    let data = crate::codec::encode_message(message)?;
+pub(crate) async fn send_message<T: Serialize>(
+    stream: &mut SendStream,
+    message: &T,
+    peer_version: u32,
+) -> Result<()> {
+    let data = crate::codec::encode_message(message, peer_version)?;
     let len: u32 = data.len().try_into().map_err(|_| {
         ConnectedError::Protocol(format!(
             "Message too large to send: {} bytes exceeds u32::MAX",
@@ -2066,7 +2116,9 @@ pub(crate) async fn send_message<T: Serialize>(stream: &mut SendStream, message:
 
 /// Receive a message from the stream (default 4 MB limit for control messages)
 pub(crate) async fn recv_message<T: DeserializeOwned>(stream: &mut RecvStream) -> Result<T> {
-    recv_message_with_limit(stream, 4 * 1024 * 1024).await
+    recv_message_with_limit(stream, 4 * 1024 * 1024)
+        .await
+        .map(|(message, _)| message)
 }
 
 /// Receive a message from the stream with a custom size limit.
@@ -2079,7 +2131,7 @@ pub(crate) async fn recv_message<T: DeserializeOwned>(stream: &mut RecvStream) -
 pub(crate) async fn recv_message_with_limit<T: DeserializeOwned>(
     stream: &mut RecvStream,
     max_size: usize,
-) -> Result<T> {
+) -> Result<(T, crate::codec::WireFormat)> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
@@ -2115,8 +2167,7 @@ pub(crate) async fn recv_message_with_limit<T: DeserializeOwned>(
         remaining -= to_read;
     }
 
-    let message = crate::codec::decode_message(&data)?;
-    Ok(message)
+    crate::codec::decode_message(&data)
 }
 
 pub fn sanitize_filename(filename: &str) -> String {

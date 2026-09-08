@@ -121,10 +121,11 @@ const FS_CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
 async fn send_fs_message<T: serde::Serialize>(
     send: &mut quinn::SendStream,
     message: &T,
+    peer_version: u32,
 ) -> Result<()> {
     tokio::time::timeout(
         FS_CTRL_TIMEOUT,
-        crate::file_transfer::send_message(send, message),
+        crate::file_transfer::send_message(send, message, peer_version),
     )
     .await
     .map_err(|_| ConnectedError::Timeout("filesystem request timed out".to_string()))?
@@ -133,10 +134,11 @@ async fn send_fs_message<T: serde::Serialize>(
 async fn recv_fs_message<T: serde::de::DeserializeOwned>(
     recv: &mut quinn::RecvStream,
 ) -> Result<T> {
-    tokio::time::timeout(
-        FS_CHUNK_TIMEOUT,
-        crate::file_transfer::recv_message_with_limit(recv, 16 * 1024 * 1024),
-    )
+    tokio::time::timeout(FS_CHUNK_TIMEOUT, async {
+        crate::file_transfer::recv_message_with_limit(recv, 16 * 1024 * 1024)
+            .await
+            .map(|(message, _)| message)
+    })
     .await
     .map_err(|_| ConnectedError::Timeout("filesystem response timed out".to_string()))?
 }
@@ -652,10 +654,11 @@ impl ConnectedClient {
         use crate::filesystem::{FilesystemMessage, STREAM_TYPE_FS};
 
         let addr = SocketAddr::new(target_ip, target_port);
+        let peer_version = self.peer_version_for_endpoint(target_ip, target_port);
         let (mut send, mut recv) = self.transport.open_stream(addr, STREAM_TYPE_FS).await?;
 
         let req = FilesystemMessage::ListDirRequest { path };
-        send_fs_message(&mut send, &req).await?;
+        send_fs_message(&mut send, &req, peer_version).await?;
 
         let resp: FilesystemMessage = recv_fs_message(&mut recv).await?;
 
@@ -677,13 +680,14 @@ impl ConnectedClient {
         use tokio::io::AsyncWriteExt;
 
         let addr = SocketAddr::new(target_ip, target_port);
+        let peer_version = self.peer_version_for_endpoint(target_ip, target_port);
         let (mut send, mut recv) = self.transport.open_stream(addr, STREAM_TYPE_FS).await?;
 
         // 1. Get Metadata to know size (optional, but good for allocation or progress)
         let meta_req = FilesystemMessage::GetMetadataRequest {
             path: remote_path.clone(),
         };
-        send_fs_message(&mut send, &meta_req).await?;
+        send_fs_message(&mut send, &meta_req, peer_version).await?;
         let meta_resp: FilesystemMessage = recv_fs_message(&mut recv).await?;
 
         let file_size = match meta_resp {
@@ -710,7 +714,7 @@ impl ConnectedClient {
                 offset,
                 size,
             };
-            send_fs_message(&mut send, &req).await?;
+            send_fs_message(&mut send, &req, peer_version).await?;
 
             let resp: FilesystemMessage = recv_fs_message(&mut recv).await?;
 
@@ -765,13 +769,14 @@ impl ConnectedClient {
         use tokio::io::AsyncWriteExt;
 
         let addr = SocketAddr::new(target_ip, target_port);
+        let peer_version = self.peer_version_for_endpoint(target_ip, target_port);
         let (mut send, mut recv) = self.transport.open_stream(addr, STREAM_TYPE_FS).await?;
 
         // Get metadata to know total size
         let meta_req = FilesystemMessage::GetMetadataRequest {
             path: remote_path.clone(),
         };
-        send_fs_message(&mut send, &meta_req).await?;
+        send_fs_message(&mut send, &meta_req, peer_version).await?;
         let meta_resp: FilesystemMessage = recv_fs_message(&mut recv).await?;
 
         let file_size = match meta_resp {
@@ -801,7 +806,7 @@ impl ConnectedClient {
                 offset,
                 size,
             };
-            send_fs_message(&mut send, &req).await?;
+            send_fs_message(&mut send, &req, peer_version).await?;
 
             let resp: FilesystemMessage = recv_fs_message(&mut recv).await?;
 
@@ -947,6 +952,7 @@ impl ConnectedClient {
         }
 
         let addr = SocketAddr::new(target_ip, target_port);
+        let peer_version = self.peer_version_for_endpoint(target_ip, target_port);
         let bytes_downloaded = Arc::new(AtomicU64::new(0));
         let transport = self.transport.clone();
 
@@ -996,6 +1002,7 @@ impl ConnectedClient {
                         file_size,
                         &local_file_path,
                         &bytes_downloaded,
+                        peer_version,
                     )
                     .await?;
 
@@ -1068,6 +1075,7 @@ impl ConnectedClient {
         file_size: u64,
         local_path: &std::path::Path,
         bytes_counter: &Arc<std::sync::atomic::AtomicU64>,
+        peer_version: u32,
     ) -> Result<u64> {
         use crate::filesystem::{FilesystemMessage, STREAM_TYPE_FS};
         use std::sync::atomic::Ordering;
@@ -1088,7 +1096,7 @@ impl ConnectedClient {
                 offset,
                 size,
             };
-            send_fs_message(&mut send, &req).await?;
+            send_fs_message(&mut send, &req, peer_version).await?;
 
             let resp: FilesystemMessage = recv_fs_message(&mut recv).await?;
 
@@ -1208,10 +1216,11 @@ impl ConnectedClient {
         use crate::filesystem::{FilesystemMessage, STREAM_TYPE_FS};
 
         let addr = SocketAddr::new(target_ip, target_port);
+        let peer_version = self.peer_version_for_endpoint(target_ip, target_port);
         let (mut send, mut recv) = self.transport.open_stream(addr, STREAM_TYPE_FS).await?;
 
         let req = FilesystemMessage::GetThumbnailRequest { path };
-        send_fs_message(&mut send, &req).await?;
+        send_fs_message(&mut send, &req, peer_version).await?;
 
         let resp: FilesystemMessage = recv_fs_message(&mut recv).await?;
 
@@ -1320,7 +1329,10 @@ impl ConnectedClient {
             reason,
         };
 
-        let data = crate::codec::encode_message(&msg)?;
+        let data = crate::codec::encode_message(
+            &msg,
+            self.peer_version_for_endpoint(target_ip, target_port),
+        )?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         if send.write_all(&len_bytes).await.is_err() || send.write_all(&data).await.is_err() {
@@ -1382,9 +1394,16 @@ impl ConnectedClient {
         self.key_store.read().get_trusted_peers()
     }
 
+    fn peer_version_for_endpoint(&self, ip: IpAddr, port: u16) -> u32 {
+        self.discovery.get_version_for_endpoint(ip, port)
+    }
+
     pub async fn send_ping(&self, target_ip: IpAddr, target_port: u16) -> Result<u64> {
         let addr = SocketAddr::new(target_ip, target_port);
-        let rtt = self.transport.send_ping(addr).await?;
+        let rtt = self
+            .transport
+            .send_ping(addr, self.peer_version_for_endpoint(target_ip, target_port))
+            .await?;
         Ok(rtt.as_millis() as u64)
     }
 
@@ -1513,8 +1532,16 @@ impl ConnectedClient {
             listening_port: self.local_device.port,
             protocol_version: crate::PROTOCOL_VERSION,
         };
-
-        let data = crate::codec::encode_message(&msg)?;
+        let peer_version = self.peer_version_for_endpoint(addr.ip(), addr.port());
+        let data = if peer_version <= 2 {
+            crate::codec::encode_v1_handshake(
+                &self.local_device.id,
+                &self.local_name.read(),
+                self.local_device.port,
+            )?
+        } else {
+            crate::codec::encode_message(&msg, peer_version)?
+        };
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -1541,7 +1568,7 @@ impl ConnectedClient {
                 }
                 // Chunked read: bound memory to bytes actually received.
                 let data = QuicTransport::read_chunked(&mut recv, msg_len).await?;
-                let response: Message = crate::codec::decode_message(&data)?;
+                let (response, _) = crate::codec::decode_message(&data)?;
                 Ok(response)
             }
             .await;
@@ -1770,7 +1797,12 @@ impl ConnectedClient {
             protocol_version: crate::PROTOCOL_VERSION,
         };
 
-        let data = crate::codec::encode_message(&msg)?;
+        let peer_version = self.peer_version_for_endpoint(addr.ip(), addr.port());
+        let data = if peer_version <= 2 {
+            crate::codec::encode_v1_handshake_ack(&self.local_device.id, &self.local_name.read())?
+        } else {
+            crate::codec::encode_message(&msg, peer_version)?
+        };
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -1809,7 +1841,10 @@ impl ConnectedClient {
             device_id: self.local_device.id.clone(),
         };
 
-        let data = crate::codec::encode_message(&msg)?;
+        let data = crate::codec::encode_message(
+            &msg,
+            self.peer_version_for_endpoint(addr.ip(), addr.port()),
+        )?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         if send.write_all(&len_bytes).await.is_err() || send.write_all(&data).await.is_err() {
@@ -1892,7 +1927,10 @@ impl ConnectedClient {
 
         let msg = Message::Clipboard { text };
 
-        let data = crate::codec::encode_message(&msg)?;
+        let data = crate::codec::encode_message(
+            &msg,
+            self.peer_version_for_endpoint(addr.ip(), addr.port()),
+        )?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -1973,7 +2011,10 @@ impl ConnectedClient {
 
         let msg = Message::MediaControl(msg);
 
-        let data = crate::codec::encode_message(&msg)?;
+        let data = crate::codec::encode_message(
+            &msg,
+            self.peer_version_for_endpoint(addr.ip(), addr.port()),
+        )?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -2054,7 +2095,10 @@ impl ConnectedClient {
 
         let msg = Message::RemoteCommand(msg);
 
-        let data = crate::codec::encode_message(&msg)?;
+        let data = crate::codec::encode_message(
+            &msg,
+            self.peer_version_for_endpoint(addr.ip(), addr.port()),
+        )?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -2139,7 +2183,10 @@ impl ConnectedClient {
 
         let msg = Message::Telephony(msg.clone());
 
-        let data = crate::codec::encode_message(&msg)?;
+        let data = crate::codec::encode_message(
+            &msg,
+            self.peer_version_for_endpoint(addr.ip(), addr.port()),
+        )?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
         send.write_all(&len_bytes)
@@ -2192,6 +2239,9 @@ impl ConnectedClient {
 
         let active_transfers = self.active_outgoing_transfers.clone();
         let tid_for_cleanup = transfer_id.clone();
+        let peer_version = self
+            .discovery
+            .get_version_for_endpoint(target_ip, target_port);
 
         tokio::spawn(async move {
             let (progress_tx, progress_rx) = mpsc::unbounded_channel();
@@ -2263,7 +2313,7 @@ impl ConnectedClient {
                 }
             });
 
-            let file_transfer = FileTransfer::new(connection);
+            let file_transfer = FileTransfer::new(connection, peer_version);
             let result = file_transfer
                 .send_file(&file_path, Some(progress_tx), Some(cancel_flag))
                 .await;
@@ -2333,6 +2383,9 @@ impl ConnectedClient {
 
         let active_transfers = self.active_outgoing_transfers.clone();
         let tid_for_cleanup = transfer_id.clone();
+        let peer_version = self
+            .discovery
+            .get_version_for_endpoint(target_ip, target_port);
 
         tokio::spawn(async move {
             let (progress_tx, progress_rx) = mpsc::unbounded_channel();
@@ -2403,7 +2456,7 @@ impl ConnectedClient {
                 }
             });
 
-            let file_transfer = FileTransfer::new(connection);
+            let file_transfer = FileTransfer::new(connection, peer_version);
             let result = file_transfer
                 .send_batch(
                     "Batch Transfer",
@@ -2757,7 +2810,9 @@ impl ConnectedClient {
                                         let msg = Message::DeviceUnpaired {
                                             device_id: local_device_id.clone(),
                                         };
-                                        if let Ok(data) = crate::codec::encode_message(&msg) {
+                                        if let Ok(data) =
+                                            crate::codec::encode_message(&msg, d.protocol_version)
+                                        {
                                             let len_bytes = (data.len() as u32).to_be_bytes();
                                             let _ = send.write_all(&len_bytes).await;
                                             let _ = send.write_all(&data).await;
@@ -2945,7 +3000,14 @@ impl ConnectedClient {
                                         device_name: local_name.read().clone(),
                                         protocol_version: crate::PROTOCOL_VERSION,
                                     };
-                                    if let Ok(data) = crate::codec::encode_message(&msg) {
+                                    if let Ok(data) = if protocol_version <= 2 {
+                                        crate::codec::encode_v1_handshake_ack(
+                                            &local_id,
+                                            &local_name.read(),
+                                        )
+                                    } else {
+                                        crate::codec::encode_message(&msg, protocol_version)
+                                    } {
                                         let len_bytes = (data.len() as u32).to_be_bytes();
                                         if send.write_all(&len_bytes).await.is_ok() {
                                             let _ = send.write_all(&data).await;
@@ -3061,7 +3123,14 @@ impl ConnectedClient {
                                     device_name: local_name.read().clone(),
                                     protocol_version: crate::PROTOCOL_VERSION,
                                 };
-                                if let Ok(data) = crate::codec::encode_message(&msg) {
+                                if let Ok(data) = if protocol_version <= 2 {
+                                    crate::codec::encode_v1_handshake_ack(
+                                        &local_id,
+                                        &local_name.read(),
+                                    )
+                                } else {
+                                    crate::codec::encode_message(&msg, protocol_version)
+                                } {
                                     let len_bytes = (data.len() as u32).to_be_bytes();
                                     if send.write_all(&len_bytes).await.is_ok() {
                                         let _ = send.write_all(&data).await;
@@ -3152,7 +3221,14 @@ impl ConnectedClient {
                                         device_name: local_name.read().clone(),
                                         protocol_version: crate::PROTOCOL_VERSION,
                                     };
-                                    if let Ok(data) = crate::codec::encode_message(&msg) {
+                                    if let Ok(data) = if protocol_version <= 2 {
+                                        crate::codec::encode_v1_handshake_ack(
+                                            &local_id,
+                                            &local_name.read(),
+                                        )
+                                    } else {
+                                        crate::codec::encode_message(&msg, protocol_version)
+                                    } {
                                         let len_bytes = (data.len() as u32).to_be_bytes();
                                         if send.write_all(&len_bytes).await.is_ok() {
                                             let _ = send.write_all(&data).await;
@@ -3454,6 +3530,7 @@ impl ConnectedClient {
                                 fingerprint
                             ),
                         },
+                        1,
                     )
                     .await
                     {
@@ -3477,18 +3554,21 @@ impl ConnectedClient {
 
                 tokio::spawn(async move {
                     let _permit = permit;
-                    use crate::file_transfer::send_message;
                     use crate::filesystem::FilesystemMessage;
 
                     loop {
-                        let msg: Result<FilesystemMessage> =
+                        let msg: Result<(FilesystemMessage, crate::codec::WireFormat)> =
                             crate::file_transfer::recv_message_with_limit(
                                 &mut recv,
                                 16 * 1024 * 1024,
                             )
                             .await;
                         match msg {
-                            Ok(req) => {
+                            Ok((req, wire_format)) => {
+                                let response_version = match wire_format {
+                                    crate::codec::WireFormat::V1Json => 1,
+                                    crate::codec::WireFormat::Postcard => crate::PROTOCOL_VERSION,
+                                };
                                 let provider = provider_ref.clone();
                                 let response = tokio::task::spawn_blocking(move || {
                                     let lock = provider.read();
@@ -3575,7 +3655,13 @@ impl ConnectedClient {
 
                                 match response {
                                     Ok(resp_msg) => {
-                                        if let Err(e) = send_message(&mut send, &resp_msg).await {
+                                        if let Err(e) = crate::file_transfer::send_message(
+                                            &mut send,
+                                            &resp_msg,
+                                            response_version,
+                                        )
+                                        .await
+                                        {
                                             warn!("Failed to send FS response: {}", e);
                                             break;
                                         }
@@ -3876,7 +3962,7 @@ impl ConnectedClient {
                     }
 
                     let msg = Message::Clipboard { text: txt };
-                    if let Ok(data) = crate::codec::encode_message(&msg) {
+                    if let Ok(data) = crate::codec::encode_message(&msg, device.protocol_version) {
                         let len_bytes = (data.len() as u32).to_be_bytes();
                         let _ = send.write_all(&len_bytes).await;
                         let _ = send.write_all(&data).await;

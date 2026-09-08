@@ -36,8 +36,7 @@ pub use update::{
 };
 
 /// Wire-protocol version advertised via mDNS TXT records and embedded in
-/// newly created `Device`s. This release intentionally starts a new protocol
-/// generation: the control codec is postcard-only and old peers are rejected.
+/// newly created `Device`s. Current peers use postcard; v1 peers use raw JSON.
 pub const PROTOCOL_VERSION: u32 = 3;
-/// Only the current protocol generation is supported.
-pub const MIN_COMPATIBLE_PROTOCOL_VERSION: u32 = PROTOCOL_VERSION;
+/// Oldest peer protocol version supported by the compatibility codec.
+pub const MIN_COMPATIBLE_PROTOCOL_VERSION: u32 = 1;

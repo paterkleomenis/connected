@@ -44,6 +44,10 @@ const STREAM_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024; // 64MB per stream
 const CONNECTION_RECEIVE_WINDOW: u32 = 256 * 1024 * 1024; // 256MB per connection
 const SEND_WINDOW: u64 = 128 * 1024 * 1024; // 128MB send window for high-speed LAN
 
+fn default_protocol_version() -> u32 {
+    crate::MIN_COMPATIBLE_PROTOCOL_VERSION
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     Ping {
@@ -58,11 +62,13 @@ pub enum Message {
         device_id: String,
         device_name: String,
         listening_port: u16,
+        #[serde(default = "default_protocol_version")]
         protocol_version: u32,
     },
     HandshakeAck {
         device_id: String,
         device_name: String,
+        #[serde(default = "default_protocol_version")]
         protocol_version: u32,
     },
     HandshakeReject {
@@ -1141,7 +1147,7 @@ impl QuicTransport {
         }
     }
 
-    pub async fn send_ping(&self, target_addr: SocketAddr) -> Result<Duration> {
+    pub async fn send_ping(&self, target_addr: SocketAddr, peer_version: u32) -> Result<Duration> {
         let start = std::time::Instant::now();
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1163,7 +1169,7 @@ impl QuicTransport {
             timestamp,
         };
 
-        let ping_data = crate::codec::encode_message(&ping)?;
+        let ping_data = crate::codec::encode_message(&ping, peer_version)?;
         let len_bytes = (ping_data.len() as u32).to_be_bytes();
         send.write_all(&len_bytes).await?;
         send.write_all(&ping_data).await?;
@@ -1184,7 +1190,7 @@ impl QuicTransport {
 
         match response {
             Ok(Ok(data)) => {
-                let message: Message = crate::codec::decode_message(&data)?;
+                let (message, _) = crate::codec::decode_message(&data)?;
                 match message {
                     Message::Pong {
                         from_id,
@@ -1356,13 +1362,14 @@ impl QuicTransport {
                                     Err(_) => return,
                                 };
 
-                                let message: Message = match crate::codec::decode_message(&data) {
-                                    Ok(m) => m,
-                                    Err(e) => {
-                                        debug!("Failed to parse message: {}", e);
-                                        return;
-                                    }
-                                };
+                                let (message, wire_format): (Message, _) =
+                                    match crate::codec::decode_message(&data) {
+                                        Ok(m) => m,
+                                        Err(e) => {
+                                            debug!("Failed to parse message: {}", e);
+                                            return;
+                                        }
+                                    };
 
                                 debug!(
                                     "Received message from {} ({}): {:?}",
@@ -1376,7 +1383,15 @@ impl QuicTransport {
                                             timestamp: *timestamp,
                                         };
 
-                                        if let Ok(pong_data) = crate::codec::encode_message(&pong) {
+                                        let peer_version = match wire_format {
+                                            crate::codec::WireFormat::V1Json => 1,
+                                            crate::codec::WireFormat::Postcard => {
+                                                crate::PROTOCOL_VERSION
+                                            }
+                                        };
+                                        if let Ok(pong_data) =
+                                            crate::codec::encode_message(&pong, peer_version)
+                                        {
                                             let len_bytes = (pong_data.len() as u32).to_be_bytes();
                                             let mut send = send;
                                             let _ = send.write_all(&len_bytes).await;
@@ -1786,7 +1801,7 @@ mod tests {
     use super::Message;
 
     #[test]
-    fn handshake_without_version_is_rejected() {
+    fn legacy_handshake_without_version_defaults_to_v1() {
         let mut value = serde_json::to_value(Message::Handshake {
             device_id: "peer".to_string(),
             device_name: "Peer".to_string(),
@@ -1800,6 +1815,12 @@ mod tests {
             .expect("handshake should be externally tagged")
             .remove("protocol_version");
 
-        assert!(serde_json::from_value::<Message>(value).is_err());
+        let decoded: Message = serde_json::from_value(value).expect("legacy handshake decodes");
+        match decoded {
+            Message::Handshake {
+                protocol_version, ..
+            } => assert_eq!(protocol_version, 1),
+            _ => panic!("expected handshake"),
+        }
     }
 }
