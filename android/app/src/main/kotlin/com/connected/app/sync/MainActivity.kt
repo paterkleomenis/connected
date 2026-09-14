@@ -1187,8 +1187,10 @@ fun SettingsScreen(
     }
 
     // Telephony permissions
+    /* Phone Link / Telephony - Commented out for Play Store compliance (uncomment to re-enable)
     var hasTelephonyPermissions by remember { mutableStateOf(false) }
     var permissionsRequested by remember { mutableStateOf(false) }
+    */
     var pendingFullAccess by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
@@ -1203,10 +1205,11 @@ fun SettingsScreen(
                 // Check notification access using robust method
                 isNotificationAccessGranted = isNotificationListenerEnabled(context, MediaObserverService::class.java)
 
-                // Check telephony permissions
+                /* Phone Link / Telephony permissions - Commented out for Play Store compliance (uncomment to re-enable)
                 hasTelephonyPermissions = connectedApp.telephonyProvider.hasContactsPermission() &&
                         connectedApp.telephonyProvider.hasSmsPermission() &&
                         connectedApp.telephonyProvider.hasCallLogPermission()
+                */
 
                 // Check pending full access
                 if (pendingFullAccess && connectedApp.isFullAccessGranted()) {
@@ -1220,6 +1223,7 @@ fun SettingsScreen(
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
+    /* Phone Link permission helpers - Commented out for Play Store compliance (uncomment to re-enable)
     val activity = context as? ComponentActivity
 
     fun getMissingPermissions(): Array<String> {
@@ -1239,6 +1243,7 @@ fun SettingsScreen(
             !activity.shouldShowRequestPermissionRationale(permission)
         }
     }
+    */
 
     fun openAppPermissionSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
@@ -1248,6 +1253,7 @@ fun SettingsScreen(
         context.startActivity(intent)
     }
 
+    /* Phone Link permission launcher & disclosure - Commented out for Play Store compliance (uncomment to re-enable)
     val telephonyPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -1257,11 +1263,11 @@ fun SettingsScreen(
             connectedApp.toggleTelephony()
         }
     }
+    */
 
     val showRenameDialog = remember { mutableStateOf(false) }
+    /* Phone Link disclosure dialog - Commented out for Play Store compliance (uncomment to re-enable)
     val showTelephonyDisclosureDialog = remember { mutableStateOf(false) }
-    val deviceName = remember { mutableStateOf(connectedApp.getDeviceName()) }
-
     if (showTelephonyDisclosureDialog.value) {
         AlertDialog(
             onDismissRequest = {
@@ -1295,6 +1301,8 @@ fun SettingsScreen(
             }
         )
     }
+    */
+    val deviceName = remember { mutableStateOf(connectedApp.getDeviceName()) }
 
     if (showRenameDialog.value) {
         var newName by remember { mutableStateOf(deviceName.value) }
@@ -1655,7 +1663,7 @@ fun SettingsScreen(
             }
         }
 
-        // Phone Link / Telephony Section
+        /* Phone Link / Telephony Section - Commented out for Play Store compliance (uncomment to re-enable)
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -1734,6 +1742,7 @@ fun SettingsScreen(
                 }
             }
         }
+        */
 
         // Shared Folder Section
         item {
@@ -2401,6 +2410,7 @@ fun DeviceItem(
                                         app.browseRemoteFiles(device)
                                     }
                                 )
+                                /* Phone Link actions - Commented out for Play Store compliance (uncomment to re-enable)
                                 DropdownMenuItem(
                                     text = { Text("Request Contacts") },
                                     leadingIcon = {
@@ -2448,6 +2458,7 @@ fun DeviceItem(
                                         }
                                     )
                                 }
+                                */
                                 // Remote power/session commands — only meaningful for desktop peers.
                                 if (device.deviceType == DeviceType.LINUX
                                     || device.deviceType == DeviceType.WINDOWS

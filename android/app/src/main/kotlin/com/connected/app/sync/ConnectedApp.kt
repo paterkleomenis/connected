@@ -1377,12 +1377,14 @@ class ConnectedApp(private val context: Context) {
             customDownloadUri.value = getCustomDownloadDir()
 
             val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
+            /* Phone Link / Telephony - Commented out for Play Store compliance (uncomment to re-enable)
             if (prefs.getBoolean(_prefTelephonyEnabled, false)) {
                 isTelephonyEnabled.value = true
                 telephonyProvider.setListener(telephonyListener)
                 telephonyProvider.registerReceivers()
                 registerTelephonyCallback(telephonyCallback)
             }
+            */
 
             startWifiAwareManager()
 
