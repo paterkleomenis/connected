@@ -565,6 +565,8 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       - name: Build with Gradle
         uses: burrunan/gradle-cache-action@v3
