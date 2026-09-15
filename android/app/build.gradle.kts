@@ -158,6 +158,15 @@ configure<ApplicationExtension> {
         }
     }
 
+    // F-Droid rejects APKs containing the Google-encrypted "Dependency metadata"
+    // signing block that AGP adds by default for Play Console SDK insights.
+    // Disable it for both APKs and Bundles. See:
+    // https://developer.android.com/build/dependencies#dependency-information-play-console
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     // Configure where to find the native libraries (.so files)
     sourceSets {
         getByName("main") {
