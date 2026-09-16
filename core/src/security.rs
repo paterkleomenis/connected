@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 
 #[cfg(windows)]
@@ -176,6 +177,141 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
     }
 }
 
+/// Async variant of [`restrict_path_to_current_user`] for async contexts.
+///
+/// Uses `tokio::process::Command` and `tokio::fs::metadata` so the tokio
+/// worker is not blocked while `whoami.exe`/`icacls.exe` run.
+#[cfg(windows)]
+async fn restrict_path_to_current_user_async(path: &std::path::Path) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let whoami_exe = format!("{}\\System32\\whoami.exe", system_root);
+    let icacls_exe = format!("{}\\System32\\icacls.exe", system_root);
+
+    let path_str = match path.to_str() {
+        Some(s) => s.to_string(),
+        None => {
+            warn!(
+                "Cannot restrict ACLs for {:?}: path is not valid UTF-8",
+                path
+            );
+            return;
+        }
+    };
+
+    let username = match tokio::process::Command::new(&whoami_exe)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+        _ => {
+            warn!("Cannot restrict ACLs: failed to get current user via whoami");
+            return;
+        }
+    };
+
+    if let Err(e) = tokio::fs::metadata(path).await {
+        warn!(
+            "Cannot access {:?} to restrict ACLs ({}); skipping ACL modification",
+            path, e
+        );
+        return;
+    }
+
+    let is_dir = path.is_dir();
+    let ace = if is_dir {
+        format!("{}:(OI)(CI)(F)", username)
+    } else {
+        format!("{}:(F)", username)
+    };
+
+    let grant = tokio::process::Command::new(&icacls_exe)
+        .creation_flags(CREATE_NO_WINDOW)
+        .arg(&path_str)
+        .arg("/grant")
+        .arg(&ace)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+
+    match grant {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            warn!(
+                "icacls /grant failed for {:?} (exit code {:?}); skipping further ACL changes",
+                path,
+                status.code()
+            );
+            return;
+        }
+        Err(e) => {
+            warn!(
+                "Failed to run icacls /grant for {:?}: {}; skipping further ACL changes",
+                path, e
+            );
+            return;
+        }
+    }
+
+    let strip = tokio::process::Command::new(&icacls_exe)
+        .creation_flags(CREATE_NO_WINDOW)
+        .arg(&path_str)
+        .args(["/inheritance:r"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+
+    match strip {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            warn!(
+                "icacls /inheritance:r failed for {:?} (exit code {:?})",
+                path,
+                status.code()
+            );
+        }
+        Err(e) => {
+            warn!("Failed to run icacls /inheritance:r for {:?}: {}", path, e);
+        }
+    }
+
+    let system_ace = if is_dir {
+        "SYSTEM:(OI)(CI)(F)"
+    } else {
+        "SYSTEM:(F)"
+    };
+
+    let grant_system = tokio::process::Command::new(&icacls_exe)
+        .creation_flags(CREATE_NO_WINDOW)
+        .arg(&path_str)
+        .arg("/grant")
+        .arg(system_ace)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+
+    match grant_system {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            warn!(
+                "icacls /grant SYSTEM failed for {:?} (exit code {:?})",
+                path,
+                status.code()
+            );
+        }
+        Err(e) => {
+            warn!("Failed to run icacls /grant SYSTEM for {:?}: {}", path, e);
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum PeerStatus {
     /// Device is trusted and can connect/transfer freely
@@ -213,6 +349,10 @@ pub struct KeyStore {
 }
 
 impl KeyStore {
+    /// Sync constructor for sync contexts (tests, FFI sync callers).
+    ///
+    /// NOTE: performs blocking file IO + `thread::sleep` retries. Do NOT
+    /// call from async code — use [`Self::new_async`] instead.
     pub fn new(custom_path: Option<PathBuf>) -> Result<Self> {
         let storage_dir = if let Some(p) = custom_path {
             p
@@ -266,6 +406,64 @@ impl KeyStore {
         })
     }
 
+    /// Async variant of [`Self::new`] for use inside async contexts.
+    ///
+    /// The sync version performs blocking file IO (`create_dir_all`,
+    /// `read`, `write+fsync`, `whoami`/`icacls` on Windows) which must not
+    /// run on a tokio worker thread. This version uses `tokio::fs`,
+    /// `tokio::process` and `tokio::time::sleep` so the executor stays
+    /// responsive during startup.
+    pub async fn new_async(custom_path: Option<PathBuf>) -> Result<Self> {
+        let storage_dir = if let Some(p) = custom_path {
+            p
+        } else {
+            dirs::config_dir()
+                .ok_or_else(|| {
+                    ConnectedError::InitializationError("Could not find config dir".to_string())
+                })?
+                .join("connected")
+        };
+
+        if !tokio::fs::try_exists(&storage_dir).await.unwrap_or(false) {
+            tokio::fs::create_dir_all(&storage_dir)
+                .await
+                .map_err(ConnectedError::Io)?;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o700);
+            if let Err(e) = tokio::fs::set_permissions(&storage_dir, perms).await {
+                warn!("Failed to set storage directory permissions: {}", e);
+            }
+        }
+        #[cfg(windows)]
+        {
+            restrict_path_to_current_user_async(&storage_dir).await;
+        }
+
+        let (cert, key, device_id) = Self::load_or_create_identity_async(&storage_dir).await?;
+        let known_peers = Self::load_known_peers_async(&storage_dir).await?;
+
+        let blocked_peers: std::collections::HashSet<String> = known_peers
+            .peers
+            .iter()
+            .filter(|(_, p)| p.status == PeerStatus::Blocked)
+            .map(|(fp, _)| fp.clone())
+            .collect();
+
+        Ok(Self {
+            cert,
+            key,
+            device_id,
+            known_peers,
+            storage_dir,
+            pairing_mode: false,
+            blocked_peers,
+        })
+    }
+
     pub fn device_id(&self) -> &str {
         &self.device_id
     }
@@ -291,6 +489,27 @@ impl KeyStore {
     /// extra to verify per-file.
     #[cfg(not(unix))]
     fn check_identity_permissions(_path: &std::path::Path) {}
+
+    /// Async variant of [`Self::check_identity_permissions`] for async
+    /// contexts. Uses `tokio::fs::metadata` so the worker is not blocked.
+    #[cfg(unix)]
+    async fn check_identity_permissions_async(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = tokio::fs::metadata(path).await {
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                warn!(
+                    "Identity file {:?} has overly permissive permissions ({:o}). \
+                     Expected 0600 (owner-only). Consider running: chmod 600 {:?}",
+                    path, mode, path
+                );
+            }
+        }
+    }
+
+    /// On Windows there is nothing extra to verify per-file.
+    #[cfg(not(unix))]
+    async fn check_identity_permissions_async(_path: &std::path::Path) {}
 
     fn load_or_create_identity(
         storage_dir: &std::path::Path,
@@ -455,6 +674,177 @@ impl KeyStore {
         Ok(())
     }
 
+    /// Async variant of [`Self::save_peers`] for future async callers.
+    /// Currently peer mutations stay sync (via `save_peers_auto`) to preserve
+    /// atomicity under the `parking_lot` write guard.
+    #[allow(dead_code)]
+    async fn save_peers_async(&self) -> Result<()> {
+        let data = serde_json::to_vec_pretty(&self.known_peers)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+
+        let final_path = self.storage_dir.join("known_peers.json");
+        let tmp_path = self.storage_dir.join("known_peers.json.tmp");
+
+        Self::write_and_sync_with_retry_async(&tmp_path, &data).await?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            if let Err(e) = tokio::fs::set_permissions(&tmp_path, perms).await {
+                warn!("Failed to set permissions on known_peers temp file: {}", e);
+            }
+        }
+
+        Self::rename_with_retry_async(&tmp_path, &final_path).await?;
+        Ok(())
+    }
+
+    /// Persist peers without blocking the tokio executor when possible.
+    ///
+    /// `trust_peer`/`block_peer`/etc. are sync APIs that may be called while
+    /// holding a `parking_lot` write guard from either sync or async context.
+    /// When called on a multi-thread tokio runtime, `block_in_place` lets the
+    /// scheduler move other tasks to a backup thread while the small JSON
+    /// write completes.
+    fn save_peers_auto(&self) -> Result<()> {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| self.save_peers())
+            }
+            _ => self.save_peers(),
+        }
+    }
+
+    /// Async variant of [`Self::load_known_peers`].
+    async fn load_known_peers_async(storage_dir: &std::path::Path) -> Result<KnownPeers> {
+        let new_path = storage_dir.join("known_peers.json");
+
+        if tokio::fs::try_exists(&new_path).await.unwrap_or(false) {
+            let data = tokio::fs::read(&new_path)
+                .await
+                .map_err(ConnectedError::Io)?;
+            match serde_json::from_slice(&data) {
+                Ok(peers) => Ok(peers),
+                Err(e) => {
+                    warn!("Failed to parse known peers file: {}", e);
+                    let ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let corrupt_path = storage_dir.join(format!("known_peers.corrupt.{}.json", ts));
+                    if let Err(err) = tokio::fs::rename(&new_path, &corrupt_path).await {
+                        warn!(
+                            "Failed to backup corrupt peers file to {}: {}",
+                            corrupt_path.display(),
+                            err
+                        );
+                    }
+                    Ok(KnownPeers::default())
+                }
+            }
+        } else {
+            Ok(KnownPeers::default())
+        }
+    }
+
+    /// Async variant of [`Self::load_or_create_identity`].
+    async fn load_or_create_identity_async(
+        storage_dir: &std::path::Path,
+    ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>, String)> {
+        let identity_path = storage_dir.join("identity.json");
+
+        if tokio::fs::try_exists(&identity_path).await.unwrap_or(false) {
+            return Self::load_identity_der_async(&identity_path).await;
+        }
+
+        info!("No identity found, generating new one...");
+        // Key generation is CPU-bound; run off the worker.
+        let CertifiedKey { cert, signing_key } = tokio::task::spawn_blocking(|| {
+            generate_simple_self_signed(vec![
+                "connected.local".to_string(),
+                "localhost".to_string(),
+            ])
+        })
+        .await
+        .map_err(|e| ConnectedError::InitializationError(e.to_string()))?
+        .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+
+        let cert_der = cert.der().to_vec();
+        let key_der = signing_key.serialize_der();
+        let device_id = uuid::Uuid::new_v4().to_string();
+
+        let persisted = PersistedIdentityDer {
+            cert_der: cert_der.clone(),
+            key_der: key_der.clone(),
+            device_id: device_id.clone(),
+        };
+        let data = serde_json::to_vec_pretty(&persisted)
+            .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+
+        let tmp_path = identity_path.with_extension("json.tmp");
+        Self::write_and_sync_with_retry_async(&tmp_path, &data).await?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            tokio::fs::set_permissions(&tmp_path, perms)
+                .await
+                .map_err(ConnectedError::Io)?;
+        }
+
+        Self::rename_with_retry_async(&tmp_path, &identity_path).await?;
+
+        Ok((
+            CertificateDer::from(cert_der),
+            PrivatePkcs8KeyDer::from(key_der),
+            device_id,
+        ))
+    }
+
+    /// Async variant of [`Self::load_identity_der`].
+    async fn load_identity_der_async(
+        path: &std::path::Path,
+    ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>, String)> {
+        Self::check_identity_permissions_async(path).await;
+
+        let data = tokio::fs::read(path).await.map_err(ConnectedError::Io)?;
+        let mut persisted: PersistedIdentityDer = serde_json::from_slice(&data).map_err(|e| {
+            ConnectedError::InitializationError(format!("Failed to parse identity: {}", e))
+        })?;
+
+        let had_device_id = !persisted.device_id.is_empty();
+
+        if !had_device_id {
+            persisted.device_id = deterministic_device_id(&persisted.cert_der);
+            info!(
+                "Legacy identity file missing device_id, persisting deterministic id: {}",
+                persisted.device_id
+            );
+            let updated_data = serde_json::to_vec_pretty(&persisted)
+                .map_err(|e| ConnectedError::InitializationError(e.to_string()))?;
+
+            let tmp_path = path.with_extension("json.tmp");
+            Self::write_and_sync_with_retry_async(&tmp_path, &updated_data).await?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let perms = std::fs::Permissions::from_mode(0o600);
+                let _ = tokio::fs::set_permissions(&tmp_path, perms).await;
+            }
+
+            Self::rename_with_retry_async(&tmp_path, path).await?;
+        }
+
+        Ok((
+            CertificateDer::from(persisted.cert_der),
+            PrivatePkcs8KeyDer::from(persisted.key_der),
+            persisted.device_id,
+        ))
+    }
+
     /// Write `data` to `path` and fsync it using a **single file handle**,
     /// retrying on transient Windows errors.
     ///
@@ -502,6 +892,49 @@ impl KeyStore {
         Ok(())
     }
 
+    /// Async variant of [`Self::do_write_and_sync`] for use inside async
+    /// contexts. Uses `tokio::fs` so the executor thread is not blocked
+    /// while the OS completes the write.
+    async fn do_write_and_sync_async(
+        path: &std::path::Path,
+        data: &[u8],
+    ) -> std::result::Result<(), std::io::Error> {
+        let mut file = tokio::fs::File::create(path).await?;
+        file.write_all(data).await?;
+        file.sync_all().await?;
+        Ok(())
+    }
+
+    /// Async variant of [`Self::write_and_sync_with_retry`] for use inside
+    /// async contexts. Yields via `tokio::time::sleep` between retries
+    /// instead of blocking the tokio worker with `std::thread::sleep`.
+    async fn write_and_sync_with_retry_async(path: &std::path::Path, data: &[u8]) -> Result<()> {
+        const MAX_RETRIES: u32 = 5;
+        const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            match Self::do_write_and_sync_async(path, data).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transient_io_error(&e) && attempt < MAX_RETRIES => {
+                    warn!(
+                        "Transient write+sync error on {:?} (attempt {}/{}): {}",
+                        path,
+                        attempt + 1,
+                        MAX_RETRIES,
+                        e
+                    );
+                    tokio::time::sleep(RETRY_DELAY * (attempt + 1)).await;
+                    last_err = Some(e);
+                }
+                Err(e) => return Err(ConnectedError::Io(e)),
+            }
+        }
+        Err(ConnectedError::Io(last_err.unwrap_or_else(|| {
+            std::io::Error::other("write+sync retry exhausted without an underlying error")
+        })))
+    }
+
     /// Rename `from` to `to`, retrying on transient Windows errors.
     fn rename_with_retry(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
         const MAX_RETRIES: u32 = 5;
@@ -529,6 +962,60 @@ impl KeyStore {
         Err(ConnectedError::Io(last_err.unwrap_or_else(|| {
             std::io::Error::other("rename retry exhausted without an underlying error")
         })))
+    }
+
+    /// Async variant of [`Self::rename_with_retry`] for async contexts.
+    /// Uses `tokio::time::sleep` between retries and `tokio::fs::rename`
+    /// on non-Windows (Windows keeps `MoveFileExW` via `spawn_blocking`
+    /// since there is no async equivalent).
+    async fn rename_with_retry_async(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
+        const MAX_RETRIES: u32 = 5;
+        const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            let res = Self::replace_file_async(from, to).await;
+            match res {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transient_io_error(&e) && attempt < MAX_RETRIES => {
+                    warn!(
+                        "Transient rename error {:?} -> {:?} (attempt {}/{}): {}",
+                        from,
+                        to,
+                        attempt + 1,
+                        MAX_RETRIES,
+                        e
+                    );
+                    tokio::time::sleep(RETRY_DELAY * (attempt + 1)).await;
+                    last_err = Some(e);
+                }
+                Err(e) => return Err(ConnectedError::Io(e)),
+            }
+        }
+        Err(ConnectedError::Io(last_err.unwrap_or_else(|| {
+            std::io::Error::other("rename retry exhausted without an underlying error")
+        })))
+    }
+
+    /// Async file replacement. Unix uses `tokio::fs::rename`; Windows runs
+    /// the `MoveFileExW` call in `spawn_blocking` so the worker is not
+    /// blocked on the syscall / AV filter.
+    async fn replace_file_async(
+        from: &std::path::Path,
+        to: &std::path::Path,
+    ) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            let from = from.to_path_buf();
+            let to = to.to_path_buf();
+            tokio::task::spawn_blocking(move || Self::replace_file(&from, &to))
+                .await
+                .map_err(std::io::Error::other)?
+        }
+        #[cfg(not(windows))]
+        {
+            tokio::fs::rename(from, to).await
+        }
     }
 
     #[allow(unsafe_code)]
@@ -585,7 +1072,7 @@ impl KeyStore {
         if name.is_some() {
             entry.name = name;
         }
-        self.save_peers()
+        self.save_peers_auto()
     }
 
     /// Unpair a peer - removes trust but keeps record to prevent auto-re-pairing.
@@ -613,14 +1100,14 @@ impl KeyStore {
                 },
             );
         }
-        self.save_peers()
+        self.save_peers_auto()
     }
 
     /// Remove peer completely from known peers list
     /// This allows re-pairing without any restrictions
     pub fn remove_peer(&mut self, fingerprint: &str) -> Result<()> {
         if self.known_peers.peers.remove(fingerprint).is_some() {
-            self.save_peers()
+            self.save_peers_auto()
         } else {
             Ok(())
         }
@@ -666,7 +1153,7 @@ impl KeyStore {
             );
         }
         self.blocked_peers.insert(fingerprint);
-        self.save_peers()
+        self.save_peers_auto()
     }
 
     /// Unblock a peer - removes blocked status (reverts to unpaired, requiring re-pairing)
@@ -678,7 +1165,7 @@ impl KeyStore {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            self.save_peers()
+            self.save_peers_auto()
         } else {
             Ok(())
         }

@@ -354,17 +354,21 @@ impl ConnectedClient {
     ) -> Result<Arc<Self>> {
         init_rustls_provider();
 
-        // Load KeyStore first to get the persisted device_id
-        let key_store = Arc::new(RwLock::new(KeyStore::new(storage_path.clone()).map_err(
-            |e| {
-                error!("KeyStore initialization failed: {}", e);
-                ConnectedError::InitializationError(format!(
-                    "Failed to load or create identity key store: {}. \
+        // Load KeyStore first to get the persisted device_id.
+        // Uses the async constructor so file IO + retry sleeps yield to the
+        // executor instead of blocking this tokio worker.
+        let key_store = Arc::new(RwLock::new(
+            KeyStore::new_async(storage_path.clone())
+                .await
+                .map_err(|e| {
+                    error!("KeyStore initialization failed: {}", e);
+                    ConnectedError::InitializationError(format!(
+                        "Failed to load or create identity key store: {}. \
                      Check that the config directory is accessible.",
-                    e
-                ))
-            },
-        )?));
+                        e
+                    ))
+                })?,
+        ));
         let device_id = key_store.read().device_id().to_string();
         info!("KeyStore loaded (device_id={})", device_id);
 
@@ -374,18 +378,20 @@ impl ConnectedClient {
             dirs::download_dir().unwrap_or_else(std::env::temp_dir)
         };
 
-        if !download_dir.exists() {
-            std::fs::create_dir_all(&download_dir).map_err(|e| {
-                error!(
-                    "Failed to create download directory {:?}: {}",
-                    download_dir, e
-                );
-                ConnectedError::InitializationError(format!(
-                    "Failed to create download directory {}: {}",
-                    download_dir.display(),
-                    e
-                ))
-            })?;
+        if !tokio::fs::try_exists(&download_dir).await.unwrap_or(false) {
+            tokio::fs::create_dir_all(&download_dir)
+                .await
+                .map_err(|e| {
+                    error!(
+                        "Failed to create download directory {:?}: {}",
+                        download_dir, e
+                    );
+                    ConnectedError::InitializationError(format!(
+                        "Failed to create download directory {}: {}",
+                        download_dir.display(),
+                        e
+                    ))
+                })?;
         }
 
         let download_dir = Arc::new(RwLock::new(download_dir));

@@ -113,7 +113,7 @@ impl UpdateChecker {
                         &tag,
                         &format!("com.paterkleomenis.Connected-{arch}.flatpak"),
                     ))
-                } else if is_installed_via_aur() {
+                } else if is_installed_via_aur_async().await {
                     Some("https://aur.archlinux.org/packages/connected-desktop-bin".to_string())
                 } else {
                     Some(github_release_download_url(
@@ -195,6 +195,20 @@ pub fn is_installed_via_aur() -> bool {
         .unwrap_or(false)
 }
 
+/// Async variant of [`is_installed_via_aur`] for async contexts.
+/// Uses `tokio::process::Command` so the executor thread is not blocked
+/// while `pacman` runs.
+pub async fn is_installed_via_aur_async() -> bool {
+    tokio::process::Command::new("pacman")
+        .args(["-Q", "connected-desktop"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Download an update asset to a local file path (streamed; avoids buffering the full payload).
 ///
 /// Writes to a temporary file first, then atomically renames to `dest_path` to
@@ -270,7 +284,7 @@ async fn download_to_file_internal(
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            let _ = std::fs::set_permissions(&tmp_path, perms);
+            let _ = tokio::fs::set_permissions(&tmp_path, perms).await;
         }
 
         // Optionally compute SHA256 while streaming
@@ -407,22 +421,31 @@ pub async fn install_macos_update(url: &str) -> Result<()> {
     }
 
     // Parse the plist output to find the mount point.
-    let mount_stdout = String::from_utf8_lossy(&mount_output.stdout);
-    let mounted_app = match parse_mount_point_from_plist(&mount_stdout) {
-        Some(mp) => mp,
-        None => {
-            // Fallback: scan /Volumes for the most recently modified .app
-            match find_app_in_volumes(Path::new("/Volumes")) {
-                Some(app) => app,
-                None => {
-                    let _ = tokio::fs::remove_file(&dmg_path).await;
-                    return Err(ConnectedError::Network(
-                        "Could not find .app in mounted DMG".to_string(),
-                    ));
+    // These scan the local filesystem (read_dir + metadata); run them off
+    // the executor via `spawn_blocking` so the worker is not blocked.
+    let mount_stdout = String::from_utf8_lossy(&mount_output.stdout).to_string();
+    let mounted_app =
+        match tokio::task::spawn_blocking(move || parse_mount_point_from_plist(&mount_stdout))
+            .await
+            .map_err(|e| ConnectedError::Network(e.to_string()))?
+        {
+            Some(mp) => mp,
+            None => {
+                // Fallback: scan /Volumes for the most recently modified .app
+                match tokio::task::spawn_blocking(|| find_app_in_volumes(Path::new("/Volumes")))
+                    .await
+                    .map_err(|e| ConnectedError::Network(e.to_string()))?
+                {
+                    Some(app) => app,
+                    None => {
+                        let _ = tokio::fs::remove_file(&dmg_path).await;
+                        return Err(ConnectedError::Network(
+                            "Could not find .app in mounted DMG".to_string(),
+                        ));
+                    }
                 }
             }
-        }
-    };
+        };
 
     // Extract the volume path (parent of the .app) for unmounting later.
     let volume_path = mounted_app
@@ -488,6 +511,9 @@ pub async fn install_macos_update(url: &str) -> Result<()> {
 ///
 /// Looks for a pattern like `<key>mount-point</key><string>/Volumes/Connected</string>`.
 fn parse_mount_point_from_plist(plist: &str) -> Option<PathBuf> {
+    // NOTE: sync helper — scans a just-mounted DMG mount point. Called from
+    // `install_macos_update` via `spawn_blocking` to avoid blocking the
+    // executor (see below).
     let mut lines = plist.lines();
     while let Some(line) = lines.next() {
         if line.contains("mount-point") {
@@ -615,17 +641,23 @@ pub async fn install_linux_appimage_update(url: &str) -> Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o755);
-        std::fs::set_permissions(&tmp_path, perms).map_err(ConnectedError::Io)?;
+        tokio::fs::set_permissions(&tmp_path, perms)
+            .await
+            .map_err(ConnectedError::Io)?;
     }
 
     // Rename current AppImage to .old (keeps one backup).
     let old_path = appimage.with_extension("AppImage.old");
     // Remove any leftover .old from a previous update.
-    let _ = std::fs::remove_file(&old_path);
-    std::fs::rename(&appimage, &old_path).map_err(ConnectedError::Io)?;
+    let _ = tokio::fs::remove_file(&old_path).await;
+    tokio::fs::rename(&appimage, &old_path)
+        .await
+        .map_err(ConnectedError::Io)?;
 
     // Rename the new AppImage into the original path.
-    std::fs::rename(&tmp_path, &appimage).map_err(ConnectedError::Io)?;
+    tokio::fs::rename(&tmp_path, &appimage)
+        .await
+        .map_err(ConnectedError::Io)?;
 
     // Relaunch the new AppImage.
     let _ = tokio::process::Command::new(&appimage).spawn();
@@ -660,7 +692,7 @@ pub async fn install_linux_flatpak_update(url: &str) -> Result<()> {
 
     let bundle_str = bundle_path.to_str().unwrap_or_default();
 
-    let is_system_installation = std::process::Command::new("flatpak-spawn")
+    let is_system_installation = tokio::process::Command::new("flatpak-spawn")
         .args([
             "--host",
             "flatpak",
@@ -671,6 +703,7 @@ pub async fn install_linux_flatpak_update(url: &str) -> Result<()> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
+        .await
         .map(|s| s.success())
         .unwrap_or(false);
 
