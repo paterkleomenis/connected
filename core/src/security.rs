@@ -183,7 +183,6 @@ fn restrict_path_to_current_user(path: &std::path::Path) {
 /// worker is not blocked while `whoami.exe`/`icacls.exe` run.
 #[cfg(windows)]
 async fn restrict_path_to_current_user_async(path: &std::path::Path) {
-    use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
     let whoami_exe = format!("{}\\System32\\whoami.exe", system_root);
