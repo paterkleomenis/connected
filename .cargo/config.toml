@@ -52,6 +52,16 @@ rustflags = ["-C", "target-feature=+aes,+sha2,+crc"]
 # Uncomment to always build with specific features
 # rustflags = ["-C", "link-arg=-s"]
 
+# Windows MSVC: link the C runtime statically so the Store/MSIX build runs
+# on fresh machines without the VC++ Redistributable (VCRUNTIME140.dll).
+# Without this, rustc defaults to dynamic CRT and the app fails at launch
+# with "VCRUNTIME140.dll was not found" on PCs that don't have it.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
 [env]
 # Set minimum Android API level (26 = Android 8.0)
 # This affects which libc functions are available
