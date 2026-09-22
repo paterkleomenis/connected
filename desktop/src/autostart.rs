@@ -83,6 +83,93 @@ mod platform {
         format!("\"{path_str}\"")
     }
 
+    /// Look up a binary name on PATH without extra dependencies.
+    fn find_in_path(name: &str) -> Option<PathBuf> {
+        let paths = std::env::var_os("PATH")?;
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    /// Resolve the executable to write into the autostart entry.
+    ///
+    /// `std::env::current_exe()` returns the *running* binary. When developing
+    /// via `cargo run` that is `<repo>/target/{debug,release}/connected-desktop`
+    /// (or a `/tmp/.mount-*` path for an AppImage), which stops existing as soon
+    /// as the repo moves, `cargo clean` runs, or the user switches to the
+    /// installed binary. systemd's autostart generator then skips the entry at
+    /// login ("Exec binary ... does not exist: not generating unit") and the app
+    /// silently never starts. So for such transient binaries, prefer a stable
+    /// `connected-desktop` found on PATH and only fall back to `current_exe()`.
+    fn resolve_autostart_exe() -> Result<PathBuf, String> {
+        let current = std::env::current_exe()
+            .map_err(|e| format!("Failed to resolve executable path: {e}"))?;
+        let path_str = current.to_string_lossy();
+        let is_transient = path_str.contains("/target/debug/")
+            || path_str.contains("/target/release/")
+            || path_str.contains("/tmp/.mount");
+        if is_transient && let Some(stable) = find_in_path("connected-desktop") {
+            return Ok(stable);
+        }
+        Ok(current)
+    }
+
+    /// Extract the executable path from an `Exec=` line: the first token,
+    /// honouring double quotes, with `\X` escapes unescaped.
+    fn exec_binary(exec_line: &str) -> Option<String> {
+        let value = exec_line.strip_prefix("Exec=")?.trim_start();
+        if let Some(quoted) = value.strip_prefix('"') {
+            let mut binary = String::new();
+            let mut chars = quoted.chars();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    if let Some(escaped) = chars.next() {
+                        binary.push(escaped);
+                    }
+                } else if c == '"' {
+                    break;
+                } else {
+                    binary.push(c);
+                }
+            }
+            if binary.is_empty() {
+                None
+            } else {
+                Some(binary)
+            }
+        } else {
+            let token = value.split_whitespace().next()?;
+            if token.is_empty() {
+                None
+            } else {
+                Some(token.to_string())
+            }
+        }
+    }
+
+    fn autostart_target_valid(path: &Path) -> bool {
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(_) => return false,
+        };
+        let Some(exec_line) = content.lines().find(|line| line.starts_with("Exec=")) else {
+            return false;
+        };
+        let Some(binary) = exec_binary(exec_line) else {
+            return false;
+        };
+        let binary_path = PathBuf::from(&binary);
+        if binary_path.is_absolute() {
+            return binary_path.is_file();
+        }
+        // Bare command (e.g. `Exec=connected-desktop`): must resolve on PATH.
+        find_in_path(&binary).is_some()
+    }
+
     fn desktop_entry(exe: &Path) -> String {
         format!(
             "[Desktop Entry]\nType=Application\nVersion=1.0\nName=Connected\nComment=High-speed, offline, cross-platform ecosystem bridging devices\nExec={} {}\nIcon=connected-desktop\nTerminal=false\nCategories=Utility;Network;FileTransfer;\nX-GNOME-Autostart-enabled=true\n",
@@ -92,7 +179,10 @@ mod platform {
     }
 
     pub fn is_enabled() -> bool {
-        autostart_path().map(|path| path.exists()).unwrap_or(false)
+        match autostart_path() {
+            Ok(path) => path.exists() && autostart_target_valid(&path),
+            Err(_) => false,
+        }
     }
 
     pub fn set_enabled(enabled: bool) -> Result<(), String> {
@@ -105,8 +195,7 @@ mod platform {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create autostart directory: {e}"))?;
 
-            let exe = std::env::current_exe()
-                .map_err(|e| format!("Failed to resolve executable path: {e}"))?;
+            let exe = resolve_autostart_exe()?;
             fs::write(&path, desktop_entry(&exe))
                 .map_err(|e| format!("Failed to write autostart desktop entry: {e}"))?;
             return Ok(());
