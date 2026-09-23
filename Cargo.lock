@@ -840,7 +840,7 @@ dependencies = [
 
 [[package]]
 name = "connected-core"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "base64 0.23.1",
  "blake3",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "connected-desktop"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -885,7 +885,7 @@ dependencies = [
  "dirs 7.0.0",
  "fs2",
  "futures-util",
- "glib 0.22.9",
+ "glib 0.22.10",
  "image",
  "ksni",
  "libloading 0.9.0",
@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "connected-ffi"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "android_logger",
  "connected-core",
@@ -2477,9 +2477,9 @@ dependencies = [
 
 [[package]]
 name = "glib"
-version = "0.22.9"
+version = "0.22.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18b9b8d350db41f690ec1b87109f202782748bbd8ab2f2ede17cb40d29e2838c"
+checksum = "e4cf9e5bd8713f1990a92c422998826e0fb34824277b46bc59757373483c6694"
 dependencies = [
  "bitflags 2.13.1",
  "futures-channel",
@@ -4155,7 +4155,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5776,7 +5776,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
