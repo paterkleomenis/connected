@@ -3,7 +3,8 @@ use crate::discovery::{DiscoveryEvent, DiscoveryService, DiscoverySource};
 use crate::error::{ConnectedError, Result};
 use crate::events::{ConnectedEvent, TransferDirection};
 use crate::file_transfer::{
-    FileTransfer, IncomingTransferConfig, TransferProgress, create_dir_all_no_symlinks,
+    ApprovedBatches, FileTransfer, IncomingTransferConfig, TransferProgress,
+    create_dir_all_no_symlinks,
 };
 use crate::security::{KeyStore, PeerStatus};
 use crate::transport::{MAX_MESSAGE_SIZE, Message, QuicTransport};
@@ -255,8 +256,8 @@ pub struct ConnectedClient {
     /// Global semaphore bounding concurrent filesystem stream handlers to prevent
     /// memory exhaustion when many peers issue large read requests simultaneously.
     fs_stream_semaphore: Arc<tokio::sync::Semaphore>,
-    /// Active/approved batch transfers on this receiver, mapping batch_id -> download directory.
-    pub(crate) approved_batches: Arc<RwLock<HashMap<String, PathBuf>>>,
+    /// Active/approved batch transfers on this receiver, mapping batch_id -> batch state.
+    pub(crate) approved_batches: ApprovedBatches,
     /// Track device IDs we've already sent unpair notifications to, so we don't spam.
     notified_unpairs: Arc<RwLock<HashSet<String>>>,
     /// Handles of long-lived background tasks (cleanup loops, message/stream

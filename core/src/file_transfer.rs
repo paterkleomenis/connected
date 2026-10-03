@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -119,9 +119,60 @@ pub struct IncomingTransferConfig {
     pub auto_accept: bool,
     pub accept_rx: Option<tokio::sync::oneshot::Receiver<bool>>,
     pub cancel_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
-    pub approved_batches:
-        Option<Arc<parking_lot::RwLock<std::collections::HashMap<String, PathBuf>>>>,
+    pub approved_batches: Option<ApprovedBatches>,
 }
+
+/// Shared receiver-side state for one batch transfer.
+///
+/// The control stream (`BatchRequest` handler) and the concurrent per-file
+/// sub-streams (`BatchItemStream` handlers) run in independent tasks. Both
+/// must contribute to the same totals, otherwise the final `Complete`
+/// validation sees only the sequentially-received files and fails with
+/// "Batch totals do not match declaration" whenever the batch contains
+/// large (>=10 MiB) files that are streamed concurrently.
+#[derive(Debug)]
+pub struct ApprovedBatch {
+    pub save_dir: PathBuf,
+    pub expected_files: u64,
+    pub expected_bytes: u64,
+    pub received_files: AtomicU64,
+    pub received_bytes: AtomicU64,
+}
+
+impl ApprovedBatch {
+    pub fn new(save_dir: PathBuf, expected_files: u64, expected_bytes: u64) -> Self {
+        Self {
+            save_dir,
+            expected_files,
+            expected_bytes,
+            received_files: AtomicU64::new(0),
+            received_bytes: AtomicU64::new(0),
+        }
+    }
+
+    /// Reserve one file slot of `size` bytes. Called when a `BatchItem` /
+    /// `BatchItemStream` header is accepted, before the payload is received,
+    /// so over-declaration is detected early even with concurrent streams.
+    pub fn reserve_file(&self, size: u64) -> Result<()> {
+        // `fetch_add` wraps on overflow, but with the 100 GiB per-file and
+        // per-batch caps the counters stay far below `u64::MAX`.
+        let new_files = self.received_files.fetch_add(1, Ordering::SeqCst) + 1;
+        let new_bytes = self.received_bytes.fetch_add(size, Ordering::SeqCst) + size;
+        // Detect wrapping (defensive; unreachable with current limits).
+        if new_files == 0 || new_bytes < size {
+            return Err(ConnectedError::Protocol("Batch size overflow".to_string()));
+        }
+        if new_files > self.expected_files || new_bytes > self.expected_bytes {
+            return Err(ConnectedError::Protocol(
+                "Batch item totals exceed the declared batch".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub type ApprovedBatches =
+    Arc<parking_lot::RwLock<std::collections::HashMap<String, Arc<ApprovedBatch>>>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum FileTransferMessage {
@@ -1438,14 +1489,14 @@ impl FileTransfer {
                     relative_path, size, batch_id
                 );
 
-                let batch_save_dir = if let Some(ref approved) = approved_batches {
+                let batch_state = if let Some(ref approved) = approved_batches {
                     let lock = approved.read();
                     lock.get(&batch_id).cloned()
                 } else {
                     None
                 };
 
-                let Some(save_dir) = batch_save_dir else {
+                let Some(batch_state) = batch_state else {
                     let reject = FileTransferMessage::Reject {
                         reason: "Batch not approved or active".to_string(),
                     };
@@ -1454,6 +1505,7 @@ impl FileTransfer {
                         "Batch not approved".to_string(),
                     ));
                 };
+                let save_dir = batch_state.save_dir.clone();
 
                 validate_incoming_size(size)?;
                 if !is_safe_relative_path(&relative_path) {
@@ -1466,6 +1518,10 @@ impl FileTransfer {
                     send_message(&mut send, &reject_msg, response_version).await?;
                     return Err(ConnectedError::Protocol(err_msg));
                 }
+
+                // Count this concurrent file toward the batch totals so the
+                // control stream's final `Complete` validation sees it.
+                batch_state.reserve_file(size)?;
 
                 Self::receive_file_payload(
                     &mut send,
@@ -1871,15 +1927,20 @@ impl FileTransfer {
                     ));
                 }
 
+                let batch_state = Arc::new(ApprovedBatch::new(
+                    save_dir.clone(),
+                    files_count,
+                    total_size,
+                ));
                 if let Some(ref approved) = approved_batches {
-                    approved.write().insert(batch_id.clone(), save_dir.clone());
+                    approved
+                        .write()
+                        .insert(batch_id.clone(), batch_state.clone());
                 }
 
                 struct ApprovedBatchGuard {
                     batch_id: String,
-                    approved_batches: Option<
-                        Arc<parking_lot::RwLock<std::collections::HashMap<String, PathBuf>>>,
-                    >,
+                    approved_batches: Option<ApprovedBatches>,
                 }
                 impl Drop for ApprovedBatchGuard {
                     fn drop(&mut self) {
@@ -1902,9 +1963,6 @@ impl FileTransfer {
                         total_size,
                     });
                 }
-
-                let mut received_files = 0u64;
-                let mut received_bytes = 0u64;
 
                 loop {
                     // Dev: no MAX_BATCH_ITEMS limit (user requested unlimited).
@@ -1947,21 +2005,10 @@ impl FileTransfer {
                                 }
                             } else {
                                 validate_incoming_size(size)?;
-                                received_files =
-                                    received_files.checked_add(1).ok_or_else(|| {
-                                        ConnectedError::Protocol(
-                                            "Batch file count overflow".to_string(),
-                                        )
-                                    })?;
-                                received_bytes =
-                                    received_bytes.checked_add(size).ok_or_else(|| {
-                                        ConnectedError::Protocol("Batch size overflow".to_string())
-                                    })?;
-                                if received_files > files_count || received_bytes > total_size {
-                                    return Err(ConnectedError::Protocol(
-                                        "Batch item totals exceed the declared batch".to_string(),
-                                    ));
-                                }
+                                // Shared with concurrent `BatchItemStream` handlers so
+                                // large files streamed on sub-streams count toward
+                                // the declared totals.
+                                batch_state.reserve_file(size)?;
                             }
                             if !is_safe_relative_path(&relative_path) {
                                 let err_msg = format!(
@@ -2001,6 +2048,8 @@ impl FileTransfer {
                             }
                         }
                         FileTransferMessage::Complete { .. } => {
+                            let received_files = batch_state.received_files.load(Ordering::SeqCst);
+                            let received_bytes = batch_state.received_bytes.load(Ordering::SeqCst);
                             if received_files != files_count || received_bytes != total_size {
                                 return Err(ConnectedError::Protocol(format!(
                                     "Batch totals do not match declaration: received {} files / {} bytes, expected {} files / {} bytes",
