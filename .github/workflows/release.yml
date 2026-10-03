@@ -627,7 +627,6 @@ jobs:
           releaseFiles: connected-android.aab
           tracks: ${{ vars.PLAY_STORE_TRACK || 'production' }}
           status: ${{ vars.PLAY_STORE_STATUS || 'completed' }}
-          changesNotSentForReview: true
 
   # -------------------------------------------------------------------------
   # Job 13: Publish to Microsoft Store
