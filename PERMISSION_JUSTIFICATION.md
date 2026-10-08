@@ -2,8 +2,8 @@
 
 **App Name:** Connected  
 **Package:** com.connected.app.sync  
-**Version:** 3.3.2  
-**Date:** 2026-10-03
+**Version:** 3.3.3  
+**Date:** 2026-10-08
 
 ---
 
