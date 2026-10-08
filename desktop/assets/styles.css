@@ -3660,3 +3660,96 @@ textarea:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
 }
+
+/* ============================================================================
+   GNOME 51 native background blur (Mutter ext-background-effect-v1)
+   ============================================================================
+   These rules only apply once the Rust side confirmed the compositor
+   accepted our blur region and added the `gnome-blur` class to <html>/<body>
+   (see `linux_wayland_blur.rs`). Everywhere else the opaque theme above is
+   kept, so compositors without blur support look exactly as before.
+
+   The window itself is transparent (tao `with_transparent(true)` + wry
+   transparent webview background); these translucent surfaces let Mutter's
+   blurring of the desktop behind the window show through as frosted glass.
+   In-app `backdrop-filter` usage is intentionally NOT relied upon here:
+   WebKitGTK's in-content backdrop-filter blurs web content, not the desktop
+   wallpaper — only the compositor effect does that. */
+
+html.gnome-blur,
+html.gnome-blur body,
+body.gnome-blur {
+    background: transparent !important;
+}
+
+.gnome-blur .app-root {
+    /* Frosted-glass base; Mutter blurs the wallpaper behind it. Alpha is
+       kept high so text stays readable if the effect ever drops out. */
+    background: rgba(28, 28, 30, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.gnome-blur .app-container {
+    background: transparent;
+}
+
+.gnome-blur .app-container.theme-light {
+    background: transparent;
+}
+
+.gnome-blur .app-root:has(.app-container.theme-light) {
+    background: rgba(245, 245, 247, 0.72);
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+.gnome-blur .main-content {
+    background: transparent;
+}
+
+.gnome-blur .sidebar {
+    /* Sidebar floats over the blurred base instead of painting opaque. */
+    background: rgba(30, 30, 32, 0.55);
+}
+
+.gnome-blur .custom-titlebar {
+    background: rgba(28, 28, 30, 0.55);
+}
+
+/* ============================================================================
+   Frameless-window resize handles (Linux custom titlebar mode)
+   ============================================================================
+   Undecorated Wayland windows receive no server-side resize borders, so
+   these invisible zones restore edge/corner resizing via
+   tao `drag_resize_window` (see `ResizeHandles` in main.rs). They sit above
+   content but below popups/menus. */
+
+.resize-handle {
+    position: fixed;
+    z-index: 9000;
+    touch-action: none;
+}
+
+.resize-east {
+    top: 0;
+    right: 0;
+    width: 6px;
+    height: 100%;
+    cursor: ew-resize;
+}
+
+.resize-south {
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    height: 6px;
+    cursor: ns-resize;
+}
+
+.resize-south-east {
+    right: 0;
+    bottom: 0;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+    z-index: 9001;
+}

@@ -12,6 +12,8 @@ mod components;
 mod controller;
 mod fs_provider;
 mod ipc;
+#[cfg(target_os = "linux")]
+mod linux_wayland_blur;
 #[cfg(target_os = "macos")]
 mod macos_media;
 mod mpris_server;
@@ -779,6 +781,20 @@ fn save_mms_image_to_downloads(
     Ok(candidate)
 }
 
+/// Set a process env var before any GUI thread exists.
+///
+/// Rust 2024 marks `std::env::set_var` unsafe (process-wide mutation races
+/// with other threads reading the environment). This is only called from
+/// `main` before threads spawn, so it is sound; the allow keeps the
+/// workspace-wide `unsafe_code` warn lint quiet for this deliberate case.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn set_linux_env_var(key: &str, value: &str) {
+    unsafe {
+        std::env::set_var(key, value);
+    }
+}
+
 fn load_icon() -> Option<dioxus::desktop::tao::window::Icon> {
     let icon_bytes = include_bytes!("../assets/logo.png");
     let reader = ImageReader::new(Cursor::new(icon_bytes))
@@ -1243,6 +1259,56 @@ fn main() {
     ipc::initialize_wakeup_state();
     ipc::start_wakeup_listener();
 
+    // Linux/Wayland renderer workarounds (GNOME 51 era, verified against
+    // WebKitGTK 2.54 + NVIDIA 615 + Mutter 51):
+    //
+    // - Wayland sessions always use native Wayland: pin GDK_BACKEND=wayland
+    //   so no dependency, wrapper script or distro default can silently
+    //   downgrade the app to XWayland (X11 windows have no wl_surface, so
+    //   the ext-background-effect-v1 blur and proper fractional scaling
+    //   would be unreachable). An explicitly user-set GDK_BACKEND is
+    //   respected as a manual escape hatch. Pure X11 sessions are
+    //   untouched — there X11 is the only option.
+    // - NVIDIA proprietary + native Wayland: WebKit's DMA-BUF renderer
+    //   misses explicit-sync acquire points, which strict compositors
+    //   (Mutter) kill with a fatal "Explicit Sync only supported on dmabuf
+    //   buffers" protocol error (webkit#280210, still regressing in 2.54),
+    //   and its GBM allocation fails outright on some setups. Disabling
+    //   NVIDIA explicit sync keeps the accelerating DMA-BUF renderer AND
+    //   paints fully. Disabling the DMA-BUF renderer instead (the generic
+    //   fallback below) avoids the crash but leaves transparent windows
+    //   partially black on this stack — so it must NOT apply here.
+    // - Other GPUs / XWayland: preserve the previous conservative behavior
+    //   (disable WebKit's DMA-BUF renderer when a DRI device exists), which
+    //   trades some rendering performance for broad compatibility.
+    // - Explicit user settings always win; nothing set is ever overridden.
+    #[cfg(target_os = "linux")]
+    {
+        let wayland_host = linux_wayland_blur::is_wayland_host_session();
+        let nvidia = linux_wayland_blur::is_nvidia_proprietary();
+
+        // Pin native Wayland when the host session is Wayland and the user
+        // did not explicitly choose a backend. Evaluated before anything
+        // else so the checks below see the final backend.
+        if wayland_host && std::env::var_os("GDK_BACKEND").is_none() {
+            set_linux_env_var("GDK_BACKEND", "wayland");
+        }
+        let native_wayland = linux_wayland_blur::is_wayland_session();
+
+        if wayland_host && nvidia && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
+            set_linux_env_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
+        }
+
+        let keep_dmabuf = nvidia && native_wayland;
+        if wayland_host
+            && !keep_dmabuf
+            && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+            && std::path::Path::new("/dev/dri").exists()
+        {
+            set_linux_env_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     // Start the global application controller in a background thread.
     // This ensures it runs even if no UI window is open.
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1275,6 +1341,7 @@ fn main() {
 
     // Platform-specific window settings
     // On Linux/Wayland, use a custom titlebar to avoid GTK decoration issues
+    // (unresponsive CSD buttons under Wayland, dioxus#3667).
     let decorations = cfg!(any(target_os = "windows", target_os = "macos"));
     let transparent = !decorations;
 
@@ -1296,8 +1363,25 @@ fn main() {
         )
         .with_disable_context_menu(true)
         .with_on_window(|window, _| {
-            ipc::set_wakeup_window(window);
+            ipc::set_wakeup_window(window.clone());
+            // GNOME 51: request compositor background blur (Mutter
+            // ext-background-effect-v1) on the native Wayland surface.
+            // Runs on a helper thread; no-op off Wayland or without
+            // compositor support.
+            #[cfg(target_os = "linux")]
+            crate::linux_wayland_blur::enable_blur_async(window);
         });
+
+    // GNOME 51 / Mutter requires a native Wayland client for the
+    // ext-background-effect-v1 blur protocol: the legacy Dioxus fallback that
+    // forces GDK_BACKEND=x11 (XWayland) + WEBKIT_DISABLE_DMABUF_RENDERER=1
+    // would run the window on XWayland, where blur is unreachable and where
+    // fractional scaling, move/resize and decorations regress. The XWayland
+    // fallback predates current WebKitGTK/DMA-BUF fixes and the removal of
+    // legacy NVIDIA interfaces in GNOME 51, and our custom titlebar already
+    // avoids the CSD-button bug that motivated it (dioxus#3667).
+    #[cfg(target_os = "linux")]
+    let config = config.with_disable_dma_buf_on_wayland(false);
 
     // Set up menu bar on macOS
     #[cfg(target_os = "macos")]
@@ -1397,6 +1481,44 @@ impl Default for CurrentMediaUi {
             artist: String::new(),
             playing: false,
             source_device_id: "local".to_string(),
+        }
+    }
+}
+
+/// Invisible resize borders for the frameless Linux window.
+///
+/// Undecorated Wayland windows get no server-side resize borders from the
+/// compositor, so without these the window could only be resized via
+/// keyboard shortcuts. Each handle initiates a compositor resize drag
+/// (`xdg_toplevel.resize`) in its direction; errors (e.g. while maximized)
+/// are ignored.
+#[cfg(target_os = "linux")]
+#[component]
+fn ResizeHandles() -> Element {
+    let win_east = dioxus::desktop::use_window();
+    let win_south = win_east.clone();
+    let win_south_east = win_east.clone();
+    rsx! {
+        div {
+            class: "resize-handle resize-east",
+            onmousedown: move |_| {
+                use dioxus::desktop::tao::window::ResizeDirection;
+                let _ = win_east.drag_resize_window(ResizeDirection::East);
+            },
+        }
+        div {
+            class: "resize-handle resize-south",
+            onmousedown: move |_| {
+                use dioxus::desktop::tao::window::ResizeDirection;
+                let _ = win_south.drag_resize_window(ResizeDirection::South);
+            },
+        }
+        div {
+            class: "resize-handle resize-south-east",
+            onmousedown: move |_| {
+                use dioxus::desktop::tao::window::ResizeDirection;
+                let _ = win_south_east.drag_resize_window(ResizeDirection::SouthEast);
+            },
         }
     }
 }
@@ -1784,13 +1906,19 @@ fn App() -> Element {
     // UI Poller - polls state and updates UI signals
     // Uses 500ms interval (increased from 200ms) to reduce CPU usage
     let wake_window = window.clone();
+    #[cfg(target_os = "linux")]
+    let blur_ctx = window.clone();
     use_future(move || {
         let wake_window = wake_window.window.clone();
+        #[cfg(target_os = "linux")]
+        let blur_ctx = blur_ctx.clone();
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         let show_item_handle = show_item_handle.clone();
         async move {
             let mut last_devices_hash: u64 = 0;
             let mut last_transfer_status_hash: u64 = 0;
+            #[cfg(target_os = "linux")]
+            let mut blur_class_added = false;
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             let mut last_visible = wake_window.is_visible();
 
@@ -1993,6 +2121,25 @@ fn App() -> Element {
                     poller_set(update_info, info);
                 }
 
+                // GNOME 51 native blur: once the background Wayland thread
+                // confirmed Mutter accepted our ext-background-effect-v1
+                // region, switch the webview to the translucent `gnome-blur`
+                // theme so the blur shows through. One-shot; everywhere else
+                // the opaque theme is kept.
+                #[cfg(target_os = "linux")]
+                if !blur_class_added
+                    && crate::linux_wayland_blur::is_blur_active()
+                    && blur_ctx
+                        .webview
+                        .evaluate_script(
+                            "document.documentElement.classList.add('gnome-blur');document.body.classList.add('gnome-blur');",
+                        )
+                        .is_ok()
+                {
+                    blur_class_added = true;
+                    tracing::debug!("gnome-blur theme class applied to webview");
+                }
+
                 // Increased from 200ms to 500ms to reduce CPU usage
                 // Most state changes are event-driven, polling is just for sync
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -2051,6 +2198,11 @@ fn App() -> Element {
 
             if cfg!(target_os = "linux") {
                 titlebar::Titlebar {}
+            }
+
+            // Frameless-window resize handles (see ResizeHandles).
+            if cfg!(target_os = "linux") {
+                ResizeHandles {}
             }
 
             div {

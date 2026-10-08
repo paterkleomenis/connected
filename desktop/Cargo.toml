@@ -36,6 +36,14 @@ ksni = "0.3"
 dbus = "0.9"
 mpris = "2.0"
 glib = "0.22"
+# Native Wayland background blur (GNOME 51 / Mutter ext-background-effect-v1).
+# wayland-backend needs client_system+dlopen so we can wrap GTK's foreign
+# wl_display (guest mode, no link-time libwayland dependency). Enabling it
+# here switches the whole dependency tree to the system backend (additive).
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
