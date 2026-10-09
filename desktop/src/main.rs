@@ -1492,7 +1492,6 @@ impl Default for CurrentMediaUi {
 /// keyboard shortcuts. Each handle initiates a compositor resize drag
 /// (`xdg_toplevel.resize`) in its direction; errors (e.g. while maximized)
 /// are ignored.
-#[cfg(target_os = "linux")]
 #[component]
 fn ResizeHandles() -> Element {
     let win_east = dioxus::desktop::use_window();
@@ -2198,10 +2197,8 @@ fn App() -> Element {
 
             if cfg!(target_os = "linux") {
                 titlebar::Titlebar {}
-            }
 
-            // Frameless-window resize handles (see ResizeHandles).
-            if cfg!(target_os = "linux") {
+                // Frameless-window resize handles (see ResizeHandles).
                 ResizeHandles {}
             }
 
