@@ -44,6 +44,16 @@ const EVENT_CHANNEL_CAPACITY: usize = 512;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIRING_MODE_TIMEOUT: Duration = Duration::from_secs(120);
 const PENDING_PAIRING_REQUEST_TTL: Duration = Duration::from_secs(300);
+/// How often the peer warmer sweeps trusted discovered peers to (re)establish
+/// a live QUIC path. Connections idle out, devices roam and reboot — without
+/// a sweep, a peer that appears *after* our last dial would never get an
+/// outbound attempt from us, and a firewalled peer could never be reached.
+/// One dial per peer per interval is negligible LAN chatter, and dials are
+/// skipped entirely while a live connection exists.
+const PEER_WARM_INTERVAL_SECS: u64 = 60;
+/// Delay after startup before the first warm sweep, so mDNS discovery has
+/// time to populate the device list.
+const PEER_WARM_STARTUP_DELAY_SECS: u64 = 10;
 
 static RUSTLS_PROVIDER_INIT: OnceLock<bool> = OnceLock::new();
 
@@ -1389,6 +1399,26 @@ impl ConnectedClient {
             .any(|p| p.device_id.as_deref() == Some(device_id))
     }
 
+    /// Non-dialing probe: true when a live connection is cached for the peer's
+    /// listen address — whether we dialed it or accepted it inbound (including
+    /// via a Hello/Handshake-registered alias). Powers the peer warmer and
+    /// lets UIs distinguish "no path" from "peer offline" without dialing.
+    pub fn has_live_connection(&self, target_ip: IpAddr, target_port: u16) -> bool {
+        self.transport
+            .has_live_connection(&SocketAddr::new(target_ip, target_port))
+    }
+
+    /// Drop the cached connection for a peer's listen address, if any.
+    /// The underlying QUIC connection is closed, so both the direct entry
+    /// and any alias pointing at the same connection object go stale (closed
+    /// entries are pruned on next access).
+    pub fn invalidate_connection(&self, target_ip: IpAddr, target_port: u16) {
+        self.transport.invalidate_connection(
+            &SocketAddr::new(target_ip, target_port),
+            QuicTransport::CLOSE_REASON_STALE,
+        );
+    }
+
     pub fn is_device_unpaired(&self, device_id: &str) -> bool {
         self.key_store
             .read()
@@ -1785,6 +1815,97 @@ impl ConnectedClient {
                 Err(ConnectedError::Timeout("Handshake timeout".to_string()))
             }
         }
+    }
+
+    /// Dial a trusted peer (if no live connection exists) and send it a
+    /// lightweight [`Message::Hello`] so it registers our listen address as a
+    /// connection alias.
+    ///
+    /// Why this exists: host firewalls with default-deny inbound (UFW, strict
+    /// firewalld, Windows public profile) drop all inbound QUIC while mDNS
+    /// discovery still works, so peers look "paired but unreachable" and every
+    /// send times out. QUIC streams are bidirectional, so a connection dialed
+    /// from *either* side serves both directions — the dialer's outbound
+    /// packets create conntrack state that the firewall honors for the return
+    /// path. Combined with the periodic sweep in [`Self::start_background_tasks`],
+    /// at least one side of every trusted pair keeps dialing out, and the
+    /// other side reuses that connection via its alias instead of dialing
+    /// into a firewall. No user firewall configuration needed.
+    ///
+    /// Security: trusted peers ONLY (checked before AND after the slow dial,
+    /// since the keystore can change mid-dial). No `pending_handshakes` entry
+    /// is created, so — unlike [`Self::send_handshake`], which is reserved for
+    /// user-initiated pairing — this can never auto-trust anyone. Unknown,
+    /// unpaired and blocked peers are never dialed. Dial failures are routine
+    /// (peer offline, or firewalled with no return path yet) and logged at
+    /// debug so the sweep doesn't spam the log.
+    pub async fn ensure_peer_connection(&self, device_id: &str, ip: IpAddr, port: u16) {
+        if port == 0 {
+            return;
+        }
+        if !self.is_device_trusted(device_id) {
+            return;
+        }
+        let addr = SocketAddr::new(ip, port);
+        // Skip families our socket cannot speak (e.g. global IPv6 on an
+        // IPv4-only socket). Discovery delivers the other family separately;
+        // dialing anyway would just fail instantly on every sweep.
+        if self.transport.is_unreachable_family(&addr) {
+            debug!(
+                "Skipping warm dial to {}: address family unreachable, waiting for alternate via discovery",
+                addr
+            );
+            return;
+        }
+        // Fast path: a usable connection already exists (dialed or accepted).
+        if self.transport.has_live_connection(&addr) {
+            return;
+        }
+        // Strict cert verification: unknown fingerprints fail here unless the
+        // user enabled pairing mode — and even then we only Hello peers WE
+        // trust (checked above and re-checked below).
+        let conn = match self.transport.connect(addr).await {
+            Ok(c) => c,
+            Err(e) => {
+                debug!("Peer warm dial to {} failed (will retry): {}", addr, e);
+                return;
+            }
+        };
+        // Re-check trust after the slow dial before sending anything.
+        if !self.is_device_trusted(device_id) {
+            debug!("Peer {} untrusted during warm dial; skipping Hello", addr);
+            return;
+        }
+        if let Err(e) = self.send_hello(&conn).await {
+            debug!("Hello to {} failed (will retry): {}", addr, e);
+        }
+    }
+
+    /// Send a one-way [`Message::Hello`] over an already-established
+    /// connection. Fire-and-forget: the receiver never acks, and we never
+    /// wait — the next sweep/alias check converges if this one is lost.
+    async fn send_hello(&self, conn: &quinn::Connection) -> Result<()> {
+        let (mut send, _recv) = conn.open_bi().await.map_err(|e| {
+            ConnectedError::Connection(format!("Failed to open Hello stream: {}", e))
+        })?;
+        send.write_all(&[QuicTransport::STREAM_TYPE_CONTROL])
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        let msg = Message::Hello {
+            device_id: self.local_device.id.clone(),
+            device_name: self.local_name.read().clone(),
+            listening_port: self.local_device.port,
+        };
+        let data = crate::codec::encode_message(&msg, crate::PROTOCOL_VERSION)?;
+        send.write_all(&(data.len() as u32).to_be_bytes())
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.write_all(&data)
+            .await
+            .map_err(|e| ConnectedError::Io(e.into()))?;
+        send.finish().map_err(|e| ConnectedError::Io(e.into()))?;
+        debug!("Sent Hello to {}", conn.remote_address());
+        Ok(())
     }
 
     /// Send a HandshakeAck to confirm trust after user approves a pairing request.
@@ -2728,7 +2849,7 @@ impl ConnectedClient {
         Ok(())
     }
 
-    async fn start_background_tasks(&self) -> Result<()> {
+    async fn start_background_tasks(self: &Arc<Self>) -> Result<()> {
         // 0. Periodic connection cache cleanup
         let transport_cleanup = self.transport.clone();
         let h = tokio::spawn(async move {
@@ -2758,6 +2879,32 @@ impl ConnectedClient {
         });
         self.background_tasks.write().push(h);
 
+        // 0c. Peer connection warmer. Keeps a live QUIC path to every trusted
+        // discovered peer so sends reuse connections instead of dialing into
+        // host firewalls (see ensure_peer_connection docs). Skipped peers cost
+        // one cache read; dead peers cost one background dial per interval.
+        {
+            let this = Arc::clone(self);
+            let h = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(PEER_WARM_STARTUP_DELAY_SECS)).await;
+                let mut interval =
+                    tokio::time::interval(Duration::from_secs(PEER_WARM_INTERVAL_SECS));
+                loop {
+                    interval.tick().await;
+                    for d in this.get_discovered_devices() {
+                        if let Some(ip) = d.ip_addr() {
+                            let peer = this.clone();
+                            let (id, port) = (d.id.clone(), d.port);
+                            tokio::spawn(async move {
+                                peer.ensure_peer_connection(&id, ip, port).await;
+                            });
+                        }
+                    }
+                }
+            });
+            self.background_tasks.write().push(h);
+        }
+
         // 1. Discovery Listener
         let (disco_tx, mut disco_rx) = mpsc::unbounded_channel();
         let discovery_started = match self.discovery.start_listening(disco_tx) {
@@ -2785,6 +2932,7 @@ impl ConnectedClient {
             let transport_clone = self.transport.clone();
             let notified_unpairs_clone = self.notified_unpairs.clone();
             let local_device_id = self.local_device.id.clone();
+            let warmer = Arc::clone(self);
             let h = tokio::spawn(async move {
                 while let Some(event) = disco_rx.recv().await {
                     match event {
@@ -2829,6 +2977,23 @@ impl ConnectedClient {
                                         }
                                     }
                                 }
+                            }
+
+                            // Peer warmer: a newly discovered trusted peer gets an
+                            // immediate dial+Hello instead of waiting for the
+                            // periodic sweep, so the first user action reuses a
+                            // live connection. Concurrent dials to the same
+                            // address are coalesced by the transport's
+                            // connecting guard; redundant ensures are a cache
+                            // read. Trusted-only (see ensure_peer_connection).
+                            if warmer.is_device_trusted(&d.id)
+                                && let Some(ip) = d.ip_addr()
+                            {
+                                let peer = warmer.clone();
+                                let (id, port) = (d.id.clone(), d.port);
+                                tokio::spawn(async move {
+                                    peer.ensure_peer_connection(&id, ip, port).await;
+                                });
                             }
 
                             let _ = event_tx.send(ConnectedEvent::DeviceFound(d));
@@ -3507,6 +3672,37 @@ impl ConnectedClient {
                             device_id: resolved_device_id,
                             device_name,
                         });
+                    }
+
+                    Message::Hello {
+                        device_id,
+                        device_name,
+                        listening_port,
+                    } => {
+                        // One-way keepalive from a peer warming its path to us.
+                        // Deliberately NOT a Handshake: no pairing request, no
+                        // DeviceFound event, no ack, no trust changes. The only
+                        // effect for senders we trust is a connection alias
+                        // (their listen address -> this inbound connection) so
+                        // our future sends reuse it instead of dialing into
+                        // their firewall. Anything from an untrusted
+                        // fingerprint is ignored.
+                        let trusted = key_store.read().is_trusted(&fingerprint);
+                        if !trusted {
+                            debug!(
+                                "Ignoring Hello from untrusted peer {} ({})",
+                                device_name, addr
+                            );
+                        } else {
+                            if listening_port != 0 && listening_port != addr.port() {
+                                let listening_addr = SocketAddr::new(addr.ip(), listening_port);
+                                transport.register_connection_alias(addr, listening_addr);
+                            }
+                            debug!(
+                                "Hello from trusted peer {} ({}) — connection alias registered",
+                                device_name, device_id
+                            );
+                        }
                     }
 
                     _ => {}

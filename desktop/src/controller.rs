@@ -1502,12 +1502,33 @@ async fn start_core(name: String) -> Option<Arc<ConnectedClient>> {
     };
 
     // Use default persistence path (None -> ~/.config/connected)
-    // Use new_with_bind_all to listen on all interfaces (0.0.0.0)
+    // Use new_with_bind_all to listen on all interfaces (0.0.0.0).
     // This is crucial for Windows/Linux with multiple interfaces (WSL, Docker, etc.)
     // to ensure we receive traffic regardless of which IP was advertised.
-    match ConnectedClient::new_with_bind_all(name.clone(), device_type, 0, None).await {
+    // Bind the stable DEFAULT_QUIC_PORT (with automatic fallback) instead of an
+    // ephemeral port so host firewall rules (ufw/firewalld/Windows Firewall)
+    // survive restarts. Peers learn the actual port via mDNS.
+    match ConnectedClient::new_with_bind_all(
+        name.clone(),
+        device_type,
+        connected_core::DEFAULT_QUIC_PORT,
+        None,
+    )
+    .await
+    {
         Ok(c) => {
             info!("Core initialized");
+            // Log the actual bound port plus the firewall command for it.
+            // Discovery (mDNS) works even when the host firewall drops QUIC
+            // traffic, which otherwise looks like "devices pair but commands
+            // time out". Make the fix greppable in logs.
+            {
+                let port = c.local_device().port;
+                info!(
+                    "Listening for peers on UDP port {}. If phones see this device but commands/timeouts fail, allow inbound UDP: `sudo ufw allow {}/udp` (UFW) or open UDP {} in firewalld/Windows Firewall.",
+                    port, port, port
+                );
+            }
 
             // Mark SDK as initialized and discovery as active
             set_sdk_initialized(true);
