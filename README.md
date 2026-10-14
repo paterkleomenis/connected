@@ -173,6 +173,34 @@ Run the desktop application:
 cargo run -p connected-desktop
 ```
 
+### Firewall: usually nothing to do
+
+Connections are warmed proactively: each side dials its trusted peers on
+discovery and sends a lightweight `Hello`, so both ends hold a live QUIC path
+and reuse it instead of dialing into host firewalls (see
+`ConnectedClient::ensure_peer_connection` in `core/src/client.rs`). Outbound
+UDP is allowed by default everywhere, so discovery + commands work with
+default-deny inbound firewalls (UFW, firewalld, Windows public profile) and
+no manual rules.
+
+If a peer is discovered but *every* connection to it times out (both sides
+freshly started, or an unusually strict LAN), allowing the stable listen port
+helps as a fallback. The app listens on UDP port `47999` by default (see
+`DEFAULT_QUIC_PORT` in `core/src/lib.rs`; it falls back to a nearby port only
+if that one is taken, and the actual port is always shown in the startup log
+and advertised via mDNS):
+
+```bash
+sudo ufw allow 47999/udp            # UFW (Ubuntu/CachyOS/Pop!_OS/...)
+# or
+sudo firewall-cmd --permanent --add-port=47999/udp && sudo firewall-cmd --reload   # firewalld (Fedora/...)
+```
+
+On Windows, allow `connected-desktop` through Windows Firewall for UDP when
+prompted. Diagnostic signature of a blocked path: the sender logs
+`Connection to <ip>:<port> timed out after 10s` (`connected_core` logcat tag
+on Android) while the receiver's log shows no incoming connection at all.
+
 ### Project Structure
 
 - `core/`: Shared Rust logic (networking, discovery, encryption).

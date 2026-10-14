@@ -88,6 +88,28 @@ pub enum Message {
     Telephony(TelephonyMessage),
     /// Remote power/session commands (shutdown, restart, sign out)
     RemoteCommand(RemoteCommandMessage),
+    /// Lightweight keepalive/warm message between already-paired peers.
+    /// Unlike [`Message::Handshake`] it carries zero pairing semantics: the
+    /// receiver never emits pairing UI events, never auto-trusts, and never
+    /// acks. Its only purpose is to let the receiver register a connection
+    /// alias (sender's listen address → this inbound connection) so future
+    /// sends reuse the existing connection instead of dialing a new one —
+    /// which is what default-deny host firewalls block. Senders only ever
+    /// emit this to peers they already trust (see
+    /// `ConnectedClient::ensure_peer_connection`); receivers ignore it from
+    /// anyone they don't trust.
+    ///
+    /// Wire-safety: this MUST stay the last variant. Postcard encodes the
+    /// variant index, so old peers reject an unknown trailing index with a
+    /// clean decode error (message dropped, harmless). Inserting anything
+    /// after it — or reordering — could make old peers misparse a Hello as
+    /// an actionable message. Pinned by
+    /// `tests::hello_stays_the_last_message_variant`.
+    Hello {
+        device_id: String,
+        device_name: String,
+        listening_port: u16,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -350,22 +372,67 @@ impl QuicTransport {
     /// Application-close reason used when we actively reject a pairing attempt.
     pub const CLOSE_REASON_REJECTED: &'static [u8] = b"pairing-rejected";
 
+    /// Bind a UDP socket, falling back to nearby ports when the requested one
+    /// is taken. Without this, callers that request the stable
+    /// [`crate::DEFAULT_QUIC_PORT`] would fail to start whenever a stale
+    /// instance (or anything else) still holds the port, and callers that
+    /// request port 0 get an ephemeral port as before. Tries the requested
+    /// port, then the next [`crate::PORT_FALLBACK_ATTEMPTS`] ports, then 0.
+    /// The caller must read back the actual port (`local_addr`) — it is
+    /// advertised via mDNS, so peers follow it automatically. Firewall rules
+    /// should target the stable default port; a fallback is logged as a
+    /// warning because the firewall rule will not cover it.
     fn bind_udp_socket(bind_addr: SocketAddr) -> std::io::Result<std::net::UdpSocket> {
-        let domain = if bind_addr.is_ipv4() {
-            Domain::IPV4
-        } else {
-            Domain::IPV6
-        };
-        let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
-        socket.set_reuse_address(true)?;
-        #[cfg(unix)]
-        {
-            let _ = socket.set_reuse_port(true);
+        fn bind_once(addr: SocketAddr) -> std::io::Result<std::net::UdpSocket> {
+            let domain = if addr.is_ipv4() {
+                Domain::IPV4
+            } else {
+                Domain::IPV6
+            };
+            let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+            socket.set_reuse_address(true)?;
+            #[cfg(unix)]
+            {
+                let _ = socket.set_reuse_port(true);
+            }
+            let _ = socket.set_send_buffer_size(8 * 1024 * 1024);
+            let _ = socket.set_recv_buffer_size(8 * 1024 * 1024);
+            socket.bind(&SockAddr::from(addr))?;
+            Ok(socket.into())
         }
-        let _ = socket.set_send_buffer_size(8 * 1024 * 1024);
-        let _ = socket.set_recv_buffer_size(8 * 1024 * 1024);
-        socket.bind(&SockAddr::from(bind_addr))?;
-        Ok(socket.into())
+
+        if bind_addr.port() == 0 {
+            return bind_once(bind_addr);
+        }
+        let mut candidates = vec![bind_addr.port()];
+        for i in 1..=crate::PORT_FALLBACK_ATTEMPTS {
+            candidates.push(bind_addr.port().saturating_add(i));
+        }
+        candidates.push(0);
+        let mut last_err = None;
+        for port in candidates {
+            let addr = SocketAddr::new(bind_addr.ip(), port);
+            match bind_once(addr) {
+                Ok(sock) => {
+                    if port != bind_addr.port() {
+                        tracing::warn!(
+                            "UDP port {} in use, bound {} instead — update firewall rules if peers cannot connect",
+                            bind_addr.port(),
+                            sock.local_addr().map(|a| a.port()).unwrap_or(port)
+                        );
+                    }
+                    return Ok(sock);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                    last_err = Some(e);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::AddrInUse, "no UDP port available")
+        }))
     }
 
     pub async fn new(
@@ -902,8 +969,8 @@ impl QuicTransport {
             .map_err(|_| {
                 warn!("Connection to {} timed out after {:?}", addr, CONNECT_TIMEOUT);
                 ConnectedError::Timeout(format!(
-                    "Connection to {} timed out after {:?}. Ensure the device is online and reachable.",
-                    addr, CONNECT_TIMEOUT
+                    "Connection to {} timed out after {:?}. Ensure the device is online and reachable. If the peer is discovered but connections always time out, its host firewall is likely dropping inbound UDP — allow the peer's listen port (default UDP {}) on the target device.",
+                    addr, CONNECT_TIMEOUT, crate::DEFAULT_QUIC_PORT
                 ))
             })?
             .map_err(|e| {
@@ -1013,8 +1080,8 @@ impl QuicTransport {
                     addr, CONNECT_TIMEOUT
                 );
                 ConnectedError::Timeout(format!(
-                    "Connection to {} timed out after {:?}. Ensure the device is online and reachable.",
-                    addr, CONNECT_TIMEOUT
+                    "Connection to {} timed out after {:?}. Ensure the device is online and reachable. If the peer is discovered but connections always time out, its host firewall is likely dropping inbound UDP — allow the peer's listen port (default UDP {}) on the target device.",
+                    addr, CONNECT_TIMEOUT, crate::DEFAULT_QUIC_PORT
                 ))
             })?
             .map_err(|e| {
@@ -1077,6 +1144,16 @@ impl QuicTransport {
         self.connection_cache
             .write()
             .register_alias(original, alias);
+    }
+
+    /// Non-dialing probe: true when a live (not closed) connection is cached
+    /// for `addr` — whether we dialed it or accepted it inbound (including
+    /// via a handshake-registered alias for the peer's listen address).
+    /// Used by the peer warmer to skip redundant dials.
+    pub fn has_live_connection(&self, addr: &SocketAddr) -> bool {
+        let addr = self.scoped_addr_for_aware(*addr);
+        let mut cache = self.connection_cache.write();
+        cache.get(&addr).is_some()
     }
 
     pub async fn get_connection_fingerprint(&self, addr: SocketAddr) -> Option<String> {
@@ -1560,6 +1637,26 @@ impl QuicTransport {
         }
     }
 
+    /// True when `addr` cannot work on this host's main QUIC socket: a global
+    /// IPv6 address while the socket is IPv4-only, or vice versa. Link-local
+    /// IPv6 is exempt — it travels through the separate WiFi Aware endpoint.
+    /// Used by the peer warmer to skip doomed dials (discovery delivers the
+    /// other family shortly after); user-initiated sends still attempt
+    /// whatever address the UI holds and fail fast with quinn's own error.
+    pub fn is_unreachable_family(&self, addr: &SocketAddr) -> bool {
+        if Self::is_link_local(addr) {
+            return false;
+        }
+        let local_ip = match self.endpoint.local_addr() {
+            Ok(a) => a.ip(),
+            Err(_) => return false,
+        };
+        matches!(
+            (local_ip, addr.ip()),
+            (IpAddr::V4(_), IpAddr::V6(_)) | (IpAddr::V6(_), IpAddr::V4(_))
+        )
+    }
+
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.endpoint.local_addr().map_err(ConnectedError::Io)
     }
@@ -1799,6 +1896,71 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
 #[cfg(test)]
 mod tests {
     use super::Message;
+
+    #[test]
+    fn hello_round_trips_on_both_wire_formats() {
+        let hello = Message::Hello {
+            device_id: "peer-id".to_string(),
+            device_name: "Peer".to_string(),
+            listening_port: 47999,
+        };
+        for version in [1, crate::PROTOCOL_VERSION] {
+            let data = crate::codec::encode_message(&hello, version).expect("hello should encode");
+            let (decoded, _) =
+                crate::codec::decode_message::<Message>(&data).expect("hello should decode");
+            match decoded {
+                Message::Hello {
+                    device_id,
+                    device_name,
+                    listening_port,
+                } => {
+                    assert_eq!(device_id, "peer-id");
+                    assert_eq!(device_name, "Peer");
+                    assert_eq!(listening_port, 47999);
+                }
+                _ => panic!("expected Hello, version {}", version),
+            }
+        }
+    }
+
+    /// Wire-safety pin: `Message::Hello` must stay the LAST variant.
+    /// Postcard encodes the variant index, so an old peer decodes an unknown
+    /// trailing index as an error (message dropped, harmless). If a variant
+    /// were ever inserted before Hello, old peers could misparse a Hello as a
+    /// different, actionable message. This test forces that to be deliberate.
+    #[test]
+    fn hello_stays_the_last_message_variant() {
+        let hello = Message::Hello {
+            device_id: String::new(),
+            device_name: String::new(),
+            listening_port: 0,
+        };
+        let data = crate::codec::encode_message(&hello, crate::PROTOCOL_VERSION)
+            .expect("hello should encode");
+        // [MAGIC_POSTCARD, variant-index, ...]; single-byte index while < 128.
+        let hello_index = data[1];
+        let predecessors = [
+            Message::Ping {
+                from_id: String::new(),
+                timestamp: 0,
+            },
+            Message::HandshakeReject {
+                device_id: String::new(),
+                reason: None,
+            },
+            Message::DeviceUnpaired {
+                device_id: String::new(),
+            },
+        ];
+        for msg in predecessors {
+            let data = crate::codec::encode_message(&msg, crate::PROTOCOL_VERSION)
+                .expect("message should encode");
+            assert!(
+                data[1] < hello_index,
+                "Hello must remain the last Message variant for old-peer safety"
+            );
+        }
+    }
 
     #[test]
     fn legacy_handshake_without_version_defaults_to_v1() {

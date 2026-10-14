@@ -382,7 +382,11 @@ final class ConnectedAppModel: ObservableObject {
                 setIosPaths(cacheDir: cachePath, documentsDir: storagePath)
 
                 do {
-                    try initialize(deviceName: currentName, deviceType: "ios", bindPort: 0, storagePath: storagePath)
+                    // Stable QUIC listen port so LAN firewall rules survive restarts.
+                    // MUST match connected_core::DEFAULT_QUIC_PORT in core/src/lib.rs
+                    // (hardcoded: UniFFI bindings are snapshotted, no FFI getter).
+                    // Core falls back to a nearby/free port if this one is taken.
+                    try initialize(deviceName: currentName, deviceType: "ios", bindPort: 47999, storagePath: storagePath)
                 } catch let error as ConnectedFfiError {
                     switch error {
                     case .InitializationError:

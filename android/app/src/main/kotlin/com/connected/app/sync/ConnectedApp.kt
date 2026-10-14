@@ -1349,7 +1349,11 @@ class ConnectedApp(private val context: Context) {
             val storagePath = context.getExternalFilesDir(null)?.absolutePath ?: ""
 
             try {
-                initialize(getDeviceName(), "android", 0u.toUShort(), storagePath)
+                // Stable QUIC listen port so LAN firewall rules survive restarts.
+                // MUST match connected_core::DEFAULT_QUIC_PORT in core/src/lib.rs
+                // (hardcoded: UniFFI bindings are snapshotted, no FFI getter).
+                // Core falls back to a nearby/free port if this one is taken.
+                initialize(getDeviceName(), "android", 47999u.toUShort(), storagePath)
             } catch (e: Exception) {
                 Log.w("ConnectedApp", "Core might be already initialized: ${e.message}")
             }
@@ -3262,7 +3266,11 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    // Send Open URL / YouTube video to device
+    // Send Open URL / YouTube video to device.
+    // NOTE: the underlying FFI call is fire-and-forget (async QUIC send whose
+    // result is only visible in Rust logs / `connected_core` logcat tag). Do
+    // NOT toast success here — a blocked firewall or unreachable peer fails
+    // ~10s later with no callback. Toast the attempt; failures surface via logs.
     fun sendOpenUrlToDevice(device: DiscoveredDevice, url: String) {
         scope.launch {
             try {
@@ -3270,7 +3278,7 @@ class ConnectedApp(private val context: Context) {
                 runOnMainThread {
                     android.widget.Toast.makeText(
                         context,
-                        "Sent link to ${device.name}",
+                        "Sending link to ${device.name}...",
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                 }

@@ -40,3 +40,14 @@ pub use update::{
 pub const PROTOCOL_VERSION: u32 = 3;
 /// Oldest peer protocol version supported by the compatibility codec.
 pub const MIN_COMPATIBLE_PROTOCOL_VERSION: u32 = 1;
+
+/// Default UDP port for the QUIC transport. A stable port (instead of an
+/// OS-assigned ephemeral one) lets users create persistent firewall rules —
+/// e.g. `sudo ufw allow 47999/udp` — which survive app restarts. The actual
+/// bound port is always advertised via mDNS, so peers never assume this value.
+/// KEEP IN SYNC: android ConnectedApp.kt + ios ConnectedAppModel.swift
+/// hardcode the same value (their UniFFI bindings are snapshotted).
+pub const DEFAULT_QUIC_PORT: u16 = 47999;
+/// How many consecutive ports past the requested one to try when the
+/// requested port is already in use, before falling back to an ephemeral port.
+pub const PORT_FALLBACK_ATTEMPTS: u16 = 10;
