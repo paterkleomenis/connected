@@ -94,10 +94,12 @@ pub enum Message {
     /// acks. Its only purpose is to let the receiver register a connection
     /// alias (sender's listen address → this inbound connection) so future
     /// sends reuse the existing connection instead of dialing a new one —
-    /// which is what default-deny host firewalls block. Senders only ever
-    /// emit this to peers they already trust (see
-    /// `ConnectedClient::ensure_peer_connection`); receivers ignore it from
-    /// anyone they don't trust.
+    /// which is what default-deny host firewalls block. Receivers register
+    /// the alias for any non-blocked sender (including not-yet-paired peers,
+    /// whose pairing handshake can then ride back over the reverse path);
+    /// strict sends still re-verify trust before reusing any alias, so a
+    /// Hello can never elevate trust (see
+    /// `ConnectedClient::ensure_peer_connection`).
     ///
     /// Wire-safety: this MUST stay the last variant. Postcard encodes the
     /// variant index, so old peers reject an unknown trailing index with a
@@ -888,12 +890,34 @@ impl QuicTransport {
         let addr = self.scoped_addr_for_aware(addr);
         let canonical = ConnectionCache::canonicalize_addr(&addr);
 
-        // Fast path: reuse a cached connection.
+        // Fast path: reuse a cached connection — but only when its peer is
+        // currently trusted (or unpaired, i.e. awaiting re-approval).
+        //
+        // The reverse-path warmer deliberately caches connections to *untrusted*
+        // discovered peers so that a first pairing handshake can travel back over
+        // a peer-initiated connection (see ensure_peer_connection). Strict sends
+        // must not inherit that shortcut: reusing a warmed untrusted connection
+        // here would silently bypass this dialer's certificate verification.
+        // Treat such entries as a cache miss and dial fresh — the strict
+        // PeerVerifier then decides (trusted / unpaired / pairing mode).
         {
             let mut cache = self.connection_cache.write();
             if let Some(conn) = cache.get(&addr) {
-                debug!("Reusing cached connection to {}", addr);
-                return Ok(conn);
+                let peer_ok = match Self::get_peer_fingerprint(&conn) {
+                    Some(fp) => {
+                        let ks = self.key_store.read();
+                        ks.is_trusted(&fp) || ks.is_unpaired(&fp)
+                    }
+                    None => false,
+                };
+                if peer_ok {
+                    debug!("Reusing cached connection to {}", addr);
+                    return Ok(conn);
+                }
+                debug!(
+                    "Cached connection to {} is not trusted; dialing fresh with strict verification",
+                    addr
+                );
             }
         }
         // cache guard is dropped here — no parking_lot guard held across awaits.

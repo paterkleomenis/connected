@@ -173,10 +173,18 @@ async fn test_hello_registers_alias_for_connection_reuse() {
     b.shutdown().await;
 }
 
-/// Untrusted peers must never be dialed or helloed: no connection appears on
-/// their side and no pairing prompt is triggered there.
+/// A discovered but not-yet-paired peer is warmed too — that is what lets a
+/// *first* pairing initiated from a firewalled side succeed: the warm dial
+/// travels outbound, the peer registers the reverse path (Hello alias), and
+/// the pairing handshake later rides back over that connection instead of
+/// dialing into the firewall.
+///
+/// Warming must stay trust-wise inert: no pairing prompts, no trust changes,
+/// and strict sends must NOT reuse the untrusted connection (that would skip
+/// certificate verification — pinned here via a strict ping, which must fail
+/// with the peer unknown).
 #[tokio::test]
-async fn test_warmer_ignores_untrusted_peers() {
+async fn test_untrusted_warm_registers_reverse_path_without_pairing() {
     let ip = IpAddr::from([127, 0, 0, 1]);
     let (port_a, port_c) = (47103u16, 47104u16);
 
@@ -209,19 +217,26 @@ async fn test_warmer_ignores_untrusted_peers() {
     );
 
     a.ensure_peer_connection(&c_id, ip, port_c).await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
 
+    // Dialer side: an untrusted discovered peer gets a warm dial now.
     assert!(
-        !c.has_live_connection(ip, port_a),
-        "untrusted C must gain no connection from A's warmer"
+        poll_until(Duration::from_secs(5), || a.has_live_connection(ip, port_c)).await,
+        "A should dial untrusted discovered peers when warming"
     );
+    // Acceptor side: the Hello registers A's listen address as an alias on C
+    // (this is the reverse path a first pairing can ride on; the trusted-peer
+    // test above pins the same alias mechanism).
     assert!(
-        !a.has_live_connection(ip, port_c),
-        "A must not dial untrusted peers"
+        poll_until(Duration::from_secs(5), || c.has_live_connection(ip, port_a)).await,
+        "C should hold a reverse-path alias for A's listen address after Hello"
     );
 
-    // Drain anything pairing-related (mDNS cross-talk from parallel tests can
-    // legitimately produce other events); fail only on PairingRequest.
+    // Trust-wise inert: nobody got trusted, and no pairing prompt appeared.
+    assert!(!a.is_device_trusted(&c_id), "warming must not trust anyone");
+    assert!(
+        !c.is_device_trusted(&a.local_device().id),
+        "warming must not trust anyone"
+    );
     let mut pairing_seen = false;
     while let Ok(ev) = rx_c.try_recv() {
         if matches!(ev, ConnectedEvent::PairingRequest { .. }) {
@@ -232,6 +247,184 @@ async fn test_warmer_ignores_untrusted_peers() {
         !pairing_seen,
         "warming an untrusted peer must not raise a pairing prompt"
     );
+
+    // Strict sends must not reuse the warmed untrusted connection: the strict
+    // `connect` path re-verifies the peer certificate (unknown here) and dials
+    // fresh instead, so this ping must fail. Without the guard it would ride
+    // the cached connection and succeed — i.e. cert checks would be skipped.
+    let ping = c.send_ping(ip, port_a).await;
+    assert!(
+        ping.is_err(),
+        "strict sends must not reuse an untrusted warmed connection (got RTT {}ms)",
+        ping.unwrap_or_default()
+    );
+
+    a.shutdown().await;
+    c.shutdown().await;
+}
+
+/// First pairing over a warmed reverse path — the exact scenario the warmer
+/// exists for. A (desktop behind a default-deny firewall) warms untrusted C;
+/// C initiates pairing and never needs A to be reachable inbound. No pairing
+/// mode is enabled on either side: the flow is purely user-initiated.
+#[tokio::test]
+async fn test_first_pairing_over_warmed_reverse_path() {
+    let ip = IpAddr::from([127, 0, 0, 1]);
+    let (port_a, port_c) = (47105u16, 47106u16);
+
+    let a = ConnectedClient::new_with_ip(
+        "Pair-A3".to_string(),
+        DeviceType::Linux,
+        port_a,
+        IpAddr::from([127, 0, 0, 1]),
+        Some(fresh_storage("a3").await),
+    )
+    .await
+    .unwrap();
+    let c = ConnectedClient::new_with_ip(
+        "Pair-C3".to_string(),
+        DeviceType::Linux,
+        port_c,
+        IpAddr::from([127, 0, 0, 1]),
+        Some(fresh_storage("c3").await),
+    )
+    .await
+    .unwrap();
+
+    let mut rx_a = a.subscribe();
+    let c_id = c.local_device().id.clone();
+    let a_id = a.local_device().id.clone();
+
+    // A warms untrusted C. This is the connection C's pairing will reuse.
+    a.ensure_peer_connection(&c_id, ip, port_c).await;
+    assert!(
+        poll_until(Duration::from_secs(5), || c.has_live_connection(ip, port_a)).await,
+        "precondition: C holds the warmed path before pairing starts"
+    );
+
+    // C starts pairing (user taps "Pair" on the firewalled side).
+    let c_clone = c.clone();
+    let handshake_handle = tokio::spawn(async move { c_clone.send_handshake(ip, port_a).await });
+
+    let pairing_req = wait_for_event(&mut rx_a, Duration::from_secs(10), |event| {
+        matches!(event, ConnectedEvent::PairingRequest { .. })
+    })
+    .await
+    .expect("A should receive the pairing request over the warmed path");
+
+    if let ConnectedEvent::PairingRequest {
+        fingerprint,
+        device_id,
+        device_name,
+    } = pairing_req
+    {
+        assert_eq!(
+            device_id, c_id,
+            "pairing request must come from C (the initiator)"
+        );
+        a.trust_device(fingerprint, Some(device_id), device_name)
+            .unwrap();
+        a.send_trust_confirmation(ip, port_c).await.unwrap();
+    } else {
+        panic!("Expected PairingRequest");
+    }
+
+    handshake_handle.await.unwrap().unwrap();
+
+    assert!(c.is_device_trusted(&a_id), "C should trust A after pairing");
+    assert!(a.is_device_trusted(&c_id), "A should trust C after pairing");
+
+    a.shutdown().await;
+    c.shutdown().await;
+}
+
+/// Regression for the live first-pairing failure: the human on the other side
+/// approves *after* the initiator's in-line ack wait (HANDSHAKE_TIMEOUT, 30s)
+/// has already expired — common when the approver is away from the machine.
+///
+/// The in-line deadline used to surface as `PairingFailed("Timeout: ...")`,
+/// which (a) skipped the reverse-path wait that keeps the attempt alive and
+/// (b) dropped the pending handshake, so the late trust confirmation was
+/// silently ignored and pairing failed for good. The attempt must instead
+/// survive the in-line timeout and complete when the ack finally arrives.
+#[tokio::test]
+async fn test_pairing_survives_approval_after_inline_timeout() {
+    let ip = IpAddr::from([127, 0, 0, 1]);
+    let (port_a, port_c) = (47107u16, 47108u16);
+
+    let a = ConnectedClient::new_with_ip(
+        "Slow-A4".to_string(),
+        DeviceType::Linux,
+        port_a,
+        IpAddr::from([127, 0, 0, 1]),
+        Some(fresh_storage("a4").await),
+    )
+    .await
+    .unwrap();
+    let c = ConnectedClient::new_with_ip(
+        "Slow-C4".to_string(),
+        DeviceType::Linux,
+        port_c,
+        IpAddr::from([127, 0, 0, 1]),
+        Some(fresh_storage("c4").await),
+    )
+    .await
+    .unwrap();
+
+    let mut rx_a = a.subscribe();
+    let c_id = c.local_device().id.clone();
+    let a_id = a.local_device().id.clone();
+
+    // Same shape as the live failure: the request is *delivered* instantly over
+    // an already-warmed path (no dial problem involved at all).
+    a.ensure_peer_connection(&c_id, ip, port_c).await;
+    assert!(
+        poll_until(Duration::from_secs(5), || c.has_live_connection(ip, port_a)).await,
+        "precondition: C holds the warmed path before pairing starts"
+    );
+
+    let c_clone = c.clone();
+    let started = std::time::Instant::now();
+    let handshake_handle = tokio::spawn(async move { c_clone.send_handshake(ip, port_a).await });
+
+    let pairing_req = wait_for_event(&mut rx_a, Duration::from_secs(10), |event| {
+        matches!(event, ConnectedEvent::PairingRequest { .. })
+    })
+    .await
+    .expect("A should receive the pairing request over the warmed path");
+
+    // The slow human: approve only after C's in-line wait is long gone.
+    tokio::time::sleep(Duration::from_secs(32)).await;
+
+    if let ConnectedEvent::PairingRequest {
+        fingerprint,
+        device_id,
+        device_name,
+    } = pairing_req
+    {
+        assert_eq!(device_id, c_id, "pairing request must come from C");
+        a.trust_device(fingerprint, Some(device_id), device_name)
+            .unwrap();
+        a.send_trust_confirmation(ip, port_c).await.unwrap();
+    } else {
+        panic!("Expected PairingRequest");
+    }
+
+    let result = handshake_handle.await.unwrap();
+    assert!(
+        result.is_ok(),
+        "pairing must survive an approval that lands after the in-line timeout: {:?}",
+        result.err()
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(31),
+        "the handshake must still have been pending past the 30s in-line window \
+         (settled after {:?})",
+        started.elapsed()
+    );
+
+    assert!(c.is_device_trusted(&a_id), "C should trust A after pairing");
+    assert!(a.is_device_trusted(&c_id), "A should trust C after pairing");
 
     a.shutdown().await;
     c.shutdown().await;

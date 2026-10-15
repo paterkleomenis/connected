@@ -183,12 +183,18 @@ UDP is allowed by default everywhere, so discovery + commands work with
 default-deny inbound firewalls (UFW, firewalld, Windows public profile) and
 no manual rules.
 
-If a peer is discovered but *every* connection to it times out (both sides
-freshly started, or an unusually strict LAN), allowing the stable listen port
-helps as a fallback. The app listens on UDP port `47999` by default (see
-`DEFAULT_QUIC_PORT` in `core/src/lib.rs`; it falls back to a nearby port only
-if that one is taken, and the actual port is always shown in the startup log
-and advertised via mDNS):
+First pairing works even when it starts from the firewalled side: the app
+also warms *untrusted* discovered peers, so tapping **Pair** sends the
+request back over that already-open outbound path instead of dialing into
+the firewall — and the request stays pending while you approve it (the
+initiator keeps waiting for the trust confirmation up to ~2 min).
+
+If a peer is still unreachable (the sender logs `Connection to <ip>:<port>
+timed out after 10s` while the receiver logs no incoming connection at all),
+allowing the stable listen port is a fallback. The app listens on UDP port
+`47999` by default (see `DEFAULT_QUIC_PORT` in `core/src/lib.rs`; it falls
+back to a nearby port only if that one is taken, and the actual port is
+always shown in the startup log and advertised via mDNS):
 
 ```bash
 sudo ufw allow 47999/udp            # UFW (Ubuntu/CachyOS/Pop!_OS/...)

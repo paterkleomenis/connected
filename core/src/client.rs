@@ -44,7 +44,7 @@ const EVENT_CHANNEL_CAPACITY: usize = 512;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIRING_MODE_TIMEOUT: Duration = Duration::from_secs(120);
 const PENDING_PAIRING_REQUEST_TTL: Duration = Duration::from_secs(300);
-/// How often the peer warmer sweeps trusted discovered peers to (re)establish
+/// How often the peer warmer sweeps discovered peers to (re)establish
 /// a live QUIC path. Connections idle out, devices roam and reboot — without
 /// a sweep, a peer that appears *after* our last dial would never get an
 /// outbound attempt from us, and a firewalled peer could never be reached.
@@ -54,6 +54,14 @@ const PEER_WARM_INTERVAL_SECS: u64 = 60;
 /// Delay after startup before the first warm sweep, so mDNS discovery has
 /// time to populate the device list.
 const PEER_WARM_STARTUP_DELAY_SECS: u64 = 10;
+/// After a direct pairing dial fails (classic signature: the peer's host
+/// firewall dropped our inbound packets), wait this long for the peer's own
+/// warmer to dial us and register a reverse path, then send the pairing
+/// handshake over that connection. Covers the warmer sweep interval (60 s)
+/// plus dial slack.
+const PAIR_REVERSE_PATH_WAIT: Duration = Duration::from_secs(90);
+/// Poll interval while waiting for a reverse path during pairing.
+const PAIR_REVERSE_PATH_POLL: Duration = Duration::from_secs(2);
 
 static RUSTLS_PROVIDER_INIT: OnceLock<bool> = OnceLock::new();
 
@@ -1427,6 +1435,17 @@ impl ConnectedClient {
             .any(|p| p.device_id.as_deref() == Some(device_id) && p.status == PeerStatus::Unpaired)
     }
 
+    /// True when we ever blocked a peer with this device id. Fingerprint-only
+    /// blocks (blocked before the id was known) are enforced independently by
+    /// the transport's certificate verifiers.
+    pub fn is_device_blocked(&self, device_id: &str) -> bool {
+        self.key_store
+            .read()
+            .get_blocked_peers()
+            .iter()
+            .any(|p| p.device_id.as_deref() == Some(device_id))
+    }
+
     pub fn get_trusted_peers(&self) -> Vec<crate::security::PeerInfo> {
         self.key_store.read().get_trusted_peers()
     }
@@ -1476,7 +1495,7 @@ impl ConnectedClient {
             PendingHandshake {
                 started_at: Instant::now(),
                 fingerprint: None,
-                device_id: target_device_id,
+                device_id: target_device_id.clone(),
             },
         );
 
@@ -1500,7 +1519,7 @@ impl ConnectedClient {
                 let should_retry =
                     matches!(e, ConnectedError::Connection(_) | ConnectedError::Io(_));
 
-                if should_retry {
+                let retried = if should_retry {
                     info!(
                         "Handshake failed to {}: {}, invalidating and retrying...",
                         addr, e
@@ -1512,6 +1531,34 @@ impl ConnectedClient {
                     self.send_handshake_internal(addr).await
                 } else {
                     Err(e)
+                };
+
+                match retried {
+                    // Two shapes of "not paired in-line":
+                    //  * the dial itself timed out (classic signature of a peer
+                    //    whose host firewall denies inbound QUIC) — its warmer
+                    //    dials us outbound on a schedule; wait for that reverse
+                    //    path and pair over it instead of dialing into the
+                    //    firewall;
+                    //  * the request was already delivered but the human on the
+                    //    other side has not approved yet — keep waiting for the
+                    //    confirmation instead of giving up at the in-line
+                    //    timeout (no re-send; that would reopen the prompt).
+                    Err(ConnectedError::Timeout(_)) => {
+                        let handshake_delivered = self
+                            .pending_handshakes
+                            .read()
+                            .get(&addr)
+                            .map(|pending| pending.fingerprint.is_some())
+                            .unwrap_or(false);
+                        self.await_reverse_path_and_retry(
+                            addr,
+                            target_device_id.clone(),
+                            handshake_delivered,
+                        )
+                        .await
+                    }
+                    other => other,
                 }
             }
         };
@@ -1536,6 +1583,116 @@ impl ConnectedClient {
         }
 
         result
+    }
+
+    /// Keep a pairing attempt alive after its in-line phase ended without
+    /// trust. Two shapes:
+    ///
+    /// * `handshake_delivered == false` — the dial was dropped (classic
+    ///   host-firewall signature): wait for the peer's own warmer to dial us
+    ///   outbound, then send the handshake over that reverse path. The peer
+    ///   registers the connection as a reverse-path alias when the
+    ///   accompanying [`Message::Hello`] arrives, so this side reuses the
+    ///   connection instead of dialing into the firewall.
+    /// * `handshake_delivered == true` — the request reached the peer and it
+    ///   is showing its approval dialog: keep waiting for the trust
+    ///   confirmation without re-sending (a second Handshake would only
+    ///   reopen the same prompt).
+    ///
+    /// The background handler resolves the pending handshake when the ack
+    /// eventually arrives. Returns `Ok(())` whenever the peer ends up
+    /// trusted, and a timeout error describing the dead end otherwise.
+    async fn await_reverse_path_and_retry(
+        &self,
+        addr: SocketAddr,
+        device_id: Option<String>,
+        handshake_delivered: bool,
+    ) -> Result<()> {
+        let deadline = Instant::now() + PAIR_REVERSE_PATH_WAIT;
+        if handshake_delivered {
+            debug!(
+                "Pairing handshake to {} is awaiting approval; waiting up to {:?} for the trust confirmation",
+                addr, PAIR_REVERSE_PATH_WAIT
+            );
+        } else {
+            debug!(
+                "Pairing dial to {} failed; waiting up to {:?} for a reverse path",
+                addr, PAIR_REVERSE_PATH_WAIT
+            );
+        }
+        let mut sent_over_reverse_path = handshake_delivered;
+        loop {
+            // A late ack may have resolved the pairing through the background
+            // handler while we were waiting.
+            if self.pairing_resolved(addr, device_id.as_deref()).await {
+                info!(
+                    "Pairing with {} completed while waiting for a reverse path",
+                    addr
+                );
+                return Ok(());
+            }
+            if !self.pending_handshakes.read().contains_key(&addr) {
+                // No longer pending and (just checked) not trusted. The
+                // background handler removes the entry a moment *before* it
+                // writes the trust change, so give that write a beat to land
+                // before concluding the user cancelled.
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if self.pairing_resolved(addr, device_id.as_deref()).await {
+                    info!("Pairing with {} completed via background handler", addr);
+                    return Ok(());
+                }
+                return Err(ConnectedError::PairingFailed(
+                    "Pairing cancelled".to_string(),
+                ));
+            }
+
+            if !sent_over_reverse_path && self.transport.has_live_connection(&addr) {
+                sent_over_reverse_path = true;
+                info!(
+                    "Reverse path to {} appeared; sending pairing handshake over it",
+                    addr
+                );
+                match self.send_handshake_internal(addr).await {
+                    Ok(()) => return Ok(()),
+                    Err(e) => debug!(
+                        "Pairing over reverse path to {} did not complete in-line: {}",
+                        addr, e
+                    ),
+                }
+                continue;
+            }
+
+            if Instant::now() >= deadline {
+                let reason = if sent_over_reverse_path {
+                    "the pairing request was delivered but was not approved in time"
+                } else {
+                    "it did not answer a direct connection and no reverse path appeared"
+                };
+                return Err(ConnectedError::Timeout(format!(
+                    "Could not pair with {}: {} (waited {:?}). If the device is nearby, try starting pairing from its side, or allow the app's UDP port (default {}) through its firewall.",
+                    addr,
+                    reason,
+                    PAIR_REVERSE_PATH_WAIT,
+                    crate::DEFAULT_QUIC_PORT
+                )));
+            }
+            tokio::time::sleep(PAIR_REVERSE_PATH_POLL).await;
+        }
+    }
+
+    /// True when the pending pairing toward `addr` has resolved into trust:
+    /// either the device id we resolved for the target is now trusted, or the
+    /// connection's authenticated peer certificate is.
+    async fn pairing_resolved(&self, addr: SocketAddr, device_id: Option<&str>) -> bool {
+        if let Some(id) = device_id
+            && self.is_device_trusted(id)
+        {
+            return true;
+        }
+        if let Some(fp) = self.transport.get_connection_fingerprint(addr).await {
+            return self.key_store.read().is_trusted(&fp);
+        }
+        false
     }
 
     async fn send_handshake_internal(&self, addr: SocketAddr) -> Result<()> {
@@ -1803,7 +1960,11 @@ impl ConnectedClient {
             Ok(Ok(_)) => Err(ConnectedError::PairingFailed(
                 "Unexpected response".to_string(),
             )),
-            Ok(Err(e)) => Err(ConnectedError::PairingFailed(e.to_string())),
+            // Preserve the inner variant: a Timeout here is the ack-wait
+            // deadline ("delivered, waiting for approval") and callers must be
+            // able to tell it apart from an outright rejection, which keeps
+            // the pending entry removed.
+            Ok(Err(e)) => Err(e),
             Err(_) => {
                 // Final check - maybe trust was established just before timeout
                 if let Some(fp) = self.transport.get_connection_fingerprint(addr).await
@@ -1817,9 +1978,9 @@ impl ConnectedClient {
         }
     }
 
-    /// Dial a trusted peer (if no live connection exists) and send it a
+    /// Dial a discovered peer (if no live connection exists) and send it a
     /// lightweight [`Message::Hello`] so it registers our listen address as a
-    /// connection alias.
+    /// connection alias — a "warmed" reverse path.
     ///
     /// Why this exists: host firewalls with default-deny inbound (UFW, strict
     /// firewalld, Windows public profile) drop all inbound QUIC while mDNS
@@ -1828,22 +1989,25 @@ impl ConnectedClient {
     /// from *either* side serves both directions — the dialer's outbound
     /// packets create conntrack state that the firewall honors for the return
     /// path. Combined with the periodic sweep in [`Self::start_background_tasks`],
-    /// at least one side of every trusted pair keeps dialing out, and the
+    /// at least one side of every discovered pair keeps dialing out, and the
     /// other side reuses that connection via its alias instead of dialing
     /// into a firewall. No user firewall configuration needed.
     ///
-    /// Security: trusted peers ONLY (checked before AND after the slow dial,
-    /// since the keystore can change mid-dial). No `pending_handshakes` entry
-    /// is created, so — unlike [`Self::send_handshake`], which is reserved for
-    /// user-initiated pairing — this can never auto-trust anyone. Unknown,
-    /// unpaired and blocked peers are never dialed. Dial failures are routine
-    /// (peer offline, or firewalled with no return path yet) and logged at
-    /// debug so the sweep doesn't spam the log.
+    /// Security: trust gates stay fully in force. No `pending_handshakes`
+    /// entry is created, so — unlike [`Self::send_handshake`], which is
+    /// reserved for user-initiated pairing — this can never auto-trust anyone.
+    /// Untrusted peers are dialed with `connect_allow_unknown` (which still
+    /// rejects blocked certificates): that is what lets a *first* pairing
+    /// succeed when the pairing side cannot be dialed inbound — the pairing
+    /// side's own outbound warm dial reaches its peer, and its pairing
+    /// handshake then rides back over that peer-initiated connection. The
+    /// Hello grants the receiving peer nothing: it only records the reverse
+    /// path, and its strict sends re-verify trust before ever reusing it.
+    /// Blocked peers are never dialed. Dial failures are routine (peer online
+    /// but firewalled, or offline) and logged at debug so the sweep doesn't
+    /// spam the log.
     pub async fn ensure_peer_connection(&self, device_id: &str, ip: IpAddr, port: u16) {
         if port == 0 {
-            return;
-        }
-        if !self.is_device_trusted(device_id) {
             return;
         }
         let addr = SocketAddr::new(ip, port);
@@ -1861,19 +2025,35 @@ impl ConnectedClient {
         if self.transport.has_live_connection(&addr) {
             return;
         }
-        // Strict cert verification: unknown fingerprints fail here unless the
-        // user enabled pairing mode — and even then we only Hello peers WE
-        // trust (checked above and re-checked below).
-        let conn = match self.transport.connect(addr).await {
+        if self.is_device_blocked(device_id) {
+            return;
+        }
+        let trusted = self.is_device_trusted(device_id);
+        // Trusted peers dial with strict certificate verification (an unknown
+        // cert must fail: the trust set may have changed under us). Untrusted
+        // peers dial tolerating an unknown cert — the connection is only a
+        // transport for the pairing handshake, and message-level trust gates
+        // remain in force regardless of what the peer claims.
+        let dial = if trusted {
+            self.transport.connect(addr).await
+        } else {
+            self.transport.connect_allow_unknown(addr).await
+        };
+        let conn = match dial {
             Ok(c) => c,
             Err(e) => {
                 debug!("Peer warm dial to {} failed (will retry): {}", addr, e);
                 return;
             }
         };
-        // Re-check trust after the slow dial before sending anything.
-        if !self.is_device_trusted(device_id) {
+        // Re-check trust after the slow dial before sending anything, so a
+        // peer blocked/unpaired mid-dial is not warmed any further.
+        if trusted && !self.is_device_trusted(device_id) {
             debug!("Peer {} untrusted during warm dial; skipping Hello", addr);
+            return;
+        }
+        if !trusted && self.is_device_blocked(device_id) {
+            debug!("Peer {} blocked during warm dial; skipping Hello", addr);
             return;
         }
         if let Err(e) = self.send_hello(&conn).await {
@@ -2879,10 +3059,12 @@ impl ConnectedClient {
         });
         self.background_tasks.write().push(h);
 
-        // 0c. Peer connection warmer. Keeps a live QUIC path to every trusted
-        // discovered peer so sends reuse connections instead of dialing into
-        // host firewalls (see ensure_peer_connection docs). Skipped peers cost
-        // one cache read; dead peers cost one background dial per interval.
+        // 0c. Peer connection warmer. Keeps a live QUIC path to every
+        // discovered peer — trusted or not — so sends reuse connections
+        // instead of dialing into host firewalls, and a first pairing
+        // initiated from either side can ride a reverse path (see
+        // ensure_peer_connection docs). Skipped peers cost one cache read;
+        // dead peers cost one background dial per interval.
         {
             let this = Arc::clone(self);
             let h = tokio::spawn(async move {
@@ -2979,16 +3161,19 @@ impl ConnectedClient {
                                 }
                             }
 
-                            // Peer warmer: a newly discovered trusted peer gets an
+                            // Peer warmer: a newly discovered peer gets an
                             // immediate dial+Hello instead of waiting for the
                             // periodic sweep, so the first user action reuses a
-                            // live connection. Concurrent dials to the same
-                            // address are coalesced by the transport's
-                            // connecting guard; redundant ensures are a cache
-                            // read. Trusted-only (see ensure_peer_connection).
-                            if warmer.is_device_trusted(&d.id)
-                                && let Some(ip) = d.ip_addr()
-                            {
+                            // live connection. Untrusted peers are warmed too
+                            // (with `connect_allow_unknown`): falling back to
+                            // user-initiated pairing hides "who can dial whom"
+                            // from firewalls, and a peer that cannot be dialed
+                            // inbound can still pair over the reverse path.
+                            // Concurrent dials to the same address are coalesced
+                            // by the transport's connecting guard; redundant
+                            // ensures are a cache read (see
+                            // ensure_peer_connection).
+                            if let Some(ip) = d.ip_addr() {
                                 let peer = warmer.clone();
                                 let (id, port) = (d.id.clone(), d.port);
                                 tokio::spawn(async move {
@@ -3681,16 +3866,21 @@ impl ConnectedClient {
                     } => {
                         // One-way keepalive from a peer warming its path to us.
                         // Deliberately NOT a Handshake: no pairing request, no
-                        // DeviceFound event, no ack, no trust changes. The only
-                        // effect for senders we trust is a connection alias
-                        // (their listen address -> this inbound connection) so
-                        // our future sends reuse it instead of dialing into
-                        // their firewall. Anything from an untrusted
-                        // fingerprint is ignored.
-                        let trusted = key_store.read().is_trusted(&fingerprint);
-                        if !trusted {
+                        // DeviceFound event, no ack, and no trust changes.
+                        //
+                        // The only effect is a connection alias (sender's listen
+                        // address -> this inbound connection) so our sends can
+                        // reuse the existing connection instead of dialing into
+                        // a firewall. Aliases are registered for any non-blocked
+                        // sender — including not-yet-paired peers, so a first
+                        // pairing handshake can ride back over this reverse path
+                        // (strict `connect` re-verifies trust before ever reusing
+                        // an alias, so an untrusted alias cannot satisfy a
+                        // trusted send).
+                        let blocked = key_store.read().is_blocked(&fingerprint);
+                        if blocked {
                             debug!(
-                                "Ignoring Hello from untrusted peer {} ({})",
+                                "Ignoring Hello from blocked peer {} ({})",
                                 device_name, addr
                             );
                         } else {
@@ -3699,7 +3889,7 @@ impl ConnectedClient {
                                 transport.register_connection_alias(addr, listening_addr);
                             }
                             debug!(
-                                "Hello from trusted peer {} ({}) — connection alias registered",
+                                "Hello from peer {} ({}) — reverse connection registered",
                                 device_name, device_id
                             );
                         }
