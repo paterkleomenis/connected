@@ -3,19 +3,19 @@ use crate::mpris_server::{MprisUpdate, send_mpris_update};
 use crate::state::{
     DeviceInfo, FileTransferRequest, LockOrRecover, PairingRequest, PreviewData, RemoteMedia,
     SavedDeviceInfo, TransferStatus, add_actionable_notification, add_file_transfer_request,
-    add_notification, add_open_file_notification, flush_settings, get_auto_sync_messages,
-    get_autostart_enabled_setting, get_clipboard_sync_enabled, get_current_media,
-    get_current_remote_files, get_current_remote_path, get_device_name_setting, get_devices_store,
-    get_download_directory_setting, get_last_clipboard, get_last_remote_clipboard_content,
-    get_last_remote_media_device_id, get_last_remote_update, get_live_incoming_transfer_ids,
-    get_live_outgoing_transfer_ids, get_media_enabled, get_pairing_mode_enabled_setting,
-    get_pairing_mode_state, get_pairing_requests, get_pending_pairings, get_phone_conversations,
-    get_phone_data_update, get_phone_messages, get_preview_data, get_remote_commands_enabled,
-    get_remote_files_update, get_remote_search, get_remote_search_update,
-    get_saved_devices_setting, get_transfer_status, is_auto_accept_enabled, mark_calls_synced,
-    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
-    remove_file_transfer_request, remove_transfer_path, save_device_to_settings,
-    set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
+    add_notification, add_open_file_notification, find_device_id_by_name, flush_settings,
+    get_auto_sync_messages, get_autostart_enabled_setting, get_clipboard_sync_enabled,
+    get_current_media, get_current_remote_files, get_current_remote_path, get_device_name_setting,
+    get_devices_store, get_download_directory_setting, get_last_clipboard,
+    get_last_remote_clipboard_content, get_last_remote_media_device_id, get_last_remote_update,
+    get_live_incoming_transfer_ids, get_live_outgoing_transfer_ids, get_media_enabled,
+    get_pairing_mode_enabled_setting, get_pairing_mode_state, get_pairing_requests,
+    get_pending_pairings, get_phone_conversations, get_phone_data_update, get_phone_messages,
+    get_preview_data, get_remote_commands_enabled, get_remote_files_update, get_remote_search,
+    get_remote_search_update, get_saved_devices_setting, get_transfer_status,
+    is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced, mark_messages_synced,
+    remove_device_from_settings, remove_file_transfer_request, remove_transfer_path,
+    save_device_to_settings, set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
     set_autostart_enabled_setting, set_device_name_setting, set_discovery_active,
     set_download_directory_setting, set_last_remote_clipboard_content,
     set_pairing_mode_enabled_setting, set_pairing_mode_state, set_phone_call_log,
@@ -59,6 +59,12 @@ static MPRIS_NAMES_CACHE: Lazy<Mutex<(Vec<String>, Instant)>> =
 
 #[cfg(target_os = "linux")]
 const MPRIS_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// Bus name of our own MPRIS proxy player. It mirrors the phone's media so the
+/// desktop environment can control it; it must never be treated as a local
+/// player, or commands would loop straight back to the phone.
+#[cfg(target_os = "linux")]
+const MPRIS_SELF_BUS_NAME: &str = "org.mpris.MediaPlayer2.connected";
 
 /// Choose a safe, non-overwriting destination for a remotely named file.
 ///
@@ -136,7 +142,7 @@ fn get_cached_mpris_names() -> Option<Vec<String>> {
             n.starts_with("org.mpris.MediaPlayer2.")
                 && !n.contains("playerctld")
                 && !n.contains("kdeconnect")
-                && n != "org.mpris.MediaPlayer2.connected"
+                && n != MPRIS_SELF_BUS_NAME
         })
         .collect();
 
@@ -1079,6 +1085,14 @@ fn spawn_event_loop(
                                         let mut generic_any: Option<Player> = None;
 
                                         for player in finder.find_all().unwrap_or_default() {
+                                            // Skip our own proxy player: it echoes the
+                                            // phone's media, so a command sent to it
+                                            // would bounce back to the phone instead of
+                                            // reaching a local player (e.g. Firefox).
+                                            if player.bus_name() == MPRIS_SELF_BUS_NAME {
+                                                continue;
+                                            }
+
                                             let identity = player.identity().to_string();
 
                                             let is_last = last_id.as_ref() == Some(&identity);
@@ -1263,15 +1277,10 @@ fn spawn_event_loop(
                                     from_device, state.title
                                 );
 
-                                // Find device ID by name
-                                let device_id = {
-                                    let store = get_devices_store().lock_or_recover();
-                                    store
-                                        .values()
-                                        .find(|d| d.name == from_device)
-                                        .map(|d| d.id.clone())
-                                        .unwrap_or_else(|| "unknown".to_string())
-                                };
+                                // Find device ID by name (preferring a reachable
+                                // entry: offline ghosts share the same name)
+                                let device_id = find_device_id_by_name(&from_device)
+                                    .unwrap_or_else(|| "unknown".to_string());
 
                                 let state_for_mpris = state.clone();
                                 *get_last_remote_media_device_id().lock_or_recover() =

@@ -22,13 +22,15 @@ class MediaObserverService : NotificationListenerService() {
     private var activeControllerCallback: MediaController.Callback? = null
 
     private fun processControllers(controllers: List<MediaController>?) {
-        if (controllers.isNullOrEmpty()) return
-
-        // Prefer the first active controller (usually the one playing or last played)
-        val controller = controllers.firstOrNull() ?: return
+        // Prefer the first active controller (usually the one playing or last
+        // played), ignoring our own session: it mirrors the remote device's
+        // playback, so reporting it back would echo state to the peer.
+        val controller = controllers.orEmpty().firstOrNull { it.packageName != packageName }
 
         // Re-registering on a different controller? Drop the old callback.
         unregisterActiveCallback()
+
+        if (controller == null) return
 
         val callback = object : MediaController.Callback() {
             override fun onPlaybackStateChanged(state: PlaybackState?) {

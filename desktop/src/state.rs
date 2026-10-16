@@ -651,6 +651,23 @@ pub fn get_active_devices() -> Vec<DeviceInfo> {
         .collect()
 }
 
+/// Resolve a device id by display name, preferring a reachable entry.
+///
+/// Names are not unique in the store: trusted-but-offline devices linger with
+/// `ip == "0.0.0.0"` and a stale port, so an unfiltered name match can bind to
+/// a dead entry and silently drop media commands as "offline".
+pub fn find_device_id_by_name(name: &str) -> Option<String> {
+    pick_device_id_by_name(&get_devices_store().lock_or_recover(), name)
+}
+
+fn pick_device_id_by_name(store: &HashMap<String, DeviceInfo>, name: &str) -> Option<String> {
+    store
+        .values()
+        .find(|d| d.name == name && d.ip != "0.0.0.0")
+        .or_else(|| store.values().find(|d| d.name == name))
+        .map(|d| d.id.clone())
+}
+
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub fn get_selected_device() -> Option<DeviceInfo> {
     SELECTED_DEVICE
@@ -1464,5 +1481,40 @@ mod tests {
         assert_ne!(resolved.ip, "0.0.0.0");
 
         get_devices_store().lock_or_recover().clear();
+    }
+
+    #[test]
+    fn test_find_device_id_by_name_prefers_online_over_offline() {
+        // Offline ghosts can share a display name with the real device (several
+        // saved entries for the same phone). Name-based resolution must bind to
+        // the reachable entry while one exists.
+        let offline = DeviceInfo {
+            id: "ghost".to_string(),
+            name: "Nothing A063".to_string(),
+            ip: "0.0.0.0".to_string(),
+            port: 47634,
+            device_type: DeviceType::Android,
+            is_trusted: true,
+            is_pending: false,
+        };
+        let online = DeviceInfo {
+            id: "live".to_string(),
+            name: "Nothing A063".to_string(),
+            ip: "10.146.96.99".to_string(),
+            port: 41165,
+            device_type: DeviceType::Android,
+            is_trusted: true,
+            is_pending: false,
+        };
+
+        let mut store = HashMap::new();
+        store.insert(offline.id.clone(), offline);
+        store.insert(online.id.clone(), online);
+
+        assert_eq!(
+            pick_device_id_by_name(&store, "Nothing A063").as_deref(),
+            Some("live")
+        );
+        assert_eq!(pick_device_id_by_name(&store, "Unknown Device"), None);
     }
 }
