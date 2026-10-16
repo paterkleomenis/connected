@@ -53,7 +53,7 @@ configure<ApplicationExtension> {
         applicationId = "com.connected.app.sync"
         minSdk = 26
         targetSdk = 37
-        versionCode = 30401
+        versionCode = 30402
         versionName = "3.4.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
