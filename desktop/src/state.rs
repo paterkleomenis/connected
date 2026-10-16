@@ -665,6 +665,14 @@ pub fn get_default_device() -> Option<DeviceInfo> {
         return Some(selected);
     }
 
+    // Prefer a device that is currently reachable (online, trusted, non-pending).
+    // Trusted-but-offline devices also live in the store with `ip == "0.0.0.0"`
+    // and a stale port, so an unfiltered scan could otherwise resolve to an
+    // unreachable device and leave sends hanging silently.
+    if let Some(device) = get_active_devices().into_iter().next() {
+        return Some(device);
+    }
+
     // Fallback to the first trusted device in active stores
     if let Some(device) = get_devices_store()
         .lock_or_recover()
@@ -1418,5 +1426,43 @@ mod tests {
         let init_tray = get_show_tray_icon_setting();
         set_show_tray_icon_setting(!init_tray);
         assert_eq!(get_show_tray_icon_setting(), !init_tray);
+    }
+
+    #[test]
+    fn test_get_default_device_prefers_online_over_offline() {
+        // Trusted-but-offline devices are kept in the store with `ip == "0.0.0.0"`
+        // and a stale port. The default-device resolution must never pick one
+        // while a reachable device exists.
+        let offline = DeviceInfo {
+            id: "offline-ghost".to_string(),
+            name: "Offline Ghost".to_string(),
+            ip: "0.0.0.0".to_string(),
+            port: 47634,
+            device_type: DeviceType::Android,
+            is_trusted: true,
+            is_pending: false,
+        };
+        let online = DeviceInfo {
+            id: "online-phone".to_string(),
+            name: "Online Phone".to_string(),
+            ip: "10.146.96.99".to_string(),
+            port: 41165,
+            device_type: DeviceType::Android,
+            is_trusted: true,
+            is_pending: false,
+        };
+
+        set_selected_device(None);
+        {
+            let mut store = get_devices_store().lock_or_recover();
+            store.insert(offline.id.clone(), offline);
+            store.insert(online.id.clone(), online);
+        }
+
+        let resolved = get_default_device().expect("a device should be resolved");
+        assert_eq!(resolved.id, "online-phone");
+        assert_ne!(resolved.ip, "0.0.0.0");
+
+        get_devices_store().lock_or_recover().clear();
     }
 }

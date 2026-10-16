@@ -3086,29 +3086,51 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
             AppAction::PickAndSendFiles => {
-                let device = crate::state::get_default_device();
-                if let Some(device) = device {
-                    let c = client.clone();
-                    tokio::spawn(async move {
-                        if let Some(handles) = rfd::AsyncFileDialog::new()
-                            .set_title("Select files to send")
-                            .pick_files()
-                            .await
-                        {
-                            let paths: Vec<String> = handles
-                                .into_iter()
-                                .map(|h| h.path().display().to_string())
-                                .collect();
+                if let Some(device) = crate::state::get_default_device() {
+                    if device.ip == "0.0.0.0" || device.ip.is_empty() {
+                        add_notification(
+                            "Offline Mode",
+                            "Offline transfer not supported. Connect to same network.",
+                            "",
+                        );
+                    } else {
+                        info!(
+                            "PickAndSendFiles: sending to {} ({}:{})",
+                            device.name, device.ip, device.port
+                        );
+                        let c = client.clone();
+                        tokio::spawn(async move {
+                            let picked = rfd::AsyncFileDialog::new()
+                                .set_title("Select files to send")
+                                .pick_files()
+                                .await;
+                            info!(
+                                "PickAndSendFiles: dialog closed, {} file(s) selected",
+                                picked.as_ref().map(|v| v.len()).unwrap_or(0)
+                            );
+                            if let Some(handles) = picked {
+                                let paths: Vec<String> = handles
+                                    .into_iter()
+                                    .map(|h| h.path().display().to_string())
+                                    .collect();
 
-                            if !paths.is_empty()
-                                && let (Some(c), Ok(ip)) = (c, device.ip.parse())
-                            {
-                                for path in paths {
-                                    let _ = c.send_file(ip, device.port, PathBuf::from(path)).await;
+                                if !paths.is_empty()
+                                    && let (Some(c), Ok(ip)) = (c, device.ip.parse())
+                                {
+                                    for path in paths {
+                                        let _ =
+                                            c.send_file(ip, device.port, PathBuf::from(path)).await;
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
+                    }
+                } else {
+                    add_notification(
+                        "Send Files",
+                        "No device available. Pair a device first.",
+                        "",
+                    );
                 }
             }
             AppAction::Shutdown => {
