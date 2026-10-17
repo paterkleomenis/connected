@@ -57,7 +57,8 @@ async fn forged_device_id_claim_cannot_displace_pending_pairing_request() {
         DeviceType::Linux,
         46301,
         IP,
-        None,
+        // Isolated keystore: never touch the developer's real app config.
+        Some(root.join("keystore_a")),
     )
     .await
     .unwrap();

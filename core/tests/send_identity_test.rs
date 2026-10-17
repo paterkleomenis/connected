@@ -58,10 +58,15 @@ async fn file_send_refuses_endpoint_impersonating_another_trusted_device() {
     tokio::fs::create_dir_all(&recv_b).await.unwrap();
 
     // A (sender), B (legitimate receiver).
-    let client_a =
-        ConnectedClient::new_with_ip("Sender".to_string(), DeviceType::Linux, 46311, IP, None)
-            .await
-            .unwrap();
+    let client_a = ConnectedClient::new_with_ip(
+        "Sender".to_string(),
+        DeviceType::Linux,
+        46311,
+        IP,
+        Some(root.join("sender")),
+    )
+    .await
+    .unwrap();
     let client_b = ConnectedClient::new_with_ip(
         "Receiver".to_string(),
         DeviceType::Linux,

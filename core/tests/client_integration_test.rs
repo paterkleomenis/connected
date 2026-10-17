@@ -7,12 +7,20 @@ async fn test_client_initialization() {
     let device_name = String::from("Test-Desktop");
     let port = 45000;
 
+    // Isolated storage: keystore and download dir must not leak into the
+    // developer's real app config (~/.config/connected) or Downloads.
+    let storage = std::env::temp_dir().join(format!(
+        "connected-test-init-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&storage).expect("create storage dir");
+
     let client = ConnectedClient::new_with_ip(
         device_name.clone(),
         DeviceType::Unknown,
         port,
         IpAddr::V4(Ipv4Addr::LOCALHOST),
-        None,
+        Some(storage.clone()),
     )
     .await;
 
@@ -25,6 +33,7 @@ async fn test_client_initialization() {
     assert_ne!(local_device.port, 0, "listening port must be bound");
 
     client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&storage);
 }
 
 /// A second client on the same storage dir must load the SAME identity
