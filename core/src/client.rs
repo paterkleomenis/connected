@@ -30,7 +30,28 @@ struct PendingHandshake {
 }
 
 type PendingHandshakeMap = HashMap<SocketAddr, PendingHandshake>;
-type PendingPairingRequestMap = HashMap<String, (Instant, String)>;
+
+/// A pairing request received from a peer and awaiting local user approval.
+#[derive(Clone)]
+struct PendingPairingRequest {
+    created_at: Instant,
+    /// Unauthenticated metadata: the device id the peer claimed. Used for
+    /// display and for locally-initiated cancels only — never for
+    /// authorization.
+    device_id: String,
+}
+
+/// Pending pairing requests, keyed by the peer's **TLS certificate
+/// fingerprint** — the only authenticated identity available at this stage.
+///
+/// Keying by the claimed `device_id` allowed any LAN peer to displace or
+/// spoof another device's pending request: device ids are broadcast via mDNS
+/// TXT records, and a map insert silently overwrote the legitimate entry, so
+/// the user's approval of the real device's prompt could grant trust to the
+/// impostor's certificate instead. Trust is granted only for the exact
+/// fingerprint shown in the prompt (`trust_device`), which is therefore what
+/// the request must be keyed on.
+type PendingPairingRequestMap = HashMap<String, PendingPairingRequest>;
 type CancelFlag = Arc<AtomicBool>;
 type OutgoingTransferEntry = (CancelFlag, Option<PathBuf>);
 
@@ -178,20 +199,31 @@ fn record_pending_pairing_request(
     fingerprint: String,
 ) {
     let mut requests = pending.write();
-    requests.retain(|_, (created_at, _)| created_at.elapsed() < PENDING_PAIRING_REQUEST_TTL);
-    requests.insert(device_id, (Instant::now(), fingerprint));
+    requests.retain(|_, request| request.created_at.elapsed() < PENDING_PAIRING_REQUEST_TTL);
+    // Keyed by fingerprint: a repeated Handshake from the same peer only
+    // refreshes its timestamp, and a peer claiming someone else's device_id
+    // cannot displace that device's pending request.
+    requests.insert(
+        fingerprint,
+        PendingPairingRequest {
+            created_at: Instant::now(),
+            device_id,
+        },
+    );
 }
 
+/// True when `fingerprint` has a non-expired pending pairing request.
+///
+/// The fingerprint is the only authenticated identity at this stage, so
+/// approval (`trust_device`) must be bound to the fingerprint the user saw in
+/// the prompt — never to the unauthenticated `device_id`.
 fn has_pending_pairing_request(
     pending: &Arc<RwLock<PendingPairingRequestMap>>,
-    device_id: &str,
     fingerprint: &str,
 ) -> bool {
     let mut requests = pending.write();
-    requests.retain(|_, (created_at, _)| created_at.elapsed() < PENDING_PAIRING_REQUEST_TTL);
-    requests
-        .get(device_id)
-        .is_some_and(|(_, expected)| expected == fingerprint)
+    requests.retain(|_, request| request.created_at.elapsed() < PENDING_PAIRING_REQUEST_TTL);
+    requests.contains_key(fingerprint)
 }
 
 fn clear_pending_pairing_state(
@@ -202,13 +234,17 @@ fn clear_pending_pairing_state(
     addr: Option<SocketAddr>,
 ) {
     if let Some(device_id) = device_id {
-        pending_pairing_requests.write().remove(device_id);
+        // `device_id` is unauthenticated metadata. Only locally-initiated
+        // cancels (end_pairing) may clear by it; remote messages must clear
+        // by fingerprint so a peer can only cancel its own request.
+        pending_pairing_requests
+            .write()
+            .retain(|_, request| request.device_id != device_id);
     }
 
     if let Some(fingerprint) = fingerprint {
-        pending_pairing_requests
-            .write()
-            .retain(|_, (_, expected)| expected != fingerprint);
+        // Authenticated removal: the connection's TLS fingerprint.
+        pending_pairing_requests.write().remove(fingerprint);
     }
 
     pending_handshakes.write().retain(|entry_addr, pending| {
@@ -1379,12 +1415,11 @@ impl ConnectedClient {
         device_id: Option<String>,
         name: String,
     ) -> Result<()> {
-        let may_trust = {
-            let ks = self.key_store.read();
-            ks.is_trusted(&fingerprint) || ks.is_unpaired(&fingerprint)
-        } || device_id.as_deref().is_some_and(|id| {
-            has_pending_pairing_request(&self.pending_pairing_requests, id, &fingerprint)
-        });
+        let may_trust =
+            {
+                let ks = self.key_store.read();
+                ks.is_trusted(&fingerprint) || ks.is_unpaired(&fingerprint)
+            } || has_pending_pairing_request(&self.pending_pairing_requests, &fingerprint);
 
         if !may_trust {
             return Err(ConnectedError::PairingFailed(
@@ -1632,10 +1667,11 @@ impl ConnectedClient {
                 return Ok(());
             }
             if !self.pending_handshakes.read().contains_key(&addr) {
-                // No longer pending and (just checked) not trusted. The
-                // background handler removes the entry a moment *before* it
-                // writes the trust change, so give that write a beat to land
-                // before concluding the user cancelled.
+                // No longer pending. The background handler now writes the
+                // trust change *before* removing the pending entry, so the
+                // re-check below normally succeeds immediately; the short
+                // sleep only covers the race where the removal is observed
+                // mid-write (e.g. a slow keystore save).
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 if self.pairing_resolved(addr, device_id.as_deref()).await {
                     info!("Pairing with {} completed via background handler", addr);
@@ -2508,6 +2544,96 @@ impl ConnectedClient {
         Ok(())
     }
 
+    /// Fingerprint the device advertised at `(ip, port)` is expected to
+    /// present, when its identity is already known locally.
+    ///
+    /// mDNS records are unauthenticated and addresses can be spoofed, recycled
+    /// by DHCP or stale in the UI, so "dial whatever answers at this address"
+    /// can deliver a file to the wrong endpoint. When this returns `Some`,
+    /// [`Self::dial_for_file_send`] requires the connection to present exactly
+    /// this fingerprint. `None` means the endpoint maps to no known device —
+    /// allowed only for explicit first-contact sends, where the receiver
+    /// prompts before accepting.
+    ///
+    /// Prefers a trusted record over an unpaired one when both exist for the
+    /// same device id. Fail-closed: a mismatch (or ambiguity) never falls back
+    /// to an unauthenticated send.
+    fn expected_fingerprint_for_endpoint(&self, ip: IpAddr, port: u16) -> Option<String> {
+        let device_id = self.discovery.get_device_id_for_endpoint(ip, port)?;
+        let key_store = self.key_store.read();
+        let mut unpaired = None;
+        for peer in key_store.get_all_known_peers() {
+            if peer.device_id.as_deref() != Some(device_id.as_str()) {
+                continue;
+            }
+            match peer.status {
+                PeerStatus::Trusted => return Some(peer.fingerprint),
+                PeerStatus::Unpaired if unpaired.is_none() => unpaired = Some(peer.fingerprint),
+                _ => {}
+            }
+        }
+        unpaired
+    }
+
+    /// True when the cached connection for `addr` presents exactly
+    /// `expected` as its TLS fingerprint.
+    async fn connection_matches_identity(&self, addr: SocketAddr, expected: &str) -> bool {
+        self.transport
+            .get_connection_fingerprint(addr)
+            .await
+            .is_some_and(|actual| actual == expected)
+    }
+
+    /// Dial `addr` for an outgoing file stream, binding the connection to a
+    /// known identity when one is expected.
+    ///
+    /// * `Some(expected)` — strict dial (the verifier accepts only known
+    ///   peers) plus an exact fingerprint check, checked again after one
+    ///   fresh redial so a stale cache alias to another device cannot fail a
+    ///   legitimate send. A mismatch closes the connection and fails closed.
+    /// * `None` — the endpoint maps to no known device: use the
+    ///   allow-unknown dial for first-contact sends; the receiver prompts
+    ///   before accepting.
+    async fn dial_for_file_send(
+        &self,
+        addr: SocketAddr,
+        expected_fingerprint: Option<&str>,
+    ) -> Result<quinn::Connection> {
+        let Some(expected) = expected_fingerprint else {
+            return self.transport.connect_allow_unknown(addr).await;
+        };
+
+        // Strict dial: an unknown certificate already fails inside the
+        // verifier. The explicit fingerprint check then rejects a *different
+        // known* device answering at this address.
+        let mut connection = self.transport.connect(addr).await?;
+        if self.connection_matches_identity(addr, expected).await {
+            return Ok(connection);
+        }
+
+        // Stale cache/alias remnants can point at another (still trusted)
+        // device. Drop the entry and dial fresh once before failing closed.
+        debug!(
+            "Cached connection to {} does not match expected identity; redialing fresh",
+            addr
+        );
+        self.transport
+            .invalidate_connection(&addr, QuicTransport::CLOSE_REASON_STALE);
+        connection = self.transport.connect(addr).await?;
+
+        if self.connection_matches_identity(addr, expected).await {
+            Ok(connection)
+        } else {
+            warn!(
+                "Refusing file send to {}: endpoint does not present the expected identity {}",
+                addr, expected
+            );
+            self.transport
+                .invalidate_connection(&addr, QuicTransport::CLOSE_REASON_REJECTED);
+            Err(ConnectedError::IdentityMismatch)
+        }
+    }
+
     pub async fn send_file(
         &self,
         target_ip: IpAddr,
@@ -2522,10 +2648,14 @@ impl ConnectedClient {
         }
 
         let addr = SocketAddr::new(target_ip, target_port);
-        // Use connect_allow_unknown() so that files can be sent to discovered
-        // but not-yet-paired devices.  The *receiver* side enforces the
-        // accept/decline prompt for untrusted peers, so this is safe.
-        let connection = self.transport.connect_allow_unknown(addr).await?;
+        // Bind the stream to the device the user selected: when this endpoint
+        // maps to a known device, the connection must present exactly that
+        // device's certificate. Only genuinely unknown endpoints (explicit
+        // first-contact sends, receiver-prompted) use the allow-unknown dial.
+        let expected_fingerprint = self.expected_fingerprint_for_endpoint(target_ip, target_port);
+        let connection = self
+            .dial_for_file_send(addr, expected_fingerprint.as_deref())
+            .await?;
 
         let event_tx = self.event_tx.clone();
         let transfer_id = uuid::Uuid::new_v4().to_string();
@@ -2677,7 +2807,12 @@ impl ConnectedClient {
         }
 
         let addr = SocketAddr::new(target_ip, target_port);
-        let connection = self.transport.connect_allow_unknown(addr).await?;
+        // Bind the batch stream to the device the user selected — see
+        // `send_file` for the identity rules.
+        let expected_fingerprint = self.expected_fingerprint_for_endpoint(target_ip, target_port);
+        let connection = self
+            .dial_for_file_send(addr, expected_fingerprint.as_deref())
+            .await?;
 
         let event_tx = self.event_tx.clone();
         let transfer_id = uuid::Uuid::new_v4().to_string();
@@ -3310,10 +3445,12 @@ impl ConnectedClient {
                                     "Auto-trusting peer from Handshake (pending outbound pairing): {} - {}",
                                     device_name, fingerprint
                                 );
-                                pending_handshakes
-                                    .write()
-                                    .retain(|k, _| k.ip() != addr.ip());
 
+                                // Write trust *before* removing the pending
+                                // entry: the foreground pairing waiter treats
+                                // "pending entry gone" as a resolution signal
+                                // and re-checks trust, so the trust change must
+                                // already be visible when the entry vanishes.
                                 if let Err(e) = key_store.write().trust_peer(
                                     fingerprint.clone(),
                                     Some(device_id.clone()),
@@ -3321,6 +3458,10 @@ impl ConnectedClient {
                                 ) {
                                     error!("Failed to auto-trust peer: {}", e);
                                 }
+
+                                pending_handshakes
+                                    .write()
+                                    .retain(|k, _| k.ip() != addr.ip());
 
                                 // Emit DeviceFound to refresh UI
                                 let known_device = discovery.get_device_by_id(&device_id);
@@ -3538,10 +3679,8 @@ impl ConnectedClient {
                                     device_name, fingerprint,
                                 );
 
-                                pending_handshakes
-                                    .write()
-                                    .retain(|k, _| k.ip() != addr.ip());
-
+                                // Write trust *before* removing the pending
+                                // entry — see the Handshake branch.
                                 if let Err(e) = key_store.write().trust_peer(
                                     fingerprint.clone(),
                                     Some(remote_device_id.clone()),
@@ -3549,6 +3688,10 @@ impl ConnectedClient {
                                 ) {
                                     error!("Failed to auto-trust peer: {}", e);
                                 }
+
+                                pending_handshakes
+                                    .write()
+                                    .retain(|k, _| k.ip() != addr.ip());
 
                                 let known_device = discovery.get_device_by_id(&remote_device_id);
                                 let resolved_type = known_device
@@ -3667,15 +3810,18 @@ impl ConnectedClient {
                             device_name, device_id, reason
                         );
 
-                        let rejected_active_request = pending_pairing_requests
-                            .read()
-                            .get(&device_id)
-                            .is_some_and(|(_, expected)| expected == &fingerprint);
+                        // Only the connection's authenticated fingerprint may
+                        // invalidate pairing state. A claimed `device_id` alone
+                        // is unauthenticated: honoring it would let any LAN
+                        // peer cancel another device's pending request (the
+                        // ids are broadcast via mDNS).
+                        let rejected_active_request =
+                            has_pending_pairing_request(&pending_pairing_requests, &fingerprint);
 
                         clear_pending_pairing_state(
                             &pending_handshakes,
                             &pending_pairing_requests,
-                            Some(&device_id),
+                            None,
                             Some(&fingerprint),
                             Some(addr),
                         );
@@ -4472,4 +4618,111 @@ pub fn get_local_ip() -> Option<IpAddr> {
             // Fallback to any IPv4
             ipv4_ifaces.first().map(|iface| iface.ip())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending_map() -> Arc<RwLock<PendingPairingRequestMap>> {
+        Arc::new(RwLock::new(HashMap::new()))
+    }
+
+    /// An impostor claiming an already-pending device_id must not displace the
+    /// legitimate request: both stay pending, each keyed by its own (authenticated
+    /// from the TLS handshake) fingerprint.
+    #[test]
+    fn same_device_id_claim_does_not_displace_pending_request() {
+        let pending = pending_map();
+        let legit_fp = "aa".repeat(32);
+        let attacker_fp = "bb".repeat(32);
+
+        record_pending_pairing_request(&pending, "victim-device-id".to_string(), legit_fp.clone());
+        record_pending_pairing_request(
+            &pending,
+            "victim-device-id".to_string(),
+            attacker_fp.clone(),
+        );
+
+        assert!(has_pending_pairing_request(&pending, &legit_fp));
+        assert!(has_pending_pairing_request(&pending, &attacker_fp));
+    }
+
+    /// Approving the legitimate device clears only the legitimate fingerprint;
+    /// the impostor's request is still pending (and vice versa).
+    #[test]
+    fn clear_by_fingerprint_removes_only_that_fingerprint() {
+        let pending = pending_map();
+        let legit_fp = "aa".repeat(32);
+        let attacker_fp = "bb".repeat(32);
+        record_pending_pairing_request(&pending, "id".to_string(), legit_fp.clone());
+        record_pending_pairing_request(&pending, "id".to_string(), attacker_fp.clone());
+
+        let handshakes: Arc<RwLock<PendingHandshakeMap>> = Arc::new(RwLock::new(HashMap::new()));
+        clear_pending_pairing_state(&handshakes, &pending, None, Some(&legit_fp), None);
+
+        assert!(!has_pending_pairing_request(&pending, &legit_fp));
+        assert!(has_pending_pairing_request(&pending, &attacker_fp));
+    }
+
+    /// A locally-initiated cancel (end_pairing) clears by claimed device_id —
+    /// the id the user saw — regardless of fingerprints, since it expresses
+    /// local intent for the device the user selected.
+    #[test]
+    fn local_cancel_clears_all_claims_for_device_id() {
+        let pending = pending_map();
+        let fp_a = "aa".repeat(32);
+        let fp_b = "bb".repeat(32);
+        record_pending_pairing_request(&pending, "device-x".to_string(), fp_a.clone());
+        record_pending_pairing_request(&pending, "device-y".to_string(), fp_b.clone());
+
+        let handshakes: Arc<RwLock<PendingHandshakeMap>> = Arc::new(RwLock::new(HashMap::new()));
+        clear_pending_pairing_state(&handshakes, &pending, Some("device-x"), None, None);
+
+        assert!(!has_pending_pairing_request(&pending, &fp_a));
+        assert!(has_pending_pairing_request(&pending, &fp_b));
+    }
+
+    /// Requests expire after PENDING_PAIRING_REQUEST_TTL and no longer
+    /// authorize trust.
+    #[test]
+    fn expired_pending_request_is_not_active() {
+        let pending = pending_map();
+        let fp = "cc".repeat(32);
+        pending.write().insert(
+            fp.clone(),
+            PendingPairingRequest {
+                created_at: Instant::now()
+                    .checked_sub(PENDING_PAIRING_REQUEST_TTL + Duration::from_secs(1))
+                    .expect("instant subtraction"),
+                device_id: "device".to_string(),
+            },
+        );
+
+        assert!(!has_pending_pairing_request(&pending, &fp));
+    }
+
+    /// Re-recording the same fingerprint refreshes its timestamp instead of
+    /// duplicating the entry.
+    #[test]
+    fn re_record_refreshes_single_entry() {
+        let pending = pending_map();
+        let fp = "dd".repeat(32);
+        record_pending_pairing_request(&pending, "old-id".to_string(), fp.clone());
+        // Force the first record to look old, then refresh it.
+        {
+            let mut map = pending.write();
+            let entry = map.get_mut(&fp).expect("entry present");
+            entry.created_at = Instant::now()
+                .checked_sub(PENDING_PAIRING_REQUEST_TTL - Duration::from_secs(5))
+                .expect("instant subtraction");
+        }
+        record_pending_pairing_request(&pending, "new-id".to_string(), fp.clone());
+
+        let map = pending.read();
+        assert_eq!(map.len(), 1);
+        let entry = map.get(&fp).expect("entry present");
+        assert_eq!(entry.device_id, "new-id");
+        assert!(entry.created_at.elapsed() < PENDING_PAIRING_REQUEST_TTL);
+    }
 }

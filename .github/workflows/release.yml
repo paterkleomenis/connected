@@ -491,6 +491,26 @@ jobs:
       ]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
+      # The update trust anchor lives in the source tree
+      # (`UPDATE_MINISIGN_PUBKEY`); refuse to publish anything unless both the
+      # pinned public key and the signing secret are configured.
+      - name: Verify update signing configuration
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          PUBKEY=$(grep -oP 'UPDATE_MINISIGN_PUBKEY: &str = "\K[^"]+' core/src/update.rs || true)
+          if [ -z "$PUBKEY" ] || [ "$PUBKEY" = "REPLACE_WITH_MINISIGN_PUBLIC_KEY" ]; then
+            echo "::error::core/src/update.rs has no real UPDATE_MINISIGN_PUBKEY. Generate a keypair (minisign -G -W), add the secret key as the MINISIGN_SECRET_KEY repository secret, and paste the public key into core/src/update.rs."
+            exit 1
+          fi
+          if [ -z "${MINISIGN_SECRET_KEY}" ]; then
+            echo "::error::MINISIGN_SECRET_KEY repository secret is not set."
+            exit 1
+          fi
+
       - name: Download All Artifacts
         uses: actions/download-artifact@v8
         with:
@@ -512,12 +532,15 @@ jobs:
       - name: Rename aarch64 Flatpak
         run: mv com.paterkleomenis.Connected.flatpak com.paterkleomenis.Connected-aarch64.flatpak
 
-      - name: Create Release
+      # Created as a draft: the release only becomes visible — and consumable
+      # by in-app auto-update — after `sign-checksums` attaches the signed
+      # SHA256SUMS manifest and flips it public.
+      - name: Create Draft Release
         uses: softprops/action-gh-release@v3
         with:
           name: Connected ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          draft: false
+          draft: true
           prerelease: false
           files: |
             connected-desktop-linux-x86_64
@@ -537,11 +560,98 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # -------------------------------------------------------------------------
-  # Job 10: Update AUR
+  # Job 10: Sign Checksums & Publish Release
+  # -------------------------------------------------------------------------
+  # The release is created as a draft so nobody — and no auto-updater — can see
+  # it before its SHA256SUMS manifest is signed and attached. Update clients
+  # refuse to install anything not covered by a manifest whose minisign
+  # signature verifies against the key pinned in core/src/update.rs; this job
+  # is what puts that guarantee on every release, and this job is the only
+  # thing that makes the release public.
+  sign-checksums:
+    name: Sign Checksums & Publish Release
+    needs: [create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download release assets (draft release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p release-assets
+          gh release download "${{ github.ref_name }}" --dir release-assets
+          ls -la release-assets
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      - name: Create and sign SHA256SUMS
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${MINISIGN_SECRET_KEY}" ]; then
+            echo "::error::MINISIGN_SECRET_KEY secret is not set; refusing to publish an unsigned release."
+            exit 1
+          fi
+
+          # The key must be passwordless (generated with `minisign -G -W`) so
+          # CI can use it non-interactively.
+          mkdir -p ~/.minisign
+          printf '%s\n' "${MINISIGN_SECRET_KEY}" > ~/.minisign/minisign.key
+          chmod 600 ~/.minisign/minisign.key
+
+          # One checksum per attached asset (paths relative so names in the
+          # manifest match the asset file names).
+          mapfile -t ASSETS < <(find release-assets -maxdepth 1 -type f \
+            ! -name 'SHA256SUMS*' ! -name '*.sha256' -printf '%f\n' | LC_ALL=C sort)
+          (cd release-assets && sha256sum "${ASSETS[@]}") > SHA256SUMS
+
+          # Legacy per-asset sidecars: clients older than the signed-manifest
+          # support look for `<asset>.sha256` and verify when present.
+          for asset in "${ASSETS[@]}"; do
+            sha256sum "release-assets/$asset" | cut -d' ' -f1 > "release-assets/$asset.sha256"
+          done
+
+          minisign -S -W -s ~/.minisign/minisign.key -x SHA256SUMS.minisig -m SHA256SUMS
+
+      - name: Verify signature against the key pinned in the app
+        run: |
+          set -euo pipefail
+
+          # The exact trust anchor compiled into the binaries must verify the
+          # manifest that ships with this release — if this fails, in-app
+          # auto-update would be broken for every user.
+          PUBKEY=$(grep -oP 'UPDATE_MINISIGN_PUBKEY: &str = "\K[^"]+' core/src/update.rs || true)
+          if [ -z "$PUBKEY" ] || [ "$PUBKEY" = "REPLACE_WITH_MINISIGN_PUBLIC_KEY" ]; then
+            echo "::error::core/src/update.rs does not pin a real UPDATE_MINISIGN_PUBKEY; refusing to publish."
+            exit 1
+          fi
+          minisign -V -P "$PUBKEY" -m SHA256SUMS
+
+      - name: Attach checksums to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            SHA256SUMS SHA256SUMS.minisig release-assets/*.sha256 --clobber
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ github.ref_name }}" --draft=false --latest
+
+  # -------------------------------------------------------------------------
+  # Job 11: Update AUR
   # -------------------------------------------------------------------------
   update-aur:
     name: Update AUR
-    needs: [create-release]
+    needs: [sign-checksums]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -568,11 +678,11 @@ jobs:
             '"
 
   # -------------------------------------------------------------------------
-  # Job 11: Update COPR (Fedora)
+  # Job 12: Update COPR (Fedora)
   # -------------------------------------------------------------------------
   update-copr:
     name: Update COPR
-    needs: [create-release]
+    needs: [sign-checksums]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     steps:
@@ -602,7 +712,7 @@ jobs:
           bash scripts/update-copr.sh ${{ github.ref_name }} --push
 
   # -------------------------------------------------------------------------
-  # Job 12: Publish to Google Play
+  # Job 13: Publish to Google Play
   # -------------------------------------------------------------------------
   publish-play-store:
     name: Publish to Google Play
@@ -629,7 +739,7 @@ jobs:
           status: ${{ vars.PLAY_STORE_STATUS || 'completed' }}
 
   # -------------------------------------------------------------------------
-  # Job 13: Publish to Microsoft Store
+  # Job 14: Publish to Microsoft Store
   # -------------------------------------------------------------------------
   publish-microsoft-store:
     name: Publish to Microsoft Store

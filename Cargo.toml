@@ -73,6 +73,9 @@ mime_guess = "2.0"
 time = ">=0.3.0, <0.3.56"
 postcard = { version = "1.1", features = ["use-std"] }
 
+# Update signature verification (minisign)
+minisign-verify = "0.3"
+
 [workspace.lints.rust]
 # Safety: prefer no unsafe code. Some crates (e.g. FFI exports) require unsafe.
 unsafe_code = "warn"

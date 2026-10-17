@@ -1,6 +1,7 @@
 use crate::error::{ConnectedError, Result};
 use reqwest::header::LOCATION;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -18,6 +19,28 @@ const REPO_OWNER: &str = "paterkleomenis";
 const REPO_NAME: &str = "connected";
 const GITHUB_RELEASES_LATEST_URL: &str =
     "https://github.com/paterkleomenis/connected/releases/latest";
+
+/// Minisign public key (base64, as printed by `minisign -G` or
+/// `rsign generate`) whose secret key signs every release's `SHA256SUMS`
+/// manifest.
+///
+/// This constant is the update trust anchor: only checksum manifests signed by
+/// the matching secret key are accepted, and release CI refuses to publish a
+/// release whose signature does not verify against **this** exact key — so the
+/// key shipped inside the binary and the key used to sign releases can never
+/// silently drift apart.
+///
+/// Initial setup:
+/// 1. `minisign -G -W -p connected-update.pub -s connected-update.key`
+/// 2. Store the *secret* key file contents as the `MINISIGN_SECRET_KEY`
+///    repository secret.
+/// 3. Paste the base64 public key (second line of `connected-update.pub`)
+///    below.
+///
+/// Rotation requires shipping one release that users install manually (old
+/// binaries only trust the old key), then updating both this constant and the
+/// `MINISIGN_SECRET_KEY` secret.
+pub const UPDATE_MINISIGN_PUBKEY: &str = "RWS5fvhebqr2k1ftgxwI5t78tRjGa1Mb+JK/zBiMxS1z4aEdgXfYMd81";
 
 pub struct UpdateChecker;
 
@@ -211,6 +234,10 @@ pub async fn is_installed_via_aur_async() -> bool {
 
 /// Download an update asset to a local file path (streamed; avoids buffering the full payload).
 ///
+/// NOTE: performs **no** verification. Release assets must go through the
+/// internal `download_release_asset`, which enforces the release's signed
+/// checksums before anything is installed.
+///
 /// Writes to a temporary file first, then atomically renames to `dest_path` to
 /// prevent partial/corrupt downloads from being used if the process crashes or
 /// the network drops mid-transfer. On Unix the temp file is created with
@@ -347,30 +374,139 @@ async fn download_to_file_internal(
     Ok(())
 }
 
-/// Fetch expected SHA256 for a GitHub release asset by trying `<url>.sha256`.
-/// Returns None if the sidecar is not available — caller should treat missing
-/// checksum as a warning, not a hard failure, for backward compatibility with
-/// older releases. For new releases, always publish the `.sha256` sidecar.
-pub async fn fetch_expected_sha256(asset_url: &str) -> Option<String> {
-    let sha_url = format!("{}.sha256", asset_url);
+/// Base URL of the release a download asset belongs to.
+///
+/// GitHub release asset URLs are
+/// `https://github.com/<owner>/<repo>/releases/download/<tag>/<file>`; every
+/// artifact of that release — `SHA256SUMS`, its signature, all downloadable
+/// assets — lives in the same directory. Deriving the base URL from the asset
+/// keeps verification pinned to the asset's own release: a signed manifest
+/// from any other release is never consulted.
+fn release_base_url(asset_url: &str) -> Result<&str> {
+    asset_url
+        .rsplit_once('/')
+        .map(|(base, _)| base)
+        .ok_or_else(|| {
+            ConnectedError::UpdateVerification(format!("Malformed release asset URL: {asset_url}"))
+        })
+}
+
+/// Fetch the release's `SHA256SUMS` manifest plus its minisign signature,
+/// verify the signature against the pinned [`UPDATE_MINISIGN_PUBKEY`], and
+/// return the parsed `file name -> sha256 hex` map.
+///
+/// Fails closed: a missing artifact, invalid signature, or malformed manifest
+/// is an error. There is deliberately no unverified fallback.
+async fn fetch_release_checksums(asset_url: &str) -> Result<HashMap<String, String>> {
+    let base = release_base_url(asset_url)?;
     let client = reqwest::Client::builder()
         .user_agent("Connected-App")
         .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(15))
         .build()
-        .ok()?;
-    let resp = client.get(&sha_url).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
+        .map_err(|e| ConnectedError::Network(e.to_string()))?;
+
+    let manifest =
+        fetch_release_text(&client, &format!("{base}/SHA256SUMS"), "checksum manifest").await?;
+    let signature = fetch_release_text(
+        &client,
+        &format!("{base}/SHA256SUMS.minisig"),
+        "checksum signature",
+    )
+    .await?;
+    verify_and_parse_checksums(&manifest, &signature, UPDATE_MINISIGN_PUBKEY)
+}
+
+/// Fetch a small text artifact from the release page. Errors explain that
+/// auto-update is disabled for releases without signed checksums.
+async fn fetch_release_text(client: &reqwest::Client, url: &str, what: &str) -> Result<String> {
+    let response = client.get(url).send().await.map_err(|e| {
+        ConnectedError::UpdateVerification(format!(
+            "Could not fetch the release {what} ({url}): {e}. \
+             Auto-update is disabled for releases without signed checksums."
+        ))
+    })?;
+    if !response.status().is_success() {
+        return Err(ConnectedError::UpdateVerification(format!(
+            "Release {what} is unavailable ({url}: HTTP {}). \
+             Auto-update is disabled for releases without signed checksums.",
+            response.status()
+        )));
     }
-    let text = resp.text().await.ok()?;
-    // SHA256 files are typically `<hex>  <filename>` or just `<hex>`
-    let hex = text.split_whitespace().next()?.trim();
-    if hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some(hex.to_ascii_lowercase())
-    } else {
-        None
+    response.text().await.map_err(|e| {
+        ConnectedError::UpdateVerification(format!("Failed to read the release {what}: {e}"))
+    })
+}
+
+/// Verify a minisign signature over a `SHA256SUMS` manifest and parse it.
+///
+/// Kept separate from the network fetch so the crypto and parsing paths are
+/// unit-testable against committed fixtures.
+fn verify_and_parse_checksums(
+    manifest: &str,
+    signature: &str,
+    public_key: &str,
+) -> Result<HashMap<String, String>> {
+    let key = minisign_verify::PublicKey::from_base64(public_key).map_err(|e| {
+        ConnectedError::UpdateVerification(format!(
+            "This build has no valid update signing key configured ({e}); \
+             refusing to install unverified updates"
+        ))
+    })?;
+    let signature = minisign_verify::Signature::decode(signature).map_err(|e| {
+        ConnectedError::UpdateVerification(format!("Invalid update signature format: {e}"))
+    })?;
+    // `allow_legacy = true` accepts both pre-hashed (modern) and legacy
+    // signatures; both are Ed25519 signatures over the same manifest bytes.
+    key.verify(manifest.as_bytes(), &signature, true)
+        .map_err(|e| {
+            ConnectedError::UpdateVerification(format!(
+                "Update checksum signature does not verify with the pinned update key: {e}"
+            ))
+        })?;
+
+    let checksums = parse_sha256sums(manifest);
+    if checksums.is_empty() {
+        return Err(ConnectedError::UpdateVerification(
+            "Update checksum manifest contains no entries".to_string(),
+        ));
     }
+    Ok(checksums)
+}
+
+/// Parse `sha256sum`-style output: `<64-hex>␣␣<name>` (text mode) or
+/// `<64-hex>␣*<name>` (binary mode). Blank and malformed lines are skipped.
+fn parse_sha256sums(manifest: &str) -> HashMap<String, String> {
+    let mut checksums = HashMap::new();
+    for line in manifest.lines() {
+        let Some((hash, rest)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let name = rest.trim_start().trim_start_matches('*');
+        if name.is_empty() {
+            continue;
+        }
+        if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            checksums.insert(name.to_string(), hash.to_ascii_lowercase());
+        }
+    }
+    checksums
+}
+
+/// Download a release asset, failing closed unless the downloaded bytes match
+/// the signature-verified checksum for that file.
+///
+/// This is the only download path update installers should use; the raw
+/// [`download_to_file`] performs no verification.
+async fn download_release_asset(url: &str, dest_path: &Path) -> Result<()> {
+    let file_name = url.rsplit('/').next().unwrap_or_default();
+    let checksums = fetch_release_checksums(url).await?;
+    let expected = checksums.get(file_name).ok_or_else(|| {
+        ConnectedError::UpdateVerification(format!(
+            "Signed checksum manifest has no entry for {file_name}; refusing to install"
+        ))
+    })?;
+    download_to_file_verified(url, dest_path, expected).await
 }
 
 /// Install a macOS update from a DMG download.
@@ -384,28 +520,35 @@ pub async fn install_macos_update(url: &str) -> Result<()> {
         uuid::Uuid::new_v4()
     ));
 
-    // Download the DMG — verify checksum if sidecar is available.
-    if let Some(expected) = fetch_expected_sha256(url).await {
-        download_to_file_verified(url, &dmg_path, &expected).await?;
-    } else {
-        tracing::warn!(
-            "No SHA256 sidecar found for {}; downloading without verification (legacy release)",
-            url
-        );
-        download_to_file(url, &dmg_path).await?;
-    }
+    // Download the DMG. Verification is mandatory: the install refuses to
+    // proceed unless the image matches the release's signed checksums.
+    download_release_asset(url, &dmg_path).await?;
 
     // Find the current .app bundle by walking up from the executable.
     let app_path = find_current_app_bundle()?;
 
-    // Mount the DMG and capture the output to find the mount point.
+    // Mount the DMG at a private, freshly created mount point. Using an
+    // explicit mount point (instead of parsing `hdiutil -plist` output and
+    // falling back to scanning /Volumes for the newest .app) guarantees the
+    // bundle we copy comes from *this* image and not from another mounted
+    // volume.
+    let mount_dir = PathBuf::from(format!(
+        "/tmp/connected-update-mount-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    tokio::fs::create_dir_all(&mount_dir)
+        .await
+        .map_err(ConnectedError::Io)?;
+
     let mount_output = tokio::process::Command::new("hdiutil")
         .args([
             "attach",
             dmg_path.to_str().unwrap_or_default(),
             "-nobrowse",
             "-quiet",
-            "-plist",
+            "-mountpoint",
+            mount_dir.to_str().unwrap_or_default(),
         ])
         .output()
         .await
@@ -413,6 +556,7 @@ pub async fn install_macos_update(url: &str) -> Result<()> {
 
     if !mount_output.status.success() {
         let stderr = String::from_utf8_lossy(&mount_output.stderr);
+        let _ = tokio::fs::remove_dir_all(&mount_dir).await;
         let _ = tokio::fs::remove_file(&dmg_path).await;
         return Err(ConnectedError::Network(format!(
             "Failed to mount DMG: {}",
@@ -420,38 +564,24 @@ pub async fn install_macos_update(url: &str) -> Result<()> {
         )));
     }
 
-    // Parse the plist output to find the mount point.
-    // These scan the local filesystem (read_dir + metadata); run them off
-    // the executor via `spawn_blocking` so the worker is not blocked.
-    let mount_stdout = String::from_utf8_lossy(&mount_output.stdout).to_string();
-    let mounted_app =
-        match tokio::task::spawn_blocking(move || parse_mount_point_from_plist(&mount_stdout))
-            .await
-            .map_err(|e| ConnectedError::Network(e.to_string()))?
-        {
-            Some(mp) => mp,
-            None => {
-                // Fallback: scan /Volumes for the most recently modified .app
-                match tokio::task::spawn_blocking(|| find_app_in_volumes(Path::new("/Volumes")))
-                    .await
-                    .map_err(|e| ConnectedError::Network(e.to_string()))?
-                {
-                    Some(app) => app,
-                    None => {
-                        let _ = tokio::fs::remove_file(&dmg_path).await;
-                        return Err(ConnectedError::Network(
-                            "Could not find .app in mounted DMG".to_string(),
-                        ));
-                    }
-                }
+    // Find the .app bundle inside the mounted image.
+    let mut mounted_app = None;
+    if let Ok(mut entries) = tokio::fs::read_dir(&mount_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let candidate = entry.path();
+            if candidate.extension().and_then(|e| e.to_str()) == Some("app") {
+                mounted_app = Some(candidate);
+                break;
             }
-        };
-
-    // Extract the volume path (parent of the .app) for unmounting later.
-    let volume_path = mounted_app
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf());
+        }
+    }
+    let Some(mounted_app) = mounted_app else {
+        detach_dmg(&mount_dir).await;
+        let _ = tokio::fs::remove_file(&dmg_path).await;
+        return Err(ConnectedError::Network(
+            "Could not find .app in mounted DMG".to_string(),
+        ));
+    };
 
     // Copy the new .app over the existing one using ditto (preserves code signing).
     let ditto_status = tokio::process::Command::new("ditto")
@@ -465,17 +595,7 @@ pub async fn install_macos_update(url: &str) -> Result<()> {
 
     if !ditto_status.success() {
         // Unmount before returning error.
-        if let Some(ref vp) = volume_path {
-            let _ = tokio::process::Command::new("hdiutil")
-                .args([
-                    "detach",
-                    vp.to_str().unwrap_or_default(),
-                    "-quiet",
-                    "-nobrowse",
-                ])
-                .status()
-                .await;
-        }
+        detach_dmg(&mount_dir).await;
         let _ = tokio::fs::remove_file(&dmg_path).await;
         return Err(ConnectedError::Network(
             "Failed to copy .app bundle".to_string(),
@@ -483,17 +603,7 @@ pub async fn install_macos_update(url: &str) -> Result<()> {
     }
 
     // Unmount the DMG.
-    if let Some(vp) = volume_path {
-        let _ = tokio::process::Command::new("hdiutil")
-            .args([
-                "detach",
-                vp.to_str().unwrap_or_default(),
-                "-quiet",
-                "-nobrowse",
-            ])
-            .status()
-            .await;
-    }
+    detach_dmg(&mount_dir).await;
 
     // Clean up the downloaded DMG.
     let _ = tokio::fs::remove_file(&dmg_path).await;
@@ -507,39 +617,21 @@ pub async fn install_macos_update(url: &str) -> Result<()> {
     std::process::exit(0);
 }
 
-/// Parse the mount point from hdiutil's XML plist output.
+/// Detach a mounted update DMG and remove its private mount point.
 ///
-/// Looks for a pattern like `<key>mount-point</key><string>/Volumes/Connected</string>`.
-fn parse_mount_point_from_plist(plist: &str) -> Option<PathBuf> {
-    // NOTE: sync helper — scans a just-mounted DMG mount point. Called from
-    // `install_macos_update` via `spawn_blocking` to avoid blocking the
-    // executor (see below).
-    let mut lines = plist.lines();
-    while let Some(line) = lines.next() {
-        if line.contains("mount-point") {
-            // The next line should contain the path in <string> tags.
-            if let Some(next) = lines.next() {
-                let start = next.find('<')? + 1;
-                let end = next.rfind('>')?;
-                if end > start {
-                    let mount_point = &next[start..end];
-                    // Look for a .app inside the mount point.
-                    let mount_dir = Path::new(mount_point);
-                    if let Ok(entries) = std::fs::read_dir(mount_dir) {
-                        for entry in entries.flatten() {
-                            let p = entry.path();
-                            if p.extension().and_then(|e| e.to_str()) == Some("app") {
-                                return Some(p);
-                            }
-                        }
-                    }
-                    // If no .app found directly, return the mount point itself.
-                    return Some(mount_dir.to_path_buf());
-                }
-            }
-        }
-    }
-    None
+/// Best-effort: called on both success and error paths, so it never fails the
+/// caller.
+async fn detach_dmg(mount_dir: &Path) {
+    let _ = tokio::process::Command::new("hdiutil")
+        .args([
+            "detach",
+            mount_dir.to_str().unwrap_or_default(),
+            "-quiet",
+            "-nobrowse",
+        ])
+        .status()
+        .await;
+    let _ = tokio::fs::remove_dir_all(mount_dir).await;
 }
 
 /// Find the current .app bundle by walking up from the executable path.
@@ -564,39 +656,6 @@ fn find_current_app_bundle() -> Result<PathBuf> {
             ))
         })?;
     }
-}
-
-/// Search /Volumes for a just-mounted Connected.app.
-fn find_app_in_volumes(volumes_dir: &Path) -> Option<PathBuf> {
-    // Give the mount a moment to settle; then scan for the newest .app.
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(volumes_dir) {
-        for entry in entries.flatten() {
-            let vol_path = entry.path();
-            if !vol_path.is_dir() {
-                continue;
-            }
-            if let Ok(app_entries) = std::fs::read_dir(&vol_path) {
-                for app_entry in app_entries.flatten() {
-                    let p = app_entry.path();
-                    if p.extension().and_then(|e| e.to_str()) == Some("app") {
-                        candidates.push(p);
-                    }
-                }
-            }
-        }
-    }
-    // Return the most recently modified .app (the one we just mounted).
-    candidates.sort_by(|a, b| {
-        let ta = std::fs::metadata(a)
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        let tb = std::fs::metadata(b)
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        tb.cmp(&ta)
-    });
-    candidates.into_iter().next()
 }
 
 /// Install a Linux AppImage update.
@@ -626,15 +685,9 @@ pub async fn install_linux_appimage_update(url: &str) -> Result<()> {
             .join(tmp_name)
     };
 
-    if let Some(expected) = fetch_expected_sha256(url).await {
-        download_to_file_verified(url, &tmp_path, &expected).await?;
-    } else {
-        tracing::warn!(
-            "No SHA256 sidecar found for {}; downloading without verification (legacy release)",
-            url
-        );
-        download_to_file(url, &tmp_path).await?;
-    }
+    // Verification is mandatory: refuse to replace the AppImage unless the
+    // download matches the release's signed checksums.
+    download_release_asset(url, &tmp_path).await?;
 
     // Make the new AppImage executable.
     #[cfg(unix)]
@@ -680,15 +733,9 @@ pub async fn install_linux_flatpak_update(url: &str) -> Result<()> {
         uuid::Uuid::new_v4()
     ));
 
-    if let Some(expected) = fetch_expected_sha256(url).await {
-        download_to_file_verified(url, &bundle_path, &expected).await?;
-    } else {
-        tracing::warn!(
-            "No SHA256 sidecar found for {}; downloading without verification (legacy release)",
-            url
-        );
-        download_to_file(url, &bundle_path).await?;
-    }
+    // Verification is mandatory: refuse to install the bundle unless the
+    // download matches the release's signed checksums.
+    download_release_asset(url, &bundle_path).await?;
 
     let bundle_str = bundle_path.to_str().unwrap_or_default();
 
@@ -754,4 +801,118 @@ pub async fn install_linux_flatpak_update(url: &str) -> Result<()> {
         .spawn();
 
     std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_PUBKEY_FILE: &str = include_str!("../tests/fixtures/update/test.pub");
+    const TEST_MANIFEST: &str = include_str!("../tests/fixtures/update/SHA256SUMS");
+    const TEST_SIGNATURE: &str = include_str!("../tests/fixtures/update/SHA256SUMS.minisig");
+
+    /// The base64 key line from the fixture's `.pub` file.
+    fn test_pubkey() -> &'static str {
+        TEST_PUBKEY_FILE
+            .lines()
+            .find(|line| !line.starts_with("untrusted comment") && !line.trim().is_empty())
+            .expect("fixture public key has a base64 line")
+            .trim()
+    }
+
+    #[test]
+    fn verifies_signed_manifest_and_parses_entries() {
+        let checksums = verify_and_parse_checksums(TEST_MANIFEST, TEST_SIGNATURE, test_pubkey())
+            .expect("fixture signature must verify");
+        assert_eq!(
+            checksums
+                .get("connected-desktop-x86_64.AppImage")
+                .map(String::as_str),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(checksums.len(), 3);
+    }
+
+    #[test]
+    fn rejects_tampered_manifest() {
+        let tampered = TEST_MANIFEST.replace(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        );
+        assert_ne!(tampered, TEST_MANIFEST);
+        let err = verify_and_parse_checksums(&tampered, TEST_SIGNATURE, test_pubkey())
+            .expect_err("tampered manifest must not verify");
+        assert!(matches!(err, ConnectedError::UpdateVerification(_)));
+    }
+
+    #[test]
+    fn rejects_manifest_signed_by_a_different_key() {
+        // A syntactically valid minisign public key that is not the fixture's.
+        let other_key = "RWQf6LRCGA9i53mlYecO4IxT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+        minisign_verify::PublicKey::from_base64(other_key)
+            .expect("the 'different key' fixture must itself be well-formed");
+        let err = verify_and_parse_checksums(TEST_MANIFEST, TEST_SIGNATURE, other_key)
+            .expect_err("a different key must not verify the fixture signature");
+        assert!(matches!(err, ConnectedError::UpdateVerification(_)));
+    }
+
+    #[test]
+    fn invalid_pinned_key_fails_closed() {
+        // Also covers the un-configured placeholder value: a build that has no
+        // real update key must refuse every manifest instead of installing.
+        let err = verify_and_parse_checksums(
+            TEST_MANIFEST,
+            TEST_SIGNATURE,
+            "REPLACE_WITH_MINISIGN_PUBLIC_KEY",
+        )
+        .expect_err("an unconfigured update key must refuse to verify anything");
+        assert!(matches!(err, ConnectedError::UpdateVerification(_)));
+    }
+
+    #[test]
+    fn pinned_pubkey_is_a_valid_minisign_key() {
+        // Release CI only publishes manifests that verify against the key
+        // compiled into the binary; a malformed key would break auto-update
+        // for every user, so fail at test time instead.
+        minisign_verify::PublicKey::from_base64(UPDATE_MINISIGN_PUBKEY)
+            .expect("UPDATE_MINISIGN_PUBKEY must be a valid minisign public key");
+    }
+
+    #[test]
+    fn parses_sha256sums_in_text_and_binary_modes() {
+        let manifest = concat!(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  file one.bin\r\n",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *binary.bin\n",
+            "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD  upper.bin\n",
+            "not a hash line\n",
+            "\n",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n",
+        );
+        let checksums = parse_sha256sums(manifest);
+        assert_eq!(checksums.len(), 3);
+        assert_eq!(
+            checksums.get("file one.bin").map(String::as_str),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(
+            checksums.get("binary.bin").map(String::as_str),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        assert_eq!(
+            checksums.get("upper.bin").map(String::as_str),
+            Some("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+        );
+    }
+
+    #[test]
+    fn derives_release_base_url_from_asset_url() {
+        assert_eq!(
+            release_base_url(
+                "https://github.com/o/r/releases/download/v1.2.3/connected-desktop-x86_64.AppImage"
+            )
+            .unwrap(),
+            "https://github.com/o/r/releases/download/v1.2.3"
+        );
+        assert!(release_base_url("garbage").is_err());
+    }
 }
