@@ -848,7 +848,9 @@ mod tests {
     #[test]
     fn rejects_manifest_signed_by_a_different_key() {
         // A syntactically valid minisign public key that is not the fixture's.
-        let other_key = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+        let other_key = "RWQf6LRCGA9i53mlYecO4IxT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+        minisign_verify::PublicKey::from_base64(other_key)
+            .expect("the 'different key' fixture must itself be well-formed");
         let err = verify_and_parse_checksums(TEST_MANIFEST, TEST_SIGNATURE, other_key)
             .expect_err("a different key must not verify the fixture signature");
         assert!(matches!(err, ConnectedError::UpdateVerification(_)));
