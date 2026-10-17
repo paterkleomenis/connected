@@ -40,7 +40,7 @@ const GITHUB_RELEASES_LATEST_URL: &str =
 /// Rotation requires shipping one release that users install manually (old
 /// binaries only trust the old key), then updating both this constant and the
 /// `MINISIGN_SECRET_KEY` secret.
-pub const UPDATE_MINISIGN_PUBKEY: &str = "REPLACE_WITH_MINISIGN_PUBLIC_KEY";
+pub const UPDATE_MINISIGN_PUBKEY: &str = "RWS5fvhebqr2k1ftgxwI5t78tRjGa1Mb+JK/zBiMxS1z4aEdgXfYMd81";
 
 pub struct UpdateChecker;
 
@@ -865,6 +865,15 @@ mod tests {
         )
         .expect_err("an unconfigured update key must refuse to verify anything");
         assert!(matches!(err, ConnectedError::UpdateVerification(_)));
+    }
+
+    #[test]
+    fn pinned_pubkey_is_a_valid_minisign_key() {
+        // Release CI only publishes manifests that verify against the key
+        // compiled into the binary; a malformed key would break auto-update
+        // for every user, so fail at test time instead.
+        minisign_verify::PublicKey::from_base64(UPDATE_MINISIGN_PUBKEY)
+            .expect("UPDATE_MINISIGN_PUBKEY must be a valid minisign public key");
     }
 
     #[test]
