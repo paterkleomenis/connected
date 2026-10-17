@@ -80,6 +80,9 @@ pub enum ConnectedError {
     #[error("Peer not trusted")]
     PeerNotTrusted,
 
+    #[error("Peer identity mismatch: the endpoint is not the expected device")]
+    IdentityMismatch,
+
     #[error("Peer is blocked")]
     PeerBlocked,
 

@@ -708,6 +708,11 @@ impl From<ConnectedError> for ConnectedFfiError {
             ConnectedError::PeerBlocked => ConnectedFfiError::InvalidArgument {
                 msg: "Peer is blocked".to_string(),
             },
+            ConnectedError::IdentityMismatch => ConnectedFfiError::InvalidArgument {
+                msg:
+                    "Peer identity mismatch: the device at this address is not the expected device"
+                        .to_string(),
+            },
             ConnectedError::ChecksumMismatch => ConnectedFfiError::Internal {
                 msg: "Checksum mismatch".to_string(),
             },
