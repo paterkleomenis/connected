@@ -11,6 +11,13 @@ import androidx.core.app.NotificationCompat
 
 class ConnectedService : Service() {
     companion object {
+        /**
+         * Posted when the system stops the service for exceeding a foreground
+         * service type's run-time limit. Must not collide with ConnectedApp's
+         * request/progress/complete notification IDs (1001-1005).
+         */
+        private const val NOTIFICATION_ID_SERVICE_STOPPED = 1006
+
         @Volatile
         var isRunning = false
             private set
@@ -45,6 +52,31 @@ class ConnectedService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("ConnectedService", "Service started")
         return START_STICKY
+    }
+
+    /**
+     * Android 15+ (API 35+) caps how long some foreground service types
+     * (dataSync, mediaProcessing) may run — 6 hours per 24 hours. When the cap
+     * is reached the system calls this method and stops the service within a
+     * few seconds; if the service has not called stopSelf() by then, the
+     * process is killed with a RemoteServiceException.
+     *
+     * The service only declares the connectedDevice type, which has no
+     * run-time cap, so this is a safety net in case a future platform version
+     * extends the caps to more types. It stops cleanly — so onDestroy() can
+     * run its normal cleanup — and tells the user instead of dying silently.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.w(
+            "ConnectedService",
+            "Foreground service timed out (startId=$startId, fgsType=$fgsType) — stopping cleanly"
+        )
+        try {
+            showServiceStoppedNotification()
+        } catch (e: Exception) {
+            Log.e("ConnectedService", "Failed to post service-stopped notification", e)
+        }
+        stopSelf()
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -93,6 +125,10 @@ class ConnectedService : Service() {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(channel)
 
+        // Clear a "background sync stopped" notice from an earlier timeout, if
+        // one is still showing.
+        manager.cancel(NOTIFICATION_ID_SERVICE_STOPPED)
+
         restoreDefaultNotification()
     }
 
@@ -119,7 +155,7 @@ class ConnectedService : Service() {
         }
 
         try {
-            startForeground(1, builder.build())
+            startForegroundCompat(builder.build())
         } catch (_: Exception) { }
     }
 
@@ -151,7 +187,58 @@ class ConnectedService : Service() {
         }
 
         try {
-            startForeground(1, builder.build())
+            startForegroundCompat(builder.build())
         } catch (_: Exception) { }
+    }
+
+    /**
+     * Starts (or updates) the foreground notification. On API 29+ the
+     * foreground service type is passed explicitly so the platform never
+     * falls back to a broader type set with its own restrictions.
+     */
+    private fun startForegroundCompat(notification: Notification) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            startForeground(
+                1,
+                notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            )
+        } else {
+            startForeground(1, notification)
+        }
+    }
+
+    /**
+     * Posted from onTimeout() so a system-enforced stop is visible to the user
+     * and can be undone with one tap.
+     */
+    private fun showServiceStoppedNotification() {
+        val channelId = "connected_service_channel"
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+
+        val resumeIntent = Intent(this, MainActivity::class.java).apply {
+            action = ConnectedApp.ACTION_RESUME_BACKGROUND_SERVICE
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val resumePendingIntent = android.app.PendingIntent.getActivity(
+            this, 1, resumeIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Background sync stopped")
+            .setContentText("Android stopped the background service. Tap to resume.")
+            .setSmallIcon(R.drawable.ic_notification_logo)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(resumePendingIntent)
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setShowWhen(false)
+            .build()
+
+        manager.notify(NOTIFICATION_ID_SERVICE_STOPPED, notification)
     }
 }

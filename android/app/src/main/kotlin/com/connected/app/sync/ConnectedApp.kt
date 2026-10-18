@@ -152,6 +152,7 @@ class ConnectedApp(private val context: Context) {
         const val ACTION_OPEN_TRANSFER_REQUEST = "com.connected.app.sync.ACTION_OPEN_TRANSFER_REQUEST"
         const val ACTION_OPEN_PAIRING_REQUEST = "com.connected.app.sync.ACTION_OPEN_PAIRING_REQUEST"
         const val ACTION_OPEN_COMPLETED_FILE = "com.connected.app.sync.ACTION_OPEN_COMPLETED_FILE"
+        const val ACTION_RESUME_BACKGROUND_SERVICE = "com.connected.app.sync.ACTION_RESUME_BACKGROUND_SERVICE"
 
         const val EXTRA_TRANSFER_ID = "transferId"
         const val EXTRA_FILENAME = "filename"

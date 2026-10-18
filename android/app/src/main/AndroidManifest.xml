@@ -123,9 +123,6 @@
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
     />
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"
-    />
 
     <!-- For ignoring battery optimizations -->
     <uses-permission
@@ -149,7 +146,7 @@
             android:name=".ConnectedService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|dataSync"
+            android:foregroundServiceType="connectedDevice"
         />
 
         <service
