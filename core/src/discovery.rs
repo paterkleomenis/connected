@@ -665,6 +665,24 @@ impl DiscoveryService {
         }
     }
 
+    /// Whether an existing discovered endpoint should keep its address when
+    /// a new mDNS record for the same device arrives.
+    ///
+    /// Dual-stack peers publish both an A and an AAAA record, and mDNS
+    /// resolves the two independently — the AAAA record can arrive *after*
+    /// the A record. The QUIC transport binds an IPv4 socket by default and
+    /// cannot dial an IPv6 target (`invalid remote address`), so letting the
+    /// newer AAAA record replace the IPv4 address would make the device
+    /// unreachable. Keep the dialable IPv4 endpoint instead.
+    fn should_keep_discovered_ipv4(existing_ip: &str, new_ip: &str) -> bool {
+        match (existing_ip.parse::<IpAddr>(), new_ip.parse::<IpAddr>()) {
+            (Ok(IpAddr::V4(v4)), Ok(IpAddr::V6(v6))) => {
+                !v4.is_unspecified() && !v4.is_loopback() && !v6.is_unspecified()
+            }
+            _ => false,
+        }
+    }
+
     fn upsert_endpoint_locked(
         devices: &mut HashMap<String, TrackedDevice>,
         device: Device,
@@ -739,9 +757,14 @@ impl DiscoveryService {
                     let new_is_unspecified = device.ip == "0.0.0.0" || device.ip == "::";
                     let existing_is_valid =
                         existing.device.ip != "0.0.0.0" && existing.device.ip != "::";
+                    let new_is_undialable_ipv6 =
+                        Self::should_keep_discovered_ipv4(&existing.device.ip, &device.ip);
 
-                    if new_is_unspecified && existing_is_valid {
-                        // Just update last_seen to keep it alive, but don't overwrite valid IP.
+                    if (new_is_unspecified && existing_is_valid) || new_is_undialable_ipv6 {
+                        // Just update last_seen to keep it alive, but don't overwrite the
+                        // valid (dialable) IP. mDNS reports A and AAAA records in separate
+                        // events, so a dual-stack peer's IPv6 record must not replace the
+                        // IPv4 address the QUIC transport can actually reach.
                         existing.last_seen = Instant::now();
 
                         // Still accept better metadata from this signal.
@@ -1568,5 +1591,130 @@ mod tests {
 
         assert_eq!(connected.device.name, "Office Workstation");
         assert_eq!(active.name, "Office Workstation");
+    }
+
+    #[test]
+    fn keeps_ipv4_endpoint_when_aaaa_record_arrives_later() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+
+        let mut devices = std::collections::HashMap::new();
+        let device_id = "dev-dual-stack-late-v6".to_string();
+
+        let ipv4 = Device::new(
+            device_id.clone(),
+            "Phone".to_string(),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)),
+            44444,
+            DeviceType::Android,
+        );
+        DiscoveryService::upsert_endpoint_locked(&mut devices, ipv4, DiscoverySource::Discovered);
+
+        let ipv6 = Device::new(
+            device_id.clone(),
+            "Phone".to_string(),
+            IpAddr::V6(Ipv6Addr::new(0x2a02, 0x1388, 0x2a03, 0x5d7d, 0, 0, 0, 5)),
+            44444,
+            DeviceType::Android,
+        );
+        let event = DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            ipv6,
+            DiscoverySource::Discovered,
+        );
+
+        assert!(
+            event.is_none(),
+            "keeping the same dialable endpoint must not emit a device change"
+        );
+
+        let tracked = devices.get(&device_id).expect("device should exist");
+        let discovered = tracked
+            .discovered
+            .as_ref()
+            .expect("discovered endpoint should exist");
+        assert_eq!(discovered.device.ip, "192.168.1.50");
+        assert_eq!(
+            tracked.active_device().expect("active device").ip,
+            "192.168.1.50"
+        );
+    }
+
+    #[test]
+    fn upgrades_ipv6_endpoint_when_a_record_arrives_later() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+
+        let mut devices = std::collections::HashMap::new();
+        let device_id = "dev-dual-stack-late-v4".to_string();
+
+        let ipv6 = Device::new(
+            device_id.clone(),
+            "Phone".to_string(),
+            IpAddr::V6(Ipv6Addr::new(0x2a02, 0x1388, 0x2a03, 0x5d7d, 0, 0, 0, 5)),
+            44444,
+            DeviceType::Android,
+        );
+        DiscoveryService::upsert_endpoint_locked(&mut devices, ipv6, DiscoverySource::Discovered);
+
+        let ipv4 = Device::new(
+            device_id.clone(),
+            "Phone".to_string(),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)),
+            44444,
+            DeviceType::Android,
+        );
+        DiscoveryService::upsert_endpoint_locked(&mut devices, ipv4, DiscoverySource::Discovered);
+
+        let tracked = devices.get(&device_id).expect("device should exist");
+        let discovered = tracked
+            .discovered
+            .as_ref()
+            .expect("discovered endpoint should exist");
+        assert_eq!(discovered.device.ip, "192.168.1.50");
+        assert_eq!(
+            tracked.active_device().expect("active device").ip,
+            "192.168.1.50"
+        );
+    }
+
+    #[test]
+    fn keeps_ipv4_endpoint_but_merges_metadata_from_aaaa_record() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+
+        let mut devices = std::collections::HashMap::new();
+        let device_id = "dev-dual-stack-metadata".to_string();
+
+        let ipv4_unknown = Device::new(
+            device_id.clone(),
+            "Phone".to_string(),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)),
+            44444,
+            DeviceType::Unknown,
+        );
+        DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            ipv4_unknown,
+            DiscoverySource::Discovered,
+        );
+
+        let ipv6_android = Device::new(
+            device_id.clone(),
+            "Phone".to_string(),
+            IpAddr::V6(Ipv6Addr::new(0x2a02, 0x1388, 0x2a03, 0x5d7d, 0, 0, 0, 5)),
+            44444,
+            DeviceType::Android,
+        );
+        DiscoveryService::upsert_endpoint_locked(
+            &mut devices,
+            ipv6_android,
+            DiscoverySource::Discovered,
+        );
+
+        let tracked = devices.get(&device_id).expect("device should exist");
+        let discovered = tracked
+            .discovered
+            .as_ref()
+            .expect("discovered endpoint should exist");
+        assert_eq!(discovered.device.ip, "192.168.1.50");
+        assert_eq!(discovered.device.device_type, DeviceType::Android);
     }
 }
