@@ -12,6 +12,13 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    groups:
+      cargo-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # Gradle dependencies
   - package-ecosystem: "gradle"
@@ -25,6 +32,13 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    groups:
+      gradle-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
@@ -38,3 +52,7 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
