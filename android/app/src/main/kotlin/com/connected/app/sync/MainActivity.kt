@@ -303,6 +303,14 @@ class MainActivity : ComponentActivity() {
                 true
             }
 
+            ConnectedApp.ACTION_RESUME_BACKGROUND_SERVICE -> {
+                // The user tapped the "Background sync stopped" notification.
+                // The app is in the foreground now, so starting the foreground
+                // service is always allowed.
+                startForegroundService(Intent(this, ConnectedService::class.java))
+                true
+            }
+
             else -> false
         }
 
