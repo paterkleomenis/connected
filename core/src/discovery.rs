@@ -1289,6 +1289,52 @@ impl DiscoveryService {
             .and_then(|tracked| tracked.active_device())
     }
 
+    /// Find the device currently advertised at `(ip, port)`.
+    ///
+    /// Discovery records are unauthenticated; callers must treat the result as
+    /// a hint (e.g. to resolve which *known* identity an endpoint is expected
+    /// to present), never as proof of identity.
+    pub fn get_device_by_endpoint(&self, ip: IpAddr, port: u16) -> Option<Device> {
+        self.discovered_devices
+            .read()
+            .values()
+            .filter_map(|tracked| tracked.active_device())
+            .find(|d| d.ip_addr() == Some(ip) && d.port == port)
+    }
+
+    /// Resolve the id of the device whose tracked endpoint — active or
+    /// shadowed — is `(ip, port)`.
+    ///
+    /// Unlike [`Self::get_device_by_endpoint`], this also searches the
+    /// shadowed endpoint bucket (a newer `Connected` endpoint hides the
+    /// `Discovered` one and vice versa). That matters for identity binding:
+    /// the address a caller intends to send to may come from a `DeviceFound`
+    /// snapshot taken before a newer connection endpoint superseded it, and a
+    /// spoofed mDNS record can only ever appear in the discovered bucket.
+    pub(crate) fn get_device_id_for_endpoint(&self, ip: IpAddr, port: u16) -> Option<String> {
+        let devices = self.discovered_devices.read();
+        let mut shadowed: Option<String> = None;
+        for (id, tracked) in devices.iter() {
+            if tracked
+                .active_device()
+                .is_some_and(|d| d.ip_addr() == Some(ip) && d.port == port)
+            {
+                return Some(id.clone());
+            }
+            if shadowed.is_none()
+                && [tracked.connected.as_ref(), tracked.discovered.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|endpoint| {
+                        endpoint.device.ip_addr() == Some(ip) && endpoint.device.port == port
+                    })
+            {
+                shadowed = Some(id.clone());
+            }
+        }
+        shadowed
+    }
+
     pub fn get_device_version(&self, id: &str) -> u32 {
         self.get_device_by_id(id)
             .map(|d| d.protocol_version)
@@ -1296,11 +1342,7 @@ impl DiscoveryService {
     }
 
     pub fn get_version_for_endpoint(&self, ip: IpAddr, port: u16) -> u32 {
-        self.discovered_devices
-            .read()
-            .values()
-            .filter_map(|t| t.active_device())
-            .find(|d| d.ip_addr() == Some(ip) && d.port == port)
+        self.get_device_by_endpoint(ip, port)
             .map(|d| d.protocol_version)
             .unwrap_or(1)
     }

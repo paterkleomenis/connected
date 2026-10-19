@@ -67,13 +67,15 @@ async fn test_file_transfer_resume_folders_batches() {
     let recv_dir = root_path.join("receiver");
     tokio::fs::create_dir_all(&recv_dir).await.unwrap();
 
-    // Initialize Client A (Sender) and Client B (Receiver) bound to 127.0.0.1
+    // Initialize Client A (Sender) and Client B (Receiver) bound to 127.0.0.1.
+    // Both use isolated storage so tests never touch the real app config or
+    // the developer's Downloads folder.
     let client_a = ConnectedClient::new_with_ip(
         "Sender-Device".to_string(),
         DeviceType::Linux,
         46001,
         IpAddr::from([127, 0, 0, 1]),
-        None,
+        Some(root_path.join("sender")),
     )
     .await
     .unwrap();

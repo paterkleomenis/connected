@@ -41,6 +41,7 @@ zip = { version = "9.0", default-features = false, features = [
 walkdir = "2.5"
 reqwest = { version = "0.13", features = ["rustls"], default-features = false }
 semver = "1.0"
+minisign-verify.workspace = true
 time.workspace = true
 
 [target.'cfg(windows)'.dependencies]
