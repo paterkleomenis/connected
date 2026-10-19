@@ -542,6 +542,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           draft: true
           prerelease: false
+          generate_release_notes: true
           files: |
             connected-desktop-linux-x86_64
             connected-desktop-linux-aarch64
