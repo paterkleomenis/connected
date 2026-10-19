@@ -158,6 +158,15 @@ async fn open_hardened_download_file(local_path: &std::path::Path) -> Result<tok
 const FS_CTRL_TIMEOUT: Duration = Duration::from_secs(30);
 const FS_CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Upper bound for opening an outgoing QUIC stream. `open_bi` waits for peer
+/// stream credit (MAX_STREAMS); a peer that never grants any must not hang
+/// the caller.
+const OPEN_STREAM_TIMEOUT: Duration = Duration::from_secs(30);
+/// Upper bound for writing a large control-stream payload (e.g. an MMS/RCS
+/// message). Small messages fit the peer's stream window and never block,
+/// but a multi-megabyte payload can stall behind a peer that stops reading.
+const CONTROL_SEND_TIMEOUT: Duration = Duration::from_secs(120);
+
 async fn send_fs_message<T: serde::Serialize>(
     send: &mut quinn::SendStream,
     message: &T,
@@ -2101,9 +2110,12 @@ impl ConnectedClient {
     /// connection. Fire-and-forget: the receiver never acks, and we never
     /// wait — the next sweep/alias check converges if this one is lost.
     async fn send_hello(&self, conn: &quinn::Connection) -> Result<()> {
-        let (mut send, _recv) = conn.open_bi().await.map_err(|e| {
-            ConnectedError::Connection(format!("Failed to open Hello stream: {}", e))
-        })?;
+        let (mut send, _recv) = tokio::time::timeout(OPEN_STREAM_TIMEOUT, conn.open_bi())
+            .await
+            .map_err(|_| ConnectedError::Timeout("opening Hello stream timed out".to_string()))?
+            .map_err(|e| {
+                ConnectedError::Connection(format!("Failed to open Hello stream: {}", e))
+            })?;
         send.write_all(&[QuicTransport::STREAM_TYPE_CONTROL])
             .await
             .map_err(|e| ConnectedError::Io(e.into()))?;
@@ -2533,12 +2545,18 @@ impl ConnectedClient {
         )?;
         let len_bytes = (data.len() as u32).to_be_bytes();
 
-        send.write_all(&len_bytes)
-            .await
-            .map_err(|e| ConnectedError::Io(e.into()))?;
-        send.write_all(&data)
-            .await
-            .map_err(|e| ConnectedError::Io(e.into()))?;
+        // Bound the writes: QUIC flow control means a peer that stops reading
+        // would otherwise block this call forever once the window fills.
+        tokio::time::timeout(CONTROL_SEND_TIMEOUT, async {
+            send.write_all(&len_bytes)
+                .await
+                .map_err(|e| ConnectedError::Io(e.into()))?;
+            send.write_all(&data)
+                .await
+                .map_err(|e| ConnectedError::Io(e.into()))
+        })
+        .await
+        .map_err(|_| ConnectedError::Timeout("telephony send timed out".to_string()))??;
         send.finish().map_err(|e| ConnectedError::Io(e.into()))?;
 
         Ok(())

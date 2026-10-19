@@ -21,6 +21,25 @@ const BUFFER_SIZE: usize = 4 * 1024 * 1024;
 /// Timeout for receiving a data chunk during file transfer (30 seconds).
 /// If no data is received within this window, the peer is considered disconnected.
 const READ_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Sender-side timeout for control responses that do not hash the payload
+/// (accept/reject, directory and small-item responses). Receivers auto-reject
+/// after 60 s when a transfer needs manual approval, so 90 s covers the
+/// slowest legitimate accept while still bounding a silent peer.
+const SEND_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+/// Sender-side timeout for the final acknowledgement. Receivers hash the
+/// received payload before acking, which can take minutes for very large
+/// files (up to the 100 GiB cap), so this budget is deliberately generous.
+const SEND_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+/// Sender-side data-write timeout. QUIC flow control turns a receiver that
+/// stops reading into an indefinitely blocked `write_all`; 4 MiB per 120 s
+/// (~280 kbit/s) is below any supported link, so only a stalled peer trips it.
+const SEND_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Sender-side timeout for opening a QUIC stream. `open_bi` waits for peer
+/// stream credit; a peer that never grants any must not hang the sender.
+const SEND_OPEN_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Best-effort cancellation notice. A stalled stream must not delay the
+/// user's cancel for longer than this.
+const SEND_CANCEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Maximum allowed incoming file size (100 GiB). This is intentionally large
 /// for normal desktop use, while preventing a malformed request from reserving
 /// an effectively unbounded amount of disk space.
@@ -112,6 +131,68 @@ fn validate_resume_offset(offset: u64, file_size: u64) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Sender-side timeouts.
+//
+// Every await in the sender path used to be unbounded: a peer that accepts the
+// stream and then never answers, stops reading (QUIC flow-control
+// backpressure), or never grants stream credit could pin the sending task —
+// and the transfer slot — forever, because the connection idle timeout only
+// fires when *no* traffic flows at all. These wrappers bound every wait.
+// ---------------------------------------------------------------------------
+
+async fn open_transfer_stream(connection: &Connection) -> Result<(SendStream, RecvStream)> {
+    tokio::time::timeout(SEND_OPEN_STREAM_TIMEOUT, connection.open_bi())
+        .await
+        .map_err(|_| ConnectedError::Timeout("file transfer stream open timed out".to_string()))?
+        .map_err(ConnectedError::QuicConnection)
+}
+
+async fn send_transfer_message<T: Serialize>(
+    send: &mut SendStream,
+    message: &T,
+    peer_version: u32,
+) -> Result<()> {
+    tokio::time::timeout(
+        SEND_CONTROL_TIMEOUT,
+        send_message(send, message, peer_version),
+    )
+    .await
+    .map_err(|_| ConnectedError::Timeout("file transfer message timed out".to_string()))?
+}
+
+async fn recv_transfer_message<T: DeserializeOwned>(recv: &mut RecvStream) -> Result<T> {
+    tokio::time::timeout(SEND_CONTROL_TIMEOUT, recv_message(recv))
+        .await
+        .map_err(|_| ConnectedError::Timeout("file transfer response timed out".to_string()))?
+}
+
+async fn recv_transfer_ack<T: DeserializeOwned>(recv: &mut RecvStream) -> Result<T> {
+    tokio::time::timeout(SEND_ACK_TIMEOUT, recv_message(recv))
+        .await
+        .map_err(|_| {
+            ConnectedError::Timeout("file transfer acknowledgement timed out".to_string())
+        })?
+}
+
+async fn send_transfer_cancel(send: &mut SendStream, peer_version: u32) -> Result<()> {
+    tokio::time::timeout(
+        SEND_CANCEL_TIMEOUT,
+        send_message(send, &FileTransferMessage::Cancel, peer_version),
+    )
+    .await
+    .map_err(|_| ConnectedError::Timeout("file transfer cancel timed out".to_string()))?
+}
+
+async fn write_transfer_chunk(send: &mut SendStream, chunk: &[u8]) -> Result<()> {
+    tokio::time::timeout(SEND_CHUNK_TIMEOUT, send.write_all(chunk))
+        .await
+        .map_err(|_| {
+            ConnectedError::Timeout("file transfer stalled: peer is not reading".to_string())
+        })?
+        .map_err(ConnectedError::QuicWrite)
 }
 
 pub struct IncomingTransferConfig {
@@ -373,11 +454,7 @@ impl FileTransfer {
             }
 
             // Open bidirectional stream for file transfer
-            let (mut send, mut recv) = self
-                .connection
-                .open_bi()
-                .await
-                .map_err(ConnectedError::QuicConnection)?;
+            let (mut send, mut recv) = open_transfer_stream(&self.connection).await?;
 
             // Write Stream Type Prefix
             send.write_all(&[STREAM_TYPE_FILE])
@@ -391,10 +468,12 @@ impl FileTransfer {
                 mime_type: mime_guess::from_path(&path).first().map(|m| m.to_string()),
             };
 
-            send_message(&mut send, &request, self.peer_version).await?;
+            send_transfer_message(&mut send, &request, self.peer_version).await?;
 
-            // Wait for accept/reject/resume
-            let response: FileTransferMessage = recv_message(&mut recv).await?;
+            // Wait for accept/reject/resume. Receivers auto-reject after 60 s
+            // when manual approval is required, so this cannot legitimately
+            // take much longer.
+            let response: FileTransferMessage = recv_transfer_message(&mut recv).await?;
 
             let mut offset = 0;
             match response {
@@ -502,9 +581,7 @@ impl FileTransfer {
 
                     let chunk = chunk_result?;
                     hasher.update(&chunk);
-                    send.write_all(&chunk)
-                        .await
-                        .map_err(ConnectedError::QuicWrite)?;
+                    write_transfer_chunk(&mut send, &chunk).await?;
 
                     bytes_sent += chunk.len() as u64;
 
@@ -533,10 +610,10 @@ impl FileTransfer {
             // Send completion with checksum
             let checksum = hasher.finalize().to_string();
             let complete = FileTransferMessage::Complete { checksum };
-            send_message(&mut send, &complete, self.peer_version).await?;
+            send_transfer_message(&mut send, &complete, self.peer_version).await?;
 
-            // Wait for acknowledgment
-            let ack: FileTransferMessage = recv_message(&mut recv).await?;
+            // Wait for acknowledgment (the receiver hashes the payload first)
+            let ack: FileTransferMessage = recv_transfer_ack(&mut recv).await?;
 
             match ack {
                 FileTransferMessage::Ack => {
@@ -637,11 +714,7 @@ impl FileTransfer {
         }
 
         // Open bidirectional stream for transfer (Control Stream)
-        let (mut send, mut recv) = self
-            .connection
-            .open_bi()
-            .await
-            .map_err(ConnectedError::QuicConnection)?;
+        let (mut send, mut recv) = open_transfer_stream(&self.connection).await?;
 
         // Write Stream Type Prefix
         send.write_all(&[STREAM_TYPE_FILE])
@@ -656,10 +729,10 @@ impl FileTransfer {
             files_count,
             is_directory,
         };
-        send_message(&mut send, &request, self.peer_version).await?;
+        send_transfer_message(&mut send, &request, self.peer_version).await?;
 
-        // Wait for accept/reject
-        let response: FileTransferMessage = recv_message(&mut recv).await?;
+        // Wait for accept/reject (receivers auto-reject after 60 s without approval)
+        let response: FileTransferMessage = recv_transfer_message(&mut recv).await?;
         match response {
             FileTransferMessage::Accept => {
                 debug!("Batch transfer accepted");
@@ -696,8 +769,7 @@ impl FileTransfer {
                 .as_ref()
                 .is_some_and(|c| c.load(Ordering::Relaxed))
             {
-                let _ =
-                    send_message(&mut send, &FileTransferMessage::Cancel, self.peer_version).await;
+                let _ = send_transfer_cancel(&mut send, self.peer_version).await;
                 if let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Cancelled);
                 }
@@ -709,9 +781,9 @@ impl FileTransfer {
                 is_dir,
                 size,
             };
-            send_message(&mut send, &item_msg, self.peer_version).await?;
+            send_transfer_message(&mut send, &item_msg, self.peer_version).await?;
 
-            let item_resp: FileTransferMessage = recv_message(&mut recv).await?;
+            let item_resp: FileTransferMessage = recv_transfer_message(&mut recv).await?;
             match item_resp {
                 FileTransferMessage::Accept
                 | FileTransferMessage::Ack
@@ -738,8 +810,7 @@ impl FileTransfer {
                 .as_ref()
                 .is_some_and(|c| c.load(Ordering::Relaxed))
             {
-                let _ =
-                    send_message(&mut send, &FileTransferMessage::Cancel, self.peer_version).await;
+                let _ = send_transfer_cancel(&mut send, self.peer_version).await;
                 if let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Cancelled);
                 }
@@ -751,9 +822,9 @@ impl FileTransfer {
                 is_dir,
                 size,
             };
-            send_message(&mut send, &item_msg, self.peer_version).await?;
+            send_transfer_message(&mut send, &item_msg, self.peer_version).await?;
 
-            let item_resp: FileTransferMessage = recv_message(&mut recv).await?;
+            let item_resp: FileTransferMessage = recv_transfer_message(&mut recv).await?;
             let offset = match item_resp {
                 FileTransferMessage::Accept => 0,
                 FileTransferMessage::AcceptResume {
@@ -808,13 +879,13 @@ impl FileTransfer {
                     blake3::hash(&[]).to_string()
                 };
 
-                send_message(
+                send_transfer_message(
                     &mut send,
                     &FileTransferMessage::ItemComplete { checksum },
                     self.peer_version,
                 )
                 .await?;
-                match recv_message(&mut recv).await? {
+                match recv_transfer_ack(&mut recv).await? {
                     FileTransferMessage::ItemAck => {}
                     FileTransferMessage::Error { message } => {
                         return Err(ConnectedError::TransferFailed(message));
@@ -887,12 +958,7 @@ impl FileTransfer {
                         .is_some_and(|c| c.load(Ordering::Relaxed))
                     {
                         read_task.abort();
-                        let _ = send_message(
-                            &mut send,
-                            &FileTransferMessage::Cancel,
-                            self.peer_version,
-                        )
-                        .await;
+                        let _ = send_transfer_cancel(&mut send, self.peer_version).await;
                         if let Some(ref tx) = progress_tx {
                             let _ = tx.send(TransferProgress::Cancelled);
                         }
@@ -903,9 +969,7 @@ impl FileTransfer {
                     let bytes_read = chunk.len();
                     hasher.update(&chunk);
 
-                    send.write_all(&chunk)
-                        .await
-                        .map_err(ConnectedError::QuicWrite)?;
+                    write_transfer_chunk(&mut send, &chunk).await?;
 
                     let total_sent = overall_bytes_transferred
                         .fetch_add(bytes_read as u64, Ordering::SeqCst)
@@ -928,14 +992,14 @@ impl FileTransfer {
             }
 
             let checksum = hasher.finalize().to_string();
-            send_message(
+            send_transfer_message(
                 &mut send,
                 &FileTransferMessage::ItemComplete { checksum },
                 self.peer_version,
             )
             .await?;
 
-            match recv_message(&mut recv).await? {
+            match recv_transfer_ack(&mut recv).await? {
                 FileTransferMessage::ItemAck => {}
                 FileTransferMessage::Error { message } => {
                     return Err(ConnectedError::TransferFailed(message));
@@ -965,10 +1029,7 @@ impl FileTransfer {
                     .await
                     .map_err(|_| ConnectedError::TransferFailed("Semaphore closed".to_string()))?;
 
-                let (mut sub_send, mut sub_recv) = connection
-                    .open_bi()
-                    .await
-                    .map_err(ConnectedError::QuicConnection)?;
+                let (mut sub_send, mut sub_recv) = open_transfer_stream(&connection).await?;
                 sub_send
                     .write_all(&[STREAM_TYPE_FILE])
                     .await
@@ -979,9 +1040,9 @@ impl FileTransfer {
                     relative_path: rel_path.clone(),
                     size,
                 };
-                send_message(&mut sub_send, &stream_msg, peer_version).await?;
+                send_transfer_message(&mut sub_send, &stream_msg, peer_version).await?;
 
-                let item_resp: FileTransferMessage = recv_message(&mut sub_recv).await?;
+                let item_resp: FileTransferMessage = recv_transfer_message(&mut sub_recv).await?;
                 let offset = match item_resp {
                     FileTransferMessage::Accept => 0,
                     FileTransferMessage::AcceptResume {
@@ -1036,13 +1097,13 @@ impl FileTransfer {
                         blake3::hash(&[]).to_string()
                     };
 
-                    send_message(
+                    send_transfer_message(
                         &mut sub_send,
                         &FileTransferMessage::ItemComplete { checksum },
                         peer_version,
                     )
                     .await?;
-                    match recv_message(&mut sub_recv).await? {
+                    match recv_transfer_ack(&mut sub_recv).await? {
                         FileTransferMessage::ItemAck => {}
                         FileTransferMessage::Error { message } => {
                             return Err(ConnectedError::TransferFailed(message));
@@ -1117,12 +1178,7 @@ impl FileTransfer {
                             .is_some_and(|c| c.load(Ordering::Relaxed))
                         {
                             read_task.abort();
-                            let _ = send_message(
-                                &mut sub_send,
-                                &FileTransferMessage::Cancel,
-                                peer_version,
-                            )
-                            .await;
+                            let _ = send_transfer_cancel(&mut sub_send, peer_version).await;
                             return Err(ConnectedError::TransferFailed("Cancelled".to_string()));
                         }
 
@@ -1130,10 +1186,7 @@ impl FileTransfer {
                         let bytes_read = chunk.len();
                         hasher.update(&chunk);
 
-                        sub_send
-                            .write_all(&chunk)
-                            .await
-                            .map_err(ConnectedError::QuicWrite)?;
+                        write_transfer_chunk(&mut sub_send, &chunk).await?;
 
                         let total_sent = overall_bytes_transferred
                             .fetch_add(bytes_read as u64, Ordering::SeqCst)
@@ -1156,14 +1209,14 @@ impl FileTransfer {
                 }
 
                 let checksum = hasher.finalize().to_string();
-                send_message(
+                send_transfer_message(
                     &mut sub_send,
                     &FileTransferMessage::ItemComplete { checksum },
                     peer_version,
                 )
                 .await?;
 
-                match recv_message(&mut sub_recv).await? {
+                match recv_transfer_ack(&mut sub_recv).await? {
                     FileTransferMessage::ItemAck => {}
                     FileTransferMessage::Error { message } => {
                         return Err(ConnectedError::TransferFailed(message));
@@ -1206,7 +1259,7 @@ impl FileTransfer {
                 _ = cancel_check_interval.tick() => {
                     if cancel_flag.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
                         join_set.abort_all();
-                        let _ = send_message(&mut send, &FileTransferMessage::Cancel, peer_version).await;
+                        let _ = send_transfer_cancel(&mut send, peer_version).await;
                         if let Some(ref tx) = progress_tx {
                             let _ = tx.send(TransferProgress::Cancelled);
                         }
@@ -1220,9 +1273,9 @@ impl FileTransfer {
         let complete = FileTransferMessage::Complete {
             checksum: "batch".to_string(),
         };
-        send_message(&mut send, &complete, peer_version).await?;
+        send_transfer_message(&mut send, &complete, peer_version).await?;
 
-        match recv_message(&mut recv).await? {
+        match recv_transfer_ack(&mut recv).await? {
             FileTransferMessage::Ack => {
                 if let Some(ref tx) = progress_tx {
                     let _ = tx.send(TransferProgress::Completed {

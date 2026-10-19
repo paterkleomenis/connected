@@ -40,6 +40,13 @@ const MAX_CONCURRENT_BIDI_STREAMS: u32 = 256; // Increased for better parallelis
 const MAX_CONCURRENT_UNI_STREAMS: u32 = 256; // Increased for better parallelism
 const MAX_IN_FLIGHT_STREAM_HANDLERS: usize = 32;
 const STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
+/// Upper bound for reading a complete control-stream message body. The
+/// per-connection stream handler permits are held while the body arrives, so
+/// without this bound a peer can slowloris all `MAX_IN_FLIGHT_STREAM_HANDLERS`
+/// slots by sending a length prefix and then stalling, blocking every
+/// subsequent stream on that connection. 120 s bounds even a maximum-size
+/// (105 MB) telephony frame to a ~7 Mbit/s floor, far below LAN throughput.
+const CONTROL_MESSAGE_TIMEOUT: Duration = Duration::from_secs(120);
 const STREAM_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024; // 64MB per stream
 const CONNECTION_RECEIVE_WINDOW: u32 = 256 * 1024 * 1024; // 256MB per connection
 const SEND_WINDOW: u64 = 128 * 1024 * 1024; // 128MB send window for high-speed LAN
@@ -1257,10 +1264,13 @@ impl QuicTransport {
 
         let connection = self.connect(target_addr).await?;
 
-        let (mut send, mut recv) = connection.open_bi().await.map_err(|e| {
-            self.invalidate_connection(&target_addr, Self::CLOSE_REASON_STALE);
-            ConnectedError::Connection(e.to_string())
-        })?;
+        let (mut send, mut recv) = timeout(CONNECT_TIMEOUT, connection.open_bi())
+            .await
+            .map_err(|_| ConnectedError::Timeout("opening ping stream timed out".to_string()))?
+            .map_err(|e| {
+                self.invalidate_connection(&target_addr, Self::CLOSE_REASON_STALE);
+                ConnectedError::Connection(e.to_string())
+            })?;
 
         // Write Stream Type
         send.write_all(&[Self::STREAM_TYPE_CONTROL]).await?;
@@ -1446,7 +1456,15 @@ impl QuicTransport {
                                 let _stream_permit = stream_permit;
                                 let mut len_buf = [0u8; 4];
 
-                                if recv.read_exact(&mut len_buf).await.is_err() {
+                                // Bound the length-prefix read as well: the peer already
+                                // sent the stream type byte, so the prefix must follow
+                                // promptly. A silent peer must not hold this permit.
+                                let len_result = tokio::time::timeout(
+                                    STREAM_HEADER_TIMEOUT,
+                                    recv.read_exact(&mut len_buf),
+                                )
+                                .await;
+                                if len_result.is_err() || len_result.is_ok_and(|r| r.is_err()) {
                                     return;
                                 }
 
@@ -1458,9 +1476,16 @@ impl QuicTransport {
 
                                 // Chunked read: never trust the declared length with a
                                 // single up-front allocation (see read_chunked docs).
-                                let data = match Self::read_chunked(&mut recv, msg_len).await {
-                                    Ok(d) => d,
-                                    Err(_) => return,
+                                // The timeout keeps a stalled body from pinning this
+                                // stream-handler permit forever (slowloris DoS).
+                                let data = match tokio::time::timeout(
+                                    CONTROL_MESSAGE_TIMEOUT,
+                                    Self::read_chunked(&mut recv, msg_len),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(d)) => d,
+                                    _ => return,
                                 };
 
                                 let (message, wire_format): (Message, _) =
@@ -1604,7 +1629,11 @@ impl QuicTransport {
     ) -> Result<(SendStream, RecvStream)> {
         let connection = self.connect(addr).await?;
 
-        let (mut send, recv) = connection.open_bi().await?;
+        // `open_bi` waits for peer stream credit (MAX_STREAMS). A peer that
+        // never grants any must not hang this call forever.
+        let (mut send, recv) = timeout(CONNECT_TIMEOUT, connection.open_bi())
+            .await
+            .map_err(|_| ConnectedError::Timeout("opening stream timed out".to_string()))??;
 
         send.write_all(&[stream_type]).await?;
 
@@ -1622,7 +1651,10 @@ impl QuicTransport {
     ) -> Result<(SendStream, RecvStream)> {
         let connection = self.connect_allow_unknown(addr).await?;
 
-        let (mut send, recv) = connection.open_bi().await?;
+        // See `open_stream`: bounded wait for peer stream credit.
+        let (mut send, recv) = timeout(CONNECT_TIMEOUT, connection.open_bi())
+            .await
+            .map_err(|_| ConnectedError::Timeout("opening stream timed out".to_string()))??;
 
         send.write_all(&[stream_type]).await?;
 
