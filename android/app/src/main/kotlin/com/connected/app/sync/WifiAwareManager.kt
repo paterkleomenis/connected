@@ -48,21 +48,10 @@ class ConnectedWifiAwareManager(private val context: Context) {
         private const val TAG = "WifiAwareManager"
         private const val SERVICE_TYPE = "_connected._udp"
         private const val SERVICE_INSTANCE_PREFIX = "conn"
-        private const val PROTOCOL_VERSION = 1
-        private const val MIN_COMPATIBLE_VERSION = 1
-        private const val MSG_KEY_DEVICE_ID = "id"
-        private const val MSG_KEY_NAME = "name"
-        private const val MSG_KEY_TYPE = "type"
-        private const val MSG_KEY_PORT = "port"
-        private const val MSG_KEY_VERSION = "ver"
-        private const val MSG_KEY_PAIRING_NAME = "pairingName"
-        private const val MSG_KEY_VENDOR_NAME = "vendorName"
-        private const val MSG_KEY_MODEL_NAME = "modelName"
 
         private const val REATTACH_DELAY_MS = 5_000L
         private const val STALE_PEER_MS = 45_000L
         private const val CLEANUP_INTERVAL_MS = 5_000L
-        private const val PAIR_INTENT_TTL_MS = 30_000L
         private const val NETWORK_REQUEST_COOLDOWN_MS = 20_000L
         // Watchdog bound for NAN data-path requests: without a system-side
         // timeout, a request whose path never materializes would wedge its
@@ -108,8 +97,6 @@ class ConnectedWifiAwareManager(private val context: Context) {
     private val connectedEndpoints = ConcurrentHashMap<String, Pair<String, Int>>()
 
     @Volatile private var pendingPeerId: String? = null
-    @Volatile private var pairingActiveUntil = 0L
-    @Volatile private var pairingTargetId: String? = null
     @Volatile private var lastAttachAttempt = 0L
     @Volatile private var attachRetryScheduled = false
     /** Guards against the un-cancellable manager.attach() completing after stop(). */
@@ -117,7 +104,6 @@ class ConnectedWifiAwareManager(private val context: Context) {
     @Volatile private var ignoredPublishTerminations = 0
     @Volatile private var ignoredSubscribeTerminations = 0
 
-    var onPairingIntent: ((String) -> Unit)? = null
     var onAwareConnected: ((peerId: String, ipv6: String, port: Int) -> Unit)? = null
     var onAwareLost: ((peerId: String) -> Unit)? = null
     private val attachCallback = object : AttachCallback() {
@@ -249,8 +235,6 @@ class ConnectedWifiAwareManager(private val context: Context) {
         ignoredPublishTerminations = 0
         ignoredSubscribeTerminations = 0
         pendingPeerId = null
-        pairingTargetId = null
-        pairingActiveUntil = 0L
         Log.d(TAG, "WiFi Aware manager stopped")
     }
 
@@ -264,8 +248,6 @@ class ConnectedWifiAwareManager(private val context: Context) {
         val peer = peers[deviceId]
         Log.d(TAG, "WiFi Aware connect requested for ${peer?.name ?: deviceId} ($deviceId)")
 
-        pairingActiveUntil = SystemClock.elapsedRealtime() + PAIR_INTENT_TTL_MS
-        pairingTargetId = deviceId
         pendingPeerId = deviceId
 
         if (peer == null) {
@@ -379,6 +361,11 @@ class ConnectedWifiAwareManager(private val context: Context) {
             s.publish(config, publishCallback, handler)
         } catch (e: SecurityException) {
             Log.w(TAG, "WiFi Aware publish blocked by permission or Location state", e)
+        } catch (e: IllegalArgumentException) {
+            // The framework rejects invalid configs (e.g. oversized service
+            // info) with IllegalArgumentException; never crash the attach
+            // callback over one — buildServiceInfo already caps the payload.
+            Log.w(TAG, "WiFi Aware publish rejected: ${e.message}")
         }
     }
 
@@ -400,6 +387,8 @@ class ConnectedWifiAwareManager(private val context: Context) {
             s.subscribe(config, subscribeCallback, handler)
         } catch (e: SecurityException) {
             Log.w(TAG, "WiFi Aware subscribe blocked by permission or Location state", e)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "WiFi Aware subscribe rejected: ${e.message}")
         }
     }
 
@@ -409,30 +398,14 @@ class ConnectedWifiAwareManager(private val context: Context) {
         deviceType: String,
         port: Int,
     ): ByteArray {
-        val entries = mapOf(
-            MSG_KEY_DEVICE_ID to deviceId,
-            MSG_KEY_NAME to name.take(48),
-            MSG_KEY_TYPE to deviceType,
-            MSG_KEY_PORT to port.toString(),
-            MSG_KEY_VERSION to PROTOCOL_VERSION.toString(),
-            MSG_KEY_PAIRING_NAME to name.take(48),
-            MSG_KEY_VENDOR_NAME to "Connected",
-            MSG_KEY_MODEL_NAME to deviceType.take(48),
+        // The framework rejects publish/subscribe configs whose payload
+        // exceeds the driver's maximum service-specific info length (255
+        // bytes on most devices) with an IllegalArgumentException. Fit the
+        // payload up front instead of crashing the attach callback.
+        val maxBytes = awareManager?.characteristics?.maxServiceSpecificInfoLength ?: 0
+        return encodeTxtRecords(
+            fitServiceInfoEntries(deviceId, name, deviceType, port, maxBytes)
         )
-        return encodeTxtRecords(entries)
-    }
-
-    private fun encodeTxtRecords(entries: Map<String, String>): ByteArray {
-        val buffer = ByteBuffer.allocate(1024)
-        for ((key, value) in entries) {
-            val kvBytes = "$key=$value".toByteArray(StandardCharsets.UTF_8)
-            buffer.put((kvBytes.size and 0xFF).toByte())
-            buffer.put(kvBytes)
-        }
-        buffer.flip()
-        val result = ByteArray(buffer.remaining())
-        buffer.get(result)
-        return result
     }
 
     private fun decodeTxtRecords(data: ByteArray): Map<String, String> {
@@ -709,6 +682,21 @@ class ConnectedWifiAwareManager(private val context: Context) {
                 socket.close()
                 injectAwareSocket(fdNum, peerIpv6, peerScopeId, peerPort.toUShort())
                 connectedEndpoints[peer.deviceId] = Pair(peerIpv6, peerPort)
+                // Publish the real NAN address to the core. Discovery for this
+                // peer currently carries the 0.0.0.0 placeholder; without this
+                // update, sends queued for an already-trusted offline device
+                // never learn a dialable address and expire still queued.
+                runCatching {
+                    injectProximityDevice(
+                        peer.deviceId,
+                        peer.name,
+                        peer.deviceType,
+                        peerIpv6,
+                        peerPort.toUShort(),
+                    )
+                }.onFailure {
+                    Log.w(TAG, "Failed to inject WiFi Aware peer endpoint", it)
+                }
                 Log.d(
                     TAG,
                     "Injected WiFi Aware socket for ${peer.deviceId}: localPort=$boundPort, peer=[$peerIpv6%$peerScopeId]:$peerPort",
@@ -817,7 +805,6 @@ class ConnectedWifiAwareManager(private val context: Context) {
             lastPeerLogAt.remove(id)
             evictNetworkRequestsFor(id, notifyLost = false)
             if (pendingPeerId == id) pendingPeerId = null
-            if (pairingTargetId == id) pairingTargetId = null
         }
 
         // Watchdog: a NAN data-path request that never completes produces NO
@@ -858,4 +845,109 @@ class ConnectedWifiAwareManager(private val context: Context) {
             handler.post { onAwareLost?.invoke(deviceId) }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Wi-Fi Aware service-info codec
+//
+// Pure, framework-free helpers for the NAN service-specific info payload: a
+// sequence of length-prefixed UTF-8 "key=value" entries. Extracted from
+// ConnectedWifiAwareManager so they are unit testable on the JVM
+// (see ServiceInfoTest).
+// ---------------------------------------------------------------------------
+
+private const val PROTOCOL_VERSION = 1
+private const val MIN_COMPATIBLE_VERSION = 1
+private const val MSG_KEY_DEVICE_ID = "id"
+private const val MSG_KEY_NAME = "name"
+private const val MSG_KEY_TYPE = "type"
+private const val MSG_KEY_PORT = "port"
+private const val MSG_KEY_VERSION = "ver"
+private const val MSG_KEY_PAIRING_NAME = "pairingName"
+private const val MSG_KEY_VENDOR_NAME = "vendorName"
+private const val MSG_KEY_MODEL_NAME = "modelName"
+
+/** Fallback used when the driver does not report its maximum payload size. */
+private const val DEFAULT_MAX_SERVICE_INFO_BYTES = 255
+private const val SERVICE_INFO_NAME_BUDGET_BYTES = 48
+private const val SERVICE_INFO_NAME_BUDGET_STEP_BYTES = 8
+
+/**
+ * Truncates [value] to at most [maxBytes] UTF-8 bytes without splitting a
+ * multi-byte character.
+ */
+internal fun truncateUtf8(value: String, maxBytes: Int): String {
+    if (maxBytes <= 0) return ""
+    val bytes = value.toByteArray(StandardCharsets.UTF_8)
+    if (bytes.size <= maxBytes) return value
+    var end = maxBytes
+    // Continuation bytes are 10xxxxxx; back off to a character boundary.
+    while (end > 0 && (bytes[end].toInt() and 0xC0) == 0x80) {
+        end--
+    }
+    return String(bytes, 0, end, StandardCharsets.UTF_8)
+}
+
+/** Encodes the length-prefixed "key=value" payload sent via NAN discovery. */
+internal fun encodeTxtRecords(entries: Map<String, String>): ByteArray {
+    val buffer = ByteBuffer.allocate(1024)
+    for ((key, value) in entries) {
+        val kvBytes = "$key=$value".toByteArray(StandardCharsets.UTF_8)
+        buffer.put((kvBytes.size and 0xFF).toByte())
+        buffer.put(kvBytes)
+    }
+    buffer.flip()
+    val result = ByteArray(buffer.remaining())
+    buffer.get(result)
+    return result
+}
+
+/**
+ * Builds a service-info entry map that fits within [maxBytes], shrinking the
+ * free-form name fields by UTF-8 bytes and, as a last resort, dropping the
+ * optional descriptive fields. A non-positive [maxBytes] means the driver
+ * did not report a limit and the default is used.
+ */
+internal fun fitServiceInfoEntries(
+    deviceId: String,
+    name: String,
+    deviceType: String,
+    port: Int,
+    maxBytes: Int,
+): Map<String, String> {
+    val limit = if (maxBytes > 0) maxBytes else DEFAULT_MAX_SERVICE_INFO_BYTES
+    var nameBudget = SERVICE_INFO_NAME_BUDGET_BYTES
+    var entries = serviceInfoEntries(deviceId, name, deviceType, port, nameBudget)
+    while (encodeTxtRecords(entries).size > limit && nameBudget > 0) {
+        nameBudget = maxOf(0, nameBudget - SERVICE_INFO_NAME_BUDGET_STEP_BYTES)
+        entries = serviceInfoEntries(deviceId, name, deviceType, port, nameBudget)
+    }
+    if (encodeTxtRecords(entries).size > limit) {
+        // Drivers reporting unusually small limits still get the identity
+        // fields; the descriptive extras are droppable.
+        entries = entries.filterKeys { key ->
+            key != MSG_KEY_VENDOR_NAME && key != MSG_KEY_MODEL_NAME
+        }
+    }
+    return entries
+}
+
+private fun serviceInfoEntries(
+    deviceId: String,
+    name: String,
+    deviceType: String,
+    port: Int,
+    nameBudgetBytes: Int,
+): Map<String, String> {
+    val displayName = truncateUtf8(name, nameBudgetBytes)
+    return linkedMapOf(
+        MSG_KEY_DEVICE_ID to deviceId,
+        MSG_KEY_NAME to displayName,
+        MSG_KEY_TYPE to truncateUtf8(deviceType, SERVICE_INFO_NAME_BUDGET_BYTES),
+        MSG_KEY_PORT to port.toString(),
+        MSG_KEY_VERSION to PROTOCOL_VERSION.toString(),
+        MSG_KEY_PAIRING_NAME to displayName,
+        MSG_KEY_VENDOR_NAME to "Connected",
+        MSG_KEY_MODEL_NAME to truncateUtf8(deviceType, SERVICE_INFO_NAME_BUDGET_BYTES),
+    )
 }
