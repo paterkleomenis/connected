@@ -351,8 +351,11 @@ impl Drop for ConnectingGuard {
 
 pub struct QuicTransport {
     endpoint: Endpoint,
-    /// WiFi Aware (NAN) endpoint for IPv6 link-local connections
-    aware_endpoint: RwLock<Option<Endpoint>>,
+    /// WiFi Aware (NAN) endpoints for IPv6 link-local connections, keyed by
+    /// the peer's link-local address. Each peer gets its own endpoint so a
+    /// new NAN data path (e.g. a third device nearby) replaces only that
+    /// peer's endpoint instead of tearing down links to other peers.
+    aware_endpoints: RwLock<HashMap<Option<Ipv6Addr>, Endpoint>>,
     aware_scopes: RwLock<HashMap<Ipv6Addr, u32>>,
     local_id: String,
     client_config: ClientConfig,
@@ -518,7 +521,7 @@ impl QuicTransport {
 
         Ok(Self {
             endpoint,
-            aware_endpoint: RwLock::new(None),
+            aware_endpoints: RwLock::new(HashMap::new()),
             aware_scopes: RwLock::new(HashMap::new()),
             local_id,
             client_config,
@@ -557,7 +560,11 @@ impl QuicTransport {
         )?;
         endpoint.set_default_client_config(self.client_config.clone());
         info!("WiFi Aware endpoint created");
-        if let Some(old_endpoint) = self.aware_endpoint.write().replace(endpoint.clone()) {
+        if let Some(old_endpoint) = self
+            .aware_endpoints
+            .write()
+            .insert(peer_ipv6, endpoint.clone())
+        {
             old_endpoint.close(VarInt::from_u32(0), b"aware-replaced");
         }
         self.spawn_aware_accept_loop(endpoint);
@@ -623,18 +630,52 @@ impl QuicTransport {
     }
 
     /// Get the appropriate endpoint for a given address.
-    /// Returns the WiFi Aware endpoint for IPv6 link-local addresses,
+    /// Returns the peer's WiFi Aware endpoint for IPv6 link-local addresses,
     /// and the main endpoint otherwise.
     fn get_endpoint_for_addr(&self, addr: &SocketAddr) -> Endpoint {
         if Self::is_link_local(addr) {
-            if let Some(ep) = self.aware_endpoint.read().clone() {
-                return ep;
+            let endpoints = self.aware_endpoints.read();
+            let keys: Vec<Ipv6Addr> = endpoints.keys().flatten().copied().collect();
+            let endpoint = Self::select_aware_key(addr, &keys)
+                .and_then(|key| endpoints.get(&Some(key)).cloned())
+                .or_else(|| {
+                    // No exact match (e.g. the peer address changed between
+                    // injection and dial): a single registered endpoint is
+                    // unambiguous, anything else must not guess.
+                    if endpoints.len() == 1 {
+                        endpoints.values().next().cloned()
+                    } else {
+                        None
+                    }
+                });
+            if let Some(endpoint) = endpoint {
+                return endpoint;
             }
             warn!(
-                "IPv6 link-local address but no WiFi Aware endpoint configured, falling back to main endpoint"
+                "IPv6 link-local address but no matching WiFi Aware endpoint configured, falling back to main endpoint"
             );
         }
         self.endpoint.clone()
+    }
+
+    /// Selects the WiFi Aware endpoint key to use for a dial target. An exact
+    /// peer match wins; a single registered endpoint is an unambiguous
+    /// fallback; otherwise no aware endpoint applies (a multi-peer dial with
+    /// no match must not send traffic out on the wrong NAN link).
+    fn select_aware_key(addr: &SocketAddr, keys: &[Ipv6Addr]) -> Option<Ipv6Addr> {
+        let SocketAddr::V6(v6) = addr else {
+            return None;
+        };
+        if !v6.ip().is_unicast_link_local() {
+            return None;
+        }
+        if keys.contains(v6.ip()) {
+            return Some(*v6.ip());
+        }
+        if keys.len() == 1 {
+            return Some(keys[0]);
+        }
+        None
     }
 
     /// Shared accept loop for both main and WiFi Aware endpoints.
@@ -1362,8 +1403,10 @@ impl QuicTransport {
         let connection_cache = self.connection_cache.clone();
         let key_store = self.key_store.clone();
 
-        // Also spawn a listener on the WiFi Aware endpoint if it was configured before startup.
-        if let Some(aware_ep) = self.aware_endpoint.read().clone() {
+        // Also spawn listeners on any WiFi Aware endpoints configured before startup.
+        let aware_endpoints: Vec<Endpoint> =
+            self.aware_endpoints.read().values().cloned().collect();
+        for aware_ep in aware_endpoints {
             self.spawn_aware_accept_loop(aware_ep);
         }
 
@@ -1726,12 +1769,20 @@ impl QuicTransport {
             }
         }
 
-        // Shut down WiFi Aware endpoint if configured
-        let aware_ep = self.aware_endpoint.read().clone();
-        if let Some(aware_ep) = aware_ep {
+        // Shut down all WiFi Aware endpoints if any were configured
+        let aware_endpoints: Vec<Endpoint> =
+            self.aware_endpoints.read().values().cloned().collect();
+        for aware_ep in &aware_endpoints {
             aware_ep.close(VarInt::from_u32(0), b"shutdown");
+        }
+        for aware_ep in &aware_endpoints {
             aware_ep.wait_idle().await;
-            info!("WiFi Aware QUIC endpoint shut down");
+        }
+        if !aware_endpoints.is_empty() {
+            info!(
+                "WiFi Aware QUIC endpoints shut down ({})",
+                aware_endpoints.len()
+            );
         }
 
         self.endpoint.close(VarInt::from_u32(0), b"shutdown");
@@ -1952,6 +2003,39 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerifier {
 #[cfg(test)]
 mod tests {
     use super::Message;
+
+    #[test]
+    fn select_aware_key_matches_peer_or_single_endpoint() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+        fn link_local(addr: &str) -> Ipv6Addr {
+            addr.parse().expect("valid link-local literal")
+        }
+
+        let a = link_local("fe80::1");
+        let b = link_local("fe80::2");
+        let c = link_local("fe80::3");
+        let target = SocketAddr::new(IpAddr::V6(b), 4444);
+
+        // Exact peer match wins when several peers are registered.
+        assert_eq!(
+            super::QuicTransport::select_aware_key(&target, &[a, b]),
+            Some(b)
+        );
+        // A single registered endpoint is an unambiguous fallback...
+        assert_eq!(
+            super::QuicTransport::select_aware_key(&target, &[a]),
+            Some(a)
+        );
+        // ...but multiple registered peers without a match must not guess.
+        assert_eq!(
+            super::QuicTransport::select_aware_key(&target, &[a, c]),
+            None
+        );
+        // Non-link-local targets never use a NAN endpoint.
+        let lan = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4444);
+        assert_eq!(super::QuicTransport::select_aware_key(&lan, &[a]), None);
+    }
 
     #[test]
     fn hello_round_trips_on_both_wire_formats() {
