@@ -613,23 +613,6 @@ class ConnectedApp(private val context: Context) {
         }
         Log.d("ConnectedApp", "WiFi Aware supported, using NAN for proximity")
         wifiAwareManager = ConnectedWifiAwareManager(context).also { manager ->
-            manager.onPairingIntent = { deviceId ->
-                if (!pendingPairing.contains(deviceId)) {
-                    try {
-                        setPairingModePersistent(true)
-                    } catch (e: Exception) {
-                        Log.w("ConnectedApp", "Failed to enable pairing mode", e)
-                    }
-                    pendingPairingAwaitingIp.add(deviceId)
-                    runOnMainThread {
-                        android.widget.Toast.makeText(
-                            context,
-                            "Connecting to device...",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }
-            }
             manager.onAwareConnected = { peerId, ipv6, port ->
                 handleWifiAwareConnected(peerId, ipv6, port)
             }
@@ -655,6 +638,19 @@ class ConnectedApp(private val context: Context) {
                 val updated = DiscoveredDevice(device.id, device.name, ip, port.toUShort(), device.deviceType)
                 devices[index] = updated
                 sendPairRequest(updated)
+            }
+            return
+        }
+
+        // No pairing pending (e.g. an already-trusted device discovered over
+        // NAN): make the real aware address dialable so queued sends can
+        // drain. The core also learns it via injectProximityDevice; this keeps
+        // the local list in sync even before that discovery event lands.
+        val index = devices.indexOfFirst { it.id == peerId }
+        if (index >= 0) {
+            val device = devices[index]
+            if (isSyntheticIp(device.ip) || isWifiAwareIp(device.ip)) {
+                devices[index] = DiscoveredDevice(device.id, device.name, ip, port.toUShort(), device.deviceType)
             }
         }
     }
