@@ -125,11 +125,16 @@ fi
 # 6. packaging/flatpak/com.paterkleomenis.Connected.metainfo.xml
 # ────────────────────────────────────────────────────────────────────
 METAINFO="$ROOT_DIR/packaging/flatpak/com.paterkleomenis.Connected.metainfo.xml"
-if grep -q "<release version=\"$OLD_VER_RE\"" "$METAINFO"; then
-  sed -i "s|<release version=\"$OLD_VER_RE\" date=\"[^\"]*\"|<release version=\"$NEW_VER\" date=\"$RELEASE_DATE\"|" "$METAINFO"
-  ok "flatpak metainfo.xml"
+if grep -q "<releases>" "$METAINFO"; then
+  if grep -q "<release version=\"$NEW_VER\"" "$METAINFO"; then
+    warn "flatpak metainfo.xml: $NEW_VER already present"
+  else
+    # Add the new release at the top instead of rewriting the previous entry.
+    sed -i "s|<releases>|<releases>\n    <release version=\"$NEW_VER\" date=\"$RELEASE_DATE\" />|" "$METAINFO"
+    ok "flatpak metainfo.xml"
+  fi
 else
-  warn "flatpak metainfo.xml: pattern not matched"
+  warn "flatpak metainfo.xml: <releases> block not found"
 fi
 
 # ────────────────────────────────────────────────────────────────────
@@ -138,7 +143,13 @@ fi
 SPEC="$ROOT_DIR/packaging/rpm/connected-desktop.spec"
 if grep -qE "^Version:[[:space:]]+$OLD_VER_RE" "$SPEC"; then
   sed -ri "s/^(Version:[[:space:]]*)$OLD_VER_RE/\1$NEW_VER/" "$SPEC"
-  sed -i "/^\\* /s/$OLD_VER_RE/$NEW_VER/g" "$SPEC"
+  RPM_DATE="$(LC_ALL=C date -d "$RELEASE_DATE" '+%a %b %d %Y' 2>/dev/null || LC_ALL=C date '+%a %b %d %Y')"
+  # Prepend a new changelog entry instead of rewriting historical entries.
+  awk -v entry="* ${RPM_DATE} Connected Team <paterkleomenis@protonmail.com> - ${NEW_VER}-1" \
+      -v change="- Update to ${NEW_VER}" '
+    /^%changelog$/ { print; print entry; print change; print ""; next }
+    { print }
+  ' "$SPEC" > "$SPEC.tmp" && mv "$SPEC.tmp" "$SPEC"
   ok "packaging/rpm/connected-desktop.spec"
 else
   warn "packaging/rpm/connected-desktop.spec: pattern not matched"

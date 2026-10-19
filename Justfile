@@ -300,11 +300,13 @@ build-android-playstore:
     {{ if os_family() == "windows" { "cd /d android && powershell -NoProfile -ExecutionPolicy Bypass -File build_release.ps1" } else { "cd android && bash ./build_release.sh" } }}
 
 # Release preparation
-[doc("Prepare for release (version bump, changelog)")]
+[doc("Prepare a release: bump all version files, refresh Cargo.lock, verify")]
 prepare-release VERSION:
     echo "Preparing release {{VERSION}}..."
-    git cliff --bump --tag {{VERSION}} --output CHANGELOG.md
-    @echo "✅ Review CHANGELOG.md and Cargo.toml changes, then commit"
+    bash scripts/bump-version.sh {{VERSION}}
+    cargo check --workspace --quiet
+    bash scripts/check-versions.sh
+    @echo "✅ Review the changes, then commit and tag {{VERSION}}"
 
 # Docker-based development (if needed later)
 [doc("Run commands in Docker (for consistent environment)")]
