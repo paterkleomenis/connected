@@ -577,6 +577,8 @@ jobs:
           arguments: |
             --build-cache
             assembleSideloadDebug
+            testSideloadDebugUnitTest
+            lintSideloadRelease
 
       - name: Prepare Android artifact
         run: cp android/app/build/outputs/apk/sideload/debug/app-sideload-debug.apk connected-android.apk

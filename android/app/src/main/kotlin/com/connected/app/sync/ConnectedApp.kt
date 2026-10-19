@@ -598,6 +598,7 @@ class ConnectedApp(private val context: Context) {
         }
 
     fun startWifiAwareManager() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         if (wifiAwareManager != null) return
         if (!ConnectedWifiAwareManager.isSupported(context)) {
             Log.d("ConnectedApp", "WiFi Aware service not supported on this device")
@@ -683,10 +684,12 @@ class ConnectedApp(private val context: Context) {
         // unregister): gating it on proximity permissions previously leaked
         // Aware sessions, network callbacks and the cleanup loop whenever the
         // user revoked location between start and stop.
-        try {
-            wifiAwareManager?.stop()
-        } catch (e: SecurityException) {
-            Log.w("ConnectedApp", "Failed to stop WiFi Aware manager: permission denied", e)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                wifiAwareManager?.stop()
+            } catch (e: SecurityException) {
+                Log.w("ConnectedApp", "Failed to stop WiFi Aware manager: permission denied", e)
+            }
         }
         wifiAwareManager = null
     }
@@ -2318,7 +2321,12 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun sendPairRequest(device: DiscoveredDevice) {
-        val awareEndpoint = wifiAwareManager?.connectedEndpoint(device.id)
+        val awareEndpoint =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                wifiAwareManager?.connectedEndpoint(device.id)
+            } else {
+                null
+            }
         val target = if (
             awareEndpoint != null &&
                 (isSyntheticIp(device.ip) || isWifiAwareIp(device.ip))
@@ -2335,9 +2343,15 @@ class ConnectedApp(private val context: Context) {
             device
         }
 
+        val awareConnected =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                wifiAwareManager?.isConnected(target.id) == true
+            } else {
+                false
+            }
         val needsAwareConnect =
             isSyntheticIp(target.ip) ||
-                (isWifiAwareIp(target.ip) && wifiAwareManager?.isConnected(target.id) != true)
+                (isWifiAwareIp(target.ip) && !awareConnected)
 
         if (needsAwareConnect) {
             if (requiresLocationToggleForProximity() && !isLocationEnabled()) {
@@ -2359,7 +2373,7 @@ class ConnectedApp(private val context: Context) {
             }
             pendingPairingAwaitingIp.add(target.id)
             if (!pendingPairing.contains(target.id)) pendingPairing.add(target.id)
-            if (hasProximityPermissions()) {
+            if (hasProximityPermissions() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
                     if (isWifiAwareIp(target.ip)) {
                         Log.d(
@@ -2569,7 +2583,7 @@ class ConnectedApp(private val context: Context) {
                     }
                     queue.add(filePathToSend)
 
-                    if (hasProximityPermissions()) {
+                    if (hasProximityPermissions() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         try {
                             wifiAwareManager?.requestConnect(device.id)
                         } catch (e: SecurityException) {
@@ -3722,7 +3736,7 @@ class ConnectedApp(private val context: Context) {
 
                         queue.add(zipFile.absolutePath)
 
-                        if (hasProximityPermissions()) {
+                        if (hasProximityPermissions() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             try {
                                 wifiAwareManager?.requestConnect(device.id)
                             } catch (e: SecurityException) {
