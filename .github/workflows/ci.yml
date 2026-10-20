@@ -16,6 +16,11 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
+permissions:
+  # Needed by the build jobs to prune their superseded cache entries.
+  actions: write
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -108,6 +113,7 @@ jobs:
           targets: ${{ join(matrix.targets, ',') }}
 
       - name: Cache Rust dependencies
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: quality-${{ matrix.name }}
@@ -148,6 +154,14 @@ jobs:
         if: matrix.name == 'Linux'
         run: typos
 
+      - name: Prune superseded Rust cache
+        shell: bash
+        continue-on-error: true
+        if: success() && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
+        run: bash scripts/prune-superseded-caches.sh "v0-rust-quality-${{ matrix.name }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   # -------------------------------------------------------------------------
   # Job 3: Security Audit
   # -------------------------------------------------------------------------
@@ -168,6 +182,7 @@ jobs:
           toolchain: stable
 
       - name: Cache Rust dependencies
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "security"
@@ -183,6 +198,14 @@ jobs:
         run: |
           cargo install cargo-deny --locked
           cargo deny check
+
+      - name: Prune superseded Rust cache
+        shell: bash
+        continue-on-error: true
+        if: success() && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
+        run: bash scripts/prune-superseded-caches.sh "v0-rust-security"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # -------------------------------------------------------------------------
   # Job 4: Linux Build
@@ -209,6 +232,7 @@ jobs:
           toolchain: stable
 
       - name: Cache Rust dependencies
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "linux-build-${{ matrix.arch }}"
@@ -233,6 +257,14 @@ jobs:
         with:
           path: target/debug/connected-desktop-linux-${{ matrix.arch }}
           archive: false
+
+      - name: Prune superseded Rust cache
+        shell: bash
+        continue-on-error: true
+        if: success() && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
+        run: bash scripts/prune-superseded-caches.sh "v0-rust-linux-build-${{ matrix.arch }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # -------------------------------------------------------------------------
   # Job 5: AppImage Build
@@ -263,6 +295,7 @@ jobs:
           toolchain: stable
 
       - name: Cache Rust dependencies
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "appimage-build-${{ matrix.arch }}"
@@ -286,6 +319,14 @@ jobs:
             target/connected-desktop-${{ matrix.arch }}.AppImage
             target/connected-desktop-${{ matrix.arch }}.AppImage.zsync
           if-no-files-found: error
+
+      - name: Prune superseded Rust cache
+        shell: bash
+        continue-on-error: true
+        if: success() && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
+        run: bash scripts/prune-superseded-caches.sh "v0-rust-appimage-build-${{ matrix.arch }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # -------------------------------------------------------------------------
   # Job 6: Flatpak Build
@@ -388,6 +429,7 @@ jobs:
           "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Cache Rust dependencies
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "windows-build-${{ matrix.target }}"
@@ -432,6 +474,14 @@ jobs:
           path: target/msix/arm64/connected-desktop-windows-arm64.msix
           name: connected-desktop-windows-arm64.msix
           archive: false
+
+      - name: Prune superseded Rust cache
+        shell: bash
+        continue-on-error: true
+        if: success() && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
+        run: bash scripts/prune-superseded-caches.sh "v0-rust-windows-build-${{ matrix.target }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # -------------------------------------------------------------------------
   # Job 8: Bundle Windows MSIX
@@ -502,6 +552,7 @@ jobs:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
 
       - name: Cache Rust dependencies
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "macos-build"
@@ -531,6 +582,14 @@ jobs:
           path: connected-desktop-macos.dmg
           archive: false
 
+      - name: Prune superseded Rust cache
+        shell: bash
+        continue-on-error: true
+        if: success() && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
+        run: bash scripts/prune-superseded-caches.sh "v0-rust-macos-build"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   # -------------------------------------------------------------------------
   # Job 10: Build Android App
   # -------------------------------------------------------------------------
@@ -555,6 +614,7 @@ jobs:
           targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
 
       - name: Cache Rust dependencies
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "android-build"
@@ -589,6 +649,14 @@ jobs:
           path: connected-android.apk
           archive: false
 
+      - name: Prune superseded Rust cache
+        shell: bash
+        continue-on-error: true
+        if: success() && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
+        run: bash scripts/prune-superseded-caches.sh "v0-rust-android-build"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   # -------------------------------------------------------------------------
   # Job 11: Build iOS IPA
   # -------------------------------------------------------------------------
@@ -609,6 +677,7 @@ jobs:
           targets: aarch64-apple-ios, aarch64-apple-ios-sim, x86_64-apple-ios
 
       - name: Cache Rust dependencies
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "ios-build"
@@ -662,3 +731,11 @@ jobs:
           name: connected-ios.ipa
           path: connected-ios.ipa
           archive: false
+
+      - name: Prune superseded Rust cache
+        shell: bash
+        continue-on-error: true
+        if: success() && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
+        run: bash scripts/prune-superseded-caches.sh "v0-rust-ios-build"
+        env:
+          GH_TOKEN: ${{ github.token }}
