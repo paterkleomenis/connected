@@ -289,30 +289,16 @@ tasks.register<Exec>("stripRustJniLibs") {
     }
 }
 
-// Once uniffi-bindgen has extracted the FFI metadata from the target/
-// copies of libconnected_ffi.so, those copies are no longer needed for the
-// build and can be stripped to reclaim ~24 MB of disk on the build machine.
-// This has no effect on the APK (which uses the jniLibs copies).
-tasks.register<Exec>("stripRustTarget") {
-    description = "Strip debug symbols from the target/ copies of libconnected_ffi.so after uniffi-bindgen has run."
-    group = "build-setup"
+// The target/ copies of libconnected_ffi.so are only needed by bindgen.
+// Delete them after each bindgen run so they don't linger on disk and the
+// next build always relinks a fresh library with its UniFFI metadata.
+tasks.register<Delete>("removeRustTargetLibs") {
     val soFiles = abiToTargetTriple.values.flatMap { triple ->
         listOf("release", "debug").map { profile ->
             File(cargoTargetDir, "$triple/$profile/libconnected_ffi.so")
         }
     }
-    val llvmStripPath = llvmStrip.absolutePath
-    inputs.files(soFiles)
-    outputs.files(soFiles)
-    // Resolve the file list at execution time: on a clean build the .so
-    // files are created by buildRust{Debug,Release} -> generateBindings*
-    // and don't exist at configuration time, so a config-time filter is
-    // always empty and llvm-strip errors with "no input file specified".
-    executable = llvmStripPath
-    onlyIf { soFiles.any { it.exists() } }
-    doFirst {
-        args = listOf("--strip-unneeded") + soFiles.filter { it.exists() }.map { it.absolutePath }
-    }
+    delete(soFiles)
 }
 
 // Generate UniFFI Kotlin bindings (using bundled uniffi-bindgen)
@@ -320,8 +306,7 @@ tasks.register<Exec>("stripRustTarget") {
 // It doesn't matter which architecture, as long as the API is the same.
 tasks.register<Exec>("generateBindings") {
     workingDir = file("${project.rootDir}/..")
-    // Use the x86_64 debug lib for generation speed/convenience during debug builds
-    commandLine(cargoExecutable, "run", "--release",
+    commandLine(cargoExecutable, "run",
         "-p", "connected-ffi",
         "--bin", "uniffi-bindgen",
         "--",
@@ -374,8 +359,7 @@ tasks.register<Exec>("cleanUniffiBindings") {
 
 tasks.register<Exec>("generateBindingsRelease") {
     workingDir = file("${project.rootDir}/..")
-    // Use the aarch64 release lib for generation
-    commandLine(cargoExecutable, "run", "--release",
+    commandLine(cargoExecutable, "run",
         "-p", "connected-ffi",
         "--bin", "uniffi-bindgen",
         "--",
@@ -391,7 +375,7 @@ tasks.register<Exec>("generateBindingsRelease") {
 afterEvaluate {
     tasks.matching { it.name == "generateBindings" || it.name == "generateBindingsRelease" }
         .configureEach {
-            finalizedBy("cleanUniffiBindings", "stripRustTarget")
+            finalizedBy("cleanUniffiBindings", "removeRustTargetLibs")
         }
     tasks.matching { it.name.startsWith("pre") && it.name.endsWith("DebugBuild") }.configureEach {
         dependsOn("generateBindings")

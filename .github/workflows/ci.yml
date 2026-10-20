@@ -638,7 +638,7 @@ jobs:
             --build-cache
             assembleSideloadDebug
             testSideloadDebugUnitTest
-            lintSideloadRelease
+            lintSideloadDebug
 
       - name: Prepare Android artifact
         run: cp android/app/build/outputs/apk/sideload/debug/app-sideload-debug.apk connected-android.apk

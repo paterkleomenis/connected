@@ -30,7 +30,7 @@ if [[ ! -f "$LIB_PATH" ]]; then
 fi
 
 echo "Generating Swift bindings..."
-cargo run --release -p connected-ffi --bin uniffi-bindgen --manifest-path "$ROOT_DIR/Cargo.toml" -- \
+cargo run -p connected-ffi --bin uniffi-bindgen --manifest-path "$ROOT_DIR/Cargo.toml" -- \
     generate \
     --library "$LIB_PATH" \
     --language swift \
