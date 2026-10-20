@@ -250,18 +250,25 @@ tasks.register<Exec>("buildRustRelease") {
 // at runtime. Once generateBindingsRelease has read the metadata, we strip
 // the jniLibs copies so the APK ships the smallest possible binaries while
 // the target/ copies (used only by the build) stay intact.
-val hostTag = run {
-    val os = System.getProperty("os.name").lowercase()
-    when {
-        os.contains("mac") -> "darwin-x86_64"
-        os.contains("linux") -> "linux-x86_64"
-        os.contains("win") -> "windows-x86_64"
-        else -> "linux-x86_64"
-    }
+val hostOsName = System.getProperty("os.name")
+val isWindowsHost = hostOsName.startsWith("Windows", ignoreCase = true)
+val isMacHost = hostOsName.startsWith("Mac", ignoreCase = true)
+val hostTag = when {
+    isMacHost -> "darwin-x86_64"
+    isWindowsHost -> "windows-x86_64"
+    else -> "linux-x86_64"
 }
 val llvmStrip = File(effectiveNdkDir, "toolchains/llvm/prebuilt/$hostTag/bin/llvm-strip")
 val jniLibsDir = file("${project.projectDir}/src/main/jniLibs")
 val cargoTargetDir = file("${project.rootDir}/../target")
+val hostFfiLib = File(
+    cargoTargetDir,
+    when {
+        isWindowsHost -> "debug/connected_ffi.dll"
+        isMacHost -> "debug/libconnected_ffi.dylib"
+        else -> "debug/libconnected_ffi.so"
+    },
+)
 // Mapping from Android ABI name to cargo target triple (used in target/).
 val abiToTargetTriple = mapOf(
     "arm64-v8a" to "aarch64-linux-android",
@@ -289,9 +296,9 @@ tasks.register<Exec>("stripRustJniLibs") {
     }
 }
 
-// The target/ copies of libconnected_ffi.so are only needed by bindgen.
-// Delete them after each bindgen run so they don't linger on disk and the
-// next build always relinks a fresh library with its UniFFI metadata.
+// The target/ copies are only intermediates for the cargo ndk build that
+// populates jniLibs. Delete them after the Rust build so they don't linger
+// on disk; bindgen reads the host library instead.
 tasks.register<Delete>("removeRustTargetLibs") {
     val soFiles = abiToTargetTriple.values.flatMap { triple ->
         listOf("release", "debug").map { profile ->
@@ -301,9 +308,16 @@ tasks.register<Delete>("removeRustTargetLibs") {
     delete(soFiles)
 }
 
+// Build the host FFI library used as the UniFFI metadata source. The
+// generated bindings are architecture-independent, so this is shared by the
+// debug and release Android variants and does not depend on the Android
+// cross-compilation.
+tasks.register<Exec>("buildFfiHost") {
+    workingDir = file("${project.rootDir}/..")
+    commandLine(cargoExecutable, "build", "-p", "connected-ffi")
+}
+
 // Generate UniFFI Kotlin bindings (using bundled uniffi-bindgen)
-// We use the library built for x86_64 (emulator) or arm64 as a reference for generation.
-// It doesn't matter which architecture, as long as the API is the same.
 tasks.register<Exec>("generateBindings") {
     workingDir = file("${project.rootDir}/..")
     commandLine(cargoExecutable, "run",
@@ -311,14 +325,12 @@ tasks.register<Exec>("generateBindings") {
         "--bin", "uniffi-bindgen",
         "--",
         "generate",
-        "--library", "target/aarch64-linux-android/debug/libconnected_ffi.so",
+        "--library", hostFfiLib.absolutePath,
         "--language", "kotlin",
         "--out-dir", "${project.projectDir}/src/main/kotlin",
         "--no-format"
     )
-    // Ensure the library exists before generating bindings.
-    // We depend on buildRustDebug because we point to the debug .so
-    dependsOn("buildRustDebug")
+    dependsOn("buildFfiHost")
 }
 
 // UniFFI-generated bindings reference the integrity/lib objects purely for
@@ -364,27 +376,30 @@ tasks.register<Exec>("generateBindingsRelease") {
         "--bin", "uniffi-bindgen",
         "--",
         "generate",
-        "--library", "target/aarch64-linux-android/release/libconnected_ffi.so",
+        "--library", hostFfiLib.absolutePath,
         "--language", "kotlin",
         "--out-dir", "${project.projectDir}/src/main/kotlin",
         "--no-format"
     )
-    dependsOn("buildRustRelease")
+    dependsOn("buildFfiHost")
 }
 
 afterEvaluate {
     tasks.matching { it.name == "generateBindings" || it.name == "generateBindingsRelease" }
         .configureEach {
-            finalizedBy("cleanUniffiBindings", "removeRustTargetLibs")
+            finalizedBy("cleanUniffiBindings")
+        }
+    tasks.matching { it.name == "buildRustDebug" || it.name == "buildRustRelease" }
+        .configureEach {
+            finalizedBy("removeRustTargetLibs")
         }
     tasks.matching { it.name.startsWith("pre") && it.name.endsWith("DebugBuild") }.configureEach {
-        dependsOn("generateBindings")
+        dependsOn("generateBindings", "buildRustDebug")
     }
     tasks.matching { it.name.startsWith("pre") && it.name.endsWith("ReleaseBuild") }.configureEach {
-        dependsOn("generateBindingsRelease")
+        dependsOn("generateBindingsRelease", "buildRustRelease")
     }
-    // The release Rust build copies unstripped .so files into jniLibs (the
-    // symbols are needed by uniffi-bindgen via the target/ copy, not jniLibs).
+    // The release Rust build copies unstripped .so files into jniLibs.
     // After the build, strip the jniLibs copies so the APK ships the smallest
     // possible binaries. Done as a finalizer so it runs after cargo ndk
     // copies the artifacts, and is skipped on incremental builds where the
