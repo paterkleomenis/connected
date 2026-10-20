@@ -118,6 +118,10 @@ pub struct AppSettings {
     pub autostart_enabled: bool,
     pub pairing_mode_enabled: bool,
     pub theme_mode: ThemeModeSetting,
+    /// Native window blur (GNOME 51+ Wayland). Harmless elsewhere.
+    pub blur_enabled: bool,
+    /// 0-100: how much of the blurred background shows through.
+    pub blur_strength: u8,
     pub device_name: Option<String>,
     pub saved_devices: HashMap<String, SavedDeviceInfo>,
     pub download_directory: Option<String>,
@@ -140,6 +144,9 @@ impl Default for AppSettings {
             // it on every launch defeated the user's security choice.
             pairing_mode_enabled: true,
             theme_mode: ThemeModeSetting::System,
+            blur_enabled: true,
+            // 40 reproduces the pre-setting frosted-glass alpha (0.72).
+            blur_strength: 40,
             device_name: None,
             saved_devices: HashMap::new(),
             download_directory: None,
@@ -1365,6 +1372,26 @@ pub fn set_theme_mode_setting(mode: ThemeModeSetting) {
     update_setting(|s| s.theme_mode = mode);
 }
 
+#[cfg(target_os = "linux")]
+pub fn get_blur_enabled_setting() -> bool {
+    get_app_settings().lock_or_recover().blur_enabled
+}
+
+#[cfg(target_os = "linux")]
+pub fn set_blur_enabled_setting(enabled: bool) {
+    update_setting(|s| s.blur_enabled = enabled);
+}
+
+#[cfg(target_os = "linux")]
+pub fn get_blur_strength_setting() -> u8 {
+    get_app_settings().lock_or_recover().blur_strength
+}
+
+#[cfg(target_os = "linux")]
+pub fn set_blur_strength_setting(strength: u8) {
+    update_setting(|s| s.blur_strength = strength.min(100));
+}
+
 pub fn get_device_name_setting() -> Option<String> {
     get_app_settings().lock_or_recover().device_name.clone()
 }
@@ -1443,6 +1470,16 @@ mod tests {
         let init_tray = get_show_tray_icon_setting();
         set_show_tray_icon_setting(!init_tray);
         assert_eq!(get_show_tray_icon_setting(), !init_tray);
+    }
+
+    #[test]
+    fn test_settings_without_blur_fields_use_defaults() {
+        // Settings files written before the blur controls existed must keep
+        // loading: blur defaults to enabled at the previous visual strength.
+        let settings: AppSettings = serde_json::from_str(r#"{"clipboard_sync_enabled":false}"#)
+            .expect("legacy settings should still parse");
+        assert!(settings.blur_enabled);
+        assert_eq!(settings.blur_strength, 40);
     }
 
     #[test]

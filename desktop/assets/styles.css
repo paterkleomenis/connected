@@ -2717,6 +2717,13 @@ input:focus + .slider {
     padding-left: var(--space-2);
 }
 
+.settings-range {
+    flex: 1;
+    min-width: 120px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
 .info-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
@@ -3682,10 +3689,17 @@ body.gnome-blur {
     background: transparent !important;
 }
 
+html.gnome-blur {
+    /* Overridden at runtime from Appearance > Blur Strength. */
+    --gnome-blur-alpha: 0.72;
+    --gnome-blur-alpha-soft: 0.55;
+}
+
 .gnome-blur .app-root {
-    /* Frosted-glass base; Mutter blurs the wallpaper behind it. Alpha is
-       kept high so text stays readable if the effect ever drops out. */
-    background: rgba(28, 28, 30, 0.72);
+    /* Frosted-glass base; Mutter blurs the wallpaper behind it. Alpha comes
+       from the strength setting, defaulting high so text stays readable if
+       the effect ever drops out. */
+    background: rgba(28, 28, 30, var(--gnome-blur-alpha));
     border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
@@ -3698,7 +3712,7 @@ body.gnome-blur {
 }
 
 .gnome-blur .app-root:has(.app-container.theme-light) {
-    background: rgba(245, 245, 247, 0.72);
+    background: rgba(245, 245, 247, var(--gnome-blur-alpha));
     border-color: rgba(0, 0, 0, 0.12);
 }
 
@@ -3708,11 +3722,11 @@ body.gnome-blur {
 
 .gnome-blur .sidebar {
     /* Sidebar floats over the blurred base instead of painting opaque. */
-    background: rgba(30, 30, 32, 0.55);
+    background: rgba(30, 30, 32, var(--gnome-blur-alpha-soft));
 }
 
 .gnome-blur .custom-titlebar {
-    background: rgba(28, 28, 30, 0.55);
+    background: rgba(28, 28, 30, var(--gnome-blur-alpha-soft));
 }
 
 /* ============================================================================
