@@ -1931,7 +1931,7 @@ fn App() -> Element {
                     ..
                 }
             ) {
-                ipc::show_window(&tray_click_window.window);
+                ipc::show_window(&tray_click_window);
             }
         });
     }
