@@ -86,12 +86,3 @@ rust_2021_compatibility = { level = "warn", priority = -1 }
 [workspace.lints.clippy]
 # Standard lints
 all = { level = "warn", priority = -1 }
-
-# ---------------------------------------------------------------------------
-# Replace libxdo with a tiny no-op stub (~80 lines) so the binary never links
-# to the system libxdo.so, which has different sonames across distros
-# (libxdo.so.3 on Ubuntu vs libxdo.so.4 on Arch). Menu keyboard-accelerator
-# simulation is the only thing lost; menus still work fine.
-# ---------------------------------------------------------------------------
-[patch.crates-io]
-libxdo = { path = "patches/libxdo" }

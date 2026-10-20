@@ -7801,7 +7801,3 @@ dependencies = [
  "syn 3.0.5",
  "winnow 1.0.4",
 ]
-
-[[patch.unused]]
-name = "libxdo"
-version = "0.6.0"
