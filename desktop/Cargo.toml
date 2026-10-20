@@ -49,6 +49,22 @@ raw-window-handle = "0.6"
 block2 = "0.6"
 core-foundation = "0.10"
 libloading = "0.9"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "NSAppearance",
+  "NSColor",
+  "NSGraphics",
+  "NSResponder",
+  "NSView",
+  "NSVisualEffectView",
+  "NSWindow",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "NSGeometry",
+  "NSString",
+] }
 
 # Native window backdrop: DWM Mica/blur on Windows, NSVisualEffectView
 # vibrancy on macOS. Linux uses the ext-background-effect-v1 implementation.

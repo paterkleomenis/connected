@@ -76,9 +76,24 @@ pub fn on_window_created(window: &Arc<Window>, visible: bool) {
         crate::windows_vibrancy::enable_blur(window);
     }
     #[cfg(target_os = "macos")]
-    let _ = (window, visible);
+    {
+        let _ = visible;
+        crate::macos_vibrancy::sync_window_chrome(window);
+    }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     let _ = (window, visible);
+}
+
+/// Re-apply the window chrome that depends on the blur/theme settings.
+///
+/// On macOS this pairs the native titlebar appearance (and therefore its text
+/// contrast) with the app theme. The titlebar tint itself is painted by the
+/// `native-blur` CSS theme. Other platforms have no native chrome to update.
+pub fn refresh_window_chrome(window: &Arc<Window>) {
+    #[cfg(target_os = "macos")]
+    crate::macos_vibrancy::sync_window_chrome(window);
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
 }
 
 /// Called on macOS from the first event-loop tick after initialization.
@@ -110,30 +125,47 @@ pub fn on_window_hidden() {
 /// Maps the 0-100 blur-strength setting to the frosted-glass base alpha.
 ///
 /// Higher strength = more transparent glass = more of the blurred backdrop
-/// visible. `40` reproduces the original hardcoded `0.72` alpha.
+/// visible. The default of `40` keeps text readable while still clearly showing
+/// the vibrant backdrop; `100` is deliberately very see-through.
 pub fn blur_alpha(strength: u8) -> f32 {
-    0.90 - 0.0045 * f32::from(strength.min(100))
+    0.62 - 0.0044 * f32::from(strength.min(100))
 }
 
 /// Alpha for the lighter surfaces (sidebar/titlebar) that sit on the base.
 pub fn blur_alpha_soft(strength: u8) -> f32 {
-    (blur_alpha(strength) * (0.55 / 0.72)).clamp(0.15, 0.95)
+    (blur_alpha(strength) * (0.55 / 0.72)).clamp(0.12, 0.95)
+}
+
+/// Alpha for the native macOS titlebar tint.
+///
+/// The titlebar carries the native window title, so it stays more opaque than
+/// the content at the highest strength. It still follows the slider (0-100)
+/// and always keeps the title text readable over a bright backdrop.
+pub fn blur_titlebar_alpha(strength: u8) -> f32 {
+    0.62 - 0.0028 * f32::from(strength.min(100))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{blur_alpha, blur_alpha_soft};
+    use super::{blur_alpha, blur_alpha_soft, blur_titlebar_alpha};
 
     #[test]
-    fn default_strength_reproduces_previous_alphas() {
-        assert!((blur_alpha(40) - 0.72).abs() < 1e-4);
-        assert!((blur_alpha_soft(40) - 0.55).abs() < 1e-4);
+    fn default_strength_is_translucent_but_readable() {
+        assert!((blur_alpha(40) - 0.444).abs() < 1e-4);
+        assert!((blur_alpha_soft(40) - 0.339_166_7).abs() < 1e-4);
     }
 
     #[test]
     fn strength_is_clamped_to_supported_range() {
-        assert!((blur_alpha(0) - 0.90).abs() < 1e-4);
-        assert!((blur_alpha(100) - 0.45).abs() < 1e-4);
+        assert!((blur_alpha(0) - 0.62).abs() < 1e-4);
+        assert!((blur_alpha(100) - 0.18).abs() < 1e-4);
         assert_eq!(blur_alpha(255), blur_alpha(100));
+    }
+
+    #[test]
+    fn titlebar_stays_readable_at_every_strength() {
+        assert!((blur_titlebar_alpha(40) - 0.508).abs() < 1e-4);
+        assert!((blur_titlebar_alpha(100) - 0.34).abs() < 1e-4);
+        assert_eq!(blur_titlebar_alpha(255), blur_titlebar_alpha(100));
     }
 }

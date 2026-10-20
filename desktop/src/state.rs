@@ -145,7 +145,7 @@ impl Default for AppSettings {
             pairing_mode_enabled: true,
             theme_mode: ThemeModeSetting::System,
             blur_enabled: true,
-            // 40 reproduces the pre-setting frosted-glass alpha (0.72).
+            // Readable frosted glass that still shows the blurred backdrop.
             blur_strength: 40,
             device_name: None,
             saved_devices: HashMap::new(),

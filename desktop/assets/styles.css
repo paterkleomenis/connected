@@ -97,6 +97,9 @@
     --leading-normal: 1.5;
     --leading-relaxed: 1.625;
 
+    /* Layout */
+    --sidebar-width: 260px;
+
     /* Device type colors */
     --device-android: #3ddc84;
     --device-ios: #007aff;
@@ -303,8 +306,8 @@ body {
    ============================================================================ */
 
 .sidebar {
-    width: 260px;
-    min-width: 260px;
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
     background: var(--bg-sidebar);
     display: flex;
     flex-direction: column;
@@ -3697,12 +3700,32 @@ html.native-blur {
     /* Overridden at runtime from Appearance > Blur Strength. */
     --native-blur-alpha: 0.72;
     --native-blur-alpha-soft: 0.55;
+    --native-titlebar-alpha: 0.55;
+
+    /* Elevated glass surfaces (cards, header buttons). The cards use a dark
+       tint rather than a white wash: over a bright wallpaper the white overlay
+       made secondary text (device status, hints) wash out. */
+    --native-card-bg: rgba(28, 28, 30, 0.35);
+    --native-card-sheen: linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.07) 0%,
+        rgba(255, 255, 255, 0.015) 100%
+    );
+    --native-card-text-secondary: rgba(255, 255, 255, 0.8);
+    --native-card-text-tertiary: rgba(255, 255, 255, 0.62);
+    --native-surface-hover-alpha: 0.16;
+    --native-surface-border: rgba(255, 255, 255, 0.16);
+    /* Icon actions need a little more fill than a large card to read as a
+       button over a bright blurred backdrop. */
+    --native-action-bg: rgba(28, 28, 30, 0.38);
 }
 
 .native-blur .app-root {
     /* Frosted-glass base; the platform effect blurs the desktop behind it.
        Alpha comes from the strength setting, defaulting high so text stays
-       readable if the effect ever drops out. */
+       readable if the effect ever drops out. macOS removes this border in
+       `.app-root.macos-chrome`: the native window already draws its rounded
+       edge and shadow, and an inner border reads as a second outline. */
     background: rgba(28, 28, 30, var(--native-blur-alpha));
     border: 1px solid rgba(255, 255, 255, 0.12);
 }
@@ -3716,8 +3739,44 @@ html.native-blur {
 }
 
 .native-blur .app-root:has(.app-container.theme-light) {
-    background: rgba(245, 245, 247, var(--native-blur-alpha));
+    /* Leave the sidebar region transparent so the sidebar can composite the
+       same dark-app-base + dark-sidebar layers as dark mode over the raw
+       native blur. The rest of the window keeps the light frosted base. */
+    background: linear-gradient(
+        to right,
+        transparent 0,
+        transparent var(--sidebar-width),
+        rgba(245, 245, 247, var(--native-blur-alpha)) var(--sidebar-width),
+        rgba(245, 245, 247, var(--native-blur-alpha)) 100%
+    );
     border-color: rgba(0, 0, 0, 0.12);
+    --native-card-bg: rgba(255, 255, 255, 0.6);
+    --native-card-sheen: none;
+    --native-card-text-secondary: #4a4a4f;
+    --native-card-text-tertiary: #6e6e73;
+    --native-surface-hover-alpha: 0.72;
+    --native-surface-border: rgba(0, 0, 0, 0.1);
+    --native-action-bg: rgba(255, 255, 255, 0.68);
+}
+
+@media (prefers-color-scheme: light) {
+    .native-blur .app-root:has(.app-container.theme-system) {
+        background: linear-gradient(
+            to right,
+            transparent 0,
+            transparent var(--sidebar-width),
+            rgba(245, 245, 247, var(--native-blur-alpha)) var(--sidebar-width),
+            rgba(245, 245, 247, var(--native-blur-alpha)) 100%
+        );
+        border-color: rgba(0, 0, 0, 0.12);
+        --native-card-bg: rgba(255, 255, 255, 0.6);
+        --native-card-sheen: none;
+        --native-card-text-secondary: #4a4a4f;
+        --native-card-text-tertiary: #6e6e73;
+        --native-surface-hover-alpha: 0.72;
+        --native-surface-border: rgba(0, 0, 0, 0.1);
+        --native-action-bg: rgba(255, 255, 255, 0.68);
+    }
 }
 
 .native-blur .main-content {
@@ -3729,8 +3788,144 @@ html.native-blur {
     background: rgba(30, 30, 32, var(--native-blur-alpha-soft));
 }
 
+/* The sidebar is dark chrome even in the opaque light theme. In light mode
+   the app-root leaves this column transparent, so stack the same dark base and
+   sidebar tint as dark mode; the result is the same dark glass over the raw
+   blurred wallpaper instead of a flat gray over the light frosted base. */
+.native-blur .app-root:has(.app-container.theme-light) .sidebar {
+    background-color: rgba(28, 28, 30, var(--native-blur-alpha));
+    background-image:
+        linear-gradient(rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.35)),
+        linear-gradient(
+            rgba(30, 30, 32, var(--native-blur-alpha-soft)),
+            rgba(30, 30, 32, var(--native-blur-alpha-soft))
+        );
+}
+
+@media (prefers-color-scheme: light) {
+    .native-blur .app-root:has(.app-container.theme-system) .sidebar {
+        background-color: rgba(28, 28, 30, var(--native-blur-alpha));
+        background-image:
+            linear-gradient(rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.35)),
+            linear-gradient(
+                rgba(30, 30, 32, var(--native-blur-alpha-soft)),
+                rgba(30, 30, 32, var(--native-blur-alpha-soft))
+            );
+    }
+}
+
 .native-blur .custom-titlebar {
     background: rgba(28, 28, 30, var(--native-blur-alpha-soft));
+}
+
+/* Main-content cards and icon actions use the same frosted material as the
+   sidebar nav items: a translucent white overlay on the blurred base. */
+.native-blur .info-card,
+.native-blur .device-card,
+.native-blur .phone-content,
+.native-blur .send-file-section,
+.native-blur .download-location,
+.native-blur .sync-status,
+.native-blur .manual-clipboard,
+.native-blur .media-controls {
+    background-color: var(--native-card-bg);
+    background-image: var(--native-card-sheen);
+    border-color: var(--native-surface-border);
+    color: var(--text-primary);
+
+    /* Muted text and status dots resolve these variables inline. Brightening
+       them keeps descriptions legible without changing the primary text. */
+    --text-secondary: var(--native-card-text-secondary);
+    --text-tertiary: var(--native-card-text-tertiary);
+}
+
+/* Keep the existing accent interaction states; the generic translucent
+   card rule above would otherwise win on equal specificity. */
+.native-blur .info-card:hover {
+    border-color: var(--border-strong);
+}
+
+.native-blur .device-card:hover,
+.native-blur .device-card.selected {
+    border-color: var(--accent);
+}
+
+.native-blur .header-action-btn {
+    background: var(--native-action-bg);
+    border-color: var(--native-surface-border);
+    color: var(--native-card-text-secondary);
+}
+
+.native-blur .header-action-btn:not(.warning):not(.danger):hover {
+    background: rgba(255, 255, 255, var(--native-surface-hover-alpha));
+    color: var(--text-primary);
+}
+
+/* ============================================================================
+   macOS full-size content + native titlebar
+   ============================================================================
+   The webview extends under the standard titlebar (fullSizeContentView), so the
+   top 28px are kept clear for the native traffic lights and title text. When
+   blur is active that strip shows the vibrant backdrop; otherwise it is filled
+   with an opaque tint that matches the app theme. */
+
+.app-root.macos-chrome {
+    padding-top: 28px;
+    background-clip: content-box;
+    /* The native window supplies the rounded edge and shadow. A CSS border
+       here is clipped by that rounded frame and shows as a second outline. */
+    border: none;
+}
+
+.macos-titlebar-tint {
+    display: none;
+}
+
+.app-root.macos-chrome .macos-titlebar-tint {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 28px;
+    z-index: 50;
+    pointer-events: none;
+    background: var(--bg-primary);
+    opacity: 1;
+}
+
+.app-root.macos-chrome:has(.app-container.theme-light) .macos-titlebar-tint {
+    background: #f5f5f7;
+}
+
+.app-root.macos-chrome:has(.app-container.theme-system) .macos-titlebar-tint {
+    background: var(--bg-primary);
+}
+
+.native-blur .app-root.macos-chrome .macos-titlebar-tint {
+    background: rgba(28, 28, 30, var(--native-titlebar-alpha));
+}
+
+.native-blur .app-root.macos-chrome:has(.app-container.theme-light) .macos-titlebar-tint {
+    background: rgba(245, 245, 247, var(--native-titlebar-alpha));
+}
+
+@media (prefers-color-scheme: light) {
+    .app-root.macos-chrome:has(.app-container.theme-system) .macos-titlebar-tint {
+        background: #f5f5f7;
+    }
+
+    .native-blur .app-root.macos-chrome:has(.app-container.theme-system) .macos-titlebar-tint {
+        background: rgba(245, 245, 247, var(--native-titlebar-alpha));
+    }
+}
+
+.macos-fullscreen .app-root.macos-chrome {
+    padding-top: 0;
+}
+
+.macos-fullscreen .macos-titlebar-tint {
+    display: none;
 }
 
 /* ============================================================================

@@ -50,6 +50,9 @@ ignore = [
   "RUSTSEC-2026-0370",
   "RUSTSEC-2026-0371",
   "RUSTSEC-2026-0372",
+  # basic-toml unmaintained - transitive build dep of askama_derive via
+  # uniffi_bindgen; current askama/uniffi releases have no replacement yet
+  "RUSTSEC-2026-0374",
 ]
 
 # =============================================================================

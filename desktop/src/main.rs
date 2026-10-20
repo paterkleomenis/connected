@@ -1360,16 +1360,28 @@ fn main() {
     }
 
     #[allow(unused_mut)]
+    let mut window_builder = dioxus::desktop::WindowBuilder::new()
+        .with_title("Connected")
+        .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
+        .with_decorations(decorations)
+        .with_transparent(transparent)
+        .with_window_icon(load_icon())
+        .with_visible(!launched_from_autostart);
+
+    // Let the webview and its vibrant backdrop extend under the native macOS
+    // titlebar, so the titlebar is blurred like the rest of the window while
+    // keeping the standard traffic lights and title text.
+    #[cfg(target_os = "macos")]
+    {
+        use dioxus::desktop::tao::platform::macos::WindowBuilderExtMacOS;
+        window_builder = window_builder
+            .with_titlebar_transparent(true)
+            .with_fullsize_content_view(true);
+    }
+
+    #[allow(unused_mut)]
     let mut config = dioxus::desktop::Config::new()
-        .with_window(
-            dioxus::desktop::WindowBuilder::new()
-                .with_title("Connected")
-                .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 700.0))
-                .with_decorations(decorations)
-                .with_transparent(transparent)
-                .with_window_icon(load_icon())
-                .with_visible(!launched_from_autostart),
-        )
+        .with_window(window_builder)
         .with_disable_context_menu(true)
         .with_on_window(move |window, _| {
             ipc::set_wakeup_window(window.clone());
@@ -1555,6 +1567,8 @@ fn BlurSettings() -> Element {
     let mut blur_enabled = use_signal(get_blur_enabled_setting);
     let mut blur_strength = use_signal(get_blur_strength_setting);
     let window = dioxus::desktop::window();
+    let toggle_chrome_window = window.window.clone();
+    let strength_chrome_window = window.window.clone();
     let hint = if cfg!(target_os = "linux") {
         "Native GNOME 51+ Wayland blur. Strength controls how much of the blurred background shows through (0 is nearly solid); the compositor owns the blur radius."
     } else if cfg!(target_os = "windows") {
@@ -1580,6 +1594,8 @@ fn BlurSettings() -> Element {
                             set_blur_enabled_setting(new_val);
                             if new_val {
                                 crate::native_blur::enable_blur(&window.window);
+                            } else {
+                                crate::native_blur::refresh_window_chrome(&toggle_chrome_window);
                             }
                         },
                     }
@@ -1606,6 +1622,7 @@ fn BlurSettings() -> Element {
                             if let Ok(value) = e.value().parse::<u8>() {
                                 blur_strength.set(value);
                                 set_blur_strength_setting(value);
+                                crate::native_blur::refresh_window_chrome(&strength_chrome_window);
                             }
                         },
                     }
@@ -1627,6 +1644,9 @@ fn BlurSettings() -> Element {
 fn App() -> Element {
     let window = dioxus::desktop::window();
     let desktop_window = dioxus::desktop::use_window();
+    let system_chrome_window = window.window.clone();
+    let light_chrome_window = window.window.clone();
+    let dark_chrome_window = window.window.clone();
 
     use_hook(|| {
         static SPUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -2018,7 +2038,7 @@ fn App() -> Element {
         async move {
             let mut last_devices_hash: u64 = 0;
             let mut last_transfer_status_hash: u64 = 0;
-            let mut applied_blur_theme: Option<(bool, u8)> = None;
+            let mut applied_blur_theme: Option<(bool, u8, bool)> = None;
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             let mut last_visible = wake_window.is_visible();
 
@@ -2230,23 +2250,37 @@ fn App() -> Element {
                     let blur_on =
                         crate::native_blur::is_blur_active() && get_blur_enabled_setting();
                     let strength = get_blur_strength_setting();
-                    if applied_blur_theme != Some((blur_on, strength)) {
+                    #[cfg(target_os = "macos")]
+                    let fullscreen = wake_window.fullscreen().is_some();
+                    #[cfg(not(target_os = "macos"))]
+                    let fullscreen = false;
+                    if applied_blur_theme != Some((blur_on, strength, fullscreen)) {
+                        let fullscreen_class = if fullscreen {
+                            "document.documentElement.classList.add('macos-fullscreen');"
+                        } else {
+                            "document.documentElement.classList.remove('macos-fullscreen');"
+                        };
                         let script = if blur_on {
                             let alpha = crate::native_blur::blur_alpha(strength);
                             let alpha_soft = crate::native_blur::blur_alpha_soft(strength);
+                            let titlebar_alpha = crate::native_blur::blur_titlebar_alpha(strength);
                             format!(
                                 "document.documentElement.style.setProperty('--native-blur-alpha','{alpha:.3}');\
                                  document.documentElement.style.setProperty('--native-blur-alpha-soft','{alpha_soft:.3}');\
+                                 document.documentElement.style.setProperty('--native-titlebar-alpha','{titlebar_alpha:.3}');\
                                  document.documentElement.classList.add('native-blur');\
-                                 document.body.classList.add('native-blur');"
+                                 document.body.classList.add('native-blur');\
+                                 {fullscreen_class}"
                             )
                         } else {
-                            "document.documentElement.classList.remove('native-blur');\
-                             document.body.classList.remove('native-blur');"
-                                .to_string()
+                            format!(
+                                "document.documentElement.classList.remove('native-blur');\
+                                 document.body.classList.remove('native-blur');\
+                                 {fullscreen_class}"
+                            )
                         };
                         if blur_ctx.webview.evaluate_script(&script).is_ok() {
-                            applied_blur_theme = Some((blur_on, strength));
+                            applied_blur_theme = Some((blur_on, strength, fullscreen));
                             debug!(
                                 "native-blur theme applied (enabled={blur_on}, strength={strength})"
                             );
@@ -2308,7 +2342,11 @@ fn App() -> Element {
         style { {include_str!("../assets/styles.css")} }
 
         div {
-            class: "app-root",
+            class: if cfg!(target_os = "macos") { "app-root macos-chrome" } else { "app-root" },
+
+            if cfg!(target_os = "macos") {
+                div { class: "macos-titlebar-tint" }
+            }
 
             if cfg!(target_os = "linux") {
                 titlebar::Titlebar {}
@@ -3839,6 +3877,7 @@ fn App() -> Element {
                                             let mode = ThemeModeSetting::System;
                                             theme_mode.set(mode.clone());
                                             set_theme_mode_setting(mode);
+                                            crate::native_blur::refresh_window_chrome(&system_chrome_window);
                                         },
                                         "System"
                                     }
@@ -3848,6 +3887,7 @@ fn App() -> Element {
                                             let mode = ThemeModeSetting::Light;
                                             theme_mode.set(mode.clone());
                                             set_theme_mode_setting(mode);
+                                            crate::native_blur::refresh_window_chrome(&light_chrome_window);
                                         },
                                         "Light"
                                     }
@@ -3857,6 +3897,7 @@ fn App() -> Element {
                                             let mode = ThemeModeSetting::Dark;
                                             theme_mode.set(mode.clone());
                                             set_theme_mode_setting(mode);
+                                            crate::native_blur::refresh_window_chrome(&dark_chrome_window);
                                         },
                                         "Dark"
                                     }
