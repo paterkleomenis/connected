@@ -1,5 +1,5 @@
 Name:           connected-desktop
-Version:        3.4.4
+Version:        3.5.0
 Release:        1%{?dist}
 Summary:        High-speed, offline, cross-platform ecosystem bridging devices
 
@@ -61,6 +61,9 @@ install -Dm644 %{SOURCE4} %{buildroot}%{_datadir}/licenses/%{name}/LICENSE-APACH
 %{_datadir}/icons/hicolor/512x512/apps/%{name}.png
 
 %changelog
+* Tue Oct 20 2026 Connected Team <paterkleomenis@protonmail.com> - 3.5.0-1
+- Update to 3.5.0
+
 * Mon Oct 19 2026 Connected Team <paterkleomenis@protonmail.com> - 3.4.4-1
 - Update to 3.4.4
 - Include trust-chain hardening, bounded stream timeouts, IPv4 discovery
