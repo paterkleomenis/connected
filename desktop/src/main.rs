@@ -1453,10 +1453,9 @@ fn main() {
             dioxus::desktop::tao::event::Event::NewEvents(
                 dioxus::desktop::tao::event::StartCause::Init
             )
-        ) {
-            if let Some(window) = ipc::current_window() {
-                crate::native_blur::on_webview_ready(&window);
-            }
+        ) && let Some(window) = ipc::current_window()
+        {
+            crate::native_blur::on_webview_ready(&window);
         }
 
         if let dioxus::desktop::tao::event::Event::Reopen {
