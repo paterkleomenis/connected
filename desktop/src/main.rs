@@ -1731,8 +1731,10 @@ fn App() -> Element {
 
             #[cfg(target_os = "macos")]
             let icon = {
-                let tray_icon = dioxus::desktop::trayicon::init_tray_icon(menu, load_tray_icon());
-                tray_icon.set_icon_as_template(true);
+                let tray_icon = dioxus::desktop::trayicon::init_tray_icon(menu, None);
+                if let Err(err) = tray_icon.set_icon_templated(load_tray_icon()) {
+                    tracing::warn!("Failed to set templated tray icon: {:?}", err);
+                }
                 tray_icon
             };
 
