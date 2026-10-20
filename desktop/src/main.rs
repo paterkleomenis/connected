@@ -16,13 +16,18 @@ mod ipc;
 mod linux_wayland_blur;
 #[cfg(target_os = "macos")]
 mod macos_media;
+#[cfg(target_os = "macos")]
+mod macos_vibrancy;
 mod mpris_server;
+mod native_blur;
 mod remote_commands;
 mod state;
 mod titlebar;
 mod utils;
 #[cfg(target_os = "windows")]
 mod windows_audio;
+#[cfg(target_os = "windows")]
+mod windows_vibrancy;
 
 use state::{
     ThemeModeSetting, get_clipboard_sync_enabled, get_device_name_setting,
@@ -1343,7 +1348,11 @@ fn main() {
     // On Linux/Wayland, use a custom titlebar to avoid GTK decoration issues
     // (unresponsive CSD buttons under Wayland, dioxus#3667).
     let decorations = cfg!(any(target_os = "windows", target_os = "macos"));
-    let transparent = !decorations;
+    // Transparent window + webview on every platform: Linux needs it for the
+    // compositor blur, Windows for the DWM backdrop, macOS for vibrancy. The
+    // opaque theme still paints every pixel whenever blur is disabled or
+    // unsupported, so this is not visible on its own.
+    let transparent = true;
 
     let data_dir = dirs::data_local_dir().map(|d| d.join("connected"));
     if let Some(d) = data_dir.as_ref().filter(|d| !d.exists()) {
@@ -1364,18 +1373,11 @@ fn main() {
         .with_disable_context_menu(true)
         .with_on_window(move |window, _| {
             ipc::set_wakeup_window(window.clone());
-            // GNOME 51: request compositor background blur (Mutter
-            // ext-background-effect-v1) on the native Wayland surface.
-            // Runs on a helper thread; no-op off Wayland or without
-            // compositor support.
-            #[cfg(target_os = "linux")]
-            {
-                // Autostart windows are created hidden and mapped only when
-                // the user opens them from the tray; the installer waits for
-                // this flag instead of exhausting its retries up front.
-                crate::linux_wayland_blur::set_window_visible(!launched_from_autostart);
-                crate::linux_wayland_blur::enable_blur_async(window);
-            }
+            // Install the platform's native backdrop: Mutter
+            // ext-background-effect-v1 on Wayland, DWM Mica/blur on Windows,
+            // NSVisualEffectView on macOS. No-op when unsupported; the opaque
+            // theme stays in that case.
+            crate::native_blur::on_window_created(&window, !launched_from_autostart);
         });
 
     // GNOME 51 / Mutter requires a native Wayland client for the
@@ -1441,6 +1443,22 @@ fn main() {
     // Show window on dock icon click on macOS
     #[cfg(target_os = "macos")]
     let config = config.with_custom_event_handler(|event, _| {
+        // macOS vibrancy can only be installed after wry has created the
+        // webview: wry replaces the NSWindow's contentView during creation,
+        // which would discard a view added from the window hook. The custom
+        // handler runs before the event match, so skip Init (the event that
+        // builds the window/webview) and apply on the next main-thread tick.
+        if !matches!(
+            event,
+            dioxus::desktop::tao::event::Event::NewEvents(
+                dioxus::desktop::tao::event::StartCause::Init
+            )
+        ) {
+            if let Some(window) = ipc::current_window() {
+                crate::native_blur::on_webview_ready(&window);
+            }
+        }
+
         if let dioxus::desktop::tao::event::Event::Reopen {
             has_visible_windows: false,
             ..
@@ -1528,16 +1546,23 @@ fn ResizeHandles() -> Element {
     }
 }
 
-/// Appearance controls for the native Wayland blur (GNOME 51+).
+/// Appearance controls for the native window blur.
 ///
-/// Only compiled on Linux; other platforms render nothing. The poller in
-/// `App` watches the persisted settings and applies them to the webview.
-#[cfg(target_os = "linux")]
+/// Mutter `ext-background-effect-v1` on Wayland, DWM Mica/blur on Windows,
+/// `NSVisualEffectView` on macOS. The poller in `App` watches the persisted
+/// settings and applies them to the webview.
 #[component]
 fn BlurSettings() -> Element {
     let mut blur_enabled = use_signal(get_blur_enabled_setting);
     let mut blur_strength = use_signal(get_blur_strength_setting);
     let window = dioxus::desktop::window();
+    let hint = if cfg!(target_os = "linux") {
+        "Native GNOME 51+ Wayland blur. Strength controls how much of the blurred background shows through (0 is nearly solid); the compositor owns the blur radius."
+    } else if cfg!(target_os = "windows") {
+        "Native Windows backdrop (Mica on Windows 11, blur on Windows 10/11 21H2). Strength controls how much of the blurred background shows through; Windows owns the blur radius."
+    } else {
+        "Native macOS vibrancy. Strength controls how much of the blurred background shows through; macOS owns the blur radius."
+    };
     rsx! {
         div {
             class: "info-grid",
@@ -1555,7 +1580,7 @@ fn BlurSettings() -> Element {
                             blur_enabled.set(new_val);
                             set_blur_enabled_setting(new_val);
                             if new_val {
-                                crate::linux_wayland_blur::enable_blur_async(window.window.clone());
+                                crate::native_blur::enable_blur(&window.window);
                             }
                         },
                     }
@@ -1595,15 +1620,9 @@ fn BlurSettings() -> Element {
         }
         p {
             class: "settings-hint",
-            "Native GNOME 51+ Wayland blur. Strength controls how much of the blurred background shows through (0 is nearly solid); the compositor owns the blur radius."
+            "{hint}"
         }
     }
-}
-
-#[cfg(not(target_os = "linux"))]
-#[component]
-fn BlurSettings() -> Element {
-    rsx! {}
 }
 
 fn App() -> Element {
@@ -1991,18 +2010,15 @@ fn App() -> Element {
     // UI Poller - polls state and updates UI signals
     // Uses 500ms interval (increased from 200ms) to reduce CPU usage
     let wake_window = window.clone();
-    #[cfg(target_os = "linux")]
     let blur_ctx = window.clone();
     use_future(move || {
         let wake_window = wake_window.window.clone();
-        #[cfg(target_os = "linux")]
         let blur_ctx = blur_ctx.clone();
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         let show_item_handle = show_item_handle.clone();
         async move {
             let mut last_devices_hash: u64 = 0;
             let mut last_transfer_status_hash: u64 = 0;
-            #[cfg(target_os = "linux")]
             let mut applied_blur_theme: Option<(bool, u8)> = None;
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             let mut last_visible = wake_window.is_visible();
@@ -2206,36 +2222,34 @@ fn App() -> Element {
                     poller_set(update_info, info);
                 }
 
-                // GNOME 51 native blur: once the background Wayland thread
-                // confirmed Mutter accepted our ext-background-effect-v1
-                // region, switch the webview to the translucent `gnome-blur`
-                // theme so the blur shows through. The user's enable/strength
-                // settings are applied live; everywhere else the opaque theme
-                // is kept.
-                #[cfg(target_os = "linux")]
+                // Native window blur: once the platform effect is active,
+                // switch the webview to the translucent `native-blur` theme so
+                // the blurred backdrop shows through. The user's enable and
+                // strength settings are applied live; everywhere else the
+                // opaque theme is kept.
                 {
                     let blur_on =
-                        crate::linux_wayland_blur::is_blur_active() && get_blur_enabled_setting();
+                        crate::native_blur::is_blur_active() && get_blur_enabled_setting();
                     let strength = get_blur_strength_setting();
                     if applied_blur_theme != Some((blur_on, strength)) {
                         let script = if blur_on {
-                            let alpha = crate::linux_wayland_blur::blur_alpha(strength);
-                            let alpha_soft = crate::linux_wayland_blur::blur_alpha_soft(strength);
+                            let alpha = crate::native_blur::blur_alpha(strength);
+                            let alpha_soft = crate::native_blur::blur_alpha_soft(strength);
                             format!(
-                                "document.documentElement.style.setProperty('--gnome-blur-alpha','{alpha:.3}');\
-                                 document.documentElement.style.setProperty('--gnome-blur-alpha-soft','{alpha_soft:.3}');\
-                                 document.documentElement.classList.add('gnome-blur');\
-                                 document.body.classList.add('gnome-blur');"
+                                "document.documentElement.style.setProperty('--native-blur-alpha','{alpha:.3}');\
+                                 document.documentElement.style.setProperty('--native-blur-alpha-soft','{alpha_soft:.3}');\
+                                 document.documentElement.classList.add('native-blur');\
+                                 document.body.classList.add('native-blur');"
                             )
                         } else {
-                            "document.documentElement.classList.remove('gnome-blur');\
-                             document.body.classList.remove('gnome-blur');"
+                            "document.documentElement.classList.remove('native-blur');\
+                             document.body.classList.remove('native-blur');"
                                 .to_string()
                         };
                         if blur_ctx.webview.evaluate_script(&script).is_ok() {
                             applied_blur_theme = Some((blur_on, strength));
                             debug!(
-                                "gnome-blur theme applied (enabled={blur_on}, strength={strength})"
+                                "native-blur theme applied (enabled={blur_on}, strength={strength})"
                             );
                         }
                     }

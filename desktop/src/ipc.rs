@@ -89,15 +89,11 @@ pub fn set_wakeup_window(window: Arc<Window>) {
 pub fn show_window(window: &Arc<Window>) {
     window.set_visible(true);
 
-    #[cfg(target_os = "linux")]
-    {
-        // Re-arm native blur on every show. Autostart creates the window
-        // hidden, so the startup installer may have been waiting (or given
-        // up) before the first wl_surface was mapped; without this, the
-        // window stayed opaque for the whole session.
-        crate::linux_wayland_blur::set_window_visible(true);
-        crate::linux_wayland_blur::enable_blur_async(window.clone());
-    }
+    // Re-arm blur on every show. Linux autostart windows are created hidden,
+    // so the installer may have been waiting (or given up) before the first
+    // wl_surface was mapped. Windows/macOS effects persist, so this is a
+    // cheap no-op there.
+    crate::native_blur::on_window_shown(window);
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
@@ -150,14 +146,23 @@ pub fn window_is_visible() -> bool {
         .unwrap_or(false)
 }
 
+/// The window created by Dioxus, once available. Used by macOS to install
+/// vibrancy after wry has built the webview.
+#[cfg(target_os = "macos")]
+pub fn current_window() -> Option<Arc<Window>> {
+    WAKEUP_WINDOW
+        .lock()
+        .ok()
+        .and_then(|current| current.as_ref().cloned())
+}
+
 pub fn hide_window() {
     let Ok(guard) = WAKEUP_WINDOW.lock() else {
         return;
     };
     if let Some(win) = guard.as_ref() {
         win.set_visible(false);
-        #[cfg(target_os = "linux")]
-        crate::linux_wayland_blur::set_window_visible(false);
+        crate::native_blur::on_window_hidden();
     }
 }
 
