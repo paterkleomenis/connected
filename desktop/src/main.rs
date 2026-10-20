@@ -1362,14 +1362,20 @@ fn main() {
                 .with_visible(!launched_from_autostart),
         )
         .with_disable_context_menu(true)
-        .with_on_window(|window, _| {
+        .with_on_window(move |window, _| {
             ipc::set_wakeup_window(window.clone());
             // GNOME 51: request compositor background blur (Mutter
             // ext-background-effect-v1) on the native Wayland surface.
             // Runs on a helper thread; no-op off Wayland or without
             // compositor support.
             #[cfg(target_os = "linux")]
-            crate::linux_wayland_blur::enable_blur_async(window);
+            {
+                // Autostart windows are created hidden and mapped only when
+                // the user opens them from the tray; the installer waits for
+                // this flag instead of exhausting its retries up front.
+                crate::linux_wayland_blur::set_window_visible(!launched_from_autostart);
+                crate::linux_wayland_blur::enable_blur_async(window);
+            }
         });
 
     // GNOME 51 / Mutter requires a native Wayland client for the
@@ -1520,6 +1526,84 @@ fn ResizeHandles() -> Element {
             },
         }
     }
+}
+
+/// Appearance controls for the native Wayland blur (GNOME 51+).
+///
+/// Only compiled on Linux; other platforms render nothing. The poller in
+/// `App` watches the persisted settings and applies them to the webview.
+#[cfg(target_os = "linux")]
+#[component]
+fn BlurSettings() -> Element {
+    let mut blur_enabled = use_signal(get_blur_enabled_setting);
+    let mut blur_strength = use_signal(get_blur_strength_setting);
+    let window = dioxus::desktop::window();
+    rsx! {
+        div {
+            class: "info-grid",
+            style: "margin-top: 12px;",
+            div { class: "info-label", "Window Blur" }
+            div {
+                class: "info-value",
+                label {
+                    class: "toggle-switch",
+                    input {
+                        r#type: "checkbox",
+                        checked: "{blur_enabled}",
+                        oninput: move |_| {
+                            let new_val = !*blur_enabled.read();
+                            blur_enabled.set(new_val);
+                            set_blur_enabled_setting(new_val);
+                            if new_val {
+                                crate::linux_wayland_blur::enable_blur_async(window.window.clone());
+                            }
+                        },
+                    }
+                    span { class: "slider" }
+                }
+            }
+        }
+        if *blur_enabled.read() {
+            div {
+                class: "info-grid",
+                style: "margin-top: 8px;",
+                div { class: "info-label", "Blur Strength" }
+                div {
+                    class: "info-value",
+                    style: "display: flex; align-items: center; gap: 10px;",
+                    input {
+                        r#type: "range",
+                        class: "settings-range",
+                        min: "0",
+                        max: "100",
+                        step: "5",
+                        value: "{blur_strength}",
+                        oninput: move |e| {
+                            if let Ok(value) = e.value().parse::<u8>() {
+                                blur_strength.set(value);
+                                set_blur_strength_setting(value);
+                            }
+                        },
+                    }
+                    span {
+                        class: "settings-hint",
+                        style: "min-width: 4ch; text-align: right; margin-top: 0; padding-left: 0;",
+                        "{blur_strength}%"
+                    }
+                }
+            }
+        }
+        p {
+            class: "settings-hint",
+            "Native GNOME 51+ Wayland blur. Strength controls how much of the blurred background shows through (0 is nearly solid); the compositor owns the blur radius."
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[component]
+fn BlurSettings() -> Element {
+    rsx! {}
 }
 
 fn App() -> Element {
@@ -1919,7 +2003,7 @@ fn App() -> Element {
             let mut last_devices_hash: u64 = 0;
             let mut last_transfer_status_hash: u64 = 0;
             #[cfg(target_os = "linux")]
-            let mut blur_class_added = false;
+            let mut applied_blur_theme: Option<(bool, u8)> = None;
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             let mut last_visible = wake_window.is_visible();
 
@@ -2125,20 +2209,36 @@ fn App() -> Element {
                 // GNOME 51 native blur: once the background Wayland thread
                 // confirmed Mutter accepted our ext-background-effect-v1
                 // region, switch the webview to the translucent `gnome-blur`
-                // theme so the blur shows through. One-shot; everywhere else
-                // the opaque theme is kept.
+                // theme so the blur shows through. The user's enable/strength
+                // settings are applied live; everywhere else the opaque theme
+                // is kept.
                 #[cfg(target_os = "linux")]
-                if !blur_class_added
-                    && crate::linux_wayland_blur::is_blur_active()
-                    && blur_ctx
-                        .webview
-                        .evaluate_script(
-                            "document.documentElement.classList.add('gnome-blur');document.body.classList.add('gnome-blur');",
-                        )
-                        .is_ok()
                 {
-                    blur_class_added = true;
-                    tracing::debug!("gnome-blur theme class applied to webview");
+                    let blur_on =
+                        crate::linux_wayland_blur::is_blur_active() && get_blur_enabled_setting();
+                    let strength = get_blur_strength_setting();
+                    if applied_blur_theme != Some((blur_on, strength)) {
+                        let script = if blur_on {
+                            let alpha = crate::linux_wayland_blur::blur_alpha(strength);
+                            let alpha_soft = crate::linux_wayland_blur::blur_alpha_soft(strength);
+                            format!(
+                                "document.documentElement.style.setProperty('--gnome-blur-alpha','{alpha:.3}');\
+                                 document.documentElement.style.setProperty('--gnome-blur-alpha-soft','{alpha_soft:.3}');\
+                                 document.documentElement.classList.add('gnome-blur');\
+                                 document.body.classList.add('gnome-blur');"
+                            )
+                        } else {
+                            "document.documentElement.classList.remove('gnome-blur');\
+                             document.body.classList.remove('gnome-blur');"
+                                .to_string()
+                        };
+                        if blur_ctx.webview.evaluate_script(&script).is_ok() {
+                            applied_blur_theme = Some((blur_on, strength));
+                            debug!(
+                                "gnome-blur theme applied (enabled={blur_on}, strength={strength})"
+                            );
+                        }
+                    }
                 }
 
                 // Increased from 200ms to 500ms to reduce CPU usage
@@ -3750,6 +3850,7 @@ fn App() -> Element {
                                 }
                             }
                             p { class: "settings-hint", "System follows your OS preference; Light and Dark are pinned." }
+                            BlurSettings {}
                         }
 
                         div {

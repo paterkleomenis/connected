@@ -62,9 +62,42 @@ use wayland_protocols::ext::background_effect::v1::client::{
 /// opaque theme.
 static BLUR_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// Guards against spawning duplicate installer threads (startup hook plus
+/// every window show).
+static BLUR_ATTEMPT_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Whether the toplevel is currently mapped. Maintained by the UI thread
+/// (window creation, tray show/hide) so the installer thread never touches
+/// GTK from the wrong thread.
+static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(true);
+
+/// Install attempts after the window is first mapped. Failed attempts sleep
+/// 500 ms, matching the previous 10 s retry budget.
+const MAX_BLUR_ATTEMPTS: u32 = 20;
+
+/// Update the UI-thread-owned visibility flag consulted by the installer.
+pub fn set_window_visible(visible: bool) {
+    WINDOW_VISIBLE.store(visible, Ordering::Release);
+}
+
 /// True once [`enable_blur_async`] installed a blur region successfully.
 pub fn is_blur_active() -> bool {
     BLUR_ACTIVE.load(Ordering::Acquire)
+}
+
+/// Maps the 0-100 blur-strength setting to the frosted-glass base alpha.
+///
+/// The compositor owns the actual blur radius (`ext-background-effect-v1`
+/// has no radius parameter), so "strength" is expressed as how much of the
+/// blurred desktop shows through: higher = more transparent. `40` reproduces
+/// the original hardcoded `0.72` alpha.
+pub fn blur_alpha(strength: u8) -> f32 {
+    0.90 - 0.0045 * f32::from(strength.min(100))
+}
+
+/// Alpha for the lighter surfaces (sidebar/titlebar) that sit on the base.
+pub fn blur_alpha_soft(strength: u8) -> f32 {
+    (blur_alpha(strength) * (0.55 / 0.72)).clamp(0.15, 0.95)
 }
 
 /// Are we in a session where native Wayland blur is even plausible?
@@ -124,6 +157,10 @@ pub fn enable_blur_async(window: Arc<dioxus::desktop::tao::window::Window>) {
         debug!("wayland-blur: disabled via CONNECTED_NO_BLUR");
         return;
     }
+    if !crate::state::get_blur_enabled_setting() {
+        debug!("wayland-blur: disabled in settings");
+        return;
+    }
     if !is_wayland_session() {
         debug!("wayland-blur: not a Wayland session, skipping");
         return;
@@ -131,17 +168,45 @@ pub fn enable_blur_async(window: Arc<dioxus::desktop::tao::window::Window>) {
     if is_blur_active() {
         return;
     }
-    std::thread::Builder::new()
+    // Only one installer thread at a time: the startup hook and every window
+    // show can both ask for blur.
+    if BLUR_ATTEMPT_RUNNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    struct RunningGuard;
+    impl Drop for RunningGuard {
+        fn drop(&mut self) {
+            BLUR_ATTEMPT_RUNNING.store(false, Ordering::Release);
+        }
+    }
+
+    let spawn_result = std::thread::Builder::new()
         .name("wayland-blur".into())
         .spawn(move || {
-            for attempt in 0..20 {
+            let _running = RunningGuard;
+            let mut attempts = 0u32;
+            while attempts < MAX_BLUR_ATTEMPTS {
                 if is_blur_active() {
                     return;
                 }
+                if !crate::state::get_blur_enabled_setting() {
+                    return;
+                }
+                // `--autostart` creates the window hidden; its wl_surface is
+                // only mapped when the user opens it from the tray. Wait for
+                // that instead of burning the retry budget on a window that
+                // cannot be blurred yet — this was why autostarted sessions
+                // never got blur when the window was later shown.
+                if !WINDOW_VISIBLE.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+                attempts += 1;
                 match try_enable_blur(&window) {
                     Ok(true) => {
                         BLUR_ACTIVE.store(true, Ordering::Release);
-                        debug!("wayland-blur: background blur enabled (attempt {attempt})");
+                        debug!("wayland-blur: background blur enabled (attempt {attempts})");
                         return;
                     }
                     Ok(false) => {
@@ -149,14 +214,16 @@ pub fn enable_blur_async(window: Arc<dioxus::desktop::tao::window::Window>) {
                         std::thread::sleep(Duration::from_millis(500));
                     }
                     Err(e) => {
-                        warn!("wayland-blur: {e} (attempt {attempt})");
+                        warn!("wayland-blur: {e} (attempt {attempts})");
                         std::thread::sleep(Duration::from_millis(500));
                     }
                 }
             }
             debug!("wayland-blur: giving up, keeping opaque theme");
-        })
-        .ok();
+        });
+    if spawn_result.is_err() {
+        BLUR_ATTEMPT_RUNNING.store(false, Ordering::Release);
+    }
 }
 
 /// One attempt. `Ok(true)` = blur installed. `Ok(false)` = retryable "not
@@ -361,4 +428,22 @@ unsafe fn install_blur_region(
 
     debug!("wayland-blur: blur region committed for wl_surface");
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{blur_alpha, blur_alpha_soft};
+
+    #[test]
+    fn default_strength_reproduces_previous_alphas() {
+        assert!((blur_alpha(40) - 0.72).abs() < 1e-4);
+        assert!((blur_alpha_soft(40) - 0.55).abs() < 1e-4);
+    }
+
+    #[test]
+    fn strength_is_clamped_to_supported_range() {
+        assert!((blur_alpha(0) - 0.90).abs() < 1e-4);
+        assert!((blur_alpha(100) - 0.45).abs() < 1e-4);
+        assert_eq!(blur_alpha(255), blur_alpha(100));
+    }
 }

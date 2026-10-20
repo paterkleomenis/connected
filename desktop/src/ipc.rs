@@ -86,8 +86,18 @@ pub fn set_wakeup_window(window: Arc<Window>) {
     }
 }
 
-pub fn show_window(window: &Window) {
+pub fn show_window(window: &Arc<Window>) {
     window.set_visible(true);
+
+    #[cfg(target_os = "linux")]
+    {
+        // Re-arm native blur on every show. Autostart creates the window
+        // hidden, so the startup installer may have been waiting (or given
+        // up) before the first wl_surface was mapped; without this, the
+        // window stayed opaque for the whole session.
+        crate::linux_wayland_blur::set_window_visible(true);
+        crate::linux_wayland_blur::enable_blur_async(window.clone());
+    }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
@@ -146,6 +156,8 @@ pub fn hide_window() {
     };
     if let Some(win) = guard.as_ref() {
         win.set_visible(false);
+        #[cfg(target_os = "linux")]
+        crate::linux_wayland_blur::set_window_visible(false);
     }
 }
 
