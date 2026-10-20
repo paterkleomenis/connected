@@ -1372,22 +1372,18 @@ pub fn set_theme_mode_setting(mode: ThemeModeSetting) {
     update_setting(|s| s.theme_mode = mode);
 }
 
-#[cfg(target_os = "linux")]
 pub fn get_blur_enabled_setting() -> bool {
     get_app_settings().lock_or_recover().blur_enabled
 }
 
-#[cfg(target_os = "linux")]
 pub fn set_blur_enabled_setting(enabled: bool) {
     update_setting(|s| s.blur_enabled = enabled);
 }
 
-#[cfg(target_os = "linux")]
 pub fn get_blur_strength_setting() -> u8 {
     get_app_settings().lock_or_recover().blur_strength
 }
 
-#[cfg(target_os = "linux")]
 pub fn set_blur_strength_setting(strength: u8) {
     update_setting(|s| s.blur_strength = strength.min(100));
 }

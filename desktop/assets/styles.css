@@ -3669,64 +3669,68 @@ textarea:focus-visible {
 }
 
 /* ============================================================================
-   GNOME 51 native background blur (Mutter ext-background-effect-v1)
+   Native window background blur
    ============================================================================
-   These rules only apply once the Rust side confirmed the compositor
-   accepted our blur region and added the `gnome-blur` class to <html>/<body>
-   (see `linux_wayland_blur.rs`). Everywhere else the opaque theme above is
-   kept, so compositors without blur support look exactly as before.
+   Linux/Wayland: Mutter ext-background-effect-v1 (linux_wayland_blur.rs)
+   Windows: DWM Mica or blur-behind (windows_vibrancy.rs)
+   macOS: NSVisualEffectView vibrancy (macos_vibrancy.rs)
+
+   These rules only apply once the Rust side confirmed the platform effect is
+   active and added the `native-blur` class to <html>/<body>. Everywhere else
+   the opaque theme above is kept, so unsupported systems look exactly as
+   before.
 
    The window itself is transparent (tao `with_transparent(true)` + wry
-   transparent webview background); these translucent surfaces let Mutter's
-   blurring of the desktop behind the window show through as frosted glass.
+   transparent webview background); these translucent surfaces let the
+   blurred desktop behind the window show through as frosted glass.
    In-app `backdrop-filter` usage is intentionally NOT relied upon here:
    WebKitGTK's in-content backdrop-filter blurs web content, not the desktop
    wallpaper — only the compositor effect does that. */
 
-html.gnome-blur,
-html.gnome-blur body,
-body.gnome-blur {
+html.native-blur,
+html.native-blur body,
+body.native-blur {
     background: transparent !important;
 }
 
-html.gnome-blur {
+html.native-blur {
     /* Overridden at runtime from Appearance > Blur Strength. */
-    --gnome-blur-alpha: 0.72;
-    --gnome-blur-alpha-soft: 0.55;
+    --native-blur-alpha: 0.72;
+    --native-blur-alpha-soft: 0.55;
 }
 
-.gnome-blur .app-root {
-    /* Frosted-glass base; Mutter blurs the wallpaper behind it. Alpha comes
-       from the strength setting, defaulting high so text stays readable if
-       the effect ever drops out. */
-    background: rgba(28, 28, 30, var(--gnome-blur-alpha));
+.native-blur .app-root {
+    /* Frosted-glass base; the platform effect blurs the desktop behind it.
+       Alpha comes from the strength setting, defaulting high so text stays
+       readable if the effect ever drops out. */
+    background: rgba(28, 28, 30, var(--native-blur-alpha));
     border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
-.gnome-blur .app-container {
+.native-blur .app-container {
     background: transparent;
 }
 
-.gnome-blur .app-container.theme-light {
+.native-blur .app-container.theme-light {
     background: transparent;
 }
 
-.gnome-blur .app-root:has(.app-container.theme-light) {
-    background: rgba(245, 245, 247, var(--gnome-blur-alpha));
+.native-blur .app-root:has(.app-container.theme-light) {
+    background: rgba(245, 245, 247, var(--native-blur-alpha));
     border-color: rgba(0, 0, 0, 0.12);
 }
 
-.gnome-blur .main-content {
+.native-blur .main-content {
     background: transparent;
 }
 
-.gnome-blur .sidebar {
+.native-blur .sidebar {
     /* Sidebar floats over the blurred base instead of painting opaque. */
-    background: rgba(30, 30, 32, var(--gnome-blur-alpha-soft));
+    background: rgba(30, 30, 32, var(--native-blur-alpha-soft));
 }
 
-.gnome-blur .custom-titlebar {
-    background: rgba(28, 28, 30, var(--gnome-blur-alpha-soft));
+.native-blur .custom-titlebar {
+    background: rgba(28, 28, 30, var(--native-blur-alpha-soft));
 }
 
 /* ============================================================================

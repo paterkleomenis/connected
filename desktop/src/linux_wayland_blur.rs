@@ -20,7 +20,7 @@
 //! 2. The window background must actually be translucent (alpha < 1) where the
 //!    blur should show through. After the blur region is installed
 //!    successfully, [`is_blur_active`] flips to `true` and the UI adds the
-//!    `gnome-blur` CSS class (see `assets/styles.css`), which switches the
+//!    `native-blur` CSS class (see `assets/styles.css`), which switches the
 //!    shell from opaque to translucent surfaces. Without the compositor
 //!    effect the previous opaque theme is kept (robust fallback).
 //!
@@ -57,7 +57,7 @@ use wayland_protocols::ext::background_effect::v1::client::{
 
 /// Set once the compositor accepted a blur region for our surface.
 ///
-/// The UI thread polls this to add the translucent `gnome-blur` theme class.
+/// The UI thread polls this to add the translucent `native-blur` theme class.
 /// Defaults to `false` so every other platform / compositor keeps the proven
 /// opaque theme.
 static BLUR_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -83,21 +83,6 @@ pub fn set_window_visible(visible: bool) {
 /// True once [`enable_blur_async`] installed a blur region successfully.
 pub fn is_blur_active() -> bool {
     BLUR_ACTIVE.load(Ordering::Acquire)
-}
-
-/// Maps the 0-100 blur-strength setting to the frosted-glass base alpha.
-///
-/// The compositor owns the actual blur radius (`ext-background-effect-v1`
-/// has no radius parameter), so "strength" is expressed as how much of the
-/// blurred desktop shows through: higher = more transparent. `40` reproduces
-/// the original hardcoded `0.72` alpha.
-pub fn blur_alpha(strength: u8) -> f32 {
-    0.90 - 0.0045 * f32::from(strength.min(100))
-}
-
-/// Alpha for the lighter surfaces (sidebar/titlebar) that sit on the base.
-pub fn blur_alpha_soft(strength: u8) -> f32 {
-    (blur_alpha(strength) * (0.55 / 0.72)).clamp(0.15, 0.95)
 }
 
 /// Are we in a session where native Wayland blur is even plausible?
@@ -428,22 +413,4 @@ unsafe fn install_blur_region(
 
     debug!("wayland-blur: blur region committed for wl_surface");
     Ok(true)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{blur_alpha, blur_alpha_soft};
-
-    #[test]
-    fn default_strength_reproduces_previous_alphas() {
-        assert!((blur_alpha(40) - 0.72).abs() < 1e-4);
-        assert!((blur_alpha_soft(40) - 0.55).abs() < 1e-4);
-    }
-
-    #[test]
-    fn strength_is_clamped_to_supported_range() {
-        assert!((blur_alpha(0) - 0.90).abs() < 1e-4);
-        assert!((blur_alpha(100) - 0.45).abs() < 1e-4);
-        assert_eq!(blur_alpha(255), blur_alpha(100));
-    }
 }
