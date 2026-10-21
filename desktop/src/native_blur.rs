@@ -44,6 +44,30 @@ pub fn is_blur_active() -> bool {
     }
 }
 
+/// Whether the current platform/session can provide a native backdrop at all.
+///
+/// Used by the Appearance UI to hide the blur controls where the effect is
+/// impossible (X11/XWayland, older Windows, unsupported compositors) instead of
+/// offering a toggle that cannot do anything.
+pub fn supports_blur() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux_wayland_blur::supports_blur()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos_vibrancy::supports_blur()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        crate::windows_vibrancy::supports_blur()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
+
 /// Install the platform blur effect if it is enabled in settings and has not
 /// been installed yet. Safe to call repeatedly (e.g. when the user toggles the
 /// setting back on).

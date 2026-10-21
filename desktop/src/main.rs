@@ -1602,13 +1602,22 @@ fn BlurSettings() -> Element {
     let window = dioxus::desktop::window();
     let toggle_chrome_window = window.window.clone();
     let strength_chrome_window = window.window.clone();
-    let hint = if cfg!(target_os = "linux") {
-        "Native GNOME 51+ Wayland blur. Strength controls how much of the blurred background shows through (0 is nearly solid); the compositor owns the blur radius."
-    } else if cfg!(target_os = "windows") {
-        "Native Windows Acrylic backdrop (Windows 11 22H2+, legacy blur on older Windows). Strength controls how much of the blurred background shows through; Windows owns the blur radius."
+
+    if !crate::native_blur::supports_blur() {
+        return rsx! {};
+    }
+
+    #[cfg(target_os = "linux")]
+    let hint = "Native Wayland blur. Strength controls how much of the blurred background shows through; the compositor owns the blur radius.";
+    #[cfg(target_os = "windows")]
+    let hint = if crate::windows_vibrancy::supports_system_backdrop() {
+        "Native Windows Acrylic backdrop. Strength controls how much of the blurred background shows through; Windows owns the blur radius."
     } else {
-        "Native macOS vibrancy. Strength controls how much of the blurred background shows through; macOS owns the blur radius."
+        "Native Windows blur. Strength controls how much of the blurred background shows through; Windows owns the blur radius."
     };
+    #[cfg(target_os = "macos")]
+    let hint = "Native macOS vibrancy. Strength controls how much of the blurred background shows through; macOS owns the blur radius.";
+
     rsx! {
         div {
             class: "info-grid",

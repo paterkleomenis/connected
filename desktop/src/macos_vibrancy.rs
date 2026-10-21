@@ -39,6 +39,11 @@ pub fn is_blur_active() -> bool {
     BLUR_ACTIVE.load(Ordering::Acquire)
 }
 
+/// `NSVisualEffectView` is available on every macOS release the app supports.
+pub fn supports_blur() -> bool {
+    true
+}
+
 fn window_from_ptr(window: &Window) -> Option<&NSWindow> {
     let ptr = window.ns_window().cast::<NSWindow>();
     if ptr.is_null() {

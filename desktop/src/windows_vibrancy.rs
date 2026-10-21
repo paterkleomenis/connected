@@ -47,6 +47,13 @@ pub fn supports_system_backdrop() -> bool {
     windows_version::OsVersion::current().build >= 22523
 }
 
+/// Whether either native backdrop path exists on this Windows release.
+///
+/// The legacy blur-behind path requires Windows 10 1809 (build 17763).
+pub fn supports_blur() -> bool {
+    windows_version::OsVersion::current().build >= 17763
+}
+
 pub fn enable_blur(window: &Arc<Window>) {
     if !crate::state::get_blur_enabled_setting() {
         debug!("windows-blur: disabled in settings");

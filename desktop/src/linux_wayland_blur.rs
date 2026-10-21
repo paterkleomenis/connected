@@ -42,7 +42,7 @@
 #![allow(unsafe_code)]
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
@@ -61,6 +61,16 @@ use wayland_protocols::ext::background_effect::v1::client::{
 /// Defaults to `false` so every other platform / compositor keeps the proven
 /// opaque theme.
 static BLUR_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Whether the compositor advertises `ext-background-effect-manager-v1`.
+///
+/// Unknown until the first installer attempt completes its registry roundtrip:
+/// a Wayland session is treated as tentatively supported so the Appearance
+/// controls stay available while the background probe runs.
+const SUPPORT_UNKNOWN: u8 = 0;
+const SUPPORT_SUPPORTED: u8 = 1;
+const SUPPORT_UNSUPPORTED: u8 = 2;
+static BLUR_SUPPORT: AtomicU8 = AtomicU8::new(SUPPORT_UNKNOWN);
 
 /// Guards against spawning duplicate installer threads (startup hook plus
 /// every window show).
@@ -83,6 +93,16 @@ pub fn set_window_visible(visible: bool) {
 /// True once [`enable_blur_async`] installed a blur region successfully.
 pub fn is_blur_active() -> bool {
     BLUR_ACTIVE.load(Ordering::Acquire)
+}
+
+/// Whether native blur can plausibly be used on this session.
+///
+/// X11/XWayland is rejected immediately. On Wayland the answer stays optimistic
+/// until the registry probe reports whether the compositor advertises
+/// `ext-background-effect-manager-v1`; unsupported compositors hide the
+/// Appearance controls once that is known.
+pub fn supports_blur() -> bool {
+    is_wayland_session() && BLUR_SUPPORT.load(Ordering::Acquire) != SUPPORT_UNSUPPORTED
 }
 
 /// Are we in a session where native Wayland blur is even plausible?
@@ -178,6 +198,10 @@ pub fn enable_blur_async(window: Arc<dioxus::desktop::tao::window::Window>) {
                 if !crate::state::get_blur_enabled_setting() {
                     return;
                 }
+                if BLUR_SUPPORT.load(Ordering::Acquire) == SUPPORT_UNSUPPORTED {
+                    debug!("wayland-blur: compositor does not advertise the protocol");
+                    return;
+                }
                 // `--autostart` creates the window hidden; its wl_surface is
                 // only mapped when the user opens it from the tray. Wait for
                 // that instead of burning the retry budget on a window that
@@ -227,6 +251,7 @@ fn try_enable_blur(window: &dioxus::desktop::tao::window::Window) -> Result<bool
             (display.display.as_ptr(), surface.surface.as_ptr())
         }
         (display, surface) => {
+            BLUR_SUPPORT.store(SUPPORT_UNSUPPORTED, Ordering::Release);
             return Err(format!(
                 "not a native Wayland window (display={display:?}, window={surface:?}); \
                  XWayland windows cannot use ext-background-effect-v1"
@@ -371,9 +396,11 @@ unsafe fn install_blur_region(
         .map_err(|e| format!("no wl_compositor global: {e:?}"))?;
     let manager: ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1 =
         globals.bind(&qh, 1..=1, ()).map_err(|_| {
+            BLUR_SUPPORT.store(SUPPORT_UNSUPPORTED, Ordering::Release);
             "compositor does not advertise ext_background_effect_manager_v1 (pre-51 Mutter?)"
                 .to_string()
         })?;
+    BLUR_SUPPORT.store(SUPPORT_SUPPORTED, Ordering::Release);
 
     // Wrap GTK's existing wl_surface (created by GDK, not by us). The
     // interface check rejects stale/wrong pointers instead of corrupting
