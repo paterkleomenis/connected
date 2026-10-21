@@ -61,7 +61,7 @@ install -Dm644 %{SOURCE4} %{buildroot}%{_datadir}/licenses/%{name}/LICENSE-APACH
 %{_datadir}/icons/hicolor/512x512/apps/%{name}.png
 
 %changelog
-* Tue Oct 20 2026 Connected Team <paterkleomenis@protonmail.com> - 3.5.0-1
+* Wed Oct 21 2026 Connected Team <paterkleomenis@protonmail.com> - 3.5.0-1
 - Update to 3.5.0
 
 * Mon Oct 19 2026 Connected Team <paterkleomenis@protonmail.com> - 3.4.4-1

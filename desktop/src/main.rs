@@ -1359,6 +1359,14 @@ fn main() {
         let _ = std::fs::create_dir_all(d);
     }
 
+    // Windows starts hidden and is revealed by the first UI tick (see
+    // `windows_vibrancy::defer_show_until_ready`), which avoids an unpainted
+    // white window and a stale light titlebar.
+    #[cfg(target_os = "windows")]
+    let initial_visible = false;
+    #[cfg(not(target_os = "windows"))]
+    let initial_visible = !launched_from_autostart;
+
     #[allow(unused_mut)]
     let mut window_builder = dioxus::desktop::WindowBuilder::new()
         .with_title("Connected")
@@ -1366,7 +1374,32 @@ fn main() {
         .with_decorations(decorations)
         .with_transparent(transparent)
         .with_window_icon(load_icon())
-        .with_visible(!launched_from_autostart);
+        .with_visible(initial_visible);
+
+    // Windows 11 22H2+ needs `WS_EX_NOREDIRECTIONBITMAP` for the DWM Acrylic
+    // system backdrop; otherwise tao's transparent-window shim
+    // (DwmEnableBlurBehindWindow) owns the backdrop and the acrylic is
+    // silently ignored. Older releases keep the legacy transparency path.
+    #[cfg(target_os = "windows")]
+    {
+        use dioxus::desktop::tao::platform::windows::WindowBuilderExtWindows;
+        use dioxus::desktop::tao::window::Theme;
+
+        if crate::windows_vibrancy::supports_system_backdrop() {
+            window_builder = window_builder.with_no_redirection_bitmap(true);
+        }
+
+        crate::windows_vibrancy::defer_show_until_ready(!launched_from_autostart);
+
+        // Set the titlebar theme before the first paint; toggling it after the
+        // window is shown can leave DWM with a stale light titlebar.
+        let theme = match get_theme_mode_setting() {
+            ThemeModeSetting::System => None,
+            ThemeModeSetting::Light => Some(Theme::Light),
+            ThemeModeSetting::Dark => Some(Theme::Dark),
+        };
+        window_builder = window_builder.with_theme(theme);
+    }
 
     // Let the webview and its vibrant backdrop extend under the native macOS
     // titlebar, so the titlebar is blurred like the rest of the window while
@@ -1386,7 +1419,7 @@ fn main() {
         .with_on_window(move |window, _| {
             ipc::set_wakeup_window(window.clone());
             // Install the platform's native backdrop: Mutter
-            // ext-background-effect-v1 on Wayland, DWM Mica/blur on Windows,
+            // ext-background-effect-v1 on Wayland, DWM Acrylic/blur on Windows,
             // NSVisualEffectView on macOS. No-op when unsupported; the opaque
             // theme stays in that case.
             crate::native_blur::on_window_created(&window, !launched_from_autostart);
@@ -1559,7 +1592,7 @@ fn ResizeHandles() -> Element {
 
 /// Appearance controls for the native window blur.
 ///
-/// Mutter `ext-background-effect-v1` on Wayland, DWM Mica/blur on Windows,
+/// Mutter `ext-background-effect-v1` on Wayland, DWM Acrylic/blur on Windows,
 /// `NSVisualEffectView` on macOS. The poller in `App` watches the persisted
 /// settings and applies them to the webview.
 #[component]
@@ -1572,7 +1605,7 @@ fn BlurSettings() -> Element {
     let hint = if cfg!(target_os = "linux") {
         "Native GNOME 51+ Wayland blur. Strength controls how much of the blurred background shows through (0 is nearly solid); the compositor owns the blur radius."
     } else if cfg!(target_os = "windows") {
-        "Native Windows backdrop (Mica on Windows 11, blur on Windows 10/11 21H2). Strength controls how much of the blurred background shows through; Windows owns the blur radius."
+        "Native Windows Acrylic backdrop (Windows 11 22H2+, legacy blur on older Windows). Strength controls how much of the blurred background shows through; Windows owns the blur radius."
     } else {
         "Native macOS vibrancy. Strength controls how much of the blurred background shows through; macOS owns the blur radius."
     };
@@ -2039,10 +2072,19 @@ fn App() -> Element {
             let mut last_devices_hash: u64 = 0;
             let mut last_transfer_status_hash: u64 = 0;
             let mut applied_blur_theme: Option<(bool, u8, bool)> = None;
+            let mut synced_window_chrome = false;
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             let mut last_visible = wake_window.is_visible();
 
             loop {
+                // The window hook runs before the window is shown, so native
+                // titlebar theming is (re)applied on the first UI tick once the
+                // window is actually visible.
+                if !synced_window_chrome {
+                    synced_window_chrome = true;
+                    crate::native_blur::on_ui_ready(&wake_window);
+                }
+
                 if ipc::take_wakeup_request() {
                     ipc::show_window(&wake_window);
                 }

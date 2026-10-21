@@ -5,8 +5,8 @@
 //! - **Linux/Wayland (GNOME 51+)**: Mutter's staging
 //!   `ext-background-effect-v1` protocol, implemented in
 //!   [`crate::linux_wayland_blur`].
-//! - **Windows**: DWM backdrop via `window-vibrancy` (Mica on Windows 11,
-//!   the legacy blur-behind effect on Windows 10), implemented in
+//! - **Windows**: DWM Acrylic backdrop on Windows 11 22H2+, the legacy
+//!   blur-behind effect on older releases, implemented in
 //!   [`crate::windows_vibrancy`].
 //! - **macOS**: `NSVisualEffectView` vibrancy behind the transparent webview,
 //!   implemented in [`crate::macos_vibrancy`].
@@ -63,7 +63,8 @@ pub fn enable_blur(window: &Arc<Window>) {
 /// `visible` is false for `--autostart`, which creates the window hidden until
 /// the user opens it from the tray. Linux needs that information because its
 /// `wl_surface` does not exist while hidden; Windows installs its DWM backdrop
-/// here. macOS waits for [`on_webview_ready`].
+/// here. macOS waits for [`on_webview_ready`], Windows reveals the initially
+/// hidden window from [`on_ui_ready`].
 pub fn on_window_created(window: &Arc<Window>, visible: bool) {
     #[cfg(target_os = "linux")]
     {
@@ -73,6 +74,7 @@ pub fn on_window_created(window: &Arc<Window>, visible: bool) {
     #[cfg(target_os = "windows")]
     {
         let _ = visible;
+        crate::windows_vibrancy::sync_window_chrome(window);
         crate::windows_vibrancy::enable_blur(window);
     }
     #[cfg(target_os = "macos")]
@@ -84,15 +86,30 @@ pub fn on_window_created(window: &Arc<Window>, visible: bool) {
     let _ = (window, visible);
 }
 
+/// Called once from the first UI poll tick.
+///
+/// Windows creates the main window hidden so it can apply the dark titlebar
+/// and blur before the first frame, then reveals it here.
+pub fn on_ui_ready(window: &Arc<Window>) {
+    #[cfg(target_os = "windows")]
+    crate::windows_vibrancy::on_ui_ready(window);
+    #[cfg(not(target_os = "windows"))]
+    refresh_window_chrome(window);
+}
+
 /// Re-apply the window chrome that depends on the blur/theme settings.
 ///
 /// On macOS this pairs the native titlebar appearance (and therefore its text
-/// contrast) with the app theme. The titlebar tint itself is painted by the
-/// `native-blur` CSS theme. Other platforms have no native chrome to update.
+/// contrast) with the app theme. On Windows it switches the DWM titlebar
+/// between light and dark so it matches the app. The titlebar tint itself is
+/// painted by the `native-blur` CSS theme. Other platforms have no native
+/// chrome to update.
 pub fn refresh_window_chrome(window: &Arc<Window>) {
     #[cfg(target_os = "macos")]
     crate::macos_vibrancy::sync_window_chrome(window);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    crate::windows_vibrancy::sync_window_chrome(window);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = window;
 }
 
@@ -113,6 +130,8 @@ pub fn on_webview_ready(window: &Arc<Window>) {
 pub fn on_window_shown(window: &Arc<Window>) {
     #[cfg(target_os = "linux")]
     crate::linux_wayland_blur::set_window_visible(true);
+    #[cfg(target_os = "windows")]
+    crate::windows_vibrancy::sync_window_chrome(window);
     enable_blur(window);
 }
 
