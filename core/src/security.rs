@@ -1258,6 +1258,30 @@ impl KeyStore {
     pub fn get_all_known_peers(&self) -> Vec<PeerInfo> {
         self.known_peers.peers.values().cloned().collect()
     }
+
+    /// Distinct fingerprints of every known peer that claims `device_id`.
+    ///
+    /// A known peer is an authenticated identity whether its current status is
+    /// `Trusted`, `Unpaired`, or `Blocked`: the user has seen and approved (or
+    /// explicitly rejected) this certificate before, and the stored
+    /// fingerprint is the only binding between the public `device_id` and the
+    /// peer's TLS identity.
+    ///
+    /// An empty result means the id is genuinely new. More than one result
+    /// means the id is ambiguous and callers must fail closed rather than pick
+    /// an arbitrary certificate.
+    pub fn known_fingerprints_for_device_id(&self, device_id: &str) -> Vec<String> {
+        let mut fingerprints: Vec<String> = self
+            .known_peers
+            .peers
+            .values()
+            .filter(|peer| peer.device_id.as_deref() == Some(device_id))
+            .map(|peer| peer.fingerprint.clone())
+            .collect();
+        fingerprints.sort();
+        fingerprints.dedup();
+        fingerprints
+    }
 }
 
 #[derive(Serialize, Deserialize)]

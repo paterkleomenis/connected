@@ -183,7 +183,6 @@ pub enum AppAction {
     },
     RejectDevice {
         fingerprint: String,
-        device_id: String,
     },
     UnpairDevice {
         device_id: String,
@@ -855,27 +854,36 @@ fn spawn_event_loop(
                     device_id,
                 } => {
                     if !*get_pairing_mode_state().lock_or_recover()
-                        && !c_clone.is_device_trusted(&device_id)
+                        && !c_clone.is_fingerprint_trusted(&fingerprint)
                     {
                         info!(
                             "Auto-rejecting pairing request while pairing mode is disabled: {} ({})",
                             device_name, device_id
                         );
                         let c_reject = c_clone.clone();
-                        let did = device_id.clone();
+                        let fp = fingerprint.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = c_reject.reject_pairing(&did).await {
+                            // Fingerprint-keyed: a claimed device_id is
+                            // duplicate-able; the prompt's fingerprint is the
+                            // authenticated identity the user is being shown.
+                            if let Err(e) = c_reject.reject_pairing_fingerprint(&fp).await {
                                 warn!("Failed to auto-reject pairing request: {}", e);
                             }
                         });
                         continue;
                     }
 
-                    // Check if already trusted
-                    if c_clone.is_device_trusted(&device_id) {
+                    // Check if the connecting peer's *authenticated fingerprint*
+                    // is already trusted. Security: keying this on the claimed
+                    // device_id instead would let any LAN impostor that claims a
+                    // paired device's id silently ride this auto-accept path
+                    // (the impostor's own Handshake creates a valid pending
+                    // pairing request). The fingerprint can only be trusted if
+                    // the user approved it.
+                    if c_clone.is_fingerprint_trusted(&fingerprint) {
                         info!(
                             "Auto-accepting pairing request from trusted device: {} ({})",
-                            device_name, device_id
+                            device_name, fingerprint
                         );
                         // Send confirmation directly
                         let c_trust = c_clone.clone();
@@ -913,6 +921,7 @@ fn spawn_event_loop(
                     device_name,
                     device_id,
                     reason,
+                    fingerprint,
                 } => {
                     add_notification(
                         "Pairing Update",
@@ -920,9 +929,15 @@ fn spawn_event_loop(
                         "",
                     );
                     get_pending_pairings().lock_or_recover().remove(&device_id);
+                    // Security: only drop the prompt whose fingerprint matches
+                    // the rejecting connection. The other event fields are
+                    // peer-claimed metadata a LAN impostor can spoof; removing
+                    // prompts by claimed device_id would let it hide the
+                    // genuine request (prompt theft) while a real pairing is
+                    // still pending.
                     get_pairing_requests()
                         .lock_or_recover()
-                        .retain(|r| r.device_id != device_id);
+                        .retain(|r| r.fingerprint != fingerprint);
                 }
                 ConnectedEvent::PairingModeChanged(enabled) => {
                     info!("Pairing mode changed: {}", enabled);
@@ -1851,10 +1866,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     });
                 }
             }
-            AppAction::RejectDevice {
-                fingerprint,
-                device_id,
-            } => {
+            AppAction::RejectDevice { fingerprint } => {
                 if let Some(c) = &client {
                     // Remove from pairing requests
                     {
@@ -1864,10 +1876,12 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                     info!("Rejecting device pairing request: {}", fingerprint);
                     let c = c.clone();
-                    let did = device_id.clone();
+                    let fp = fingerprint.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = c.reject_pairing(&did).await {
-                            warn!("Failed to send rejection to {}: {}", did, e);
+                        // Fingerprint-keyed rejection targets exactly the
+                        // request shown to the user.
+                        if let Err(e) = c.reject_pairing_fingerprint(&fp).await {
+                            warn!("Failed to reject pairing request: {}", e);
                         }
                     });
                 }

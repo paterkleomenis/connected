@@ -684,7 +684,8 @@ final class ConnectedAppModel: ObservableObject {
 
         runInBackground { [weak self] in
             do {
-                try rejectPairing(deviceId: request.deviceId)
+                // SECURITY: reject by the prompt's authenticated fingerprint.
+                try rejectPairingFingerprint(fingerprint: request.fingerprint)
             } catch {
                 Task { @MainActor [weak self] in
                     self?.lastErrorMessage = "Reject failed: \(error.localizedDescription)"
@@ -1699,22 +1700,37 @@ final class ConnectedAppModel: ObservableObject {
     }
 
     fileprivate func handlePairingRequest(deviceName: String, fingerprint: String, deviceId: String) {
-        let wasPending = pendingPairing.contains(deviceId)
-        let alreadyTrusted = trustedDeviceIds.contains(deviceId) || isDeviceTrusted(deviceId: deviceId)
+        // SECURITY: automatic accept decisions must key on the *authenticated*
+        // TLS fingerprint, never on the claimed device_id. The device_id inside
+        // a Handshake message is unauthenticated — any LAN peer can claim the id
+        // of a device we paired with, and the impostor's own Handshake creates a
+        // valid pending pairing request keyed to the attacker's fingerprint.
+        // Auto-approving the claimed id would activate that request and
+        // silently grant trusted access. A fingerprint can only already be
+        // trusted if the user approved it, which makes this check safe.
+        let fingerprintTrusted = isFingerprintTrusted(fingerprint)
 
-        if wasPending || alreadyTrusted {
-            pendingPairing.insert(deviceId)
+        if fingerprintTrusted {
             acceptPairingRequest(
                 deviceName: deviceName,
                 fingerprint: fingerprint,
                 deviceId: deviceId,
-                wasAlreadyTrusted: alreadyTrusted
+                wasAlreadyTrusted: true
             )
             return
         }
 
+        // SECURITY: no auto-accept for user-initiated pairings either — the
+        // claimed device_id can be spoofed while the user is pairing. The core's
+        // ack path (fingerprint captured when we dialed) already finalises
+        // pairing we initiated, so incoming requests always need approval here.
+
         if !pairingModeEnabled {
-            rejectPairingRequestFromUnknownDevice(deviceName: deviceName, deviceId: deviceId)
+            rejectPairingRequestFromUnknownDevice(
+                deviceName: deviceName,
+                fingerprint: fingerprint,
+                deviceId: deviceId
+            )
             return
         }
 
@@ -1722,9 +1738,28 @@ final class ConnectedAppModel: ObservableObject {
         pairingRequest = PairingPrompt(deviceName: deviceName, fingerprint: fingerprint, deviceId: deviceId)
     }
 
-    fileprivate func handlePairingRejected(deviceName: String, deviceId: String, reason: String) {
+    /// SECURITY: true only when the *authenticated* TLS fingerprint of a
+    /// connecting peer is already trusted in the core keystore. Automatic
+    /// (zero-interaction) pairing accept paths must use this — never
+    /// `isDeviceTrusted(deviceId:)` — because the device_id inside a Handshake
+    /// message is unauthenticated and can be claimed by any LAN impostor.
+    private func isFingerprintTrusted(_ fingerprint: String) -> Bool {
+        getTrustedPeers().contains { $0.fingerprint == fingerprint }
+    }
+
+    fileprivate func handlePairingRejected(
+        deviceName: String,
+        deviceId: String,
+        reason: String,
+        fingerprint: String
+    ) {
         pendingPairing.remove(deviceId)
-        if pairingRequest?.deviceId == deviceId {
+        // SECURITY: dismiss the prompt only when the rejecting connection's
+        // authenticated fingerprint matches the prompt's. The other fields
+        // are peer-claimed metadata: an impostor can spoof a rejection with a
+        // paired device's id to hide the genuine prompt (prompt theft). A
+        // request that is still pending re-shows on the peer's next Handshake.
+        if pairingRequest?.fingerprint == fingerprint {
             pairingRequest = nil
         }
         infoMessage = "Pairing \(reason) by \(deviceName)"
@@ -2016,10 +2051,17 @@ final class ConnectedAppModel: ObservableObject {
         }
     }
 
-    private func rejectPairingRequestFromUnknownDevice(deviceName: String, deviceId: String) {
+    private func rejectPairingRequestFromUnknownDevice(
+        deviceName: String,
+        fingerprint: String,
+        deviceId: String
+    ) {
         runInBackground { [weak self] in
             do {
-                try rejectPairing(deviceId: deviceId)
+                // SECURITY: reject by the prompt's authenticated fingerprint —
+                // id-keyed rejection can fail closed or hit a sibling
+                // request claiming the same id.
+                try rejectPairingFingerprint(fingerprint: fingerprint)
             } catch {
                 Task { @MainActor [weak self] in
                     self?.lastErrorMessage = "Reject pairing failed: \(error.localizedDescription)"
@@ -2028,7 +2070,7 @@ final class ConnectedAppModel: ObservableObject {
 
             Task { @MainActor [weak self] in
                 self?.pendingPairing.remove(deviceId)
-                if self?.pairingRequest?.deviceId == deviceId {
+                if self?.pairingRequest?.fingerprint == fingerprint {
                     self?.pairingRequest = nil
                 }
                 self?.infoMessage = "Rejected pairing from \(deviceName) because pairing mode is off"
@@ -2727,9 +2769,19 @@ private final class PairingBridge: PairingCallback, @unchecked Sendable {
         }
     }
 
-    func onPairingRejected(deviceName: String, deviceId: String, reason: String) {
+    func onPairingRejected(
+        deviceName: String,
+        deviceId: String,
+        reason: String,
+        fingerprint: String
+    ) {
         Task { @MainActor [weak app] in
-            app?.handlePairingRejected(deviceName: deviceName, deviceId: deviceId, reason: reason)
+            app?.handlePairingRejected(
+                deviceName: deviceName,
+                deviceId: deviceId,
+                reason: reason,
+                fingerprint: fingerprint
+            )
         }
     }
 

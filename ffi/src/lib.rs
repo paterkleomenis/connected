@@ -795,7 +795,17 @@ pub trait ClipboardCallback: Send + Sync {
 #[uniffi::export(callback_interface)]
 pub trait PairingCallback: Send + Sync {
     fn on_pairing_request(&self, device_name: String, fingerprint: String, device_id: String);
-    fn on_pairing_rejected(&self, device_name: String, device_id: String, reason: String);
+    /// `fingerprint` is the rejecting connection's authenticated TLS
+    /// fingerprint. Consumers must gate prompt-dismissal on it: the other
+    /// fields are peer-claimed metadata a LAN impostor can spoof to hide
+    /// someone else's request.
+    fn on_pairing_rejected(
+        &self,
+        device_name: String,
+        device_id: String,
+        reason: String,
+        fingerprint: String,
+    );
     fn on_pairing_mode_changed(&self, enabled: bool);
 }
 
@@ -1117,9 +1127,15 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                         device_name,
                         device_id,
                         reason,
+                        fingerprint,
                     } => {
                         if let Some(cb) = PAIRING_CALLBACK.read().as_ref() {
-                            cb.on_pairing_rejected(device_name, device_id, reason);
+                            cb.on_pairing_rejected(
+                                device_name,
+                                device_id,
+                                reason,
+                                fingerprint,
+                            );
                         }
                     }
                     ConnectedEvent::DeviceUnpaired {
@@ -1673,6 +1689,33 @@ pub fn cancel_pairing_request(device_id: String) -> Result<(), ConnectedFfiError
     let client = get_client()?;
     get_runtime()
         .block_on(async { client.cancel_pairing(&device_id).await })
+        .map_err(Into::into)
+}
+
+/// Reject an incoming pairing request by its **authenticated** fingerprint —
+/// the identity carried by the prompt.
+///
+/// Security: a `device_id` is peer-claimed metadata any impostor can
+/// duplicate, so id-keyed rejection can fail closed (ambiguous) or miss.
+/// UIs must migrate to this variant: it targets exactly the pending request
+/// (and its connection) the user saw, regardless of what others claim.
+#[uniffi::export]
+pub fn reject_pairing_fingerprint(fingerprint: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    get_runtime()
+        .block_on(async { client.reject_pairing_fingerprint(&fingerprint).await })
+        .map_err(Into::into)
+}
+
+/// Cancel an incoming pairing request by its authenticated fingerprint.
+///
+/// The silent counterpart of `reject_pairing_fingerprint` (no reason note);
+/// used when the local user backs out of an incoming prompt.
+#[uniffi::export]
+pub fn cancel_pairing_fingerprint(fingerprint: String) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    get_runtime()
+        .block_on(async { client.cancel_pairing_fingerprint(&fingerprint).await })
         .map_err(Into::into)
 }
 

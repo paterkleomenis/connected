@@ -66,7 +66,7 @@ import uniffi.connected_ffi.registerTelephonyCallback
 import uniffi.connected_ffi.registerTransferCallback
 import uniffi.connected_ffi.registerUnpairCallback
 import uniffi.connected_ffi.rejectFileTransfer
-import uniffi.connected_ffi.rejectPairing
+import uniffi.connected_ffi.rejectPairingFingerprint
 import uniffi.connected_ffi.renameLocalDevice
 import uniffi.connected_ffi.requestCallLog
 import uniffi.connected_ffi.requestContactsSync
@@ -1244,8 +1244,18 @@ class ConnectedApp(private val context: Context) {
 
     private val pairingCallback = object : PairingCallback {
         override fun onPairingRequest(deviceName: String, fingerprint: String, deviceId: String) {
-            // Check if Core already trusts this device (e.g. re-connection after local unpair)
-            if (isDeviceTrusted(DiscoveredDevice(deviceId, deviceName, "0.0.0.0", 0u, DeviceType.UNKNOWN))) {
+            // SECURITY: Auto-accept only when the *authenticated* TLS fingerprint
+            // of the connecting peer is already trusted. Never key an automatic
+            // trust decision on the claimed device_id: that field arrives inside
+            // the Handshake message and is not authenticated — any LAN peer can
+            // claim the id of a device we paired with, and the impostor's own
+            // Handshake creates a valid pending pairing request keyed to the
+            // attacker's fingerprint. Auto-approving the claimed id would then
+            // activate that request and silently grant trusted access
+            // (verified empirically against this exact app build).
+            val fingerprintTrusted = runCatching { isFingerprintTrusted(fingerprint) }
+                .getOrDefault(false)
+            if (fingerprintTrusted) {
                 Log.d("ConnectedApp", "Already trusted device re-connecting: $deviceName")
                 runOnMainThread {
                     android.widget.Toast.makeText(
@@ -1259,15 +1269,16 @@ class ConnectedApp(private val context: Context) {
                 return
             }
 
-            if (pendingPairing.contains(deviceId)) {
-                Log.d("ConnectedApp", "Auto-trusting pending device: $deviceName ($deviceId)")
-                trustDevice(PairingRequest(deviceName, fingerprint, deviceId))
-            } else {
-                val request = PairingRequest(deviceName, fingerprint, deviceId)
-                pairingRequest.value = request
-                if (!isAppInForeground.get()) {
-                    showPairingNotification(request)
-                }
+            // SECURITY: no auto-trust for user-initiated pairings either. When the
+            // user taps "Pair" on a device card, an impostor could claim that
+            // device's id and ride the user's tap. The core's ack path already
+            // finalises pairing we initiated safely (authenticated by the
+            // fingerprint captured when we dialed), so an incoming request now
+            // always requires explicit approval.
+            val request = PairingRequest(deviceName, fingerprint, deviceId)
+            pairingRequest.value = request
+            if (!isAppInForeground.get()) {
+                showPairingNotification(request)
             }
         }
 
@@ -1275,15 +1286,26 @@ class ConnectedApp(private val context: Context) {
             Log.d("ConnectedApp", "Pairing mode changed: $enabled")
         }
 
-        override fun onPairingRejected(deviceName: String, deviceId: String, reason: String) {
+        override fun onPairingRejected(
+            deviceName: String,
+            deviceId: String,
+            reason: String,
+            fingerprint: String,
+        ) {
             runOnMainThread {
                 pendingPairing.remove(deviceId)
                 pendingPairingAwaitingIp.remove(deviceId)
                 activeWifiAwareEndpoints.remove(deviceId)
-                if (pairingRequest.value?.deviceId == deviceId) {
+                // SECURITY: dismiss the visible prompt only when the rejecting
+                // connection's authenticated fingerprint matches the prompt's.
+                // The other fields are peer-claimed metadata: an impostor can
+                // spoof a rejection carrying a paired device's id to hide the
+                // genuine prompt (prompt theft). If the request is still
+                // pending, the peer's next Handshake re-shows it.
+                if (pairingRequest.value?.fingerprint == fingerprint) {
                     pairingRequest.value = null
+                    dismissPairingNotification()
                 }
-                dismissPairingNotification()
                 android.widget.Toast.makeText(
                     context,
                     "Pairing $reason by $deviceName",
@@ -2456,6 +2478,21 @@ class ConnectedApp(private val context: Context) {
     fun isDeviceTrusted(device: DiscoveredDevice): Boolean {
         return try {
             isDeviceTrusted(device.id)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * SECURITY: True only when the *authenticated* TLS fingerprint of a
+     * connecting peer is already trusted in the core keystore. Automatic
+     * (zero-interaction) pairing accept paths must use this — never
+     * [isDeviceTrusted] — because the device_id inside a Handshake message is
+     * unauthenticated and can be claimed by any LAN impostor.
+     */
+    private fun isFingerprintTrusted(fingerprint: String): Boolean {
+        return try {
+            getTrustedPeers().any { it.fingerprint == fingerprint }
         } catch (_: Exception) {
             false
         }
@@ -3932,7 +3969,11 @@ class ConnectedApp(private val context: Context) {
     fun rejectDevice(request: PairingRequest) {
         scope.launch(Dispatchers.IO) {
             try {
-                rejectPairing(request.deviceId)
+                // SECURITY: reject by the prompt's authenticated fingerprint —
+                // the device_id is peer-claimed metadata an impostor can
+                // duplicate, and id-keyed rejection could fail closed or
+                // target a sibling request claiming the same id.
+                rejectPairingFingerprint(request.fingerprint)
             } catch (e: Exception) {
                 Log.e("ConnectedApp", "Reject pairing failed", e)
             }

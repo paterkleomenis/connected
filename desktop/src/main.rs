@@ -4338,7 +4338,6 @@ fn App() -> Element {
                                             move |_| {
                                                 action_tx.send(AppAction::RejectDevice {
                                                     fingerprint: req.fingerprint.clone(),
-                                                    device_id: req.device_id.clone(),
                                                 });
                                                 get_pairing_requests().lock_or_recover().retain(|r| r.fingerprint != req.fingerprint);
                                             }

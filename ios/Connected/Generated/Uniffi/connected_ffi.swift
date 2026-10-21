@@ -2292,6 +2292,89 @@ public func FfiConverterTypePhoneNumberType_lower(_ value: PhoneNumberType) -> R
 
 
 
+public enum RemoteCommand: Equatable, Hashable {
+
+    case shutdown
+    case restart
+    case signOut
+    case openUrl(url: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RemoteCommand: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRemoteCommand: FfiConverterRustBuffer {
+    typealias SwiftType = RemoteCommand
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RemoteCommand {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .shutdown
+
+        case 2: return .restart
+
+        case 3: return .signOut
+
+        case 4: return .openUrl(url: try FfiConverterString.read(from: &buf)
+        )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RemoteCommand, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .shutdown:
+            writeInt(&buf, Int32(1))
+
+
+        case .restart:
+            writeInt(&buf, Int32(2))
+
+
+        case .signOut:
+            writeInt(&buf, Int32(3))
+
+
+        case let .openUrl(url):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(url, into: &buf)
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteCommand_lift(_ buf: RustBuffer) throws -> RemoteCommand {
+    return try FfiConverterTypeRemoteCommand.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteCommand_lower(_ value: RemoteCommand) -> RustBuffer {
+    return FfiConverterTypeRemoteCommand.lower(value)
+}
+
+
+
+
 public enum SmsStatus: Equatable, Hashable {
 
     case pending
@@ -3676,7 +3759,13 @@ public protocol PairingCallback: AnyObject, Sendable {
 
     func onPairingRequest(deviceName: String, fingerprint: String, deviceId: String)
 
-    func onPairingRejected(deviceName: String, deviceId: String, reason: String)
+    /**
+     * `fingerprint` is the rejecting connection's authenticated TLS
+     * fingerprint. Consumers must gate prompt-dismissal on it: the other
+     * fields are peer-claimed metadata a LAN impostor can spoof to hide
+     * someone else's request.
+     */
+    func onPairingRejected(deviceName: String, deviceId: String, reason: String, fingerprint: String)
 
     func onPairingModeChanged(enabled: Bool)
 
@@ -3738,6 +3827,7 @@ fileprivate struct UniffiCallbackInterfacePairingCallback {
             deviceName: RustBuffer,
             deviceId: RustBuffer,
             reason: RustBuffer,
+            fingerprint: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -3749,7 +3839,8 @@ fileprivate struct UniffiCallbackInterfacePairingCallback {
                 return uniffiObj.onPairingRejected(
                      deviceName: try FfiConverterString.lift(deviceName),
                      deviceId: try FfiConverterString.lift(deviceId),
-                     reason: try FfiConverterString.lift(reason)
+                     reason: try FfiConverterString.lift(reason),
+                     fingerprint: try FfiConverterString.lift(fingerprint)
                 )
             }
 
@@ -3862,6 +3953,146 @@ public func FfiConverterCallbackInterfacePairingCallback_lift(_ handle: UInt64) 
 #endif
 public func FfiConverterCallbackInterfacePairingCallback_lower(_ v: PairingCallback) -> UInt64 {
     return FfiConverterCallbackInterfacePairingCallback.lower(v)
+}
+
+
+
+
+public protocol RemoteCommandsCallback: AnyObject, Sendable {
+
+    /**
+     * Called when a remote power/session command is received from a trusted peer.
+     */
+    func onRemoteCommand(fromDevice: String, command: RemoteCommand)
+
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceRemoteCommandsCallback {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceRemoteCommandsCallback = UniffiVTableCallbackInterfaceRemoteCommandsCallback(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceRemoteCommandsCallback.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface RemoteCommandsCallback: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceRemoteCommandsCallback.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface RemoteCommandsCallback: handle missing in uniffiClone")
+            }
+        },
+        onRemoteCommand: { (
+            uniffiHandle: UInt64,
+            fromDevice: RustBuffer,
+            command: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceRemoteCommandsCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onRemoteCommand(
+                     fromDevice: try FfiConverterString.lift(fromDevice),
+                     command: try FfiConverterTypeRemoteCommand_lift(command)
+                )
+            }
+
+
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceRemoteCommandsCallback> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceRemoteCommandsCallback>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitRemoteCommandsCallback() {
+    uniffi_connected_ffi_fn_init_callback_vtable_remotecommandscallback(UniffiCallbackInterfaceRemoteCommandsCallback.vtablePtr)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceRemoteCommandsCallback {
+    fileprivate static let handleMap = UniffiHandleMap<RemoteCommandsCallback>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceRemoteCommandsCallback : FfiConverter {
+    typealias SwiftType = RemoteCommandsCallback
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceRemoteCommandsCallback_lift(_ handle: UInt64) throws -> RemoteCommandsCallback {
+    return try FfiConverterCallbackInterfaceRemoteCommandsCallback.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceRemoteCommandsCallback_lower(_ v: RemoteCommandsCallback) -> UInt64 {
+    return FfiConverterCallbackInterfaceRemoteCommandsCallback.lower(v)
 }
 
 
@@ -4920,6 +5151,19 @@ public func cancelIncomingFileTransfer(transferId: String)throws   {try rustCall
     )
 }
 }
+/**
+ * Cancel an incoming pairing request by its authenticated fingerprint.
+ *
+ * The silent counterpart of `reject_pairing_fingerprint` (no reason note);
+ * used when the local user backs out of an incoming prompt.
+ */
+public func cancelPairingFingerprint(fingerprint: String)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_connected_ffi_fn_func_cancel_pairing_fingerprint(
+        FfiConverterString.lower(fingerprint),uniffiCallStatus
+    )
+}
+}
 public func cancelPairingRequest(deviceId: String)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
         uniffiCallStatus in
     uniffi_connected_ffi_fn_func_cancel_pairing_request(
@@ -5092,6 +5336,13 @@ public func registerPairingCallback(callback: PairingCallback)  {try! rustCall()
     )
 }
 }
+public func registerRemoteCommandsCallback(callback: RemoteCommandsCallback)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_connected_ffi_fn_func_register_remote_commands_callback(
+        FfiConverterCallbackInterfaceRemoteCommandsCallback_lower(callback),uniffiCallStatus
+    )
+}
+}
 public func registerTelephonyCallback(callback: TelephonyCallback)  {try! rustCall() {
         uniffiCallStatus in
     uniffi_connected_ffi_fn_func_register_telephony_callback(
@@ -5124,6 +5375,22 @@ public func rejectPairing(deviceId: String)throws   {try rustCallWithError(FfiCo
         uniffiCallStatus in
     uniffi_connected_ffi_fn_func_reject_pairing(
         FfiConverterString.lower(deviceId),uniffiCallStatus
+    )
+}
+}
+/**
+ * Reject an incoming pairing request by its **authenticated** fingerprint —
+ * the identity carried by the prompt.
+ *
+ * Security: a `device_id` is peer-claimed metadata any impostor can
+ * duplicate, so id-keyed rejection can fail closed (ambiguous) or miss.
+ * UIs must migrate to this variant: it targets exactly the pending request
+ * (and its connection) the user saw, regardless of what others claim.
+ */
+public func rejectPairingFingerprint(fingerprint: String)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_connected_ffi_fn_func_reject_pairing_fingerprint(
+        FfiConverterString.lower(fingerprint),uniffiCallStatus
     )
 }
 }
@@ -5315,6 +5582,24 @@ public func sendMessages(targetIp: String, targetPort: UInt16, threadId: String,
     )
 }
 }
+public func sendOpenUrl(targetIp: String, targetPort: UInt16, url: String)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_connected_ffi_fn_func_send_open_url(
+        FfiConverterString.lower(targetIp),
+        FfiConverterUInt16.lower(targetPort),
+        FfiConverterString.lower(url),uniffiCallStatus
+    )
+}
+}
+public func sendRemoteCommand(targetIp: String, targetPort: UInt16, command: RemoteCommand)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_connected_ffi_fn_func_send_remote_command(
+        FfiConverterString.lower(targetIp),
+        FfiConverterUInt16.lower(targetPort),
+        FfiConverterTypeRemoteCommand_lower(command),uniffiCallStatus
+    )
+}
+}
 public func sendSms(targetIp: String, targetPort: UInt16, to: String, body: String)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
         uniffiCallStatus in
     uniffi_connected_ffi_fn_func_send_sms(
@@ -5452,6 +5737,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_connected_ffi_checksum_func_cancel_incoming_file_transfer() != 44) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_connected_ffi_checksum_func_cancel_pairing_fingerprint() != 16369) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_connected_ffi_checksum_func_cancel_pairing_request() != 56953) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5515,6 +5803,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_connected_ffi_checksum_func_register_pairing_callback() != 40465) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_connected_ffi_checksum_func_register_remote_commands_callback() != 54263) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_connected_ffi_checksum_func_register_telephony_callback() != 18280) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5528,6 +5819,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_reject_pairing() != 64642) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_connected_ffi_checksum_func_reject_pairing_fingerprint() != 52874) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_rename_local_device() != 1396) {
@@ -5588,6 +5882,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_send_messages() != 19900) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_connected_ffi_checksum_func_send_open_url() != 41627) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_connected_ffi_checksum_func_send_remote_command() != 11860) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_send_sms() != 53876) {
@@ -5698,10 +5998,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_request() != 3950) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_rejected() != 14941) {
+    if (uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_rejected() != 15859) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_mode_changed() != 1382) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_connected_ffi_checksum_method_remotecommandscallback_on_remote_command() != 58759) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_method_telephonycallback_on_contacts_sync_request() != 35760) {
@@ -5757,6 +6060,7 @@ private let initializationResult: InitializationResult = {
     uniffiCallbackInitFilesystemProviderCallback()
     uniffiCallbackInitMediaControlCallback()
     uniffiCallbackInitPairingCallback()
+    uniffiCallbackInitRemoteCommandsCallback()
     uniffiCallbackInitTelephonyCallback()
     uniffiCallbackInitUnpairCallback()
     return InitializationResult.ok

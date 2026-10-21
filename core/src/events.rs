@@ -60,6 +60,11 @@ pub enum ConnectedEvent {
         device_name: String,
         device_id: String,
         reason: String,
+        /// The rejecting connection's authenticated TLS fingerprint. UIs must
+        /// ignore a rejection whose fingerprint doesn't match the identity the
+        /// user is actually interacting with: the remaining fields are
+        /// peer-claimed metadata a LAN impostor can spoof.
+        fingerprint: String,
     },
     /// Pairing mode enabled/disabled
     PairingModeChanged(bool),

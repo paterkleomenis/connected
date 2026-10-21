@@ -406,7 +406,7 @@ typedef void (*UniffiCallbackInterfacePairingCallbackMethod0)(uint64_t, RustBuff
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD1
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD1
-typedef void (*UniffiCallbackInterfacePairingCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull,
+typedef void (*UniffiCallbackInterfacePairingCallbackMethod1)(uint64_t, RustBuffer, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -414,6 +414,13 @@ typedef void (*UniffiCallbackInterfacePairingCallbackMethod1)(uint64_t, RustBuff
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD2
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_PAIRING_CALLBACK_METHOD2
 typedef void (*UniffiCallbackInterfacePairingCallbackMethod2)(uint64_t, int8_t, void* _Nonnull,
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_REMOTE_COMMANDS_CALLBACK_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_REMOTE_COMMANDS_CALLBACK_METHOD0
+typedef void (*UniffiCallbackInterfaceRemoteCommandsCallbackMethod0)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull,
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -604,6 +611,15 @@ typedef struct UniffiVTableCallbackInterfacePairingCallback {
 } UniffiVTableCallbackInterfacePairingCallback;
 
 #endif
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_REMOTE_COMMANDS_CALLBACK
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_REMOTE_COMMANDS_CALLBACK
+typedef struct UniffiVTableCallbackInterfaceRemoteCommandsCallback {
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+    UniffiCallbackInterfaceClone _Nonnull uniffiClone;
+    UniffiCallbackInterfaceRemoteCommandsCallbackMethod0 _Nonnull onRemoteCommand;
+} UniffiVTableCallbackInterfaceRemoteCommandsCallback;
+
+#endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_TELEPHONY_CALLBACK
 #define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_TELEPHONY_CALLBACK
 typedef struct UniffiVTableCallbackInterfaceTelephonyCallback {
@@ -670,6 +686,11 @@ void uniffi_connected_ffi_fn_init_callback_vtable_mediacontrolcallback(const Uni
 void uniffi_connected_ffi_fn_init_callback_vtable_pairingcallback(const UniffiVTableCallbackInterfacePairingCallback* _Nonnull vtable
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_INIT_CALLBACK_VTABLE_REMOTECOMMANDSCALLBACK
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_INIT_CALLBACK_VTABLE_REMOTECOMMANDSCALLBACK
+void uniffi_connected_ffi_fn_init_callback_vtable_remotecommandscallback(const UniffiVTableCallbackInterfaceRemoteCommandsCallback* _Nonnull vtable
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_INIT_CALLBACK_VTABLE_TELEPHONYCALLBACK
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_INIT_CALLBACK_VTABLE_TELEPHONYCALLBACK
 void uniffi_connected_ffi_fn_init_callback_vtable_telephonycallback(const UniffiVTableCallbackInterfaceTelephonyCallback* _Nonnull vtable
@@ -693,6 +714,11 @@ void uniffi_connected_ffi_fn_func_cancel_file_transfer(RustBuffer transfer_id, R
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CANCEL_INCOMING_FILE_TRANSFER
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CANCEL_INCOMING_FILE_TRANSFER
 void uniffi_connected_ffi_fn_func_cancel_incoming_file_transfer(RustBuffer transfer_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CANCEL_PAIRING_FINGERPRINT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CANCEL_PAIRING_FINGERPRINT
+void uniffi_connected_ffi_fn_func_cancel_pairing_fingerprint(RustBuffer fingerprint, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_CANCEL_PAIRING_REQUEST
@@ -807,6 +833,11 @@ void uniffi_connected_ffi_fn_func_register_media_control_callback(uint64_t callb
 void uniffi_connected_ffi_fn_func_register_pairing_callback(uint64_t callback, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REGISTER_REMOTE_COMMANDS_CALLBACK
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REGISTER_REMOTE_COMMANDS_CALLBACK
+void uniffi_connected_ffi_fn_func_register_remote_commands_callback(uint64_t callback, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REGISTER_TELEPHONY_CALLBACK
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REGISTER_TELEPHONY_CALLBACK
 void uniffi_connected_ffi_fn_func_register_telephony_callback(uint64_t callback, RustCallStatus *_Nonnull out_status
@@ -830,6 +861,11 @@ void uniffi_connected_ffi_fn_func_reject_file_transfer(RustBuffer transfer_id, R
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REJECT_PAIRING
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REJECT_PAIRING
 void uniffi_connected_ffi_fn_func_reject_pairing(RustBuffer device_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REJECT_PAIRING_FINGERPRINT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_REJECT_PAIRING_FINGERPRINT
+void uniffi_connected_ffi_fn_func_reject_pairing_fingerprint(RustBuffer fingerprint, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_RENAME_LOCAL_DEVICE
@@ -930,6 +966,16 @@ void uniffi_connected_ffi_fn_func_send_media_state(RustBuffer target_ip, uint16_
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_MESSAGES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_MESSAGES
 void uniffi_connected_ffi_fn_func_send_messages(RustBuffer target_ip, uint16_t target_port, RustBuffer thread_id, RustBuffer messages, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_OPEN_URL
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_OPEN_URL
+void uniffi_connected_ffi_fn_func_send_open_url(RustBuffer target_ip, uint16_t target_port, RustBuffer url, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_REMOTE_COMMAND
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_REMOTE_COMMAND
+void uniffi_connected_ffi_fn_func_send_remote_command(RustBuffer target_ip, uint16_t target_port, RustBuffer command, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_SMS
@@ -1277,6 +1323,12 @@ uint16_t uniffi_connected_ffi_checksum_func_cancel_incoming_file_transfer(void
 
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_PAIRING_FINGERPRINT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_PAIRING_FINGERPRINT
+uint16_t uniffi_connected_ffi_checksum_func_cancel_pairing_fingerprint(void
+
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_PAIRING_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_CANCEL_PAIRING_REQUEST
 uint16_t uniffi_connected_ffi_checksum_func_cancel_pairing_request(void
@@ -1403,6 +1455,12 @@ uint16_t uniffi_connected_ffi_checksum_func_register_pairing_callback(void
 
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_REMOTE_COMMANDS_CALLBACK
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_REMOTE_COMMANDS_CALLBACK
+uint16_t uniffi_connected_ffi_checksum_func_register_remote_commands_callback(void
+
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_TELEPHONY_CALLBACK
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REGISTER_TELEPHONY_CALLBACK
 uint16_t uniffi_connected_ffi_checksum_func_register_telephony_callback(void
@@ -1430,6 +1488,12 @@ uint16_t uniffi_connected_ffi_checksum_func_reject_file_transfer(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REJECT_PAIRING
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REJECT_PAIRING
 uint16_t uniffi_connected_ffi_checksum_func_reject_pairing(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REJECT_PAIRING_FINGERPRINT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_REJECT_PAIRING_FINGERPRINT
+uint16_t uniffi_connected_ffi_checksum_func_reject_pairing_fingerprint(void
 
 );
 #endif
@@ -1550,6 +1614,18 @@ uint16_t uniffi_connected_ffi_checksum_func_send_media_state(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_MESSAGES
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_MESSAGES
 uint16_t uniffi_connected_ffi_checksum_func_send_messages(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_OPEN_URL
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_OPEN_URL
+uint16_t uniffi_connected_ffi_checksum_func_send_open_url(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_REMOTE_COMMAND
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_REMOTE_COMMAND
+uint16_t uniffi_connected_ffi_checksum_func_send_remote_command(void
 
 );
 #endif
@@ -1778,6 +1854,12 @@ uint16_t uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_rejecte
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_PAIRINGCALLBACK_ON_PAIRING_MODE_CHANGED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_PAIRINGCALLBACK_ON_PAIRING_MODE_CHANGED
 uint16_t uniffi_connected_ffi_checksum_method_pairingcallback_on_pairing_mode_changed(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_REMOTECOMMANDSCALLBACK_ON_REMOTE_COMMAND
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_REMOTECOMMANDSCALLBACK_ON_REMOTE_COMMAND
+uint16_t uniffi_connected_ffi_checksum_method_remotecommandscallback_on_remote_command(void
 
 );
 #endif
