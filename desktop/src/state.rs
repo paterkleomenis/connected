@@ -110,6 +110,12 @@ pub struct AppSettings {
     pub clipboard_sync_enabled: bool,
     pub media_enabled: bool,
     pub remote_commands_enabled: bool,
+    /// Accept keyboard/pointer input from paired phones.
+    pub remote_input_enabled: bool,
+    /// xdg-desktop-portal restore token for the remote-input session. The
+    /// portal refuses to remember approval without this, which would prompt on
+    /// every launch.
+    pub remote_input_restore_token: Option<String>,
     pub auto_sync_messages: bool,
     pub auto_sync_calls: bool,
     pub auto_sync_contacts: bool,
@@ -134,6 +140,8 @@ impl Default for AppSettings {
             clipboard_sync_enabled: true,
             media_enabled: true,
             remote_commands_enabled: false,
+            remote_input_enabled: false,
+            remote_input_restore_token: None,
             auto_sync_messages: true,
             auto_sync_calls: true,
             auto_sync_contacts: true,
@@ -1314,6 +1322,25 @@ pub fn get_remote_commands_enabled_setting() -> bool {
 
 pub fn set_remote_commands_enabled_setting(enabled: bool) {
     update_setting(|s| s.remote_commands_enabled = enabled);
+}
+
+pub fn get_remote_input_enabled_setting() -> bool {
+    get_app_settings().lock_or_recover().remote_input_enabled
+}
+
+pub fn set_remote_input_enabled_setting(enabled: bool) {
+    update_setting(|s| s.remote_input_enabled = enabled);
+}
+
+pub fn get_remote_input_restore_token() -> Option<String> {
+    get_app_settings()
+        .lock_or_recover()
+        .remote_input_restore_token
+        .clone()
+}
+
+pub fn set_remote_input_restore_token(token: Option<String>) {
+    update_setting(|s| s.remote_input_restore_token = token);
 }
 
 pub fn get_auto_sync_messages() -> bool {

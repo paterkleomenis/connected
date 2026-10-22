@@ -8,6 +8,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
+import android.os.SystemClock
 import android.content.pm.PackageManager
 import android.provider.Settings
 import android.text.TextUtils
@@ -20,11 +21,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,7 +42,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Close
@@ -45,17 +54,24 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.core.content.ContextCompat
@@ -63,9 +79,11 @@ import androidx.core.os.BundleCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import uniffi.connected_ffi.DiscoveredDevice
 import uniffi.connected_ffi.DeviceType
 import uniffi.connected_ffi.RemoteCommand
+import uniffi.connected_ffi.RemoteInputEvent
 import uniffi.connected_ffi.FfiCallLogEntry
 import uniffi.connected_ffi.FfiContact
 import uniffi.connected_ffi.FfiConversation
@@ -1145,7 +1163,14 @@ private fun formatBytes(bytes: Long): String {
 
 private fun formatDuration(seconds: Long): String {
     return when {
-        seconds >= 3600 -> String.format(Locale.getDefault(), "%d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60)
+        seconds >= 3600 -> String.format(
+            Locale.getDefault(),
+            "%d:%02d:%02d",
+            seconds / 3600,
+            (seconds % 3600) / 60,
+            seconds % 60
+        )
+
         seconds >= 60 -> String.format(Locale.getDefault(), "%d:%02d", seconds / 60, seconds % 60)
         else -> "${seconds}s"
     }
@@ -1400,7 +1425,11 @@ fun SettingsScreen(
         // Paired Devices Section
         item {
             val trustedIds = connectedApp.trustedDevices.toList()
-            val trustedPeers = try { getTrustedPeers() } catch (_: Exception) { emptyList() }
+            val trustedPeers = try {
+                getTrustedPeers()
+            } catch (_: Exception) {
+                emptyList()
+            }
             val peerNames = trustedPeers.associate { it.deviceId to it.name }
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -1424,7 +1453,8 @@ fun SettingsScreen(
                     } else {
                         trustedIds.forEach { deviceId ->
                             val onlineDevice = connectedApp.devices.firstOrNull { it.id == deviceId }
-                            val deviceName = onlineDevice?.name ?: peerNames[deviceId]?.takeIf { it.isNotEmpty() } ?: deviceId
+                            val deviceName =
+                                onlineDevice?.name ?: peerNames[deviceId]?.takeIf { it.isNotEmpty() } ?: deviceId
                             val deviceType = onlineDevice?.deviceType?.displayName() ?: "Offline"
                             val isOnline = onlineDevice != null
                             Row(
@@ -1937,8 +1967,10 @@ fun SettingsScreen(
                     Button(
                         onClick = {
                             try {
-                                val intent = Intent(Intent.ACTION_VIEW,
-                                    "https://github.com/paterkleomenis/connected/issues/new".toUri())
+                                val intent = Intent(
+                                    Intent.ACTION_VIEW,
+                                    "https://github.com/paterkleomenis/connected/issues/new".toUri()
+                                )
                                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 context.startActivity(intent)
                             } catch (e: Exception) {
@@ -1959,8 +1991,10 @@ fun SettingsScreen(
                     OutlinedButton(
                         onClick = {
                             try {
-                                val intent = Intent(Intent.ACTION_VIEW,
-                                    "https://github.com/paterkleomenis/connected/blob/main/PRIVACY_POLICY.md".toUri())
+                                val intent = Intent(
+                                    Intent.ACTION_VIEW,
+                                    "https://github.com/paterkleomenis/connected/blob/main/PRIVACY_POLICY.md".toUri()
+                                )
                                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 context.startActivity(intent)
                             } catch (e: Exception) {
@@ -2042,6 +2076,7 @@ private fun PhoneDataDialog(
                                 }
                             }
                         )
+
                         PhoneDataKind.CallLog -> CallLogDataList(app.callLog, device.name, context)
                     }
                 }
@@ -2319,6 +2354,7 @@ fun DeviceItem(
     val isPending = app.pendingPairing.contains(device.id)
     var showMenu by remember { mutableStateOf(false) }
     var showDetails by remember { mutableStateOf(false) }
+    var showRemoteInput by remember { mutableStateOf(false) }
     val phoneDataKind = remember { mutableStateOf<PhoneDataKind?>(null) }
 
     Card(modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth()) {
@@ -2467,13 +2503,27 @@ fun DeviceItem(
                                     )
                                 }
                                 */
-                                // Remote power/session commands — only meaningful for desktop peers.
+                                // Remote input and power/session commands — only
+                                // meaningful for desktop peers.
                                 if (device.deviceType == DeviceType.LINUX
                                     || device.deviceType == DeviceType.WINDOWS
                                     || device.deviceType == DeviceType.MAC_OS
                                 ) {
-                                    var showRemoteMenu by remember { mutableStateOf(false) }
                                     HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = { Text("Remote Input") },
+                                        leadingIcon = {
+                                            Icon(
+                                                painterResource(R.drawable.ic_desktop),
+                                                contentDescription = null
+                                            )
+                                        },
+                                        onClick = {
+                                            showMenu = false
+                                            showRemoteInput = true
+                                        }
+                                    )
+                                    var showRemoteMenu by remember { mutableStateOf(false) }
                                     Box {
                                         DropdownMenuItem(
                                             text = { Text("Remote Commands") },
@@ -2604,12 +2654,731 @@ fun DeviceItem(
         }
     }
 
+    if (showRemoteInput) {
+        RemoteInputOverlay(
+            device = device,
+            app = app,
+            onDismiss = { showRemoteInput = false }
+        )
+    }
+
     phoneDataKind.value?.let { kind ->
         PhoneDataDialog(
             kind = kind,
             device = device,
             app = app,
             onDismiss = { phoneDataKind.value = null }
+        )
+    }
+}
+
+// ============================================================================
+// Remote input overlay (phone -> desktop)
+// ============================================================================
+
+private const val REMOTE_BTN_LEFT = 0x110
+private const val REMOTE_BTN_RIGHT = 0x111
+private const val REMOTE_BTN_MIDDLE = 0x112
+
+private const val KEYSYM_BACKSPACE = 0xFF08
+private const val KEYSYM_TAB = 0xFF09
+private const val KEYSYM_RETURN = 0xFF0D
+private const val KEYSYM_ESCAPE = 0xFF1B
+private const val KEYSYM_HOME = 0xFF50
+private const val KEYSYM_LEFT = 0xFF51
+private const val KEYSYM_UP = 0xFF52
+private const val KEYSYM_RIGHT = 0xFF53
+private const val KEYSYM_DOWN = 0xFF54
+private const val KEYSYM_PAGE_UP = 0xFF55
+private const val KEYSYM_PAGE_DOWN = 0xFF56
+private const val KEYSYM_END = 0xFF57
+private const val KEYSYM_INSERT = 0xFF63
+private const val KEYSYM_DELETE = 0xFFFF
+private const val KEYSYM_A = 0x61
+private const val KEYSYM_SHIFT_L = 0xFFE1
+private const val KEYSYM_CONTROL_L = 0xFFE3
+private const val KEYSYM_ALT_L = 0xFFE9
+private const val KEYSYM_SUPER_L = 0xFFEB
+
+private fun remoteButton(button: Int, pressed: Boolean) =
+    RemoteInputEvent.PointerButton(button.toUShort(), pressed)
+
+private fun remoteKey(keysym: Int, pressed: Boolean) =
+    RemoteInputEvent.Key(keysym.toUInt(), pressed)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RemoteInputOverlay(
+    device: DiscoveredDevice,
+    app: ConnectedApp,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val view = LocalView.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+
+    var typedText by remember { mutableStateOf("") }
+    var ctrlPressed by remember { mutableStateOf(false) }
+    var altPressed by remember { mutableStateOf(false) }
+    var shiftPressed by remember { mutableStateOf(false) }
+    var superPressed by remember { mutableStateOf(false) }
+    var dragActive by remember { mutableStateOf(false) }
+    var tapDragActive by remember { mutableStateOf(false) }
+    var overviewOpenByGesture by remember { mutableStateOf(false) }
+    var startError by remember { mutableStateOf<String?>(null) }
+    var connected by remember { mutableStateOf(false) }
+
+    fun send(events: List<RemoteInputEvent>) {
+        app.sendRemoteControlEvents(device, events)
+    }
+
+    fun activeModifiers(): List<Int> = buildList {
+        if (ctrlPressed) add(KEYSYM_CONTROL_L)
+        if (altPressed) add(KEYSYM_ALT_L)
+        if (shiftPressed) add(KEYSYM_SHIFT_L)
+        if (superPressed) add(KEYSYM_SUPER_L)
+    }
+
+    fun clearModifiers() {
+        ctrlPressed = false
+        altPressed = false
+        shiftPressed = false
+        superPressed = false
+    }
+
+    fun click(button: Int) {
+        send(listOf(remoteButton(button, true), remoteButton(button, false)))
+        // A click can move the desktop caret to another field or position.
+        // Start a fresh live-typing buffer instead of assuming the old text
+        // is still immediately before the caret.
+        typedText = ""
+        overviewOpenByGesture = false
+    }
+
+    fun sendKey(keysym: Int, resetLiveText: Boolean = true) {
+        val modifiers = activeModifiers()
+        val events = mutableListOf<RemoteInputEvent>()
+        modifiers.forEach { events.add(remoteKey(it, true)) }
+        events.add(remoteKey(keysym, true))
+        events.add(remoteKey(keysym, false))
+        modifiers.asReversed().forEach { events.add(remoteKey(it, false)) }
+        send(events)
+        if (modifiers.isNotEmpty()) clearModifiers()
+        if (resetLiveText) typedText = ""
+        overviewOpenByGesture = false
+    }
+
+    fun sendBackspaces(count: Int) {
+        var remaining = count
+        while (remaining > 0) {
+            // One Backspace press/release pair is two protocol events. Stay
+            // below MAX_INPUT_EVENTS_PER_BATCH (256) on every FFI call.
+            val chunk = minOf(remaining, 100)
+            val events = ArrayList<RemoteInputEvent>(chunk * 2)
+            repeat(chunk) {
+                events.add(remoteKey(KEYSYM_BACKSPACE, true))
+                events.add(remoteKey(KEYSYM_BACKSPACE, false))
+            }
+            send(events)
+            remaining -= chunk
+        }
+    }
+
+    fun applyTypedText(newValue: String) {
+        val previous = typedText
+        val modifiers = activeModifiers()
+
+        // A modifier chip plus a single character is a shortcut, not text.
+        // Keep the character out of the phone field so it is never echoed.
+        // A and C use the same physical key: send the base key, otherwise
+        // Ctrl+C would become Ctrl+Shift+C. The Shift chip still applies.
+        if (modifiers.isNotEmpty() &&
+            newValue.length == previous.length + 1 &&
+            newValue.startsWith(previous)
+        ) {
+            val character = newValue.last()
+            val baseCharacter = if (character in 'A'..'Z') character.lowercaseChar() else character
+            if (baseCharacter.code in 0x20..0xFF) {
+                sendKey(baseCharacter.code)
+                return
+            }
+        }
+
+        val next = limitLiveText(newValue)
+        if (next == previous) return
+
+        planRemoteTextEdit(previous, next)?.let { edit ->
+            if (edit.backspaces > 0) sendBackspaces(edit.backspaces)
+            if (edit.insert.isNotEmpty()) {
+                send(listOf(RemoteInputEvent.Text(edit.insert)))
+            }
+        }
+        typedText = next
+        if (modifiers.isNotEmpty()) clearModifiers()
+        overviewOpenByGesture = false
+    }
+
+    fun clearTypedText() {
+        sendBackspaces(remoteBackspaceCount(typedText))
+        typedText = ""
+        overviewOpenByGesture = false
+    }
+
+    fun sendChord(modifiers: List<Int>, keysym: Int) {
+        val events = mutableListOf<RemoteInputEvent>()
+        modifiers.forEach { events.add(remoteKey(it, true)) }
+        events.add(remoteKey(keysym, true))
+        events.add(remoteKey(keysym, false))
+        modifiers.asReversed().forEach { events.add(remoteKey(it, false)) }
+        send(events)
+    }
+
+    fun zoom(isZoomIn: Boolean) {
+        // Ctrl+wheel is the common application zoom shortcut. Keep the press,
+        // scroll and release in one ordered batch.
+        send(
+            listOf(
+                remoteKey(KEYSYM_CONTROL_L, true),
+                RemoteInputEvent.Scroll(0f, if (isZoomIn) 120f else -120f),
+                remoteKey(KEYSYM_CONTROL_L, false)
+            )
+        )
+    }
+
+    fun threeFingerSwipe(dx: Float, dy: Float) {
+        if (abs(dx) > abs(dy)) {
+            // Natural direction: swiping left moves to the workspace on the
+            // right, matching GNOME's three-finger workspace switch.
+            val key = if (dx < 0f) KEYSYM_RIGHT else KEYSYM_LEFT
+            sendChord(listOf(KEYSYM_CONTROL_L, KEYSYM_ALT_L), key)
+        } else if (dy < 0f) {
+            if (overviewOpenByGesture) {
+                // A second upward swipe opens GNOME's Applications view.
+                sendChord(listOf(KEYSYM_SUPER_L), KEYSYM_A)
+            } else {
+                // GNOME opens the Activities overview on the first swipe up.
+                sendChord(emptyList(), KEYSYM_SUPER_L)
+                overviewOpenByGesture = true
+            }
+        } else {
+            // GNOME's downward gesture backs out of the overview/app grid.
+            sendChord(emptyList(), KEYSYM_ESCAPE)
+            overviewOpenByGesture = false
+        }
+        clearModifiers()
+        typedText = ""
+    }
+
+    // Start the long-lived ordered stream as soon as the panel opens, so the
+    // desktop can present its permission prompt before the first touch.
+    DisposableEffect(device.id, device.ip, device.port) {
+        val error = app.startRemoteControl(device)
+        startError = error
+        if (error != null) {
+            android.widget.Toast.makeText(
+                context,
+                "Remote input unavailable: $error",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+        onDispose {
+            // Release a drag before tearing the stream down, otherwise the
+            // desktop can be left with a held mouse button.
+            if (dragActive || tapDragActive) {
+                send(listOf(remoteButton(REMOTE_BTN_LEFT, false)))
+            }
+            app.stopRemoteControl()
+        }
+    }
+
+    DisposableEffect(view) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                onDismiss()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(device.id, device.ip, device.port) {
+        while (true) {
+            connected = app.isRemoteControlActive(device)
+            delay(400)
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding()
+                    .imePadding()
+                    .padding(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_desktop),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Remote Input",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Text(
+                            text = device.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Filled.Close, contentDescription = "Close")
+                    }
+                }
+
+                Text(
+                    text = when {
+                        startError != null -> "Could not start remote input: $startError"
+                        connected -> "Session active. If your desktop is showing a permission prompt, approve it once — it will be remembered."
+                        else -> "Waiting for this computer. Enable Remote Input in Settings there; on Wayland, approve the system permission prompt once."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when {
+                        startError != null -> MaterialTheme.colorScheme.error
+                        connected -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(vertical = 6.dp)
+                )
+
+                RemoteTouchpad(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    onMotion = { dx, dy ->
+                        send(
+                            listOf(
+                                RemoteInputEvent.PointerMotion(dx * 1.35f, dy * 1.35f)
+                            )
+                        )
+                    },
+                    onScroll = { dx, dy ->
+                        send(listOf(RemoteInputEvent.Scroll(dx, dy)))
+                    },
+                    onZoom = { zoomIn -> zoom(zoomIn) },
+                    onThreeFingerSwipe = { dx, dy -> threeFingerSwipe(dx, dy) },
+                    onLeftDown = {
+                        if (!dragActive) {
+                            tapDragActive = true
+                            send(listOf(remoteButton(REMOTE_BTN_LEFT, true)))
+                            typedText = ""
+                        }
+                        overviewOpenByGesture = false
+                    },
+                    onLeftUp = {
+                        if (tapDragActive) {
+                            tapDragActive = false
+                            send(listOf(remoteButton(REMOTE_BTN_LEFT, false)))
+                        }
+                    },
+                    onClick = { fingers ->
+                        click(
+                            when (fingers) {
+                                1 -> REMOTE_BTN_LEFT
+                                2 -> REMOTE_BTN_RIGHT
+                                else -> REMOTE_BTN_MIDDLE
+                            }
+                        )
+                    }
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { click(REMOTE_BTN_LEFT) },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    ) { Text("Left") }
+                    OutlinedButton(
+                        onClick = { click(REMOTE_BTN_RIGHT) },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    ) { Text("Right") }
+                    OutlinedButton(
+                        onClick = { click(REMOTE_BTN_MIDDLE) },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    ) { Text("Middle") }
+                    Button(
+                        onClick = {
+                            dragActive = !dragActive
+                            send(listOf(remoteButton(REMOTE_BTN_LEFT, dragActive)))
+                            typedText = ""
+                        },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        colors = if (dragActive) {
+                            ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.tertiary
+                            )
+                        } else {
+                            ButtonDefaults.buttonColors()
+                        }
+                    ) { Text(if (dragActive) "Release" else "Drag") }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { send(listOf(RemoteInputEvent.Scroll(0f, 120f))) },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    ) { Text("Scroll Up") }
+                    OutlinedButton(
+                        onClick = { send(listOf(RemoteInputEvent.Scroll(0f, -120f))) },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    ) { Text("Scroll Down") }
+                }
+
+                OutlinedTextField(
+                    value = typedText,
+                    onValueChange = { applyTypedText(it) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    singleLine = true,
+                    label = { Text("Type on desktop") },
+                    placeholder = { Text("Sent live as you type") },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = { clearTypedText() },
+                        enabled = typedText.isNotEmpty(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) { Text("Clear") }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = ctrlPressed,
+                        onClick = { ctrlPressed = !ctrlPressed },
+                        label = { Text("Ctrl") }
+                    )
+                    FilterChip(
+                        selected = altPressed,
+                        onClick = { altPressed = !altPressed },
+                        label = { Text("Alt") }
+                    )
+                    FilterChip(
+                        selected = shiftPressed,
+                        onClick = { shiftPressed = !shiftPressed },
+                        label = { Text("Shift") }
+                    )
+                    FilterChip(
+                        selected = superPressed,
+                        onClick = { superPressed = !superPressed },
+                        label = { Text("Super") }
+                    )
+                    RemoteKeyButton("Esc") { sendKey(KEYSYM_ESCAPE) }
+                    RemoteKeyButton("Tab") { sendKey(KEYSYM_TAB) }
+                    RemoteKeyButton("Enter") { sendKey(KEYSYM_RETURN) }
+                    RemoteKeyButton("Bksp") {
+                        // Keep the live buffer aligned with a plain Backspace.
+                        // A modified Backspace may delete an application-defined
+                        // word or line, so drop the buffer instead of guessing.
+                        val modified = activeModifiers().isNotEmpty()
+                        sendKey(KEYSYM_BACKSPACE, resetLiveText = false)
+                        typedText = if (modified) "" else dropLastGrapheme(typedText)
+                    }
+                    RemoteKeyButton("Del") { sendKey(KEYSYM_DELETE) }
+                    RemoteKeyButton("Ins") { sendKey(KEYSYM_INSERT) }
+                    RemoteKeyButton("Home") { sendKey(KEYSYM_HOME) }
+                    RemoteKeyButton("End") { sendKey(KEYSYM_END) }
+                    RemoteKeyButton("PgUp") { sendKey(KEYSYM_PAGE_UP) }
+                    RemoteKeyButton("PgDn") { sendKey(KEYSYM_PAGE_DOWN) }
+                    RemoteKeyButton("←") { sendKey(KEYSYM_LEFT) }
+                    RemoteKeyButton("↑") { sendKey(KEYSYM_UP) }
+                    RemoteKeyButton("↓") { sendKey(KEYSYM_DOWN) }
+                    RemoteKeyButton("→") { sendKey(KEYSYM_RIGHT) }
+                }
+
+                Text(
+                    text = "Drag: move · tap: left · two-finger tap: right · three-finger tap: middle\n" +
+                            "Two-finger drag: scroll · pinch: zoom · double-tap + drag: select\n" +
+                            "Three-finger swipe: ↑ Activities · ↑ again Apps · ↓ Back · ←/→ Workspaces",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemoteKeyButton(label: String, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Text(label)
+    }
+}
+
+private enum class TwoFingerMode { Undecided, Scroll, Zoom }
+
+@Composable
+private fun RemoteTouchpad(
+    modifier: Modifier = Modifier,
+    onMotion: (Float, Float) -> Unit,
+    onScroll: (Float, Float) -> Unit,
+    onZoom: (Boolean) -> Unit,
+    onThreeFingerSwipe: (Float, Float) -> Unit,
+    onLeftDown: () -> Unit,
+    onLeftUp: () -> Unit,
+    onClick: (Int) -> Unit
+) {
+    // The pointerInput block is long-lived. Keep these callbacks current so a
+    // stale composition cannot leave a mouse button held or ignore a chip.
+    val currentOnMotion by rememberUpdatedState(onMotion)
+    val currentOnScroll by rememberUpdatedState(onScroll)
+    val currentOnZoom by rememberUpdatedState(onZoom)
+    val currentOnSwipe by rememberUpdatedState(onThreeFingerSwipe)
+    val currentOnLeftDown by rememberUpdatedState(onLeftDown)
+    val currentOnLeftUp by rememberUpdatedState(onLeftUp)
+    val currentOnClick by rememberUpdatedState(onClick)
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .pointerInput(Unit) {
+                val swipeThreshold = 72.dp.toPx()
+                val threeFingerTapSlop = 24.dp.toPx()
+                val doubleTapSlop = 36.dp.toPx()
+                val zoomStep = 48.dp.toPx()
+                var lastTapUpTime = 0L
+                var lastTapPosition = Offset.Zero
+
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val doubleTap = lastTapUpTime != 0L &&
+                            down.uptimeMillis - lastTapUpTime in 0L..viewConfiguration.doubleTapTimeoutMillis &&
+                            (down.position - lastTapPosition).getDistance() <= doubleTapSlop
+                    if (doubleTap) lastTapUpTime = 0L
+
+                    var lastCentroid = down.position
+                    var lastPointerCount = 1
+                    var maxPointerCount = 1
+                    var moved = false
+                    var motionAccum = Offset.Zero
+                    var threeFingerAccum = Offset.Zero
+                    var twoFingerMode = TwoFingerMode.Undecided
+                    var centroidAccum = Offset.Zero
+                    var spreadAccum = 0f
+                    var lastPinchDistance = 0f
+                    var zoomAccum = 0f
+                    var tapDragCandidate = doubleTap
+                    var dragPressSent = false
+                    var tapDragging = false
+
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Main)
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+
+                            maxPointerCount = maxOf(maxPointerCount, pressed.size)
+                            val centroid = pressed.fold(Offset.Zero) { acc, change ->
+                                acc + change.position
+                            } / pressed.size.toFloat()
+
+                            if (pressed.size != lastPointerCount) {
+                                // Adding or lifting a finger moves the centroid;
+                                // don't turn that jump into input.
+                                lastPointerCount = pressed.size
+                                lastCentroid = centroid
+                                if (pressed.size == 2) {
+                                    lastPinchDistance =
+                                        (pressed[0].position - pressed[1].position).getDistance()
+                                    twoFingerMode = TwoFingerMode.Undecided
+                                    centroidAccum = Offset.Zero
+                                    spreadAccum = 0f
+                                    zoomAccum = 0f
+                                }
+                                if (tapDragging) {
+                                    tapDragging = false
+                                    currentOnLeftUp()
+                                }
+                                event.changes.forEach { it.consume() }
+                                continue
+                            }
+
+                            val delta = centroid - lastCentroid
+                            lastCentroid = centroid
+
+                            if (maxPointerCount >= 3) {
+                                // Three- and four-finger gestures are reserved
+                                // for GNOME navigation; never emit pointer or
+                                // scroll input for them.
+                                if (pressed.size >= 3) {
+                                    threeFingerAccum += delta
+                                    if (threeFingerAccum.getDistance() > threeFingerTapSlop) {
+                                        moved = true
+                                    }
+                                }
+                            } else if (pressed.size == 2) {
+                                val pinchDistance =
+                                    (pressed[0].position - pressed[1].position).getDistance()
+                                val spreadDelta = pinchDistance - lastPinchDistance
+                                lastPinchDistance = pinchDistance
+                                centroidAccum += delta
+                                spreadAccum += spreadDelta
+
+                                when (twoFingerMode) {
+                                    TwoFingerMode.Undecided -> {
+                                        val centroidDistance = centroidAccum.getDistance()
+                                        val spreadDistance = abs(spreadAccum)
+                                        // A pinch needs a clear spread change;
+                                        // otherwise a slightly uneven two-finger
+                                        // scroll would get mistaken for zoom.
+                                        val zoomIntent = spreadDistance >
+                                                maxOf(
+                                                    centroidDistance * 1.5f,
+                                                    viewConfiguration.touchSlop * 2f
+                                                )
+                                        if (zoomIntent ||
+                                            centroidDistance > viewConfiguration.touchSlop
+                                        ) {
+                                            moved = true
+                                            twoFingerMode =
+                                                if (zoomIntent) {
+                                                    TwoFingerMode.Zoom
+                                                } else {
+                                                    TwoFingerMode.Scroll
+                                                }
+                                            if (twoFingerMode == TwoFingerMode.Scroll) {
+                                                currentOnScroll(
+                                                    centroidAccum.x,
+                                                    centroidAccum.y
+                                                )
+                                                centroidAccum = Offset.Zero
+                                            } else {
+                                                zoomAccum = spreadAccum
+                                                spreadAccum = 0f
+                                                while (abs(zoomAccum) >= zoomStep) {
+                                                    currentOnZoom(zoomAccum > 0f)
+                                                    zoomAccum -= if (zoomAccum > 0f) {
+                                                        zoomStep
+                                                    } else {
+                                                        -zoomStep
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    TwoFingerMode.Scroll -> {
+                                        if (delta != Offset.Zero) {
+                                            currentOnScroll(delta.x, delta.y)
+                                        }
+                                    }
+
+                                    TwoFingerMode.Zoom -> {
+                                        zoomAccum += spreadDelta
+                                        while (abs(zoomAccum) >= zoomStep) {
+                                            currentOnZoom(zoomAccum > 0f)
+                                            zoomAccum -= if (zoomAccum > 0f) {
+                                                zoomStep
+                                            } else {
+                                                -zoomStep
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if (maxPointerCount == 1) {
+                                if (!moved) {
+                                    motionAccum += delta
+                                    if (motionAccum.getDistance() >
+                                        viewConfiguration.touchSlop
+                                    ) {
+                                        moved = true
+                                        if (tapDragCandidate) {
+                                            tapDragCandidate = false
+                                            dragPressSent = true
+                                            tapDragging = true
+                                            currentOnLeftDown()
+                                        }
+                                        currentOnMotion(motionAccum.x, motionAccum.y)
+                                        motionAccum = Offset.Zero
+                                    }
+                                } else if (delta != Offset.Zero) {
+                                    currentOnMotion(delta.x, delta.y)
+                                }
+                            }
+                            event.changes.forEach { it.consume() }
+                        }
+                    } finally {
+                        if (tapDragging) {
+                            tapDragging = false
+                            currentOnLeftUp()
+                        }
+                    }
+
+                    if (!moved && !dragPressSent) {
+                        currentOnClick(maxPointerCount)
+                        if (maxPointerCount == 1 && !doubleTap) {
+                            lastTapUpTime = SystemClock.uptimeMillis()
+                            lastTapPosition = down.position
+                        }
+                    }
+
+                    if (maxPointerCount >= 3 &&
+                        moved &&
+                        threeFingerAccum.getDistance() >= swipeThreshold
+                    ) {
+                        currentOnSwipe(threeFingerAccum.x, threeFingerAccum.y)
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "Touchpad",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

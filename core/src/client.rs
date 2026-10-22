@@ -6,6 +6,7 @@ use crate::file_transfer::{
     ApprovedBatches, FileTransfer, IncomingTransferConfig, TransferProgress,
     create_dir_all_no_symlinks,
 };
+use crate::input::{self, RemoteInputError, RemoteInputEvent, RemoteInputMessage};
 use crate::security::{KeyStore, PeerStatus};
 use crate::transport::{MAX_MESSAGE_SIZE, Message, QuicTransport};
 use parking_lot::RwLock;
@@ -14,7 +15,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use std::time::{Duration, Instant};
 
@@ -62,6 +63,49 @@ struct PendingPairingRequest {
 type PendingPairingRequestMap = HashMap<String, PendingPairingRequest>;
 type CancelFlag = Arc<AtomicBool>;
 type OutgoingTransferEntry = (CancelFlag, Option<PathBuf>);
+
+/// Sender-side commands for one remote-input session (one peer).
+enum RemoteInputCommand {
+    /// Open the stream and handshake before the first event, so the desktop
+    /// can show its permission prompt while the user is opening the control
+    /// panel rather than on the first touch.
+    Start,
+    Events(Vec<RemoteInputEvent>),
+    Stop,
+}
+
+struct RemoteInputSession {
+    tx: mpsc::Sender<RemoteInputCommand>,
+    handle: tokio::task::JoinHandle<()>,
+    active: Arc<AtomicBool>,
+}
+
+/// Number of queued input batches per peer. Input is lossy under extreme
+/// backpressure: a remote pointer generating more than this while the peer is
+/// unreachable should not grow memory without bound.
+const REMOTE_INPUT_CHANNEL_CAPACITY: usize = 64;
+/// Collect events for this long so a high-frequency touch stream becomes a
+/// handful of frames instead of one QUIC write per sample.
+const REMOTE_INPUT_BATCH_DELAY: Duration = Duration::from_millis(4);
+const REMOTE_INPUT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(6);
+/// After a failed handshake (desktop disabled, portal denied, asleep), don't
+/// reopen on every touch sample. A retry at this cadence lets the session
+/// recover shortly after the user enables it on the desktop.
+const REMOTE_INPUT_RETRY_DELAY: Duration = Duration::from_secs(2);
+
+/// Identifies accepted remote-input streams in `ConnectedEvent`s. A global
+/// counter (rather than one per connection) prevents an old event from a
+/// previous connection reusing an id after a reconnect.
+static NEXT_INPUT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_input_session_id() -> u64 {
+    let id = NEXT_INPUT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+    if id == 0 {
+        NEXT_INPUT_SESSION_ID.fetch_add(1, Ordering::Relaxed).max(1)
+    } else {
+        id
+    }
+}
 
 /// Capacity of the broadcast channel used for `ConnectedEvent`s.
 ///
@@ -373,6 +417,12 @@ pub struct ConnectedClient {
     pub(crate) approved_batches: ApprovedBatches,
     /// Track device IDs we've already sent unpair notifications to, so we don't spam.
     notified_unpairs: Arc<RwLock<HashSet<String>>>,
+    /// Local switch for accepting remote keyboard/pointer input. Defaults to
+    /// false: a paired peer still cannot type until the desktop user enables
+    /// this setting.
+    remote_input_enabled: Arc<AtomicBool>,
+    /// Active sender-side remote-input sessions keyed by peer address.
+    remote_input_sessions: Arc<parking_lot::Mutex<HashMap<SocketAddr, RemoteInputSession>>>,
     /// Handles of long-lived background tasks (cleanup loops, message/stream
     /// dispatchers). Aborted on `shutdown()` so repeated init/shutdown cycles
     /// (e.g. Android service restarts) don't leak tasks and Arcs.
@@ -563,6 +613,8 @@ impl ConnectedClient {
             fs_stream_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FS_STREAMS)),
             approved_batches: Arc::new(RwLock::new(HashMap::new())),
             notified_unpairs: Arc::new(RwLock::new(HashSet::new())),
+            remote_input_enabled: Arc::new(AtomicBool::new(false)),
+            remote_input_sessions: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             background_tasks: Arc::new(RwLock::new(Vec::new())),
         });
 
@@ -2566,6 +2618,141 @@ impl ConnectedClient {
         Ok(())
     }
 
+    /// Enable or disable accepting remote keyboard/pointer input on this
+    /// device. This is the local safety gate; trust is checked separately.
+    pub fn set_remote_input_enabled(&self, enabled: bool) {
+        self.remote_input_enabled.store(enabled, Ordering::Relaxed);
+        info!(
+            "Remote input acceptance {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+    }
+
+    pub fn is_remote_input_enabled(&self) -> bool {
+        self.remote_input_enabled.load(Ordering::Relaxed)
+    }
+
+    /// Start (or reuse) the sender-side input session for a peer. The session
+    /// opens the input stream and performs the `Start`/`Started` handshake in
+    /// the background, so this returns immediately.
+    pub fn start_remote_input(&self, target_ip: IpAddr, target_port: u16) -> Result<()> {
+        let addr = SocketAddr::new(target_ip, target_port);
+        let mut sessions = self.remote_input_sessions.lock();
+        if sessions.contains_key(&addr) {
+            return Ok(());
+        }
+        let (tx, rx) = mpsc::channel(REMOTE_INPUT_CHANNEL_CAPACITY);
+        let active = Arc::new(AtomicBool::new(false));
+        let handle = spawn_remote_input_worker(
+            self.transport.clone(),
+            self.key_store.clone(),
+            addr,
+            rx,
+            active.clone(),
+        )?;
+        let _ = tx.try_send(RemoteInputCommand::Start);
+        sessions.insert(addr, RemoteInputSession { tx, handle, active });
+        Ok(())
+    }
+
+    /// Whether a remote-input stream to this peer has completed its handshake
+    /// and is currently open. Used by the phone UI to show approval status.
+    pub fn is_remote_input_active(&self, target_ip: IpAddr, target_port: u16) -> bool {
+        let addr = SocketAddr::new(target_ip, target_port);
+        self.remote_input_sessions
+            .lock()
+            .get(&addr)
+            .map(|session| session.active.load(Ordering::Acquire))
+            .unwrap_or(false)
+    }
+
+    /// Queue an input batch for a peer. Creates the session lazily if needed.
+    /// This is deliberately synchronous: callers (including UniFFI) must not
+    /// reorder touch events by spawning one task per event.
+    pub fn send_remote_input(
+        &self,
+        target_ip: IpAddr,
+        target_port: u16,
+        events: Vec<RemoteInputEvent>,
+    ) -> Result<()> {
+        input::validate_events(&events).map_err(ConnectedError::Protocol)?;
+        let addr = SocketAddr::new(target_ip, target_port);
+        let mut sessions = self.remote_input_sessions.lock();
+
+        if let Some(session) = sessions.get(&addr) {
+            match session.tx.try_send(RemoteInputCommand::Events(events)) {
+                Ok(()) => return Ok(()),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    // Lossy under extreme backpressure; dropping a motion sample
+                    // is preferable to unbounded memory growth.
+                    debug!("Remote-input queue full for {}; dropping batch", addr);
+                    return Ok(());
+                }
+                Err(mpsc::error::TrySendError::Closed(command)) => {
+                    let RemoteInputCommand::Events(events) = command else {
+                        return Ok(());
+                    };
+                    sessions.remove(&addr);
+                    return self.queue_remote_input_locked(&mut sessions, addr, events);
+                }
+            }
+        }
+
+        self.queue_remote_input_locked(&mut sessions, addr, events)
+    }
+
+    fn queue_remote_input_locked(
+        &self,
+        sessions: &mut HashMap<SocketAddr, RemoteInputSession>,
+        addr: SocketAddr,
+        events: Vec<RemoteInputEvent>,
+    ) -> Result<()> {
+        let (tx, rx) = mpsc::channel(REMOTE_INPUT_CHANNEL_CAPACITY);
+        let active = Arc::new(AtomicBool::new(false));
+        let handle = spawn_remote_input_worker(
+            self.transport.clone(),
+            self.key_store.clone(),
+            addr,
+            rx,
+            active.clone(),
+        )?;
+        match tx.try_send(RemoteInputCommand::Events(events)) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                debug!("Remote-input queue full for {}; dropping batch", addr);
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                return Err(ConnectedError::Connection(
+                    "Remote-input worker stopped".to_string(),
+                ));
+            }
+        }
+        sessions.insert(addr, RemoteInputSession { tx, handle, active });
+        Ok(())
+    }
+
+    /// Stop the sender-side session for a peer and close the input stream.
+    pub fn stop_remote_input(&self, target_ip: IpAddr, target_port: u16) {
+        let addr = SocketAddr::new(target_ip, target_port);
+        if let Some(session) = self.remote_input_sessions.lock().remove(&addr) {
+            let _ = session.tx.try_send(RemoteInputCommand::Stop);
+            session.handle.abort();
+        }
+    }
+
+    fn stop_all_remote_input(&self) {
+        let sessions: Vec<RemoteInputSession> = self
+            .remote_input_sessions
+            .lock()
+            .drain()
+            .map(|(_, session)| session)
+            .collect();
+        for session in sessions {
+            let _ = session.tx.try_send(RemoteInputCommand::Stop);
+            session.handle.abort();
+        }
+    }
+
     pub async fn send_media_control(
         &self,
         target_ip: IpAddr,
@@ -3622,8 +3809,11 @@ impl ConnectedClient {
         let (msg_tx, mut msg_rx) = mpsc::channel(128);
         let (file_tx, mut file_rx) = mpsc::channel(32);
         let (fs_tx, mut fs_rx) = mpsc::channel(32);
+        let (input_tx, mut input_rx) = mpsc::channel(16);
 
-        self.transport.start_server(msg_tx, file_tx, fs_tx).await?;
+        self.transport
+            .start_server(msg_tx, file_tx, fs_tx, input_tx)
+            .await?;
 
         let event_tx = self.event_tx.clone();
         let key_store_control = self.key_store.clone();
@@ -4728,6 +4918,67 @@ impl ConnectedClient {
         });
         self.background_tasks.write().push(h);
 
+        // Handle remote-input streams. One long-lived stream per peer; a new
+        // stream from the same authenticated peer replaces the old one (phones
+        // may reconnect before the old QUIC stream has fully drained).
+        let input_event_tx = self.event_tx.clone();
+        let input_key_store = self.key_store.clone();
+        let input_enabled = self.remote_input_enabled.clone();
+        let h = tokio::spawn(async move {
+            type ActiveInput = (oneshot::Sender<()>, tokio::task::JoinHandle<()>);
+            let mut active: HashMap<String, ActiveInput> = HashMap::new();
+            // Input injection is machine-global. Only one peer may control
+            // the desktop at a time; a second phone gets an AlreadyActive
+            // denial and retries while its panel remains open.
+            let session_slot = Arc::new(tokio::sync::Semaphore::new(1));
+            while let Some((addr, fingerprint, send, recv, permit)) = input_rx.recv().await {
+                if !input_key_store.read().is_trusted(&fingerprint) {
+                    warn!(
+                        "Dropping remote-input stream from untrusted peer {} ({})",
+                        fingerprint, addr
+                    );
+                    continue;
+                }
+
+                // Finish the old stream's `SessionEnded` before starting the
+                // replacement. Otherwise the end event can arrive after the
+                // new `SessionStarted`, leaving a desktop portal session open
+                // for a stream that no longer exists.
+                if let Some((cancel, handle)) = active.remove(&fingerprint) {
+                    let _ = cancel.send(());
+                    // The handler normally exits immediately on cancel. Bound
+                    // the wait so a wedged peer cannot block its replacement.
+                    let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+                }
+                let (cancel_tx, cancel_rx) = oneshot::channel();
+                let session_id = next_input_session_id();
+
+                let active_key = fingerprint.clone();
+                let event_tx = input_event_tx.clone();
+                let key_store = input_key_store.clone();
+                let enabled = input_enabled.clone();
+                let session_slot = session_slot.clone();
+                let handle = tokio::spawn(async move {
+                    let _permit = permit;
+                    handle_remote_input_stream(
+                        session_id,
+                        addr,
+                        fingerprint,
+                        send,
+                        recv,
+                        enabled,
+                        key_store,
+                        event_tx,
+                        cancel_rx,
+                        session_slot,
+                    )
+                    .await;
+                });
+                active.insert(active_key, (cancel_tx, handle));
+            }
+        });
+        self.background_tasks.write().push(h);
+
         Ok(())
     }
 }
@@ -4735,6 +4986,8 @@ impl ConnectedClient {
 impl ConnectedClient {
     pub async fn shutdown(&self) {
         info!("Shutting down ConnectedClient...");
+
+        self.stop_all_remote_input();
 
         // Cancel pairing mode timeout if active
         if let Some(handle) = self.pairing_mode_handle.write().take() {
@@ -4934,6 +5187,422 @@ pub fn get_local_ip() -> Option<IpAddr> {
             // Fallback to any IPv4
             ipv4_ifaces.first().map(|iface| iface.ip())
         })
+}
+
+fn spawn_remote_input_worker(
+    transport: Arc<QuicTransport>,
+    key_store: Arc<RwLock<KeyStore>>,
+    addr: SocketAddr,
+    rx: mpsc::Receiver<RemoteInputCommand>,
+    active: Arc<AtomicBool>,
+) -> Result<tokio::task::JoinHandle<()>> {
+    let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+        ConnectedError::InitializationError(
+            "Remote input requires a Tokio runtime context".to_string(),
+        )
+    })?;
+    Ok(handle.spawn(run_remote_input_worker(
+        transport, key_store, addr, rx, active,
+    )))
+}
+
+async fn run_remote_input_worker(
+    transport: Arc<QuicTransport>,
+    key_store: Arc<RwLock<KeyStore>>,
+    addr: SocketAddr,
+    mut rx: mpsc::Receiver<RemoteInputCommand>,
+    active: Arc<AtomicBool>,
+) {
+    let mut stream: Option<(quinn::SendStream, quinn::RecvStream)> = None;
+    let mut retry_after = Instant::now();
+    // Commands pulled in from the channel that did not fit in the current
+    // batch. Keeping them here (instead of dropping the excess) preserves
+    // ordering, especially the release half of a mouse-button pair.
+    let mut deferred: std::collections::VecDeque<RemoteInputCommand> =
+        std::collections::VecDeque::new();
+
+    loop {
+        let command = if let Some(command) = deferred.pop_front() {
+            Some(command)
+        } else if stream.is_none() {
+            // Retry the handshake on a timer while the phone's control panel
+            // is open. This lets the session connect as soon as remote input
+            // is enabled on the desktop, instead of waiting for the next touch
+            // (which would be dropped by the failed session).
+            let wait = retry_after.saturating_duration_since(Instant::now());
+            tokio::select! {
+                command = rx.recv() => match command {
+                    Some(command) => Some(command),
+                    None => break,
+                },
+                _ = tokio::time::sleep(wait) => None,
+            }
+        } else {
+            match rx.recv().await {
+                Some(command) => Some(command),
+                None => break,
+            }
+        };
+
+        let Some(command) = command else {
+            match open_remote_input_stream(&transport, &key_store, addr).await {
+                Ok(new_stream) => {
+                    info!("Remote-input session established with {}", addr);
+                    stream = Some(new_stream);
+                    active.store(true, Ordering::Release);
+                    retry_after = Instant::now();
+                }
+                Err(error) => {
+                    debug!("Remote input to {} unavailable: {}", addr, error);
+                    active.store(false, Ordering::Release);
+                    retry_after = Instant::now() + REMOTE_INPUT_RETRY_DELAY;
+                }
+            }
+            continue;
+        };
+
+        match command {
+            RemoteInputCommand::Stop => break,
+            RemoteInputCommand::Start => {
+                if stream.is_none() && Instant::now() >= retry_after {
+                    match open_remote_input_stream(&transport, &key_store, addr).await {
+                        Ok(new_stream) => {
+                            info!("Remote-input session established with {}", addr);
+                            stream = Some(new_stream);
+                            active.store(true, Ordering::Release);
+                        }
+                        Err(error) => {
+                            debug!("Remote input to {} unavailable: {}", addr, error);
+                            active.store(false, Ordering::Release);
+                            retry_after = Instant::now() + REMOTE_INPUT_RETRY_DELAY;
+                        }
+                    }
+                }
+            }
+            RemoteInputCommand::Events(first) => {
+                let mut batch = first;
+                let mut stop_after = false;
+
+                // Small coalescing window: a 120 Hz touch stream becomes ~8
+                // frames per second instead of one stream write per sample.
+                tokio::time::sleep(REMOTE_INPUT_BATCH_DELAY).await;
+                while batch.len() < input::MAX_INPUT_EVENTS_PER_BATCH {
+                    let next = if let Some(command) = deferred.pop_front() {
+                        Ok(command)
+                    } else {
+                        rx.try_recv()
+                    };
+                    match next {
+                        Ok(RemoteInputCommand::Events(mut more)) => {
+                            let remaining = input::MAX_INPUT_EVENTS_PER_BATCH - batch.len();
+                            if more.len() <= remaining {
+                                batch.extend(more);
+                            } else {
+                                let tail = more.split_off(remaining);
+                                batch.extend(more);
+                                deferred.push_front(RemoteInputCommand::Events(tail));
+                                break;
+                            }
+                        }
+                        Ok(RemoteInputCommand::Start) => {}
+                        Ok(RemoteInputCommand::Stop) => {
+                            stop_after = true;
+                            break;
+                        }
+                        Err(mpsc::error::TryRecvError::Empty) => break,
+                        Err(mpsc::error::TryRecvError::Disconnected) => {
+                            stop_after = true;
+                            break;
+                        }
+                    }
+                }
+
+                if stream.is_none() {
+                    if Instant::now() < retry_after {
+                        if stop_after {
+                            break;
+                        }
+                        continue;
+                    }
+                    match open_remote_input_stream(&transport, &key_store, addr).await {
+                        Ok(new_stream) => {
+                            info!("Remote-input session established with {}", addr);
+                            stream = Some(new_stream);
+                            active.store(true, Ordering::Release);
+                            retry_after = Instant::now();
+                        }
+                        Err(error) => {
+                            // The desktop may have remote input disabled, may be
+                            // showing a portal prompt, or may be an older build
+                            // that ignores stream type 4. Retry slowly rather
+                            // than reconnecting for every touch sample.
+                            debug!("Remote input to {} unavailable: {}", addr, error);
+                            active.store(false, Ordering::Release);
+                            retry_after = Instant::now() + REMOTE_INPUT_RETRY_DELAY;
+                            if stop_after {
+                                break;
+                            }
+                            continue;
+                        }
+                    }
+                }
+
+                if let Some((send, _)) = stream.as_mut()
+                    && let Err(error) =
+                        write_remote_input_frame(send, &RemoteInputMessage::Events(batch)).await
+                {
+                    warn!("Remote-input send to {} failed: {}", addr, error);
+                    stream = None;
+                    active.store(false, Ordering::Release);
+                    retry_after = Instant::now() + REMOTE_INPUT_RETRY_DELAY;
+                }
+
+                if stop_after {
+                    break;
+                }
+            }
+        }
+    }
+
+    active.store(false, Ordering::Release);
+    if let Some((mut send, _)) = stream {
+        let _ = write_remote_input_frame(&mut send, &RemoteInputMessage::Stop).await;
+        let _ = send.finish();
+    }
+    debug!("Remote-input sender session with {} ended", addr);
+}
+
+async fn open_remote_input_stream(
+    transport: &QuicTransport,
+    key_store: &RwLock<KeyStore>,
+    addr: SocketAddr,
+) -> Result<(quinn::SendStream, quinn::RecvStream)> {
+    let (mut send, mut recv) = transport
+        .open_stream(addr, QuicTransport::STREAM_TYPE_INPUT)
+        .await?;
+
+    // The transport deliberately allows unknown peers to connect for pairing.
+    // Remote input is a much stronger capability, so require an established
+    // trust relationship before even sending the Start frame.
+    let fingerprint = transport
+        .get_connection_fingerprint(addr)
+        .await
+        .ok_or(ConnectedError::PeerNotTrusted)?;
+    if !key_store.read().is_trusted(&fingerprint) {
+        let _ = send.finish();
+        return Err(ConnectedError::PeerNotTrusted);
+    }
+
+    write_remote_input_frame(
+        &mut send,
+        &RemoteInputMessage::Start {
+            version: input::INPUT_PROTOCOL_VERSION,
+        },
+    )
+    .await?;
+
+    let response = tokio::time::timeout(
+        REMOTE_INPUT_HANDSHAKE_TIMEOUT,
+        read_remote_input_frame(&mut recv),
+    )
+    .await
+    .map_err(|_| ConnectedError::Timeout("remote-input handshake timed out".to_string()))??;
+
+    match response {
+        RemoteInputMessage::Started => Ok((send, recv)),
+        RemoteInputMessage::Denied { reason } => {
+            let _ = send.finish();
+            Err(ConnectedError::Protocol(format!(
+                "remote input denied: {reason}"
+            )))
+        }
+        _ => {
+            let _ = send.finish();
+            Err(ConnectedError::Protocol(
+                "unexpected remote-input handshake response".to_string(),
+            ))
+        }
+    }
+}
+
+async fn write_remote_input_frame(
+    send: &mut quinn::SendStream,
+    message: &RemoteInputMessage,
+) -> Result<()> {
+    let frame = input::encode_frame(message)?;
+    send.write_all(&frame).await?;
+    Ok(())
+}
+
+async fn read_remote_input_frame(recv: &mut quinn::RecvStream) -> Result<RemoteInputMessage> {
+    let mut len_buf = [0u8; 4];
+    recv.read_exact(&mut len_buf).await?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len == 0 || len > input::MAX_INPUT_FRAME_SIZE {
+        return Err(ConnectedError::Protocol(
+            "remote-input frame has invalid length".to_string(),
+        ));
+    }
+    let mut payload = vec![0u8; len];
+    recv.read_exact(&mut payload).await?;
+    input::decode_payload(&payload)
+}
+
+async fn deny_remote_input(send: &mut quinn::SendStream, reason: &str) {
+    let _ = write_remote_input_frame(
+        send,
+        &RemoteInputMessage::Denied {
+            reason: reason.to_string(),
+        },
+    )
+    .await;
+    let _ = send.finish();
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_remote_input_stream(
+    session_id: u64,
+    addr: SocketAddr,
+    fingerprint: String,
+    mut send: quinn::SendStream,
+    mut recv: quinn::RecvStream,
+    enabled: Arc<AtomicBool>,
+    key_store: Arc<RwLock<KeyStore>>,
+    event_tx: broadcast::Sender<ConnectedEvent>,
+    mut cancel: oneshot::Receiver<()>,
+    session_slot: Arc<tokio::sync::Semaphore>,
+) {
+    let from_device = key_store
+        .read()
+        .get_peer_name(&fingerprint)
+        .unwrap_or_else(|| "Unknown device".to_string());
+
+    let handshake = tokio::select! {
+        _ = &mut cancel => return,
+        result = tokio::time::timeout(
+            REMOTE_INPUT_HANDSHAKE_TIMEOUT,
+            read_remote_input_frame(&mut recv),
+        ) => result,
+    };
+
+    let version = match handshake {
+        Ok(Ok(RemoteInputMessage::Start { version })) => version,
+        Ok(Ok(_)) => {
+            deny_remote_input(&mut send, "expected input handshake").await;
+            return;
+        }
+        Ok(Err(error)) => {
+            debug!("Remote-input handshake from {} failed: {}", addr, error);
+            return;
+        }
+        Err(_) => {
+            deny_remote_input(&mut send, "input handshake timed out").await;
+            return;
+        }
+    };
+
+    if version != input::INPUT_PROTOCOL_VERSION {
+        deny_remote_input(&mut send, "unsupported input protocol version").await;
+        warn!(
+            "Rejected remote input from {}: protocol version {} (expected {})",
+            addr,
+            version,
+            input::INPUT_PROTOCOL_VERSION
+        );
+        return;
+    }
+
+    if !key_store.read().is_trusted(&fingerprint) {
+        deny_remote_input(&mut send, "remote input requires a trusted device").await;
+        debug!(
+            "Denied remote input from {}: peer is no longer trusted",
+            addr
+        );
+        return;
+    }
+
+    if !enabled.load(Ordering::Relaxed) {
+        deny_remote_input(&mut send, "remote input is disabled on this device").await;
+        debug!("Denied remote input from {}: disabled in settings", addr);
+        return;
+    }
+
+    // Only one phone may inject at a time. Keep the permit for the whole
+    // handshake and event loop so a second stream cannot become active while
+    // the first still owns the desktop. Same-peer replacements are serialized
+    // by the dispatcher, which cancels and joins the old handler first.
+    let _session_permit = match session_slot.try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            deny_remote_input(&mut send, &RemoteInputError::AlreadyActive.to_string()).await;
+            debug!(
+                "Denied remote input from {}: another session is active",
+                addr
+            );
+            return;
+        }
+    };
+
+    if let Err(error) = write_remote_input_frame(&mut send, &RemoteInputMessage::Started).await {
+        debug!("Failed to confirm remote input to {}: {}", addr, error);
+        return;
+    }
+
+    info!("Remote-input session started from {}", from_device);
+    let _ = event_tx.send(ConnectedEvent::RemoteInputSessionStarted {
+        session_id,
+        from_device: from_device.clone(),
+    });
+
+    loop {
+        let frame = tokio::select! {
+            _ = &mut cancel => break,
+            result = read_remote_input_frame(&mut recv) => result,
+        };
+
+        match frame {
+            Ok(RemoteInputMessage::Events(events)) => {
+                if !enabled.load(Ordering::Relaxed) {
+                    deny_remote_input(&mut send, "remote input was disabled").await;
+                    break;
+                }
+                if !key_store.read().is_trusted(&fingerprint) {
+                    deny_remote_input(&mut send, "remote input trust was revoked").await;
+                    break;
+                }
+                if let Err(reason) = input::validate_events(&events) {
+                    // Never include event payloads (which may contain text) in logs.
+                    warn!("Invalid remote-input batch from {}: {}", addr, reason);
+                    deny_remote_input(&mut send, "invalid input event").await;
+                    break;
+                }
+                let _ = event_tx.send(ConnectedEvent::RemoteInput {
+                    session_id,
+                    from_device: from_device.clone(),
+                    events,
+                });
+            }
+            Ok(RemoteInputMessage::Stop) => break,
+            Ok(RemoteInputMessage::Start { .. }) => {
+                warn!("Duplicate remote-input handshake from {}", addr);
+                break;
+            }
+            Ok(RemoteInputMessage::Started | RemoteInputMessage::Denied { .. }) => {
+                warn!("Unexpected remote-input control frame from {}", addr);
+                break;
+            }
+            Err(error) => {
+                debug!("Remote-input stream from {} ended: {}", addr, error);
+                break;
+            }
+        }
+    }
+
+    let _ = event_tx.send(ConnectedEvent::RemoteInputSessionEnded {
+        session_id,
+        from_device,
+    });
+    debug!("Remote-input receiver session with {} ended", addr);
 }
 
 #[cfg(test)]

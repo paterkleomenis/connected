@@ -176,11 +176,23 @@ struct CachedConnection {
     last_used: std::time::Instant,
 }
 
+/// An accepted remote-input stream. The semaphore permit is held for the
+/// lifetime of the client-side input session so a peer cannot exhaust the
+/// per-connection stream-handler budget with idle input streams.
+pub type InputStreamItem = (
+    SocketAddr,
+    String,
+    SendStream,
+    RecvStream,
+    tokio::sync::OwnedSemaphorePermit,
+);
+
 #[derive(Clone)]
 struct TransportHandlers {
     message_tx: mpsc::Sender<(SocketAddr, String, Message, Option<SendStream>)>,
     file_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
     fs_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
+    input_stream_tx: mpsc::Sender<InputStreamItem>,
 }
 
 impl ConnectionCache {
@@ -613,6 +625,7 @@ impl QuicTransport {
                 handlers.message_tx,
                 handlers.file_stream_tx,
                 handlers.fs_stream_tx,
+                handlers.input_stream_tx,
                 local_id,
                 connection_cache,
                 key_store,
@@ -679,11 +692,13 @@ impl QuicTransport {
     }
 
     /// Shared accept loop for both main and WiFi Aware endpoints.
+    #[allow(clippy::too_many_arguments)]
     async fn accept_loop(
         endpoint: Endpoint,
         message_tx: mpsc::Sender<(SocketAddr, String, Message, Option<SendStream>)>,
         file_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
         fs_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
+        input_stream_tx: mpsc::Sender<InputStreamItem>,
         local_id: String,
         connection_cache: Arc<RwLock<ConnectionCache>>,
         key_store: Arc<RwLock<KeyStore>>,
@@ -733,6 +748,7 @@ impl QuicTransport {
             let tx = message_tx.clone();
             let f_tx = file_stream_tx.clone();
             let fs_tx = fs_stream_tx.clone();
+            let input_tx = input_stream_tx.clone();
             let id = local_id.clone();
             let cache = connection_cache.clone();
             let ks = key_store.clone();
@@ -790,6 +806,7 @@ impl QuicTransport {
                                 tx,
                                 f_tx,
                                 fs_tx,
+                                input_tx,
                                 id,
                                 ks,
                             )
@@ -833,6 +850,7 @@ impl QuicTransport {
                 handlers.message_tx,
                 handlers.file_stream_tx,
                 handlers.fs_stream_tx,
+                handlers.input_stream_tx,
                 local_id,
                 key_store,
             )
@@ -1383,11 +1401,15 @@ impl QuicTransport {
 
     pub const STREAM_TYPE_FS: u8 = 3;
 
+    /// Dedicated long-lived remote keyboard/pointer stream.
+    pub const STREAM_TYPE_INPUT: u8 = 4;
+
     pub async fn start_server(
         &self,
         message_tx: mpsc::Sender<(SocketAddr, String, Message, Option<SendStream>)>,
         file_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
         fs_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
+        input_stream_tx: mpsc::Sender<InputStreamItem>,
     ) -> Result<()> {
         {
             let mut handlers = self.handlers.write();
@@ -1395,6 +1417,7 @@ impl QuicTransport {
                 message_tx: message_tx.clone(),
                 file_stream_tx: file_stream_tx.clone(),
                 fs_stream_tx: fs_stream_tx.clone(),
+                input_stream_tx: input_stream_tx.clone(),
             });
         }
 
@@ -1417,6 +1440,7 @@ impl QuicTransport {
                 message_tx,
                 file_stream_tx,
                 fs_stream_tx,
+                input_stream_tx,
                 local_id,
                 connection_cache,
                 key_store,
@@ -1452,12 +1476,14 @@ impl QuicTransport {
         Ok(data)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_connection(
         connection: Connection,
         remote_addr: SocketAddr,
         message_tx: mpsc::Sender<(SocketAddr, String, Message, Option<SendStream>)>,
         file_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
         fs_stream_tx: mpsc::Sender<(String, SendStream, RecvStream)>,
+        input_stream_tx: mpsc::Sender<InputStreamItem>,
         local_id: String,
         key_store: Arc<RwLock<KeyStore>>,
     ) -> Result<()> {
@@ -1592,6 +1618,29 @@ impl QuicTransport {
                             info!("Received Filesystem Stream from {}", fingerprint);
                             let _stream_permit = stream_permit;
                             let _ = fs_stream_tx.send((fingerprint.clone(), send, recv)).await;
+                        }
+
+                        Self::STREAM_TYPE_INPUT => {
+                            // Remote input can type and click on this machine, so
+                            // require the same TLS-fingerprint trust as clipboard
+                            // and remote commands. The client checks again before
+                            // injecting anything.
+                            if !key_store.read().is_trusted(&fingerprint) {
+                                warn!(
+                                    "Rejected remote-input stream from untrusted peer {} ({})",
+                                    fingerprint, remote_addr
+                                );
+                                continue;
+                            }
+
+                            info!("Received remote-input stream from {}", fingerprint);
+                            if input_stream_tx
+                                .send((remote_addr, fingerprint.clone(), send, recv, stream_permit))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
                         }
 
                         _ => {

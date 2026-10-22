@@ -8,6 +8,7 @@ pub mod error;
 pub mod events;
 pub mod file_transfer;
 pub mod filesystem;
+pub mod input;
 pub mod security;
 pub mod telephony;
 pub mod transport;
@@ -20,6 +21,10 @@ pub use error::{ConnectedError, Result};
 pub use events::{ConnectedEvent, TransferDirection};
 pub use file_transfer::{FileTransfer, FileTransferMessage, TransferProgress};
 pub use filesystem::{FilesystemMessage, FsEntry, FsEntryType};
+pub use input::{
+    INPUT_PROTOCOL_VERSION, MAX_INPUT_EVENTS_PER_BATCH, MAX_INPUT_FRAME_SIZE, MAX_INPUT_TEXT_BYTES,
+    RemoteInputError, RemoteInputEvent, RemoteInputMessage,
+};
 pub use security::{PeerInfo, PeerStatus};
 pub use telephony::{
     ActiveCall, ActiveCallState, CallAction, CallLogEntry, CallType, Contact, Conversation,

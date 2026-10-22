@@ -128,8 +128,9 @@ async fn file_send_refuses_endpoint_impersonating_another_trusted_device() {
     let (msg_tx, _msg_rx) = tokio::sync::mpsc::channel(64);
     let (file_tx, _file_rx) = tokio::sync::mpsc::channel(4);
     let (fs_tx, _fs_rx) = tokio::sync::mpsc::channel(4);
+    let (input_tx, _input_rx) = tokio::sync::mpsc::channel(4);
     impostor_transport
-        .start_server(msg_tx, file_tx, fs_tx)
+        .start_server(msg_tx, file_tx, fs_tx, input_tx)
         .await
         .unwrap();
 

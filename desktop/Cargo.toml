@@ -26,6 +26,9 @@ uuid = { workspace = true }
 url = "2"
 notify-rust = "4.11"
 fs2 = "0.4"
+# Desktop input injection. X11 via x11rb; Windows via SendInput; macOS via
+# CGEvent. Wayland uses the portal/libei backend below instead.
+enigo = "0.6"
 single-instance = { git = "https://github.com/WLBF/single-instance", version = "0.3", rev = "b3fae2c90a24f4a53e5944fc2ab828c1c35944cb" }
 # Faster allocator for file-transfer hot path — ~10% less alloc overhead, safe (no unsafe in user code)
 mimalloc = { version = "0.1", default-features = false }
@@ -36,6 +39,11 @@ ksni = "0.3"
 dbus = "0.9"
 mpris = "2.0"
 glib = "0.22"
+# Wayland remote input: xdg-desktop-portal RemoteDesktop + libei.
+ashpd = { version = "0.13", features = ["remote_desktop", "screencast"] }
+reis = { version = "0.7", features = ["tokio"] }
+xkbcommon = "0.9"
+libc = "0.2"
 # Native Wayland background blur (GNOME 51 / Mutter ext-background-effect-v1).
 # wayland-backend needs client_system+dlopen so we can wrap GTK's foreign
 # wl_display (guest mode, no link-time libwayland dependency). Enabling it

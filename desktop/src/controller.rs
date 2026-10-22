@@ -11,11 +11,12 @@ use crate::state::{
     get_live_incoming_transfer_ids, get_live_outgoing_transfer_ids, get_media_enabled,
     get_pairing_mode_enabled_setting, get_pairing_mode_state, get_pairing_requests,
     get_pending_pairings, get_phone_conversations, get_phone_data_update, get_phone_messages,
-    get_preview_data, get_remote_commands_enabled, get_remote_files_update, get_remote_search,
-    get_remote_search_update, get_saved_devices_setting, get_transfer_status,
-    is_auto_accept_enabled, mark_calls_synced, mark_contacts_synced, mark_messages_synced,
-    remove_device_from_settings, remove_file_transfer_request, remove_transfer_path,
-    save_device_to_settings, set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
+    get_preview_data, get_remote_commands_enabled, get_remote_files_update,
+    get_remote_input_enabled_setting, get_remote_search, get_remote_search_update,
+    get_saved_devices_setting, get_transfer_status, is_auto_accept_enabled, mark_calls_synced,
+    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
+    remove_file_transfer_request, remove_transfer_path, save_device_to_settings,
+    set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
     set_autostart_enabled_setting, set_device_name_setting, set_discovery_active,
     set_download_directory_setting, set_last_remote_clipboard_content,
     set_pairing_mode_enabled_setting, set_pairing_mode_state, set_phone_call_log,
@@ -235,6 +236,7 @@ pub enum AppAction {
         enabled: bool,
         notify: bool,
     },
+    SetRemoteInputEnabled(bool),
     SendMediaCommand {
         ip: String,
         port: u16,
@@ -1509,6 +1511,27 @@ fn spawn_event_loop(
                         }
                     }
                 }
+                ConnectedEvent::RemoteInput {
+                    session_id,
+                    from_device,
+                    events,
+                } => {
+                    crate::remote_input::handle_events(session_id, &from_device, events);
+                }
+                ConnectedEvent::RemoteInputSessionStarted {
+                    session_id,
+                    from_device,
+                } => {
+                    info!("Remote-input session started from {}", from_device);
+                    crate::remote_input::session_started(session_id, &from_device);
+                }
+                ConnectedEvent::RemoteInputSessionEnded {
+                    session_id,
+                    from_device,
+                } => {
+                    debug!("Remote-input session ended from {}", from_device);
+                    crate::remote_input::session_ended(session_id);
+                }
             }
         }
     });
@@ -1642,6 +1665,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     }
                     clipboard_monitor = Some(spawn_clipboard_monitor(c.clone()));
                     c.set_pairing_mode_persistent(get_pairing_mode_enabled_setting());
+                    c.set_remote_input_enabled(get_remote_input_enabled_setting());
                 }
                 // Apply saved download directory to core
                 if let Some(c) = &client
@@ -1740,6 +1764,14 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
             }
             AppAction::SetClipboardSync(_enabled) => {
                 // Handled in main loop for state sync, here we just ack
+            }
+            AppAction::SetRemoteInputEnabled(enabled) => {
+                if let Some(c) = &client {
+                    c.set_remote_input_enabled(enabled);
+                }
+                if !enabled {
+                    crate::remote_input::disable();
+                }
             }
             AppAction::PairWithDevice { ip, port } => {
                 if let Some(c) = &client {

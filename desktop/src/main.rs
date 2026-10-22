@@ -21,6 +21,7 @@ mod macos_vibrancy;
 mod mpris_server;
 mod native_blur;
 mod remote_commands;
+mod remote_input;
 mod state;
 mod titlebar;
 mod utils;
@@ -1257,8 +1258,12 @@ fn main() {
         eprintln!("Failed to install rustls ring provider: {err:?}");
     }
 
+    // Keep debug diagnostics, but never let dependency logging leak remote
+    // input: enigo logs the full text passed to `text()` and every key passed
+    // to `key()` at DEBUG level. Suppress that crate entirely; injection
+    // failures are reported by our own sanitized logs.
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_env_filter(tracing_subscriber::EnvFilter::new("debug,enigo=off"))
         .init();
 
     ipc::initialize_wakeup_state();
@@ -1726,6 +1731,7 @@ fn App() -> Element {
     // (is_sdk_initialized() and is_discovery_active())
     let media_enabled = use_signal(get_media_enabled_setting);
     let mut remote_commands_enabled = use_signal(get_remote_commands_enabled_setting);
+    let mut remote_input_enabled = use_signal(get_remote_input_enabled_setting);
     // Fix #17: Consolidate four separate media signals into one struct signal.
     // These were all derived from the same `get_current_media()` global state
     // and updated together in the polling loop — four signals for one source.
@@ -2381,6 +2387,13 @@ fn App() -> Element {
         remote_commands_enabled.set(new_state);
         set_remote_commands_enabled_setting(new_state); // Save to disk
         *get_remote_commands_enabled().lock_or_recover() = new_state;
+    };
+
+    let toggle_remote_input = move |_| {
+        let new_state = !*remote_input_enabled.read();
+        remote_input_enabled.set(new_state);
+        set_remote_input_enabled_setting(new_state);
+        action_tx.send(AppAction::SetRemoteInputEnabled(new_state));
     };
 
     let app_theme_class = match theme_mode.read().clone() {
@@ -4157,6 +4170,31 @@ fn App() -> Element {
                                 }
                             }
                             p { class: "settings-hint", "Let trusted devices shut down, restart, or sign you out of this computer. Off by default for safety." }
+                        }
+
+                        div {
+                            class: "info-card",
+                            h3 {
+                                Icon { icon: IconType::Desktop, size: 20, color: "currentColor".to_string() }
+                                " Remote Input"
+                            }
+                            div {
+                                class: "info-grid",
+                                div { class: "info-label", "Allow keyboard and mouse control" }
+                                div {
+                                    class: "info-value",
+                                    label {
+                                        class: "toggle-switch",
+                                        input {
+                                            r#type: "checkbox",
+                                            checked: "{remote_input_enabled}",
+                                            oninput: toggle_remote_input,
+                                        }
+                                        span { class: "slider" }
+                                    }
+                                }
+                            }
+                            p { class: "settings-hint", "Let trusted phones use this computer's keyboard and pointer. On Wayland, your desktop asks for permission the first time and remembers your choice until you revoke it. Off by default." }
                         }
 
                         if cfg!(target_os = "linux") || cfg!(target_os = "windows") {

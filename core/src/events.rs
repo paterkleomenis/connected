@@ -1,4 +1,5 @@
 use crate::device::Device;
+use crate::input::RemoteInputEvent;
 use crate::telephony::TelephonyMessage;
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +90,26 @@ pub enum ConnectedEvent {
         from_ip: String,
         from_port: u16,
         message: TelephonyMessage,
+    },
+    /// A batch of remote keyboard/pointer events from a paired device.
+    ///
+    /// Event payloads may contain typed text and must never be logged.
+    RemoteInput {
+        /// Monotonic app-wide stream identifier. Consumers must ignore events
+        /// from a replaced session.
+        session_id: u64,
+        from_device: String,
+        events: Vec<RemoteInputEvent>,
+    },
+    /// A remote-input stream completed its handshake and may now inject input.
+    RemoteInputSessionStarted {
+        session_id: u64,
+        from_device: String,
+    },
+    /// A remote-input stream ended (user release, disconnect, or revocation).
+    RemoteInputSessionEnded {
+        session_id: u64,
+        from_device: String,
     },
     /// Critical error in a subsystem
     Error(String),

@@ -33,7 +33,12 @@ import uniffi.connected_ffi.ClipboardCallback
 import uniffi.connected_ffi.DiscoveredDevice
 import uniffi.connected_ffi.DeviceType
 import uniffi.connected_ffi.RemoteCommand
+import uniffi.connected_ffi.RemoteInputEvent
 import uniffi.connected_ffi.sendRemoteCommand
+import uniffi.connected_ffi.startRemoteInput as ffiStartRemoteInput
+import uniffi.connected_ffi.sendRemoteInput as ffiSendRemoteInput
+import uniffi.connected_ffi.stopRemoteInput as ffiStopRemoteInput
+import uniffi.connected_ffi.isRemoteInputActive as ffiIsRemoteInputActive
 import uniffi.connected_ffi.sendOpenUrl
 import uniffi.connected_ffi.DiscoveryCallback
 import uniffi.connected_ffi.FfiActiveCall
@@ -459,11 +464,12 @@ class ConnectedApp(private val context: Context) {
                     )
                     when (state) {
                         android.net.wifi.WifiManager.WIFI_STATE_DISABLED -> {
-                            Log.d("ConnectedApp", "Wi-Fi turned off - clearing device cache")
-                            // Keep manager instance; it resumes when WiFi Aware returns
-                            runOnMainThread {
-                                devices.clear()
-                            }
+                            // Wi-Fi can be disabled while the device is still reachable
+                            // over USB tethering, Ethernet, or a Wi-Fi hotspot that the
+                            // phone itself hosts. Do not clear the list here: discovery
+                            // will remove devices when they actually go away, and the
+                            // core does not re-emit an unchanged device after a clear.
+                            Log.d("ConnectedApp", "Wi-Fi turned off - keeping device cache until discovery reports loss")
                         }
 
                         android.net.wifi.WifiManager.WIFI_STATE_ENABLED -> {
@@ -1489,6 +1495,10 @@ class ConnectedApp(private val context: Context) {
     }
 
     private fun doCleanup() {
+
+        // Release the desktop injection session (and its portal session)
+        // before shutting the core down.
+        stopRemoteControl()
 
         // Cancel active file transfers gracefully so the peer receives a
         // Cancel message and can clean up partial data.
@@ -3293,6 +3303,64 @@ class ConnectedApp(private val context: Context) {
             } catch (e: Exception) {
                 Log.e("ConnectedApp", "Failed to send media state", e)
             }
+        }
+    }
+
+    // Remote keyboard/pointer control. The stream is long-lived and ordered;
+    // callers must not launch one coroutine per event or the desktop may see
+    // pointer motion out of order.
+    private val remoteControlDevice = AtomicReference<DiscoveredDevice?>(null)
+
+    fun startRemoteControl(device: DiscoveredDevice): String? {
+        return try {
+            // Close any previous target before switching streams.
+            remoteControlDevice.getAndSet(device)?.let { previous ->
+                if (previous.id != device.id || previous.ip != device.ip || previous.port != device.port) {
+                    try {
+                        ffiStopRemoteInput(previous.ip, previous.port)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            ffiStartRemoteInput(device.ip, device.port)
+            null
+        } catch (e: Exception) {
+            remoteControlDevice.set(null)
+            Log.e("ConnectedApp", "Failed to start remote input: ${e.message}", e)
+            e.message ?: "Failed to start remote input"
+        }
+    }
+
+    fun isRemoteControlActive(device: DiscoveredDevice): Boolean {
+        val active = remoteControlDevice.get() ?: return false
+        if (active.id != device.id || active.ip != device.ip || active.port != device.port) return false
+        return try {
+            ffiIsRemoteInputActive(device.ip, device.port)
+        } catch (_: Exception) {
+            // A transient FFI error should just leave the UI in its waiting
+            // state; retry on the next poll.
+            false
+        }
+    }
+
+    fun sendRemoteControlEvents(device: DiscoveredDevice, events: List<RemoteInputEvent>) {
+        if (events.isEmpty()) return
+        val active = remoteControlDevice.get() ?: return
+        if (active.id != device.id || active.ip != device.ip || active.port != device.port) return
+        try {
+            ffiSendRemoteInput(device.ip, device.port, events)
+        } catch (e: Exception) {
+            // Never log the event payload: it can contain typed text.
+            Log.e("ConnectedApp", "Failed to send remote input: ${e.message}", e)
+        }
+    }
+
+    fun stopRemoteControl() {
+        val previous = remoteControlDevice.getAndSet(null) ?: return
+        try {
+            ffiStopRemoteInput(previous.ip, previous.port)
+        } catch (e: Exception) {
+            Log.w("ConnectedApp", "Failed to stop remote input: ${e.message}")
         }
     }
 

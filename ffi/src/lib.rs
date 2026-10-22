@@ -166,6 +166,44 @@ impl From<connected_core::RemoteCommand> for RemoteCommand {
 }
 
 // ============================================================================
+// Remote Input Types
+// ============================================================================
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum RemoteInputEvent {
+    /// Relative pointer motion in device-independent pixels.
+    PointerMotion { dx: f32, dy: f32 },
+    /// Mouse button state. `button` is a Linux `BTN_*` code (0x110 = left).
+    PointerButton { button: u16, pressed: bool },
+    /// Relative scroll delta.
+    Scroll { dx: f32, dy: f32 },
+    /// X11 keysym press/release.
+    Key { keysym: u32, pressed: bool },
+    /// UTF-8 text to type.
+    Text { text: String },
+}
+
+impl From<RemoteInputEvent> for connected_core::RemoteInputEvent {
+    fn from(event: RemoteInputEvent) -> Self {
+        match event {
+            RemoteInputEvent::PointerMotion { dx, dy } => {
+                connected_core::RemoteInputEvent::PointerMotion { dx, dy }
+            }
+            RemoteInputEvent::PointerButton { button, pressed } => {
+                connected_core::RemoteInputEvent::PointerButton { button, pressed }
+            }
+            RemoteInputEvent::Scroll { dx, dy } => {
+                connected_core::RemoteInputEvent::Scroll { dx, dy }
+            }
+            RemoteInputEvent::Key { keysym, pressed } => {
+                connected_core::RemoteInputEvent::Key { keysym, pressed }
+            }
+            RemoteInputEvent::Text { text } => connected_core::RemoteInputEvent::Text { text },
+        }
+    }
+}
+
+// ============================================================================
 // Telephony Types
 // ============================================================================
 
@@ -1305,6 +1343,13 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                             );
                         }
                     }
+                    ConnectedEvent::RemoteInput { .. }
+                    | ConnectedEvent::RemoteInputSessionStarted { .. }
+                    | ConnectedEvent::RemoteInputSessionEnded { .. } => {
+                        // Remote input is consumed by desktop shell integrations.
+                        // Mobile clients are senders, so there is nothing to do
+                        // if one is received here.
+                    }
                     ConnectedEvent::Error(msg) => {
                         error!("Core error: {}", msg);
                     }
@@ -2246,6 +2291,75 @@ pub fn send_remote_command(
         let _ = client.send_remote_command(ip, target_port, msg).await;
     });
 
+    Ok(())
+}
+
+/// Open the long-lived remote-input stream to a desktop. The desktop may show
+/// a system permission prompt the first time; the approval token is persisted
+/// there. This function returns immediately.
+#[uniffi::export]
+pub fn start_remote_input(target_ip: String, target_port: u16) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: IpAddr = target_ip
+        .parse()
+        .map_err(|_| ConnectedFfiError::InvalidArgument {
+            msg: "Invalid IP".into(),
+        })?;
+    let _guard = get_runtime().enter();
+    client
+        .start_remote_input(ip, target_port)
+        .map_err(ConnectedFfiError::from)
+}
+
+/// Queue a batch of keyboard/pointer events for a desktop. Events are sent in
+/// order on one stream and must not be reordered by the caller.
+#[uniffi::export]
+pub fn send_remote_input(
+    target_ip: String,
+    target_port: u16,
+    events: Vec<RemoteInputEvent>,
+) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: IpAddr = target_ip
+        .parse()
+        .map_err(|_| ConnectedFfiError::InvalidArgument {
+            msg: "Invalid IP".into(),
+        })?;
+    let events: Vec<connected_core::RemoteInputEvent> =
+        events.into_iter().map(Into::into).collect();
+    let _guard = get_runtime().enter();
+    client
+        .send_remote_input(ip, target_port, events)
+        .map_err(ConnectedFfiError::from)
+}
+
+/// Whether the remote-input handshake with this desktop has completed. The
+/// phone uses this to distinguish "waiting for desktop approval" from an
+/// active session.
+#[uniffi::export]
+pub fn is_remote_input_active(
+    target_ip: String,
+    target_port: u16,
+) -> Result<bool, ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: IpAddr = target_ip
+        .parse()
+        .map_err(|_| ConnectedFfiError::InvalidArgument {
+            msg: "Invalid IP".into(),
+        })?;
+    Ok(client.is_remote_input_active(ip, target_port))
+}
+
+/// End the remote-input session and release the desktop-side injection backend.
+#[uniffi::export]
+pub fn stop_remote_input(target_ip: String, target_port: u16) -> Result<(), ConnectedFfiError> {
+    let client = get_client()?;
+    let ip: IpAddr = target_ip
+        .parse()
+        .map_err(|_| ConnectedFfiError::InvalidArgument {
+            msg: "Invalid IP".into(),
+        })?;
+    client.stop_remote_input(ip, target_port);
     Ok(())
 }
 
