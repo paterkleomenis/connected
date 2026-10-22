@@ -363,7 +363,7 @@ tasks.register<Exec>("cleanUniffiBindings") {
     // No onlyIf guard is used because File-derived predicates are not
     // serializable into the configuration cache.
     commandLine(
-        "python3",
+        if (isWindowsHost) "python" else "python3",
         uniffiCleanerScript.absolutePath,
         generatedBindingsFile.absolutePath,
     )

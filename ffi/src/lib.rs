@@ -1421,6 +1421,26 @@ pub fn inject_aware_socket(
     Ok(())
 }
 
+// Non-Unix stub so host-generated UniFFI metadata matches the Android
+// bindings. Keep the doc comment identical to the Unix implementation:
+// UniFFI checksums include it, and a mismatch fails at runtime.
+/// Inject a WiFi Aware socket (from Android NAN data path) into the QUIC transport.
+/// The socket is already bound to the WiFi Aware network by the Kotlin layer.
+/// This creates a second QUIC endpoint for IPv6 link-local connections.
+#[uniffi::export]
+#[cfg(not(unix))]
+pub fn inject_aware_socket(
+    fd: i32,
+    peer_ipv6: String,
+    peer_scope_id: i32,
+    port: u16,
+) -> Result<(), ConnectedFfiError> {
+    let _ = (fd, peer_ipv6, peer_scope_id, port);
+    Err(ConnectedFfiError::InvalidArgument {
+        msg: "WiFi Aware socket injection is currently only supported on Unix targets".into(),
+    })
+}
+
 #[uniffi::export]
 pub fn stop_discovery() {
     // Clear the callback to stop sending events
