@@ -3783,6 +3783,12 @@ html.native-blur {
     background: transparent;
 }
 
+/* Device pages paint their own opaque page background; let the blurred
+   desktop show through instead, like the nearby-devices and settings pages. */
+.native-blur .device-detail-content {
+    background: transparent;
+}
+
 .native-blur .sidebar {
     /* Sidebar floats over the blurred base instead of painting opaque. */
     background: rgba(30, 30, 32, var(--native-blur-alpha-soft));
@@ -3822,12 +3828,24 @@ html.native-blur {
    sidebar nav items: a translucent white overlay on the blurred base. */
 .native-blur .info-card,
 .native-blur .device-card,
+.native-blur .device-detail-header,
 .native-blur .phone-content,
 .native-blur .send-file-section,
 .native-blur .download-location,
 .native-blur .sync-status,
 .native-blur .manual-clipboard,
-.native-blur .media-controls {
+.native-blur .media-controls,
+.native-blur .media-info,
+.native-blur .transfer-idle,
+.native-blur .transfer-active,
+.native-blur .transfer-complete,
+.native-blur .transfer-failed,
+.native-blur .browser-header,
+.native-blur .selection-bar,
+.native-blur .file-list,
+.native-blur .conversation-item,
+.native-blur .call-item,
+.native-blur .contact-item {
     background-color: var(--native-card-bg);
     background-image: var(--native-card-sheen);
     border-color: var(--native-surface-border);
@@ -3847,6 +3865,55 @@ html.native-blur {
 
 .native-blur .device-card:hover,
 .native-blur .device-card.selected {
+    border-color: var(--accent);
+}
+
+.native-blur .phone-tabs {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.native-blur .phone-tab.active {
+    background-color: var(--native-card-bg);
+    background-image: var(--native-card-sheen);
+}
+
+.native-blur .messages-container,
+.native-blur .compose-area {
+    background: transparent;
+}
+
+.native-blur .compose-area {
+    border-top-color: var(--native-surface-border);
+}
+
+.native-blur .thread-header {
+    background: transparent;
+    border-bottom-color: var(--native-surface-border);
+}
+
+.native-blur .thread-header .back-button:hover {
+    background: rgba(255, 255, 255, var(--native-surface-hover-alpha));
+}
+
+.native-blur .compose-area .compose-input {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--native-surface-border);
+}
+
+.native-blur .message-bubble.incoming {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.native-blur .conversation-item:hover,
+.native-blur .call-item:hover,
+.native-blur .contact-item:hover {
+    background-color: rgba(255, 255, 255, var(--native-surface-hover-alpha));
+    background-image: none;
+}
+
+.native-blur .conversation-item.unread {
+    background-color: rgba(0, 122, 255, 0.1);
+    background-image: none;
     border-color: var(--accent);
 }
 
