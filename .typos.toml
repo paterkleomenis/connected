@@ -22,6 +22,9 @@ extend-ignore-identifiers-re = [".*_strm$", "ba"]
 [default.extend-words]
 # Don't correct these words
 # Add any domain-specific terms here
+# libei's EIS (Emulated Input Server) protocol
+EIS = "EIS"
+eis = "eis"
 
 [default.extend-identifiers]
 # Don't correct these identifiers

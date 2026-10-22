@@ -35,6 +35,9 @@ enum InputCommand {
     /// A batch of input events.
     Batch {
         session_id: u64,
+        // Only the Wayland/ydotool dispatcher uses the device name in a batch;
+        // the enigo worker takes it from `WarmUp` instead.
+        #[cfg(target_os = "linux")]
         from_device: String,
         events: Vec<RemoteInputEvent>,
     },
@@ -165,6 +168,7 @@ pub fn handle_events(session_id: u64, from_device: &str, events: Vec<RemoteInput
     }
     queue(InputCommand::Batch {
         session_id,
+        #[cfg(target_os = "linux")]
         from_device: from_device.to_string(),
         events,
     });
@@ -428,6 +432,9 @@ fn enigo_key(keysym: u32) -> Option<enigo::Key> {
         KEY_Return => Key::Return,
         KEY_Escape => Key::Escape,
         KEY_Delete => Key::Delete,
+        // enigo only exposes `Insert` on Windows and Linux; macOS keyboards have
+        // no Insert key.
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         KEY_Insert => Key::Insert,
         KEY_Home => Key::Home,
         KEY_End => Key::End,
@@ -471,6 +478,7 @@ mod xkb_keysyms {
     pub const KEY_Return: u32 = 0xff0d;
     pub const KEY_Escape: u32 = 0xff1b;
     pub const KEY_Delete: u32 = 0xffff;
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub const KEY_Insert: u32 = 0xff63;
     pub const KEY_Home: u32 = 0xff50;
     pub const KEY_End: u32 = 0xff57;

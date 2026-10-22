@@ -1332,6 +1332,8 @@ pub fn set_remote_input_enabled_setting(enabled: bool) {
     update_setting(|s| s.remote_input_enabled = enabled);
 }
 
+/// xdg-desktop-portal restore tokens only exist on the Linux Wayland backend.
+#[cfg(target_os = "linux")]
 pub fn get_remote_input_restore_token() -> Option<String> {
     get_app_settings()
         .lock_or_recover()
@@ -1339,6 +1341,7 @@ pub fn get_remote_input_restore_token() -> Option<String> {
         .clone()
 }
 
+#[cfg(target_os = "linux")]
 pub fn set_remote_input_restore_token(token: Option<String>) {
     update_setting(|s| s.remote_input_restore_token = token);
 }
