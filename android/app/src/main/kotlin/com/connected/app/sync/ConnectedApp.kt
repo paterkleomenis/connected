@@ -142,6 +142,10 @@ class ConnectedApp(private val context: Context) {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
 
     companion object {
+        /** Phone Link ships only in the sideload flavor. */
+        val isPhoneLinkSupported: Boolean
+            get() = BuildConfig.FLAVOR == "sideload"
+
         private const val NOTIFICATION_ID_REQUEST = 1001
         private const val NOTIFICATION_ID_PROGRESS = 1002
         private const val NOTIFICATION_ID_COMPLETE = 1003
@@ -1409,14 +1413,12 @@ class ConnectedApp(private val context: Context) {
             customDownloadUri.value = getCustomDownloadDir()
 
             val prefs = context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE)
-            /* Phone Link / Telephony - Commented out for Play Store compliance (uncomment to re-enable)
-            if (prefs.getBoolean(_prefTelephonyEnabled, false)) {
+            if (isPhoneLinkSupported && prefs.getBoolean(_prefTelephonyEnabled, false)) {
                 isTelephonyEnabled.value = true
                 telephonyProvider.setListener(telephonyListener)
                 telephonyProvider.registerReceivers()
                 registerTelephonyCallback(telephonyCallback)
             }
-            */
 
             startWifiAwareManager()
 
@@ -3090,6 +3092,7 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun toggleTelephony() {
+        if (!isPhoneLinkSupported) return
         val newState = !isTelephonyEnabled.value
         isTelephonyEnabled.value = newState
         context.getSharedPreferences(_prefsName, Context.MODE_PRIVATE).edit {
@@ -3184,6 +3187,7 @@ class ConnectedApp(private val context: Context) {
     }
 
     private fun canRequestPhoneData(device: DiscoveredDevice): Boolean {
+        if (!isPhoneLinkSupported) return false
         if (!isTelephonyEnabled.value) {
             runOnMainThread {
                 android.widget.Toast.makeText(

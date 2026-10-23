@@ -81,15 +81,11 @@
     <!-- For posting notifications (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-
-
     <!--
-        ========================================================================
-        Phone Link / Telephony permissions
-        Commented out for Google Play Store compliance (Option 1).
-        To restore SMS and call-history synchronization in the future, uncomment
-        the permissions below and submit the Play Console SMS/Call Log Declaration.
-        ========================================================================
+        Phone Link / Telephony permissions (sideload flavor only).
+        The playStore flavor removes these in src/playStore/AndroidManifest.xml
+        so the Play build never requests SMS, call-log, or contacts access.
+    -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission
         android:name="android.permission.READ_SMS"
@@ -107,7 +103,6 @@
         android:name="android.permission.READ_CALL_LOG"
         tools:ignore="SmsAndCallLogPolicy"
     />
-    -->
 
     <!-- For monitoring media playback -->
     <uses-permission

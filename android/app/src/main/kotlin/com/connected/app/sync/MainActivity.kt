@@ -1219,11 +1219,9 @@ fun SettingsScreen(
         )
     }
 
-    // Telephony permissions
-    /* Phone Link / Telephony - Commented out for Play Store compliance (uncomment to re-enable)
+    // Phone Link permissions (sideload-only feature)
     var hasTelephonyPermissions by remember { mutableStateOf(false) }
     var permissionsRequested by remember { mutableStateOf(false) }
-    */
     var pendingFullAccess by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
@@ -1238,11 +1236,12 @@ fun SettingsScreen(
                 // Check notification access using robust method
                 isNotificationAccessGranted = isNotificationListenerEnabled(context, MediaObserverService::class.java)
 
-                /* Phone Link / Telephony permissions - Commented out for Play Store compliance (uncomment to re-enable)
-                hasTelephonyPermissions = connectedApp.telephonyProvider.hasContactsPermission() &&
-                        connectedApp.telephonyProvider.hasSmsPermission() &&
-                        connectedApp.telephonyProvider.hasCallLogPermission()
-                */
+                // Check Phone Link permissions (sideload-only feature)
+                if (ConnectedApp.isPhoneLinkSupported) {
+                    hasTelephonyPermissions = connectedApp.telephonyProvider.hasContactsPermission() &&
+                            connectedApp.telephonyProvider.hasSmsPermission() &&
+                            connectedApp.telephonyProvider.hasCallLogPermission()
+                }
 
                 // Check pending full access
                 if (pendingFullAccess && connectedApp.isFullAccessGranted()) {
@@ -1256,7 +1255,6 @@ fun SettingsScreen(
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
-    /* Phone Link permission helpers - Commented out for Play Store compliance (uncomment to re-enable)
     val activity = context as? ComponentActivity
 
     fun getMissingPermissions(): Array<String> {
@@ -1276,7 +1274,6 @@ fun SettingsScreen(
             !activity.shouldShowRequestPermissionRationale(permission)
         }
     }
-    */
 
     fun openAppPermissionSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
@@ -1286,7 +1283,6 @@ fun SettingsScreen(
         context.startActivity(intent)
     }
 
-    /* Phone Link permission launcher & disclosure - Commented out for Play Store compliance (uncomment to re-enable)
     val telephonyPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -1296,10 +1292,8 @@ fun SettingsScreen(
             connectedApp.toggleTelephony()
         }
     }
-    */
 
     val showRenameDialog = remember { mutableStateOf(false) }
-    /* Phone Link disclosure dialog - Commented out for Play Store compliance (uncomment to re-enable)
     val showTelephonyDisclosureDialog = remember { mutableStateOf(false) }
     if (showTelephonyDisclosureDialog.value) {
         AlertDialog(
@@ -1334,7 +1328,6 @@ fun SettingsScreen(
             }
         )
     }
-    */
     val deviceName = remember { mutableStateOf(connectedApp.getDeviceName()) }
 
     if (showRenameDialog.value) {
@@ -1701,86 +1694,87 @@ fun SettingsScreen(
             }
         }
 
-        /* Phone Link / Telephony Section - Commented out for Play Store compliance (uncomment to re-enable)
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_nav_phone),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Phone Link", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "SMS, call history, and contacts sync",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+        if (ConnectedApp.isPhoneLinkSupported) {
+            // Phone Link / Telephony Section (sideload-only feature)
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                painterResource(R.drawable.ic_nav_phone),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Phone Link", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "SMS, call history, and contacts sync",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = connectedApp.isTelephonyEnabled.value,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && !hasTelephonyPermissions) {
+                                        showTelephonyDisclosureDialog.value = true
+                                    } else {
+                                        connectedApp.toggleTelephony()
+                                    }
+                                }
                             )
                         }
-                        Switch(
-                            checked = connectedApp.isTelephonyEnabled.value,
-                            onCheckedChange = { enabled ->
-                                if (enabled && !hasTelephonyPermissions) {
-                                    showTelephonyDisclosureDialog.value = true
-                                } else {
-                                    connectedApp.toggleTelephony()
-                                }
-                            }
-                        )
-                    }
 
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Permission status indicators
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        PermissionStatusRow(
-                            label = "Contacts",
-                            granted = connectedApp.telephonyProvider.hasContactsPermission()
-                        )
-                        PermissionStatusRow(
-                            label = "SMS",
-                            granted = connectedApp.telephonyProvider.hasSmsPermission()
-                        )
-                        PermissionStatusRow(
-                            label = "Call Log",
-                            granted = connectedApp.telephonyProvider.hasCallLogPermission()
-                        )
-                    }
-
-                    if (!hasTelephonyPermissions) {
                         Spacer(modifier = Modifier.height(12.dp))
-                        Button(
-                            onClick = {
-                                if (shouldOpenSettings()) {
-                                    openAppPermissionSettings()
-                                } else {
-                                    showTelephonyDisclosureDialog.value = true
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(if (shouldOpenSettings()) "Open App Settings" else "Grant Permissions")
-                        }
-                    }
 
+                        // Permission status indicators
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            PermissionStatusRow(
+                                label = "Contacts",
+                                granted = connectedApp.telephonyProvider.hasContactsPermission()
+                            )
+                            PermissionStatusRow(
+                                label = "SMS",
+                                granted = connectedApp.telephonyProvider.hasSmsPermission()
+                            )
+                            PermissionStatusRow(
+                                label = "Call Log",
+                                granted = connectedApp.telephonyProvider.hasCallLogPermission()
+                            )
+                        }
+
+                        if (!hasTelephonyPermissions) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = {
+                                    if (shouldOpenSettings()) {
+                                        openAppPermissionSettings()
+                                    } else {
+                                        showTelephonyDisclosureDialog.value = true
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(if (shouldOpenSettings()) "Open App Settings" else "Grant Permissions")
+                            }
+                        }
+
+                    }
                 }
             }
         }
-        */
 
         // Shared Folder Section
         item {
@@ -2454,55 +2448,55 @@ fun DeviceItem(
                                         app.browseRemoteFiles(device)
                                     }
                                 )
-                                /* Phone Link actions - Commented out for Play Store compliance (uncomment to re-enable)
-                                DropdownMenuItem(
-                                    text = { Text("Request Contacts") },
-                                    leadingIcon = {
-                                        Icon(
-                                            painterResource(R.drawable.ic_contact),
-                                            contentDescription = null
+                                if (ConnectedApp.isPhoneLinkSupported) {
+                                    DropdownMenuItem(
+                                        text = { Text("Request Contacts") },
+                                        leadingIcon = {
+                                            Icon(
+                                                painterResource(R.drawable.ic_contact),
+                                                contentDescription = null
+                                            )
+                                        },
+                                        onClick = {
+                                            showMenu = false
+                                            if (app.requestContactsFromDevice(device)) {
+                                                phoneDataKind.value = PhoneDataKind.Contacts
+                                            }
+                                        }
+                                    )
+                                    if (device.deviceType != DeviceType.IOS) {
+                                        DropdownMenuItem(
+                                            text = { Text("Request Conversations") },
+                                            leadingIcon = {
+                                                Icon(
+                                                    painterResource(R.drawable.ic_message),
+                                                    contentDescription = null
+                                                )
+                                            },
+                                            onClick = {
+                                                showMenu = false
+                                                if (app.requestConversationsFromDevice(device)) {
+                                                    phoneDataKind.value = PhoneDataKind.Conversations
+                                                }
+                                            }
                                         )
-                                    },
-                                    onClick = {
-                                        showMenu = false
-                                        if (app.requestContactsFromDevice(device)) {
-                                            phoneDataKind.value = PhoneDataKind.Contacts
-                                        }
+                                        DropdownMenuItem(
+                                            text = { Text("Request Call Log") },
+                                            leadingIcon = {
+                                                Icon(
+                                                    painterResource(R.drawable.ic_call),
+                                                    contentDescription = null
+                                                )
+                                            },
+                                            onClick = {
+                                                showMenu = false
+                                                if (app.requestCallLogFromDevice(device)) {
+                                                    phoneDataKind.value = PhoneDataKind.CallLog
+                                                }
+                                            }
+                                        )
                                     }
-                                )
-                                if (device.deviceType != DeviceType.IOS) {
-                                    DropdownMenuItem(
-                                        text = { Text("Request Conversations") },
-                                        leadingIcon = {
-                                            Icon(
-                                                painterResource(R.drawable.ic_message),
-                                                contentDescription = null
-                                            )
-                                        },
-                                        onClick = {
-                                            showMenu = false
-                                            if (app.requestConversationsFromDevice(device)) {
-                                                phoneDataKind.value = PhoneDataKind.Conversations
-                                            }
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Request Call Log") },
-                                        leadingIcon = {
-                                            Icon(
-                                                painterResource(R.drawable.ic_call),
-                                                contentDescription = null
-                                            )
-                                        },
-                                        onClick = {
-                                            showMenu = false
-                                            if (app.requestCallLogFromDevice(device)) {
-                                                phoneDataKind.value = PhoneDataKind.CallLog
-                                            }
-                                        }
-                                    )
                                 }
-                                */
                                 // Remote input and power/session commands — only
                                 // meaningful for desktop peers.
                                 if (device.deviceType == DeviceType.LINUX

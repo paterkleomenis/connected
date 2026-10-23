@@ -91,6 +91,7 @@ configure<ApplicationExtension> {
         }
         create("sideload") {
             dimension = "distribution"
+            isDefault = true
         }
     }
 
