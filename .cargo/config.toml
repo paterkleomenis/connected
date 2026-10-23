@@ -69,5 +69,5 @@ ANDROID_API = "26"
 
 [alias]
 # Convenient aliases for common operations
-ndk-build = "ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 -o android/app/src/main/jniLibs build"
-ndk-release = "ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 -o android/app/src/main/jniLibs build --release"
+ndk-build = "ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 -o android/app/build/rustJniLibs/debug build"
+ndk-release = "ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 -o android/app/build/rustJniLibs/release build --release"

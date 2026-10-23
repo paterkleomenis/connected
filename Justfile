@@ -130,7 +130,7 @@ outdated:
 # Build Android library
 [doc("Build Android library (requires cargo-ndk)")]
 build-android:
-    cargo ndk -t aarch64-linux-android -t armv7-linux-androideabi -t x86_64-linux-android -t i686-linux-android -o android/app/src/main/jniLibs build --release
+    cargo ndk -t aarch64-linux-android -t armv7-linux-androideabi -t x86_64-linux-android -t i686-linux-android -o android/app/build/rustJniLibs/release build --release
 
 # iOS-specific commands
 [doc("Generate Swift UniFFI bindings for iOS")]

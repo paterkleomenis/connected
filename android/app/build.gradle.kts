@@ -37,6 +37,14 @@ val latestNdkVersion: String = ndkDir?.name ?: "26.3.11579223"
 // Helper for NDK-dependent tasks
 val effectiveNdkDir: File = ndkDir ?: File(sdkDir, "ndk/$latestNdkVersion")
 
+// Native libraries are built into the Gradle build directory, never into the
+// source tree. This lets Gradle track cargo-ndk's outputs and invalidate the
+// merge/packaging tasks when a library changes.
+val workspaceRoot = file("${project.rootDir}/..")
+val rustJniLibsRoot = layout.buildDirectory.dir("rustJniLibs")
+val rustJniLibsDebugDir = rustJniLibsRoot.map { it.dir("debug") }
+val rustJniLibsReleaseDir = rustJniLibsRoot.map { it.dir("release") }
+
 kotlin {
     compilerOptions {
         freeCompilerArgs.add("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
@@ -167,10 +175,18 @@ configure<ApplicationExtension> {
         includeInBundle = false
     }
 
-    // Configure where to find the native libraries (.so files)
+    // Native libraries come from the cargo-ndk build directory, not from the
+    // source tree. main's default src/main/jniLibs is cleared so a stale copy
+    // left by older builds can never be packaged.
     sourceSets {
         getByName("main") {
-            jniLibs.directories.add("src/main/jniLibs")
+            jniLibs.directories.clear()
+        }
+        getByName("debug") {
+            jniLibs.directories.add(rustJniLibsDebugDir.get().asFile.absolutePath)
+        }
+        getByName("release") {
+            jniLibs.directories.add(rustJniLibsReleaseDir.get().asFile.absolutePath)
         }
     }
 }
@@ -216,50 +232,60 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
+// Everything that affects the connected-ffi cdylib. Declaring these as task
+// inputs lets Gradle skip cargo when nothing changed and rerun it (and
+// resnapshot the outputs) when a Rust source or manifest changes.
+val rustInputs = files(
+    workspaceRoot.resolve("Cargo.toml"),
+    workspaceRoot.resolve("Cargo.lock"),
+    workspaceRoot.resolve("rust-toolchain.toml"),
+    fileTree(workspaceRoot) {
+        include("core/**/*.rs", "core/**/Cargo.toml", "ffi/**/*.rs", "ffi/**/Cargo.toml", ".cargo/**")
+        exclude("**/target/**")
+    },
+)
+
 // Task to build Rust library for Android
 tasks.register<Exec>("buildRustDebug") {
     workingDir = file("${project.rootDir}/../ffi")
     environment("ANDROID_NDK_HOME", effectiveNdkDir.absolutePath)
+    val outputDir = rustJniLibsDebugDir.get().asFile
     commandLine(cargoExecutable, "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
         "-t", "x86_64",
         "-t", "x86",
-        "-o", "${project.projectDir}/src/main/jniLibs",
+        "-o", outputDir.absolutePath,
         "build"
     )
+    inputs.files(rustInputs)
+    outputs.dir(rustJniLibsDebugDir)
+    // cargo-ndk only copies when the cargo artifact is newer than the
+    // destination. Clear the destination so a stale or tampered file in the
+    // build directory can never survive a rebuild.
+    doFirst { outputDir.deleteRecursively() }
 }
 
 tasks.register<Exec>("buildRustRelease") {
     workingDir = file("${project.rootDir}/../ffi")
     environment("ANDROID_NDK_HOME", effectiveNdkDir.absolutePath)
+    val outputDir = rustJniLibsReleaseDir.get().asFile
     commandLine(cargoExecutable, "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
         "-t", "x86_64",
         "-t", "x86",
-        "-o", "${project.projectDir}/src/main/jniLibs",
+        "-o", outputDir.absolutePath,
         "build", "--release"
     )
+    inputs.files(rustInputs)
+    outputs.dir(rustJniLibsReleaseDir)
+    doFirst { outputDir.deleteRecursively() }
 }
 
-// The connected-ffi package keeps its debug symbols (see
-// [profile.release.package.connected-ffi] in the workspace Cargo.toml) so
-// that uniffi-bindgen can extract the FFI metadata at build time. Those
-// symbols inflate the .so files in jniLibs by ~30-50% which is unnecessary
-// at runtime. Once generateBindingsRelease has read the metadata, we strip
-// the jniLibs copies so the APK ships the smallest possible binaries while
-// the target/ copies (used only by the build) stay intact.
 val hostOsName = System.getProperty("os.name")
 val isWindowsHost = hostOsName.startsWith("Windows", ignoreCase = true)
 val isMacHost = hostOsName.startsWith("Mac", ignoreCase = true)
-val hostTag = when {
-    isMacHost -> "darwin-x86_64"
-    isWindowsHost -> "windows-x86_64"
-    else -> "linux-x86_64"
-}
-val llvmStrip = File(effectiveNdkDir, "toolchains/llvm/prebuilt/$hostTag/bin/llvm-strip")
-val jniLibsDir = file("${project.projectDir}/src/main/jniLibs")
 val cargoTargetDir = file("${project.rootDir}/../target")
 val hostFfiLib = File(
     cargoTargetDir,
@@ -276,29 +302,9 @@ val abiToTargetTriple = mapOf(
     "x86_64" to "x86_64-linux-android",
     "x86" to "i686-linux-android",
 )
-val abiList = abiToTargetTriple.keys.toList()
-
-tasks.register<Exec>("stripRustJniLibs") {
-    description = "Strip debug symbols from the jniLibs copies of libconnected_ffi.so."
-    group = "build-setup"
-    val soFiles = abiList.map { File(jniLibsDir, "$it/libconnected_ffi.so") }
-    val llvmStripPath = llvmStrip.absolutePath
-    inputs.files(soFiles)
-    outputs.files(soFiles)
-    // The .so files are produced by buildRustRelease, which runs before
-    // this finalizer but after configuration. Resolve the file list at
-    // execution time so a clean build (where nothing exists at config
-    // time) still strips the freshly-built artifacts.
-    executable = llvmStripPath
-    onlyIf { soFiles.any { it.exists() } }
-    doFirst {
-        args = listOf("--strip-unneeded") + soFiles.filter { it.exists() }.map { it.absolutePath }
-    }
-}
-
 // The target/ copies are only intermediates for the cargo ndk build that
-// populates jniLibs. Delete them after the Rust build so they don't linger
-// on disk; bindgen reads the host library instead.
+// populates the jniLibs output directory. Delete them after the Rust build so
+// they don't linger on disk; bindgen reads the host library instead.
 tasks.register<Delete>("removeRustTargetLibs") {
     val soFiles = abiToTargetTriple.values.flatMap { triple ->
         listOf("release", "debug").map { profile ->
@@ -399,16 +405,4 @@ afterEvaluate {
     tasks.matching { it.name.startsWith("pre") && it.name.endsWith("ReleaseBuild") }.configureEach {
         dependsOn("generateBindingsRelease", "buildRustRelease")
     }
-    // The release Rust build copies unstripped .so files into jniLibs.
-    // After the build, strip the jniLibs copies so the APK ships the smallest
-    // possible binaries. Done as a finalizer so it runs after cargo ndk
-    // copies the artifacts, and is skipped on incremental builds where the
-    // .so files haven't changed.
-    tasks.matching { it.name == "buildRustRelease" }.configureEach {
-        finalizedBy("stripRustJniLibs")
-    }
-    tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
-        .configureEach {
-            dependsOn("stripRustJniLibs")
-        }
 }
