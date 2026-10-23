@@ -14,9 +14,9 @@ use crate::state::{
     get_preview_data, get_remote_commands_enabled, get_remote_files_update,
     get_remote_input_enabled_setting, get_remote_search, get_remote_search_update,
     get_saved_devices_setting, get_transfer_status, is_auto_accept_enabled, mark_calls_synced,
-    mark_contacts_synced, mark_messages_synced, remove_device_from_settings,
-    remove_file_transfer_request, remove_transfer_path, save_device_to_settings,
-    set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
+    mark_contacts_synced, mark_messages_synced, notify_ui_state_changed,
+    remove_device_from_settings, remove_file_transfer_request, remove_transfer_path,
+    save_device_to_settings, set_active_incoming_transfer_id, set_active_outgoing_transfer_id,
     set_autostart_enabled_setting, set_device_name_setting, set_discovery_active,
     set_download_directory_setting, set_last_remote_clipboard_content,
     set_pairing_mode_enabled_setting, set_pairing_mode_state, set_phone_call_log,
@@ -917,6 +917,8 @@ fn spawn_event_loop(
                             device_name,
                             device_id,
                         });
+                        drop(requests);
+                        notify_ui_state_changed();
                     }
                 }
                 ConnectedEvent::PairingRejected {
@@ -940,6 +942,7 @@ fn spawn_event_loop(
                     get_pairing_requests()
                         .lock_or_recover()
                         .retain(|r| r.fingerprint != fingerprint);
+                    notify_ui_state_changed();
                 }
                 ConnectedEvent::PairingModeChanged(enabled) => {
                     info!("Pairing mode changed: {}", enabled);
@@ -1857,6 +1860,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                 let mut requests = get_pairing_requests().lock_or_recover();
                                 requests.retain(|r| r.fingerprint != fingerprint);
                             }
+                            notify_ui_state_changed();
 
                             // Update device trust status in store
                             {
@@ -1905,6 +1909,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                         let mut requests = get_pairing_requests().lock_or_recover();
                         requests.retain(|r| r.fingerprint != fingerprint);
                     }
+                    notify_ui_state_changed();
 
                     info!("Rejecting device pairing request: {}", fingerprint);
                     let c = c.clone();

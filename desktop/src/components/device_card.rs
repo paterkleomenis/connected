@@ -18,8 +18,6 @@ pub fn DeviceCard(
     } else {
         get_device_icon_type(device.device_type.as_str())
     };
-    let mut is_hovered = use_signal(|| false);
-
     let card_class = if device.ip == "0.0.0.0" {
         if is_selected {
             "device-card offline selected"
@@ -33,10 +31,11 @@ pub fn DeviceCard(
     };
 
     rsx! {
+        // Hover-only controls stay in the DOM and are revealed via
+        // `.device-card:hover` in CSS. Toggling them from Rust would re-render
+        // the card on every hover transition and make the action row reflow.
         div {
             class: "{card_class}",
-            onmouseenter: move |_| is_hovered.set(true),
-            onmouseleave: move |_| is_hovered.set(false),
             onclick: {
                 let device = device.clone();
                 move |_| {
@@ -57,7 +56,7 @@ pub fn DeviceCard(
                 }
             }
 
-            if device.is_trusted && *is_hovered.read() {
+            if device.is_trusted {
                 div {
                     class: "device-icon-unpair",
                     button {
@@ -172,19 +171,17 @@ pub fn DeviceCard(
                         },
                         Icon { icon: IconType::Send, size: 14, color: "currentColor".to_string() }
                     }
-                    if *is_hovered.read() {
-                        button {
-                            class: "action-button",
-                            title: "Open device",
-                            onclick: {
-                                let device = device.clone();
-                                move |evt: Event<MouseData>| {
-                                    evt.stop_propagation();
-                                    on_select.call(device.clone());
-                                }
-                            },
-                            Icon { icon: IconType::ArrowRight, size: 16, color: "currentColor".to_string() }
-                        }
+                    button {
+                        class: "action-button",
+                        title: "Open device",
+                        onclick: {
+                            let device = device.clone();
+                            move |evt: Event<MouseData>| {
+                                evt.stop_propagation();
+                                on_select.call(device.clone());
+                            }
+                        },
+                        Icon { icon: IconType::ArrowRight, size: 16, color: "currentColor".to_string() }
                     }
                 }
             }

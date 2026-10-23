@@ -501,6 +501,18 @@ pub struct FileTransferRequest {
 static DEVICES: OnceLock<Arc<Mutex<HashMap<String, DeviceInfo>>>> = OnceLock::new();
 static ACTION_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<crate::controller::AppAction>> =
     OnceLock::new();
+/// Wakes the UI poller immediately when remote state changes, so event-driven
+/// updates (pairing requests, notifications, transfer requests) don't wait for
+/// the next periodic poll tick.
+static UI_WAKE: OnceLock<tokio::sync::Notify> = OnceLock::new();
+
+pub fn ui_wake() -> &'static tokio::sync::Notify {
+    UI_WAKE.get_or_init(tokio::sync::Notify::new)
+}
+
+pub fn notify_ui_state_changed() {
+    ui_wake().notify_one();
+}
 
 pub fn set_action_tx(tx: tokio::sync::mpsc::UnboundedSender<crate::controller::AppAction>) {
     let _ = ACTION_TX.set(tx);
@@ -883,11 +895,16 @@ pub fn get_last_remote_media_device_id() -> &'static Arc<Mutex<Option<String>>> 
 pub fn add_file_transfer_request(request: FileTransferRequest) {
     let mut requests = get_file_transfer_requests().lock_or_recover();
     requests.insert(request.id.clone(), request);
+    drop(requests);
+    notify_ui_state_changed();
 }
 
 pub fn remove_file_transfer_request(id: &str) -> Option<FileTransferRequest> {
     let mut requests = get_file_transfer_requests().lock_or_recover();
-    requests.remove(id)
+    let removed = requests.remove(id);
+    drop(requests);
+    notify_ui_state_changed();
+    removed
 }
 
 /// Cleanup old transfer requests that have been pending for too long (5 minutes).
@@ -944,6 +961,8 @@ pub fn add_notification(title: &str, message: &str, icon: &'static str) {
     if notifications.len() > 5 {
         notifications.remove(0);
     }
+    drop(notifications);
+    notify_ui_state_changed();
 }
 
 #[cfg(target_os = "linux")]
@@ -1146,6 +1165,8 @@ pub fn add_actionable_notification(title: &str, message: &str, icon: &'static st
     if notifications.len() > 5 {
         notifications.remove(0);
     }
+    drop(notifications);
+    notify_ui_state_changed();
 }
 
 pub fn get_current_remote_files() -> &'static Arc<Mutex<Option<Vec<FsEntry>>>> {

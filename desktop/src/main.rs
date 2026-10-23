@@ -2345,9 +2345,14 @@ fn App() -> Element {
                     }
                 }
 
-                // Increased from 200ms to 500ms to reduce CPU usage
-                // Most state changes are event-driven, polling is just for sync
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                // Increased from 200ms to 500ms to reduce CPU usage.
+                // Most state changes are event-driven, polling is just for sync.
+                // Remote events call `notify_ui_state_changed`, which wakes this
+                // loop immediately so prompts don't wait for the next tick.
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                    _ = crate::state::ui_wake().notified() => {}
+                }
             }
         }
     });
@@ -4429,6 +4434,7 @@ fn App() -> Element {
                                                     fingerprint: req.fingerprint.clone(),
                                                 });
                                                 get_pairing_requests().lock_or_recover().retain(|r| r.fingerprint != req.fingerprint);
+                                                notify_ui_state_changed();
                                             }
                                         },
                                         "Reject"
@@ -4444,6 +4450,7 @@ fn App() -> Element {
                                                     device_id: req.device_id.clone()
                                                 });
                                                 get_pairing_requests().lock_or_recover().retain(|r| r.fingerprint != req.fingerprint);
+                                                notify_ui_state_changed();
                                             }
                                         },
                                         "Trust"

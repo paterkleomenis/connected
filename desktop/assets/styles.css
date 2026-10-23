@@ -63,7 +63,7 @@
     --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
     --transition-normal: 200ms cubic-bezier(0.4, 0, 0.2, 1);
     --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
-    --transition-spring: 400ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    --spring-curve: cubic-bezier(0.175, 0.885, 0.32, 1.275);
 
     /* Spacing Scale */
     --space-1: 4px;
@@ -522,7 +522,7 @@ body {
     color: var(--bg-primary);
     min-width: 24px;
     text-align: center;
-    animation: badge-pop 0.3s var(--transition-spring);
+    animation: badge-pop 0.3s var(--spring-curve);
 }
 
 @keyframes badge-pop {
@@ -818,7 +818,9 @@ body {
     padding: var(--space-6);
     box-shadow: var(--shadow-card);
     cursor: pointer;
-    transition: all var(--transition-normal);
+    transition:
+        border-color var(--transition-normal),
+        opacity var(--transition-normal);
     position: relative;
     display: flex;
     align-items: flex-start;
@@ -841,17 +843,12 @@ body {
 }
 
 .device-card:hover {
-    transform: translateY(-4px);
     box-shadow: var(--shadow-card-hover);
     border-color: var(--accent);
 }
 
 .device-card:hover::before {
     opacity: 1;
-}
-
-.device-card:active {
-    transform: translateY(-2px);
 }
 
 .device-card.selected {
@@ -887,11 +884,12 @@ body {
         0 8px 20px rgba(0, 0, 0, 0.28);
     font-size: 32px;
     position: relative;
-    transition: var(--transition-normal);
+    transition:
+        background-color var(--transition-normal),
+        border-color var(--transition-normal);
 }
 
 .device-card:hover .device-card-icon {
-    transform: scale(1.05);
     background: rgba(255, 255, 255, 0.1);
 }
 
@@ -903,11 +901,14 @@ body {
     display: flex;
     gap: var(--space-2);
     opacity: 0;
-    transition: var(--transition-normal);
+    visibility: hidden;
+    pointer-events: none;
 }
 
 .device-card:hover .device-icon-unpair {
     opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
 }
 
 .untrusted-badge {
@@ -986,13 +987,14 @@ body {
     display: flex;
     gap: var(--space-2);
     opacity: 0;
-    transform: translateY(4px);
-    transition: var(--transition-normal);
+    visibility: hidden;
+    pointer-events: none;
 }
 
 .device-card:hover .device-actions {
     opacity: 1;
-    transform: translateY(0);
+    visibility: visible;
+    pointer-events: auto;
 }
 
 .action-button {
@@ -1005,7 +1007,10 @@ body {
     font-size: var(--text-sm);
     font-weight: 500;
     color: var(--text-primary);
-    transition: var(--transition-fast);
+    transition:
+        background-color var(--transition-fast),
+        color var(--transition-fast),
+        border-color var(--transition-fast);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1015,11 +1020,10 @@ body {
 .action-button:hover:not(:disabled) {
     background: var(--accent);
     color: var(--bg-primary) !important;
-    transform: scale(1.02);
 }
 
 .action-button:active:not(:disabled) {
-    transform: scale(0.98);
+    background: var(--accent-hover);
 }
 
 .action-button:disabled,
@@ -2323,7 +2327,7 @@ input:focus + .slider {
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
-    animation: notification-slide-in 0.4s var(--transition-spring);
+    animation: notification-slide-in 0.4s var(--spring-curve);
     pointer-events: auto;
     backdrop-filter: blur(20px);
 }
@@ -2400,7 +2404,7 @@ input:focus + .slider {
     width: 90%;
     max-width: 440px;
     box-shadow: var(--shadow-xl);
-    animation: modal-scale-in 0.3s var(--transition-spring);
+    animation: modal-scale-in 0.3s var(--spring-curve);
     overflow: hidden;
 }
 
@@ -3439,7 +3443,7 @@ input:focus + .slider {
     width: 90%;
     text-align: center;
     box-shadow: var(--shadow-xl);
-    animation: call-slide-in 0.4s var(--transition-spring);
+    animation: call-slide-in 0.4s var(--spring-curve);
 }
 
 @keyframes call-slide-in {
@@ -3822,6 +3826,16 @@ html.native-blur {
 
 .native-blur .custom-titlebar {
     background: rgba(28, 28, 30, var(--native-blur-alpha-soft));
+}
+
+/* The window backdrop is already frosted by the compositor. A second
+   full-window `backdrop-filter` layer is expensive to composite (especially
+   in WebKitGTK) and can stall the first frame of a modal, so keep just the
+   dimming there. */
+html.native-blur .modal-overlay,
+html.native-blur .dialog-overlay {
+    backdrop-filter: none;
+    background: rgba(0, 0, 0, 0.55);
 }
 
 /* Main-content cards and icon actions use the same frosted material as the
