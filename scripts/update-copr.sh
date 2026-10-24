@@ -15,7 +15,7 @@ Options:
   --push          Submit build to COPR (default)
   --no-push       Dry run, don't submit to COPR
   --dry-run       Same as --no-push
-  --chroot        Specify chroot (default: all configured chroots)
+  --chroot        Specify chroot(s) (default: all active chroots in the COPR project)
 USAGE
 }
 
@@ -34,6 +34,34 @@ resolve_latest_version() {
   [ -n "$location" ] || die "failed to resolve latest release redirect"
   local tag="${location##*/}"
   echo "${tag#v}"
+}
+
+resolve_project_chroots() {
+  local owner="${COPR_PROJECT%%/*}"
+  local project="${COPR_PROJECT#*/}"
+  local response
+
+  if [ "$owner" = "$COPR_PROJECT" ] || [ -z "$owner" ] || [ -z "$project" ]; then
+    die "COPR_PROJECT must be in owner/project format: $COPR_PROJECT"
+  fi
+
+  response=$(curl -fsSL "${COPR_API_BASE}/project/?ownername=${owner}&projectname=${project}") \
+    || die "failed to fetch COPR project ${COPR_PROJECT}"
+
+  printf '%s' "$response" | python3 -c '
+import json
+import sys
+
+try:
+    chroots = json.load(sys.stdin).get("chroot_repos") or {}
+except (json.JSONDecodeError, AttributeError) as exc:
+    sys.exit(f"invalid COPR API response: {exc}")
+
+if not chroots:
+    sys.exit("COPR project has no active chroots")
+
+print(" ".join(sorted(chroots)))
+'
 }
 
 version=""
@@ -82,6 +110,7 @@ need_cmd rpmbuild
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COPR_CFG="${ROOT_DIR}/packaging/rpm/copr-package.cfg"
+COPR_API_BASE="${COPR_API_BASE:-https://copr.fedorainfracloud.org/api_3}"
 
 [ -f "$COPR_CFG" ] || die "COPR config not found at ${COPR_CFG}"
 
@@ -95,9 +124,16 @@ fi
 
 echo "Updating COPR package to version: ${version}"
 
-# Default chroots from config if not specified
+# Use the project's active chroots unless overridden with --chroot or
+# COPR_CHROOTS in the config. This keeps COPR as the source of truth for distro
+# versions (including new Fedora branches that COPR enables automatically).
 if [ -z "$chroots" ]; then
-  chroots="$COPR_CHROOTS"
+  if [ -n "${COPR_CHROOTS:-}" ]; then
+    chroots="$COPR_CHROOTS"
+  else
+    need_cmd python3
+    chroots="$(resolve_project_chroots)"
+  fi
 fi
 
 # Create temp directory for SRPM builds
