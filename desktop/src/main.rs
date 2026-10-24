@@ -1288,9 +1288,10 @@ fn main() {
     //   paints fully. Disabling the DMA-BUF renderer instead (the generic
     //   fallback below) avoids the crash but leaves transparent windows
     //   partially black on this stack — so it must NOT apply here.
-    // - Other GPUs / XWayland: preserve the previous conservative behavior
-    //   (disable WebKit's DMA-BUF renderer when a DRI device exists), which
-    //   trades some rendering performance for broad compatibility.
+    // - XWayland: preserve the conservative behavior (disable WebKit's
+    //   DMA-BUF renderer when a DRI device exists), which had compatibility
+    //   bugs on the X11 path. Native Wayland keeps DMA-BUF on every GPU:
+    //   the software fallback half-renders the window with WebKitGTK 2.54.
     // - Explicit user settings always win; nothing set is ever overridden.
     #[cfg(target_os = "linux")]
     {
@@ -1309,7 +1310,12 @@ fn main() {
             set_linux_env_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
         }
 
-        let keep_dmabuf = nvidia && native_wayland;
+        // Keep the accelerated DMA-BUF renderer on native Wayland for every
+        // GPU. Disabling it (the conservative XWayland fallback below) makes
+        // WebKitGTK 2.54's software path render only part of the window
+        // ("half render") on some compositors. The fallback is only needed
+        // for XWayland, where the DMA-BUF renderer had compatibility bugs.
+        let keep_dmabuf = native_wayland;
         if wayland_host
             && !keep_dmabuf
             && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
@@ -1369,10 +1375,18 @@ fn main() {
     // On Linux/Wayland, use a custom titlebar to avoid GTK decoration issues
     // (unresponsive CSD buttons under Wayland, dioxus#3667).
     let decorations = cfg!(any(target_os = "windows", target_os = "macos"));
-    // Transparent window + webview on every platform: Linux needs it for the
-    // compositor blur, Windows for the DWM backdrop, macOS for vibrancy. The
-    // opaque theme still paints every pixel whenever blur is disabled or
-    // unsupported, so this is not visible on its own.
+    // Transparent window + webview: Linux needs it for the compositor blur,
+    // Windows for the DWM backdrop, macOS for vibrancy.
+    //
+    // On Linux it is only safe with WebKit's accelerated DMA-BUF renderer.
+    // The broken combination is specifically software/SHM rendering plus a
+    // transparent window (verified with a plain wry app: SHM + transparent
+    // paints only part of the window, SHM + opaque paints fully, DMA-BUF +
+    // transparent is fine). So: when the DMA-BUF renderer is unavailable
+    // (XWayland, explicit opt-out, no DRI device) use an opaque window.
+    #[cfg(target_os = "linux")]
+    let transparent = linux_wayland_blur::uses_dmabuf_renderer();
+    #[cfg(not(target_os = "linux"))]
     let transparent = true;
 
     let data_dir = dirs::data_local_dir().map(|d| d.join("connected"));
