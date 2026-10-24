@@ -19,9 +19,9 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - arch: aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -63,9 +63,9 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - arch: aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
@@ -90,11 +90,11 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             artifact: connected-appimage-x86_64
             build-args: "--arch x86_64"
           - arch: aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
             artifact: connected-appimage-aarch64
             build-args: "--arch aarch64"
     runs-on: ${{ matrix.runner }}
@@ -322,7 +322,7 @@ jobs:
   # -------------------------------------------------------------------------
   build-android:
     name: Build Android
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
 
@@ -489,7 +489,7 @@ jobs:
         build-android,
         build-ios,
       ]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
 
@@ -572,7 +572,7 @@ jobs:
   sign-checksums:
     name: Sign Checksums & Publish Release
     needs: [create-release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
 
@@ -586,6 +586,7 @@ jobs:
 
       - name: Install minisign
         run: |
+          sudo add-apt-repository -y ppa:savoury1/minisign
           sudo apt-get update
           sudo apt-get install -y minisign
 
@@ -653,7 +654,7 @@ jobs:
   update-aur:
     name: Update AUR
     needs: [sign-checksums]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -684,7 +685,7 @@ jobs:
   update-copr:
     name: Update COPR
     needs: [sign-checksums]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v7
@@ -718,7 +719,7 @@ jobs:
   publish-play-store:
     name: Publish to Google Play
     needs: [create-release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v7

@@ -31,7 +31,7 @@ jobs:
   # -------------------------------------------------------------------------
   pre-commit:
     name: Pre-commit Hooks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v7
@@ -68,7 +68,7 @@ jobs:
       matrix:
         include:
           - name: Linux
-            os: ubuntu-latest
+            os: ubuntu-22.04
             components: rustfmt clippy
             targets:
               - x86_64-unknown-linux-gnu
@@ -167,7 +167,7 @@ jobs:
   # -------------------------------------------------------------------------
   security:
     name: Security Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
 
@@ -219,9 +219,9 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - arch: aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -278,11 +278,11 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             artifact: connected-appimage-x86_64
             build-args: "--arch x86_64"
           - arch: aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
             artifact: connected-appimage-aarch64
             build-args: "--arch aarch64"
     runs-on: ${{ matrix.runner }}
@@ -340,9 +340,9 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - arch: aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
@@ -595,7 +595,7 @@ jobs:
   # -------------------------------------------------------------------------
   build-android:
     name: Android Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [pre-commit, quality, security]
     if: github.event_name != 'schedule'
     steps:
