@@ -1317,6 +1317,22 @@ fn main() {
         {
             set_linux_env_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
+
+        // WebKitGTK's DRM vblank monitor can block forever inside
+        // drmWaitVBlank when it guesses the wrong CRTC (seen with hybrid
+        // GPUs / multiple DRM devices). The UI process's DisplayLink then
+        // wakes only every few seconds, which throttles
+        // requestAnimationFrame to ~0.3 Hz and makes painted content update
+        // in ~3.5 s steps. DOM timers and compositor-driven CSS animations
+        // keep working, so the app looks "half frozen" rather than dead.
+        //
+        // WebKit's own timer fallback drives the display link at 60 Hz
+        // without touching DRM. It is the same path WebKit uses when DRM
+        // vblank creation fails, so it is safe on ordinary systems too; set
+        // WEBKIT_FORCE_VBLANK_TIMER=0 to opt back into the DRM path.
+        if std::env::var_os("WEBKIT_FORCE_VBLANK_TIMER").is_none() {
+            set_linux_env_var("WEBKIT_FORCE_VBLANK_TIMER", "1");
+        }
     }
 
     // Start the global application controller in a background thread.
