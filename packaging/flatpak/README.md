@@ -99,23 +99,25 @@ grant the wayland socket at all and instead mount the host's sockets via
 
 ## Submitting to Flathub — checklist
 
-1. **Commit the app-id rename and the Flatpak-specific code first.** The
-   staged changes (the `io.github.paterkleomenis.*` file names, the
-   Background-portal autostart, and `is_flathub_build()`/`CONNECTED_FLATHUB_BUILD`
-   in `core/src/update.rs`) must be part of the tag the manifest builds —
-   a build of the old `3.5.2` tag would still offer in-app self-updates,
-   which Flathub apps must not do.
-2. **(Re)create the `3.5.2` tag** (or cut a new release; then update `tag:`
-   in `io.github.paterkleomenis.Connected.yml` — `scripts/bump-version.sh`
-   does *not* do this — and add the `<releases>` entry via
-   `just prepare-release`), and push the tag.
-3. **Pin the resolved commit** next to `tag:` in the manifest — Flathub's
-   linter expects `tag` + `commit`, and pinning protects against upstream
-   re-tagging. Get it via `git rev-parse 3.5.2`.
-4. **Regenerate `cargo-sources.json`** if `Cargo.lock` changed since.
-5. Run the linters above and fix any errors.
-6. Submit via <https://flathub.org> (new apps are submitted through the
+The app-id rename, the Flathub-aware updater (`is_flathub_build()` /
+`CONNECTED_FLATHUB_BUILD`), the Background-portal autostart and the
+vendored sources are all part of the `3.5.4` release.
+
+1. **Push the release and tag** (`3.5.4`) to GitHub — Flathub builds from
+   the tag. Force-pushing a tag after submission is not allowed, so treat
+   the pushed tag as final.
+2. **Pin the resolved commit** in the *submission copy* of the manifest
+   next to `tag:` — Flathub's linter expects `tag` + `commit`, and pinning
+   protects against upstream re-tagging. Get it via `git rev-parse 3.5.4`.
+3. **Regenerate `cargo-sources.json`** if `Cargo.lock` changed since.
+4. Run the linters above and fix any errors.
+5. Submit via <https://flathub.org> (new apps are submitted through the
    website; upload the manifest and `cargo-sources.json` together).
+
+For every later release: bump versions (`just prepare-release X.Y.Z`),
+update `tag:` in `io.github.paterkleomenis.Connected.yml`
+(`scripts/bump-version.sh` does *not* do this), regenerate
+`cargo-sources.json` when the lock changed, and update the Flathub repo.
 
 ### Permission justifications (for the submission review)
 
