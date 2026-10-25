@@ -102,7 +102,27 @@ pub fn is_blur_active() -> bool {
 /// `ext-background-effect-manager-v1`; unsupported compositors hide the
 /// Appearance controls once that is known.
 pub fn supports_blur() -> bool {
-    is_wayland_session() && BLUR_SUPPORT.load(Ordering::Acquire) != SUPPORT_UNSUPPORTED
+    uses_dmabuf_renderer() && BLUR_SUPPORT.load(Ordering::Acquire) != SUPPORT_UNSUPPORTED
+}
+
+/// Whether WebKit will use its accelerated DMA-BUF renderer.
+///
+/// The app only creates a transparent window when this is true. On WebKitGTK
+/// 2.54 the combination of software (SHM) rendering **and** a transparent
+/// window renders only part of the window ("half render"); SHM with an
+/// opaque window is fine. So on that path the window is opaque and native
+/// blur (which needs a translucent window to show through) is unavailable.
+///
+/// Mirrors WebKit's own opt-outs: an explicit `WEBKIT_DISABLE_DMABUF_RENDERER`
+/// (set by us on XWayland or by the user), `WEBKIT_DMABUF_RENDERER_FORCE_SHM`
+/// and `WEBKIT_DISABLE_COMPOSITING_MODE` all select software rendering. A
+/// missing DRI device also leaves WebKit without a DMA-BUF renderer.
+pub fn uses_dmabuf_renderer() -> bool {
+    is_wayland_session()
+        && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+        && std::env::var_os("WEBKIT_DMABUF_RENDERER_FORCE_SHM").is_none()
+        && std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none()
+        && std::path::Path::new("/dev/dri").exists()
 }
 
 /// Are we in a session where native Wayland blur is even plausible?
@@ -168,6 +188,13 @@ pub fn enable_blur_async(window: Arc<dioxus::desktop::tao::window::Window>) {
     }
     if !is_wayland_session() {
         debug!("wayland-blur: not a Wayland session, skipping");
+        return;
+    }
+    if !uses_dmabuf_renderer() {
+        debug!(
+            "wayland-blur: DMA-BUF renderer unavailable (software/SHM path); \
+             window is opaque, skipping blur"
+        );
         return;
     }
     if is_blur_active() {

@@ -1,5 +1,5 @@
 Name:           connected-desktop
-Version:        3.5.2
+Version:        3.5.3
 Release:        1%{?dist}
 Summary:        High-speed, offline, cross-platform ecosystem bridging devices
 
@@ -61,6 +61,9 @@ install -Dm644 %{SOURCE4} %{buildroot}%{_datadir}/licenses/%{name}/LICENSE-APACH
 %{_datadir}/icons/hicolor/512x512/apps/%{name}.png
 
 %changelog
+* Sat Oct 24 2026 Connected Team <paterkleomenis@protonmail.com> - 3.5.3-1
+- Update to 3.5.3
+
 * Sat Oct 24 2026 Connected Team <paterkleomenis@protonmail.com> - 3.5.2-1
 - Update to 3.5.2
 
