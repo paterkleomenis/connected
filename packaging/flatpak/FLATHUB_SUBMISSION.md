@@ -43,9 +43,9 @@ The branch is already pushed. Remaining steps, in order:
 3. When reviewers ask for a test build, comment `bot, build` on the PR.
 4. Answer reviewer comments myself.
 
-Note: in `PR_BODY.md` the AI-material disclosure is already filled in with
-the one-liner; the last AI checkbox before opening the PR + the video item
-are the only two left for me to tick.
+Note: the video is recorded (path in `PR_BODY.md`, 2.8 MB so it embeds
+inline). After opening the PR, edit the body, drag the video in, and tick
+the video item + the last AI checkbox.
 
 ## When they ask about permissions
 
