@@ -43,6 +43,10 @@ The branch is already pushed. Remaining steps, in order:
 3. When reviewers ask for a test build, comment `bot, build` on the PR.
 4. Answer reviewer comments myself.
 
+Note: in `PR_BODY.md` the AI-material disclosure is already filled in with
+the one-liner; the last AI checkbox before opening the PR + the video item
+are the only two left for me to tick.
+
 ## When they ask about permissions
 
 `--filesystem=host` is the one that will get questions. The honest answer:
