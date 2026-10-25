@@ -76,8 +76,8 @@ jobs:
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: com.paterkleomenis.Connected.flatpak
-          manifest-path: packaging/flatpak/com.paterkleomenis.Connected.yml
+          bundle: io.github.paterkleomenis.Connected.flatpak
+          manifest-path: packaging/flatpak/connected-desktop-bundle.yml
           arch: ${{ matrix.arch }}
 
   # -------------------------------------------------------------------------
@@ -519,18 +519,18 @@ jobs:
       - name: Download x86_64 Flatpak
         uses: actions/download-artifact@v8
         with:
-          name: com.paterkleomenis.Connected-x86_64.flatpak
+          name: io.github.paterkleomenis.Connected-x86_64.flatpak
 
       - name: Rename x86_64 Flatpak
-        run: mv com.paterkleomenis.Connected.flatpak com.paterkleomenis.Connected-x86_64.flatpak
+        run: mv io.github.paterkleomenis.Connected.flatpak io.github.paterkleomenis.Connected-x86_64.flatpak
 
       - name: Download aarch64 Flatpak
         uses: actions/download-artifact@v8
         with:
-          name: com.paterkleomenis.Connected-aarch64.flatpak
+          name: io.github.paterkleomenis.Connected-aarch64.flatpak
 
       - name: Rename aarch64 Flatpak
-        run: mv com.paterkleomenis.Connected.flatpak com.paterkleomenis.Connected-aarch64.flatpak
+        run: mv io.github.paterkleomenis.Connected.flatpak io.github.paterkleomenis.Connected-aarch64.flatpak
 
       # Created as a draft: the release only becomes visible — and consumable
       # by in-app auto-update — after `sign-checksums` attaches the signed
@@ -546,8 +546,8 @@ jobs:
           files: |
             connected-desktop-linux-x86_64
             connected-desktop-linux-aarch64
-            com.paterkleomenis.Connected-x86_64.flatpak
-            com.paterkleomenis.Connected-aarch64.flatpak
+            io.github.paterkleomenis.Connected-x86_64.flatpak
+            io.github.paterkleomenis.Connected-aarch64.flatpak
             connected-desktop-x86_64.AppImage
             connected-desktop-x86_64.AppImage.zsync
             connected-desktop-aarch64.AppImage

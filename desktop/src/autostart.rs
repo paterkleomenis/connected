@@ -1,10 +1,18 @@
 pub const AUTOSTART_ARG: &str = "--autostart";
 
 pub fn is_enabled() -> bool {
+    #[cfg(target_os = "linux")]
+    if connected_core::update::is_installed_via_flatpak() {
+        return platform::flatpak::is_enabled();
+    }
     platform::is_enabled()
 }
 
-pub fn set_enabled(enabled: bool) -> Result<(), String> {
+pub async fn set_enabled(enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if connected_core::update::is_installed_via_flatpak() {
+        return platform::flatpak::set_enabled(enabled).await;
+    }
     platform::set_enabled(enabled)
 }
 
@@ -71,6 +79,72 @@ mod platform {
     use std::path::{Path, PathBuf};
 
     const AUTOSTART_FILENAME: &str = "connected-desktop.desktop";
+
+    /// Autostart inside a Flatpak sandbox.
+    ///
+    /// Writing to `$XDG_CONFIG_HOME/autostart` only changes the sandbox's
+    /// private config directory, so it never reaches the host's session. The
+    /// Background portal is the supported way for a sandboxed app to request
+    /// autostart. The portal has no status getter, so a marker file in the
+    /// app's config directory caches the last granted state.
+    pub mod flatpak {
+        use std::fs;
+        use std::path::PathBuf;
+
+        const AUTOSTART_MARKER: &str = "autostart-enabled";
+
+        fn marker_path() -> Result<PathBuf, String> {
+            let config_dir = dirs::config_dir()
+                .ok_or_else(|| "Unable to resolve config directory".to_string())?;
+            Ok(config_dir.join("connected").join(AUTOSTART_MARKER))
+        }
+
+        pub fn is_enabled() -> bool {
+            marker_path().map(|path| path.exists()).unwrap_or(false)
+        }
+
+        pub async fn set_enabled(enabled: bool) -> Result<(), String> {
+            let marker = marker_path()?;
+
+            // Re-requesting on every startup would show the permission prompt
+            // again. The marker is the local cache of the granted state.
+            if enabled == marker.exists() {
+                return Ok(());
+            }
+
+            let response = ashpd::desktop::background::Background::request()
+                .reason("Start Connected automatically when you log in")
+                .auto_start(enabled)
+                .command(["connected-desktop", crate::autostart::AUTOSTART_ARG])
+                .send()
+                .await
+                .map_err(|e| format!("Failed to request background autostart: {e}"))?
+                .response()
+                .map_err(|e| format!("Background autostart request was not granted: {e}"))?;
+
+            if response.auto_start() != enabled {
+                return Err(if enabled {
+                    "The desktop did not grant autostart permission".to_string()
+                } else {
+                    "The desktop did not remove the autostart entry".to_string()
+                });
+            }
+
+            if enabled {
+                if let Some(parent) = marker.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|e| format!("Failed to create autostart marker directory: {e}"))?;
+                }
+                fs::write(&marker, b"enabled")
+                    .map_err(|e| format!("Failed to write autostart marker: {e}"))?;
+            } else if marker.exists() {
+                fs::remove_file(&marker)
+                    .map_err(|e| format!("Failed to remove autostart marker: {e}"))?;
+            }
+
+            Ok(())
+        }
+    }
 
     fn autostart_path() -> Result<PathBuf, String> {
         let config_dir =

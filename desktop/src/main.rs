@@ -1230,6 +1230,11 @@ fn main() {
         let _ = std::fs::create_dir_all(&path);
         path.push("connected-desktop-app.lock");
         path.to_string_lossy().into_owned()
+    } else if let Ok(flatpak_id) = std::env::var("FLATPAK_ID") {
+        // Keep old and new Flatpak app IDs from sharing a single-instance
+        // lock during the migration between bundle IDs. The IPC socket is
+        // already scoped to the app's private data directory.
+        format!("{flatpak_id}-app")
     } else {
         "connected-desktop-app".to_string()
     };
@@ -3820,9 +3825,9 @@ fn App() -> Element {
                                 div { class: "info-label", "Current Version" }
                                 div { class: "info-value", "{env!(\"CARGO_PKG_VERSION\")}" }
 
-                                if cfg!(target_os = "windows") {
+                                if let Some(store) = crate::utils::updates_managed_by() {
                                     div { class: "info-label", "Updates" }
-                                    div { class: "info-value", "Managed by Microsoft Store" }
+                                    div { class: "info-value", "Managed by " "{store}" }
                                 } else if let Some(info) = update_info.read().as_ref() {
                                     div { class: "info-label", "Latest Version" }
                                     div { class: "info-value", "{info.latest_version}" }
@@ -3838,7 +3843,7 @@ fn App() -> Element {
                                 }
                             }
 
-                            if !cfg!(target_os = "windows") {
+                            if crate::utils::updates_managed_by().is_none() {
                                 div {
                                     class: "settings-actions",
                                     style: "margin-top: 15px; display: flex; gap: 10px;",
@@ -4063,7 +4068,7 @@ fn App() -> Element {
                                     }
                                 }
                             }
-                            p { class: "settings-hint", "Choose which folder other devices can browse. By default, peers can access your home directory." }
+                            p { class: "settings-hint", "Choose which folder other devices can browse. By default, peers can access your home directory (Downloads in Flatpak builds)." }
                         }
 
                         div {

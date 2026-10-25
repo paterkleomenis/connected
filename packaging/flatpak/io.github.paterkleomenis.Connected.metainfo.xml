@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <component type="desktop-application">
-  <id>com.paterkleomenis.Connected</id>
+  <id>io.github.paterkleomenis.Connected</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
   <name>Connected</name>
@@ -20,21 +20,23 @@
   </description>
   <launchable
         type="desktop-id"
-    >com.paterkleomenis.Connected.desktop</launchable>
+    >io.github.paterkleomenis.Connected.desktop</launchable>
   <screenshots>
     <screenshot type="default">
       <caption>The main window showing connected devices.</caption>
       <image
-            >https://raw.githubusercontent.com/paterkleomenis/connected/main/screenshots/desktop-home.png</image>
+            >https://raw.githubusercontent.com/paterkleomenis/connected/3.5.2/screenshots/desktop-home.png</image>
     </screenshot>
     <screenshot>
       <caption>Browsing files on a remote device.</caption>
       <image
-            >https://raw.githubusercontent.com/paterkleomenis/connected/main/screenshots/desktop-browse.png</image>
+            >https://raw.githubusercontent.com/paterkleomenis/connected/3.5.2/screenshots/desktop-browse.png</image>
     </screenshot>
   </screenshots>
   <url type="homepage">https://github.com/paterkleomenis/connected</url>
-  <developer_name>Pater Kleomenis</developer_name>
+  <developer id="io.github.paterkleomenis">
+    <name>Pater Kleomenis</name>
+  </developer>
   <content_rating type="oars-1.1" />
   <releases>
     <release version="3.5.2" date="2026-10-24" />

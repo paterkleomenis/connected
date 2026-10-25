@@ -132,10 +132,19 @@ impl UpdateChecker {
                         &format!("connected-desktop-{arch}.AppImage"),
                     ))
                 } else if is_installed_via_flatpak() {
-                    Some(github_release_download_url(
-                        &tag,
-                        &format!("com.paterkleomenis.Connected-{arch}.flatpak"),
-                    ))
+                    if is_flathub_build() {
+                        // Flathub builds are updated by the Flathub repository.
+                        // Installing a bundle in-app would require the
+                        // org.freedesktop.Flatpak permission, which Flathub
+                        // applications must not request.
+                        None
+                    } else {
+                        let app_id = flatpak_app_id();
+                        Some(github_release_download_url(
+                            &tag,
+                            &format!("{app_id}-{arch}.flatpak"),
+                        ))
+                    }
                 } else if is_installed_via_aur_async().await {
                     Some("https://aur.archlinux.org/packages/connected-desktop-bin".to_string())
                 } else {
@@ -199,6 +208,51 @@ pub fn is_running_as_appimage() -> bool {
 /// sandbox) or the `FLATPAK_ID` environment variable.
 pub fn is_installed_via_flatpak() -> bool {
     std::path::Path::new("/.flatpak-info").exists() || std::env::var("FLATPAK_ID").is_ok()
+}
+
+/// Detect a build whose updates are managed by Flathub (or another store).
+///
+/// Flathub updates applications through the Flathub repository. The Flathub
+/// manifest sets `CONNECTED_FLATHUB_BUILD=1` so the app does not try to install
+/// GitHub release bundles, which would require the
+/// `org.freedesktop.Flatpak` permission that Flathub applications must not
+/// request. As a fallback, a Flatpak without that host-spawn permission cannot
+/// install bundles itself, so in-app self-update is unavailable there too.
+pub fn is_flathub_build() -> bool {
+    if std::env::var_os("CONNECTED_FLATHUB_BUILD").is_some() {
+        return true;
+    }
+    is_installed_via_flatpak() && !flatpak_has_host_spawn_access()
+}
+
+/// Whether the sandbox grants `--talk-name=org.freedesktop.Flatpak`.
+///
+/// The permission is recorded in `/.flatpak-info` under `[Session Bus Policy]`.
+fn flatpak_has_host_spawn_access() -> bool {
+    std::fs::read_to_string("/.flatpak-info")
+        .map(|info| flatpak_info_has_host_spawn(&info))
+        .unwrap_or(false)
+}
+
+fn flatpak_info_has_host_spawn(info: &str) -> bool {
+    let mut in_session_bus_policy = false;
+    for line in info.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_session_bus_policy = line == "[Session Bus Policy]";
+            continue;
+        }
+        if in_session_bus_policy && line == "org.freedesktop.Flatpak=talk" {
+            return true;
+        }
+    }
+    false
+}
+
+/// The app ID of the running Flatpak, falling back to the ID used by GitHub
+/// release bundles.
+pub fn flatpak_app_id() -> String {
+    std::env::var("FLATPAK_ID").unwrap_or_else(|_| "io.github.paterkleomenis.Connected".to_string())
 }
 
 /// Detect whether the app is installed via the AUR.
@@ -724,6 +778,13 @@ pub async fn install_linux_appimage_update(url: &str) -> Result<()> {
 /// Downloads the Flatpak bundle, installs it matching the current installation
 /// type (system-wide installation or user), relaunches and terminates the old app.
 pub async fn install_linux_flatpak_update(url: &str) -> Result<()> {
+    if is_flathub_build() {
+        return Err(ConnectedError::UpdateVerification(
+            "Updates for Flathub builds are managed by Flathub".to_string(),
+        ));
+    }
+
+    let app_id = flatpak_app_id();
     let downloads_dir = dirs::download_dir().unwrap_or_else(|| {
         PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
     });
@@ -740,13 +801,7 @@ pub async fn install_linux_flatpak_update(url: &str) -> Result<()> {
     let bundle_str = bundle_path.to_str().unwrap_or_default();
 
     let is_system_installation = tokio::process::Command::new("flatpak-spawn")
-        .args([
-            "--host",
-            "flatpak",
-            "info",
-            "--system",
-            "com.paterkleomenis.Connected",
-        ])
+        .args(["--host", "flatpak", "info", "--system", app_id.as_str()])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -797,7 +852,7 @@ pub async fn install_linux_flatpak_update(url: &str) -> Result<()> {
     }
 
     let _ = tokio::process::Command::new("flatpak-spawn")
-        .args(["--host", "flatpak", "run", "com.paterkleomenis.Connected"])
+        .args(["--host", "flatpak", "run", app_id.as_str()])
         .spawn();
 
     std::process::exit(0);
@@ -818,6 +873,16 @@ mod tests {
             .find(|line| !line.starts_with("untrusted comment") && !line.trim().is_empty())
             .expect("fixture public key has a base64 line")
             .trim()
+    }
+
+    #[test]
+    fn detects_flatpak_host_spawn_permission() {
+        let with_permission =
+            "[Application]\nname=test\n\n[Session Bus Policy]\norg.freedesktop.Flatpak=talk\n";
+        let without_permission = "[Application]\nname=test\n\n[Session Bus Policy]\norg.freedesktop.Notifications=talk\n";
+
+        assert!(flatpak_info_has_host_spawn(with_permission));
+        assert!(!flatpak_info_has_host_spawn(without_permission));
     }
 
     #[test]

@@ -1,30 +1,106 @@
 use arboard::Clipboard;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-pub fn get_system_clipboard() -> String {
-    match Clipboard::new() {
-        Ok(mut clipboard) => clipboard.get_text().unwrap_or_default(),
-        Err(e) => {
-            warn!("Failed to access clipboard: {}", e);
-            String::new()
-        }
+/// Name of the store that manages updates for this build, if any.
+///
+/// Windows builds are updated through the Microsoft Store. Flathub builds are
+/// updated by the Flathub repository; installing GitHub release bundles in-app
+/// would require the `org.freedesktop.Flatpak` permission, which Flathub
+/// applications must not request.
+pub fn updates_managed_by() -> Option<&'static str> {
+    if cfg!(target_os = "windows") {
+        Some("Microsoft Store")
+    } else if cfg!(target_os = "linux")
+        && connected_core::update::is_installed_via_flatpak()
+        && connected_core::update::is_flathub_build()
+    {
+        Some("Flathub")
+    } else {
+        None
     }
 }
 
-pub fn set_system_clipboard(text: &str) {
-    match Clipboard::new() {
-        Ok(mut clipboard) => {
-            if let Err(e) = clipboard.set_text(text) {
-                warn!("Failed to set clipboard: {}", e);
+/// Reuse one clipboard connection for the lifetime of the process.
+///
+/// Creating a new [`Clipboard`] on every poll makes `arboard` retry the
+/// Wayland data-control protocol each time. GNOME/Mutter does not implement
+/// that protocol, so Flatpak builds fall back to X11; caching keeps that
+/// fallback from reconnecting (and logging) every 500 ms.
+///
+/// A Flatpak manifest must expose `--socket=x11` (with `--share=ipc`) for
+/// this fallback. `--socket=fallback-x11` is not enough on a Wayland session.
+struct ClipboardCache {
+    clipboard: Option<Clipboard>,
+    retry_after: Option<Instant>,
+}
+
+static CLIPBOARD_CACHE: OnceLock<Mutex<ClipboardCache>> = OnceLock::new();
+
+const CLIPBOARD_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
+fn with_clipboard<R>(f: impl FnOnce(&mut Clipboard) -> R) -> Option<R> {
+    let cache = CLIPBOARD_CACHE.get_or_init(|| {
+        Mutex::new(ClipboardCache {
+            clipboard: None,
+            retry_after: None,
+        })
+    });
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    if cache.clipboard.is_none() {
+        if cache
+            .retry_after
+            .is_some_and(|retry_after| retry_after > Instant::now())
+        {
+            return None;
+        }
+
+        match Clipboard::new() {
+            Ok(clipboard) => {
+                cache.clipboard = Some(clipboard);
+                cache.retry_after = None;
+            }
+            Err(error) => {
+                cache.retry_after = Some(Instant::now() + CLIPBOARD_RETRY_INTERVAL);
+                warn!("Failed to access clipboard: {}", error);
+                return None;
             }
         }
-        Err(e) => {
-            warn!("Failed to access clipboard: {}", e);
+    }
+
+    cache.clipboard.as_mut().map(f)
+}
+
+fn reset_clipboard() {
+    if let Some(cache) = CLIPBOARD_CACHE.get() {
+        let mut cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.clipboard = None;
+        cache.retry_after = None;
+    }
+}
+
+pub fn get_system_clipboard() -> String {
+    with_clipboard(|clipboard| clipboard.get_text().unwrap_or_default()).unwrap_or_default()
+}
+
+pub fn set_system_clipboard(text: &str) {
+    match with_clipboard(|clipboard| clipboard.set_text(text)) {
+        Some(Ok(())) => {}
+        Some(Err(error)) => {
+            warn!("Failed to set clipboard: {}", error);
+            reset_clipboard();
         }
+        None => {}
     }
 }
 

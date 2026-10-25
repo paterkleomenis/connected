@@ -1685,7 +1685,7 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                 let saved_autostart = get_autostart_enabled_setting();
                 if actual_autostart
                     && saved_autostart
-                    && let Err(e) = crate::autostart::set_enabled(true)
+                    && let Err(e) = crate::autostart::set_enabled(true).await
                 {
                     error!("Failed to refresh autostart entry: {}", e);
                 }
@@ -2967,44 +2967,46 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                     add_notification("Settings", &format!("Shared folder set to {}", path), "");
                 }
             }
-            AppAction::SetAutostart(enabled) => match crate::autostart::set_enabled(enabled) {
-                Ok(()) => {
-                    let actual_state = crate::autostart::is_enabled();
-                    set_autostart_enabled_setting(actual_state);
+            AppAction::SetAutostart(enabled) => {
+                match crate::autostart::set_enabled(enabled).await {
+                    Ok(()) => {
+                        let actual_state = crate::autostart::is_enabled();
+                        set_autostart_enabled_setting(actual_state);
 
-                    if actual_state == enabled {
-                        info!("Autostart set to {}", enabled);
+                        if actual_state == enabled {
+                            info!("Autostart set to {}", enabled);
+                            add_notification(
+                                "Settings",
+                                if enabled {
+                                    "Connected will start automatically when you log in"
+                                } else {
+                                    "Connected will no longer start automatically"
+                                },
+                                "",
+                            );
+                        } else {
+                            warn!(
+                                "Autostart request did not match final state (requested {}, actual {})",
+                                enabled, actual_state
+                            );
+                            add_notification(
+                                "Settings",
+                                "Autostart state could not be verified. Check your system startup settings.",
+                                "",
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to update autostart setting: {}", e);
+                        set_autostart_enabled_setting(crate::autostart::is_enabled());
                         add_notification(
                             "Settings",
-                            if enabled {
-                                "Connected will start automatically when you log in"
-                            } else {
-                                "Connected will no longer start automatically"
-                            },
-                            "",
-                        );
-                    } else {
-                        warn!(
-                            "Autostart request did not match final state (requested {}, actual {})",
-                            enabled, actual_state
-                        );
-                        add_notification(
-                            "Settings",
-                            "Autostart state could not be verified. Check your system startup settings.",
+                            &format!("Failed to update startup setting: {e}"),
                             "",
                         );
                     }
                 }
-                Err(e) => {
-                    error!("Failed to update autostart setting: {}", e);
-                    set_autostart_enabled_setting(crate::autostart::is_enabled());
-                    add_notification(
-                        "Settings",
-                        &format!("Failed to update startup setting: {e}"),
-                        "",
-                    );
-                }
-            },
+            }
             AppAction::CheckForUpdates => {
                 #[cfg(target_os = "windows")]
                 {
@@ -3017,44 +3019,57 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                 #[cfg(not(target_os = "windows"))]
                 {
-                    tokio::spawn(async move {
-                        let platform = if cfg!(target_os = "linux") {
-                            "linux"
-                        } else if cfg!(target_os = "macos") {
-                            "macos"
-                        } else if cfg!(target_os = "windows") {
-                            "windows"
-                        } else {
-                            "unknown"
-                        };
+                    if let Some(store) = crate::utils::updates_managed_by() {
+                        add_notification(
+                            "Updates",
+                            &format!(
+                                "Updates are managed by {store}. Use your software center to update Connected."
+                            ),
+                            "",
+                        );
+                    } else {
+                        tokio::spawn(async move {
+                            let platform = if cfg!(target_os = "linux") {
+                                "linux"
+                            } else if cfg!(target_os = "macos") {
+                                "macos"
+                            } else if cfg!(target_os = "windows") {
+                                "windows"
+                            } else {
+                                "unknown"
+                            };
 
-                        let current_version = env!("CARGO_PKG_VERSION").to_string();
+                            let current_version = env!("CARGO_PKG_VERSION").to_string();
 
-                        match UpdateChecker::check_for_updates(
-                            current_version,
-                            platform.to_string(),
-                        )
-                        .await
-                        {
-                            Ok(info) => {
-                                *crate::state::get_update_info().lock_or_recover() =
-                                    Some(info.clone());
-                                if info.has_update {
-                                    add_notification(
-                                        "Update Available",
-                                        &format!("Version {} is available", info.latest_version),
-                                        "",
-                                    );
-                                } else {
-                                    add_notification("Updates", "You are up to date", "");
+                            match UpdateChecker::check_for_updates(
+                                current_version,
+                                platform.to_string(),
+                            )
+                            .await
+                            {
+                                Ok(info) => {
+                                    *crate::state::get_update_info().lock_or_recover() =
+                                        Some(info.clone());
+                                    if info.has_update {
+                                        add_notification(
+                                            "Update Available",
+                                            &format!(
+                                                "Version {} is available",
+                                                info.latest_version
+                                            ),
+                                            "",
+                                        );
+                                    } else {
+                                        add_notification("Updates", "You are up to date", "");
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Update check failed: {}", e);
+                                    add_notification("Update Check Failed", &e.to_string(), "");
                                 }
                             }
-                            Err(e) => {
-                                error!("Update check failed: {}", e);
-                                add_notification("Update Check Failed", &e.to_string(), "");
-                            }
-                        }
-                    });
+                        });
+                    }
                 }
             }
             AppAction::PerformUpdate => {
@@ -3069,48 +3084,29 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
 
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let info_opt = crate::state::get_update_info().lock_or_recover().clone();
-                    if let Some(info) = info_opt {
-                        if let Some(url) = info.download_url {
-                            #[cfg(target_os = "macos")]
-                            {
-                                add_notification("Updates", "Downloading update…", "");
-                                let url_clone = url.clone();
-                                tokio::spawn(async move {
-                                    match install_macos_update(&url_clone).await {
-                                        Ok(()) => {
-                                            info!("macOS update installed, restarting…");
-                                        }
-                                        Err(e) => {
-                                            error!("macOS update failed: {}", e);
-                                            add_notification("Update Failed", &e.to_string(), "");
-                                        }
-                                    }
-                                });
-                            }
-
-                            #[cfg(target_os = "linux")]
-                            {
-                                if is_running_as_appimage() || is_installed_via_flatpak() {
-                                    let label = if is_running_as_appimage() {
-                                        "AppImage"
-                                    } else {
-                                        "Flatpak"
-                                    };
+                    if let Some(store) = crate::utils::updates_managed_by() {
+                        add_notification(
+                            "Updates",
+                            &format!(
+                                "Updates are managed by {store}. Use your software center to update Connected."
+                            ),
+                            "",
+                        );
+                    } else {
+                        let info_opt = crate::state::get_update_info().lock_or_recover().clone();
+                        if let Some(info) = info_opt {
+                            if let Some(url) = info.download_url {
+                                #[cfg(target_os = "macos")]
+                                {
                                     add_notification("Updates", "Downloading update…", "");
                                     let url_clone = url.clone();
                                     tokio::spawn(async move {
-                                        let result = if is_running_as_appimage() {
-                                            install_linux_appimage_update(&url_clone).await
-                                        } else {
-                                            install_linux_flatpak_update(&url_clone).await
-                                        };
-                                        match result {
+                                        match install_macos_update(&url_clone).await {
                                             Ok(()) => {
-                                                info!("{} update installed, restarting…", label);
+                                                info!("macOS update installed, restarting…");
                                             }
                                             Err(e) => {
-                                                error!("{} update failed: {}", label, e);
+                                                error!("macOS update failed: {}", e);
                                                 add_notification(
                                                     "Update Failed",
                                                     &e.to_string(),
@@ -3119,27 +3115,67 @@ pub async fn app_controller(mut rx: UnboundedReceiver<AppAction>) {
                                             }
                                         }
                                     });
-                                } else {
-                                    info!("Opening update URL: {}", url);
-                                    if let Err(e) =
-                                        std::process::Command::new("xdg-open").arg(&url).spawn()
-                                    {
-                                        error!("Failed to open update URL: {}", e);
-                                        add_notification("Update", "Failed to open update URL", "");
+                                }
+
+                                #[cfg(target_os = "linux")]
+                                {
+                                    if is_running_as_appimage() || is_installed_via_flatpak() {
+                                        let label = if is_running_as_appimage() {
+                                            "AppImage"
+                                        } else {
+                                            "Flatpak"
+                                        };
+                                        add_notification("Updates", "Downloading update…", "");
+                                        let url_clone = url.clone();
+                                        tokio::spawn(async move {
+                                            let result = if is_running_as_appimage() {
+                                                install_linux_appimage_update(&url_clone).await
+                                            } else {
+                                                install_linux_flatpak_update(&url_clone).await
+                                            };
+                                            match result {
+                                                Ok(()) => {
+                                                    info!(
+                                                        "{} update installed, restarting…",
+                                                        label
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    error!("{} update failed: {}", label, e);
+                                                    add_notification(
+                                                        "Update Failed",
+                                                        &e.to_string(),
+                                                        "",
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    } else {
+                                        info!("Opening update URL: {}", url);
+                                        if let Err(e) =
+                                            std::process::Command::new("xdg-open").arg(&url).spawn()
+                                        {
+                                            error!("Failed to open update URL: {}", e);
+                                            add_notification(
+                                                "Update",
+                                                "Failed to open update URL",
+                                                "",
+                                            );
+                                        }
                                     }
                                 }
-                            }
 
-                            #[cfg(not(any(
-                                target_os = "linux",
-                                target_os = "macos",
-                                target_os = "windows"
-                            )))]
-                            {
-                                info!("Opening update URL: {}", url);
+                                #[cfg(not(any(
+                                    target_os = "linux",
+                                    target_os = "macos",
+                                    target_os = "windows"
+                                )))]
+                                {
+                                    info!("Opening update URL: {}", url);
+                                }
+                            } else {
+                                add_notification("Update", "No download URL found", "");
                             }
-                        } else {
-                            add_notification("Update", "No download URL found", "");
                         }
                     }
                 }

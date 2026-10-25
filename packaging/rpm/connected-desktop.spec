@@ -7,7 +7,7 @@ License:        MIT OR Apache-2.0
 URL:            https://github.com/paterkleomenis/connected
 Source0:        %{url}/releases/download/%{version}/connected-desktop-linux-%{_arch}
 Source1:        connected-desktop.desktop
-Source2:        com.paterkleomenis.Connected.png
+Source2:        io.github.paterkleomenis.Connected.png
 Source3:        LICENSE-MIT
 Source4:        LICENSE-APACHE
 

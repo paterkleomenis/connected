@@ -171,7 +171,7 @@ for arch in "${ARCH_ARRAY[@]}"; do
 
   # Copy source files (Source1-Source4)
   cp "$ROOT_DIR/packaging/connected-desktop.desktop" "$RPM_DIR/SOURCES/"
-  cp "$ROOT_DIR/packaging/flatpak/com.paterkleomenis.Connected.png" "$RPM_DIR/SOURCES/"
+  cp "$ROOT_DIR/packaging/flatpak/io.github.paterkleomenis.Connected.png" "$RPM_DIR/SOURCES/"
   cp "$ROOT_DIR/LICENSE-MIT" "$RPM_DIR/SOURCES/"
   cp "$ROOT_DIR/LICENSE-APACHE" "$RPM_DIR/SOURCES/"
 

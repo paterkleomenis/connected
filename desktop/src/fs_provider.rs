@@ -30,6 +30,16 @@ impl DesktopFilesystemProvider {
     }
 
     pub fn default_shared_folder() -> PathBuf {
+        // Inside a Flatpak sandbox `$HOME` is the app's private home, which is
+        // empty and useless to peers. The download directory is the one
+        // user-visible folder the app already needs for received files; users
+        // can pick a wider folder through the file chooser (a portal grant).
+        #[cfg(target_os = "linux")]
+        if connected_core::update::is_installed_via_flatpak() {
+            return dirs::download_dir()
+                .or_else(dirs::home_dir)
+                .unwrap_or_else(|| PathBuf::from("."));
+        }
         dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
     }
 

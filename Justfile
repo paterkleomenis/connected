@@ -153,7 +153,7 @@ build-macos:
 # Build Flatpak package
 [doc("Build Flatpak package")]
 build-flatpak:
-    {{ if os_family() == "windows" { "echo ERROR: Flatpak builds are only supported on Linux && exit /b 2" } else { "flatpak-builder --force-clean build-dir packaging/flatpak/com.paterkleomenis.Connected.yml" } }}
+    {{ if os_family() == "windows" { "echo ERROR: Flatpak builds are only supported on Linux && exit /b 2" } else { "flatpak run org.flatpak.Builder --force-clean build-dir packaging/flatpak/connected-desktop-bundle.yml" } }}
 
 # Build AppImage package
 [doc("Build AppImage package (Linux only)")]

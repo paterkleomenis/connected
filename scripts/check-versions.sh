@@ -173,7 +173,7 @@ else
 fi
 
 # Check Flatpak metainfo (latest <release> entry)
-FLATPAK_METAINFO="packaging/flatpak/com.paterkleomenis.Connected.metainfo.xml"
+FLATPAK_METAINFO="packaging/flatpak/io.github.paterkleomenis.Connected.metainfo.xml"
 if [ -f "$FLATPAK_METAINFO" ]; then
     FLATPAK_VERSION=$(grep -m1 -oE '<release version="[^"]+"' "$FLATPAK_METAINFO" | sed -E 's/.*"([^"]+)"/\1/')
     if [ -z "$FLATPAK_VERSION" ]; then

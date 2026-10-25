@@ -81,7 +81,7 @@ chmod +x "$APPDIR/usr/bin/connected-desktop"
 
 cp "$PROJECT_ROOT/packaging/connected-desktop.desktop" "$APPDIR/usr/share/applications/connected-desktop.desktop"
 
-cp "$PROJECT_ROOT/packaging/flatpak/com.paterkleomenis.Connected.png" \
+cp "$PROJECT_ROOT/packaging/flatpak/io.github.paterkleomenis.Connected.png" \
    "$APPDIR/usr/share/icons/hicolor/512x512/apps/connected-desktop.png"
 
 LINUXDEPLOY_URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${ARCH}.AppImage"

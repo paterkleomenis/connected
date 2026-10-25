@@ -94,7 +94,7 @@ sed -i "s/^Version:.*/Version:        $VERSION/" "$RPM_DIR/SPECS/connected-deskt
 # Prepare source files
 cp "$BINARY" "$RPM_DIR/SOURCES/connected-desktop-linux-$ARCH"
 cp "$PROJECT_ROOT/packaging/connected-desktop.desktop" "$RPM_DIR/SOURCES/"
-cp "$PROJECT_ROOT/packaging/flatpak/com.paterkleomenis.Connected.png" "$RPM_DIR/SOURCES/com.paterkleomenis.Connected.png"
+cp "$PROJECT_ROOT/packaging/flatpak/io.github.paterkleomenis.Connected.png" "$RPM_DIR/SOURCES/io.github.paterkleomenis.Connected.png"
 cp "$PROJECT_ROOT/LICENSE-MIT" "$RPM_DIR/SOURCES/"
 cp "$PROJECT_ROOT/LICENSE-APACHE" "$RPM_DIR/SOURCES/"
 
@@ -104,7 +104,7 @@ tar -czf "$RPM_DIR/SOURCES/connected-desktop-$VERSION.tar.gz" \
     --transform "s,^,connected-desktop-$VERSION/," \
     packaging/rpm/connected-desktop.spec \
     packaging/connected-desktop.desktop \
-    packaging/flatpak/com.paterkleomenis.Connected.png \
+    packaging/flatpak/io.github.paterkleomenis.Connected.png \
     LICENSE-MIT \
     LICENSE-APACHE
 

@@ -353,8 +353,8 @@ jobs:
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: com.paterkleomenis.Connected.flatpak
-          manifest-path: packaging/flatpak/com.paterkleomenis.Connected.yml
+          bundle: io.github.paterkleomenis.Connected.flatpak
+          manifest-path: packaging/flatpak/connected-desktop-bundle.yml
           arch: ${{ matrix.arch }}
 
   # -------------------------------------------------------------------------

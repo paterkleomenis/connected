@@ -122,9 +122,9 @@ else
 fi
 
 # ────────────────────────────────────────────────────────────────────
-# 6. packaging/flatpak/com.paterkleomenis.Connected.metainfo.xml
+# 6. packaging/flatpak/io.github.paterkleomenis.Connected.metainfo.xml
 # ────────────────────────────────────────────────────────────────────
-METAINFO="$ROOT_DIR/packaging/flatpak/com.paterkleomenis.Connected.metainfo.xml"
+METAINFO="$ROOT_DIR/packaging/flatpak/io.github.paterkleomenis.Connected.metainfo.xml"
 if grep -q "<releases>" "$METAINFO"; then
   if grep -q "<release version=\"$NEW_VER\"" "$METAINFO"; then
     warn "flatpak metainfo.xml: $NEW_VER already present"
