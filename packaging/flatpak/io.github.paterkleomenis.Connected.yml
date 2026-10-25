@@ -1,3 +1,8 @@
+# Packaged for Flathub. The Flatpak packaging in this submission (manifest,
+# vendored dependency sources, wrapper and submission docs) was prepared with
+# the assistance of an AI coding agent, then reviewed and approved by the
+# maintainer — disclosed here and in the submission PR per Flathub's
+# Generative AI policy.
 app-id: io.github.paterkleomenis.Connected
 runtime: org.gnome.Platform
 runtime-version: "50"

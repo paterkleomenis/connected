@@ -38,6 +38,36 @@ sed "s|^        tag: 3.5.4$|        tag: <NEW TAG>\n        commit: $(git rev-pa
     > target/flathub-submission/io.github.paterkleomenis.Connected.yml
 ```
 
+## Generative-AI disclosure (paste into the submission PR)
+
+Per [Flathub's Generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy),
+include this in the submission PR description:
+
+> **AI assistance disclosure**
+>
+> The Flatpak packaging for this submission was prepared with the assistance
+> of an AI coding agent (an interactive coding session run by the
+> maintainer), covering approximately the following extent:
+>
+> - the Flatpak manifest (`io.github.paterkleomenis.Connected.yml`) and the
+>   self-hosted bundle variant,
+> - the vendored dependency sources (`cargo-sources.json`, generated with
+>   the official `flatpak-cargo-generator` tool),
+> - the Wayland/clipboard launch wrapper comments, and
+> - the submission documentation in `packaging/flatpak/`.
+>
+> All of it was reviewed, tested and approved by the maintainer before
+> submission. The application source code itself (Rust core, desktop UI,
+> Android/iOS apps) was written by the maintainer. No AI tools were used to
+> open this pull request or to interact with the review.
+
+> [!IMPORTANT]
+> Flathub's policy forbids AI agents from opening or automating submission
+> pull requests, and AI-generated review interactions can get the
+> submission rejected or the account banned. Submit through the website
+> yourself, and do **not** ask AI tools to reply to reviewers on the
+> submission PR — handle review comments manually.
+
 ## Permission justifications (paste-ready)
 
 > **`--filesystem=host`**
