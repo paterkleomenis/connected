@@ -41,7 +41,11 @@ mpris = "2.0"
 glib = "0.22"
 # Wayland remote input: xdg-desktop-portal RemoteDesktop + libei.
 # Background portal: autostart inside the Flatpak sandbox.
-ashpd = { version = "0.13", features = ["background", "remote_desktop", "screencast"] }
+ashpd = { version = "0.13", features = [
+  "background",
+  "remote_desktop",
+  "screencast",
+] }
 reis = { version = "0.7", features = ["tokio"] }
 xkbcommon = "0.9"
 libc = "0.2"
