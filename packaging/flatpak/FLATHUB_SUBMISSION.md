@@ -18,14 +18,41 @@ source tree.
 
 ## Submission steps
 
-1. Log in at <https://flathub.org> **with the GitHub account that owns the
-   repo** (`paterkleomenis`) — for an `io.github.<owner>.<app>` app id this
-   also makes GitHub verification straightforward afterwards.
-2. Submit a new app: enter the app id **`io.github.paterkleomenis.Connected`**
-   and upload the two files above.
-3. In the permission-review form, paste the justification text below.
-4. Flathub's buildbot builds the tag automatically; the submission PR is
-   reviewed by Flathub maintainers. Respond to review comments in the PR.
+Submissions are pull requests against the `new-pr` base branch of
+[flathub/flathub](https://github.com/flathub/flathub) (approved submissions
+are then merged into a new repo under the Flathub org).
+
+The mechanical part is already done:
+
+- fork: <https://github.com/paterkleomenis/flathub>
+- branch `connected-submission` contains, at the repo root,
+  `io.github.paterkleomenis.Connected.yml` (with pinned commit + AI
+  disclosure header) and `cargo-sources.json`, committed as
+  "Add io.github.paterkleomenis.Connected"
+- a filled-in PR-template draft is at
+  `target/flathub-submission/PR_BODY.md`
+
+The PR itself is opened manually by the maintainer (Flathub's generative-AI
+policy requires it not be opened by an AI agent):
+
+1. Record a short video of Connected running (as the Flatpak) doing a file
+   transfer between two devices — reviewers want to see it working.
+2. Open the PR **against the `new-pr` base branch** with the title
+   `Add io.github.paterkleomenis.Connected`, either via the web UI
+   (<https://github.com/flathub/flathub/compare/new-pr...paterkleomenis:connected-submission>)
+   or with:
+
+   ```bash
+   gh pr create --repo flathub/flathub --base new-pr \
+       --head paterkleomenis:connected-submission \
+       --title "Add io.github.paterkleomenis.Connected" \
+       --body-file target/flathub-submission/PR_BODY.md
+   ```
+
+   Edit `PR_BODY.md` first: tick the video item once the video is attached,
+   and adjust the wording so every statement is yours.
+3. Reply to reviewer comments yourself (not via AI tools), and comment
+   `bot, build` to trigger a test build when asked.
 
 ## Regenerating the submission files
 
