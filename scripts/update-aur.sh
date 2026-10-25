@@ -123,7 +123,7 @@ extract_pkgbuild_sources() {
 verify_pkgbuild_hashes() {
   local pkgbuild="$1"
   local ver="$2"
-  local source_names=("connected-desktop-${ver}-x86_64" "connected-desktop-${ver}-aarch64" "connected-desktop.desktop" "ic_launcher-playstore.png" "LICENSE-MIT" "LICENSE-APACHE")
+  local source_names=("connected-desktop-${ver}-x86_64" "connected-desktop-${ver}-aarch64" "connected-desktop.desktop" "io.github.paterkleomenis.Connected.png" "LICENSE-MIT" "LICENSE-APACHE")
 
   PKGBUILD_SOURCES=()
   PKGBUILD_SUMS=()
@@ -188,7 +188,7 @@ clean_aur_cache() {
   local aur_dir="$1"
   rm -f "${aur_dir}"/connected-desktop-*
   rm -f "${aur_dir}/connected-desktop.desktop"
-  rm -f "${aur_dir}/ic_launcher-playstore.png"
+  rm -f "${aur_dir}/io.github.paterkleomenis.Connected.png"
   rm -f "${aur_dir}/LICENSE-MIT"
   rm -f "${aur_dir}/LICENSE-APACHE"
   rm -rf "${aur_dir}/src" "${aur_dir}/pkg"
@@ -325,7 +325,7 @@ sed -i "s/^pkgrel=.*/pkgrel=1/" "$PKGBUILD"
 bin_url_x86_64="https://github.com/paterkleomenis/connected/releases/download/${version}/connected-desktop-linux-x86_64"
 bin_url_aarch64="https://github.com/paterkleomenis/connected/releases/download/${version}/connected-desktop-linux-aarch64"
 desktop_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/packaging/connected-desktop.desktop"
-icon_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/android/app/src/main/ic_launcher-playstore.png"
+icon_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/packaging/flatpak/io.github.paterkleomenis.Connected.png"
 license_mit_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/LICENSE-MIT"
 license_apache_url="https://raw.githubusercontent.com/paterkleomenis/connected/main/LICENSE-APACHE"
 
