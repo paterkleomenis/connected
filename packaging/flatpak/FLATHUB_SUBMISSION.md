@@ -1,46 +1,37 @@
-# Flathub Submission Guide
+# Submitting Connected to Flathub
 
-Everything needed to submit Connected to Flathub is in
-`target/flathub-submission/` (git-ignored build output — regenerate when
-needed, see below).
+Notes for myself so I don't have to figure this out again next release.
 
-## Files to upload
+## What goes in
 
-| File | Purpose |
-|---|---|
-| `target/flathub-submission/io.github.paterkleomenis.Connected.yml` | The manifest (submission copy — has `tag` + pinned `commit`) |
-| `target/flathub-submission/cargo-sources.json` | Vendored crates referenced by the manifest |
+The submission branch (`connected-submission` on my `flathub` fork) has two
+files at the root:
 
-Nothing else is needed: the desktop file, AppStream metainfo and icon come
-from the `3.5.4` source tree during the Flathub build (a Flathub requirement
-— metadata must be integrated upstream). The launch wrapper is also in the
-source tree.
+- `io.github.paterkleomenis.Connected.yml` — the manifest. It builds the
+  `3.5.4` tag and pins the commit next to the tag so Flathub's linter is
+  happy and upstream re-tags can't silently change a published build.
+- `cargo-sources.json` — the vendored crates. Everything (including the
+  `single-instance` git dep) is checksum-pinned, so the buildbot needs
+  zero network beyond pulling sources.
 
-## Submission steps
+No desktop file / metainfo / icon in the submission — those ship in the app
+source tree and get installed by the build, which is what Flathub wants
+(metadata integrated upstream).
 
-Submissions are pull requests against the `new-pr` base branch of
-[flathub/flathub](https://github.com/flathub/flathub) (approved submissions
-are then merged into a new repo under the Flathub org).
+## How a submission works
 
-The mechanical part is already done:
+Turns out there's no web form for this. New apps go in as a pull request
+against the `new-pr` branch of flathub/flathub, and if it's approved the
+reviewers merge it into a fresh repo under the Flathub org and give me
+write access (2FA required, accept within a week).
 
-- fork: <https://github.com/paterkleomenis/flathub>
-- branch `connected-submission` contains, at the repo root,
-  `io.github.paterkleomenis.Connected.yml` (with pinned commit + AI
-  disclosure header) and `cargo-sources.json`, committed as
-  "Add io.github.paterkleomenis.Connected"
-- a filled-in PR-template draft is at
-  `target/flathub-submission/PR_BODY.md`
+The branch is already pushed. Remaining steps, in order:
 
-The PR itself is opened manually by the maintainer (Flathub's generative-AI
-policy requires it not be opened by an AI agent):
-
-1. Record a short video of Connected running (as the Flatpak) doing a file
-   transfer between two devices — reviewers want to see it working.
-2. Open the PR **against the `new-pr` base branch** with the title
-   `Add io.github.paterkleomenis.Connected`, either via the web UI
-   (<https://github.com/flathub/flathub/compare/new-pr...paterkleomenis:connected-submission>)
-   or with:
+1. Record a short video of the app doing an actual file transfer between
+   two devices. Reviewers want to see the thing running, can't skip this.
+2. Read `PR_BODY.md` (next to this file), fix it up so every line is
+   something I actually mean, attach the video, then open the PR against
+   `new-pr` (NOT master):
 
    ```bash
    gh pr create --repo flathub/flathub --base new-pr \
@@ -49,110 +40,50 @@ policy requires it not be opened by an AI agent):
        --body-file target/flathub-submission/PR_BODY.md
    ```
 
-   Edit `PR_BODY.md` first: tick the video item once the video is attached,
-   and adjust the wording so every statement is yours.
-3. Reply to reviewer comments yourself (not via AI tools), and comment
-   `bot, build` to trigger a test build when asked.
+3. When reviewers ask for a test build, comment `bot, build` on the PR.
+4. Answer reviewer comments myself. The AI policy on the submission side
+   is strict: no AI agent opens the PR, no AI writes the replies. The
+   packaging help is fine as long as it's disclosed — which the PR body
+   does.
 
-## Regenerating the submission files
+## What I'll tell reviewers about AI
 
-```bash
-python3 flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
-mkdir -p target/flathub-submission
-cp packaging/flatpak/cargo-sources.json target/flathub-submission/
-sed "s|^        tag: 3.5.4$|        tag: <NEW TAG>\n        commit: $(git rev-parse <NEW TAG>)|" \
-    packaging/flatpak/io.github.paterkleomenis.Connected.yml \
-    > target/flathub-submission/io.github.paterkleomenis.Connected.yml
-```
+One line, same as the header comment in the manifest: the packaging
+(manifest, vendored sources, wrapper, docs) was put together with an AI
+coding agent and I reviewed and tested all of it. The app code is mine.
+That's the whole extent, it's ticked in the PR body.
 
-## Generative-AI disclosure (paste into the submission PR)
+## When they ask about permissions
 
-Per [Flathub's Generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy),
-include this in the submission PR description:
+`--filesystem=host` is the one that will get questions. The honest answer:
+this is a file transfer app, phones and other computers browse the folders
+I shared through it and files I receive get saved wherever I pick — same
+reason a file manager wants host access. Transfers are p2p over QUIC,
+encrypted, no server in the middle.
 
-> **AI assistance disclosure**
->
-> The Flatpak packaging for this submission was prepared with the assistance
-> of an AI coding agent (an interactive coding session run by the
-> maintainer), covering approximately the following extent:
->
-> - the Flatpak manifest (`io.github.paterkleomenis.Connected.yml`) and the
->   self-hosted bundle variant,
-> - the vendored dependency sources (`cargo-sources.json`, generated with
->   the official `flatpak-cargo-generator` tool),
-> - the Wayland/clipboard launch wrapper comments, and
-> - the submission documentation in `packaging/flatpak/`.
->
-> All of it was reviewed, tested and approved by the maintainer before
-> submission. The application source code itself (Rust core, desktop UI,
-> Android/iOS apps) was written by the maintainer. No AI tools were used to
-> open this pull request or to interact with the review.
+If they ask about the X11 socket: clipboard sync needs the X11 clipboard
+as a fallback because Mutter doesn't do the wayland data-control protocol,
+and `fallback-x11` would mean no X11 socket at all on a wayland session,
+so clipboard sync would just be dead on GNOME.
 
-> [!IMPORTANT]
-> Flathub's policy forbids AI agents from opening or automating submission
-> pull requests, and AI-generated review interactions can get the
-> submission rejected or the account banned. Submit through the website
-> yourself, and do **not** ask AI tools to reply to reviewers on the
-> submission PR — handle review comments manually.
+The wayland socket mounts (`xdg-run/wayland-0..32,99`): for the compositors
+that DO have data-control (KDE, wlroots), the wrapper script picks the
+host socket directly instead of flatpak's. 0-32 is everything
+`wl_display_add_socket_auto` can hand out, 99 is Mir's quirk.
 
-## Permission justifications (paste-ready)
+`--share=network`: mDNS discovery + the transfers themselves, all LAN
+side. The only internet touch is checking GitHub for release notes.
 
-> **`--filesystem=host`**
->
-> Connected is a peer-to-peer file-transfer tool (an open alternative to
-> AirDrop/KDE Connect). Two features need full filesystem access:
->
-> 1. **Remote file browsing**: a linked phone or computer browses the files
->    this machine shares through Connected. The shared tree is the user's
->    real filesystem — the same access any file manager needs. The user
->    picks which folders are shared in Connected's settings; peers only see
->    what they are allowed to browse.
-> 2. **Saving received files anywhere**: transfers are saved at
->    user-chosen locations (Downloads, Documents, USB drives under
->    /run/media, ...), which the portal file dialogs cannot express for
->    background/automated transfers.
->
-> All transfers are end-to-end encrypted (QUIC + TLS) and go only to the
-> user's own paired devices. No data is sent to any server.
+There's deliberately no `org.freedesktop.Flatpak` talk name: flathub apps
+aren't supposed to install their own updates, so the manifest sets
+`CONNECTED_FLATHUB_BUILD=1` and the app leaves updating to Flathub. The
+GitHub-release bundles use a separate manifest
+(`connected-desktop-bundle.yml`) that keeps the permission so those
+installs can still self-update.
 
-> **`--socket=x11` (instead of `fallback-x11`)**
->
-> Clipboard synchronization falls back to the X11 clipboard when the
-> compositor does not implement the Wayland data-control protocol — Mutter
-> (GNOME) does not. On a Wayland host session `--socket=fallback-x11`
-> provides no X11 socket at all, so the clipboard sync would silently fail
-> on GNOME, the primary target. See `ClipboardCache` in
-> `desktop/src/utils.rs`.
+## Next releases
 
-> **`--filesystem=xdg-run/wayland-0..32,99`**
->
-> Direct, unproxied access to the host's Wayland sockets for the
-> wlroots/KDE data-control clipboard path (GNOME uses the X11 fallback
-> above). A wrapper script exports `WAYLAND_DISPLAY` to the first mounted
-> socket. Sockets 0–32 cover every socket `wl_display_add_socket_auto`
-> can return; wayland-99 is Mir's. Only Unix sockets are reachable through
-> these grants.
-
-> **`--share=network`**
->
-> mDNS discovery of nearby devices and the QUIC data transfers themselves
-> run on the local network. The app is serverless: transfers are
-> peer-to-peer between paired devices only. The same grant also lets the
-> app ask GitHub's public API for release notes (no downloads are
-> installed; Flathub remains the update channel for this build).
-
-> **No `--talk-name=org.freedesktop.Flatpak`**
->
-> Deliberately omitted: Flathub applications must not request host-spawn
-> access to self-install updates. The manifest sets
-> `CONNECTED_FLATHUB_BUILD=1`, which makes the app treat Flathub as its
-> update store (its own updater is disabled in code).
-
-## After publication
-
-For every later release: `just prepare-release X.Y.Z`, set `tag:` (+ pinned
-`commit:`) in `io.github.paterkleomenis.Connected.yml`, regenerate
-`cargo-sources.json` if the lock changed, push the tag, and update the
-`flathub/io.github.paterkleomenis.Connected` repository (Flathub's
-external-data-checker opens PRs for tag updates — review and regenerate the
-cargo sources as part of merging them).
+`just prepare-release X.Y.Z`, bump `tag:` (+ pinned commit) in the
+manifest, regen `cargo-sources.json` if the lock moved, push, update the
+flathub repo. `bump-version.sh` doesn't touch the manifest tag, that part
+is manual.
