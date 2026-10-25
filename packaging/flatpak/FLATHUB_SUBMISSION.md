@@ -41,17 +41,7 @@ The branch is already pushed. Remaining steps, in order:
    ```
 
 3. When reviewers ask for a test build, comment `bot, build` on the PR.
-4. Answer reviewer comments myself. The AI policy on the submission side
-   is strict: no AI agent opens the PR, no AI writes the replies. The
-   packaging help is fine as long as it's disclosed — which the PR body
-   does.
-
-## What I'll tell reviewers about AI
-
-One line, same as the header comment in the manifest: the packaging
-(manifest, vendored sources, wrapper, docs) was put together with an AI
-coding agent and I reviewed and tested all of it. The app code is mine.
-That's the whole extent, it's ticked in the PR body.
+4. Answer reviewer comments myself.
 
 ## When they ask about permissions
 

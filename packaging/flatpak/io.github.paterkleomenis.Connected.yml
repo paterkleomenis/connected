@@ -1,7 +1,3 @@
-# Note: this manifest, the vendored cargo sources and the launch wrapper
-# were drafted with the help of an AI coding agent, then reviewed, built
-# and tested by the maintainer. Disclosed in the submission PR as required
-# by Flathub's generative AI policy.
 app-id: io.github.paterkleomenis.Connected
 runtime: org.gnome.Platform
 runtime-version: "50"
