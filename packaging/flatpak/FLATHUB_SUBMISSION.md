@@ -55,15 +55,11 @@ I shared through it and files I receive get saved wherever I pick — same
 reason a file manager wants host access. Transfers are p2p over QUIC,
 encrypted, no server in the middle.
 
-If they ask about the X11 socket: clipboard sync needs the X11 clipboard
-as a fallback because Mutter doesn't do the wayland data-control protocol,
-and `fallback-x11` would mean no X11 socket at all on a wayland session,
-so clipboard sync would just be dead on GNOME.
-
-The wayland socket mounts (`xdg-run/wayland-0..32,99`): for the compositors
-that DO have data-control (KDE, wlroots), the wrapper script picks the
-host socket directly instead of flatpak's. 0-32 is everything
-`wl_display_add_socket_auto` can hand out, 99 is Mir's quirk.
+Both `--socket=wayland` and `--socket=x11`: the webview renders through
+the wayland socket; clipboard sync needs the X11 clipboard on compositors
+without the wayland data-control protocol (GNOME/Mutter), which
+`--socket=wayland` alone can't cover. See `ClipboardCache` in
+`desktop/src/utils.rs`.
 
 `--share=network`: mDNS discovery + the transfers themselves, all LAN
 side. The only internet touch is checking GitHub for release notes.
@@ -74,6 +70,15 @@ aren't supposed to install their own updates, so the manifest sets
 GitHub-release bundles use a separate manifest
 (`connected-desktop-bundle.yml`) that keeps the permission so those
 installs can still self-update.
+
+## Review log
+
+- 2026-10-25: opened as #10830, auto-closed by the checker (video
+  checklist not met), fixed and reopened by a reviewer.
+- 2026-10-25: requested changes — drop the prototype-style comments from
+  the manifest, move to the GNOME 51 runtime, replace the
+  wayland-socket-mount workaround with standard sockets and no wrapper.
+  Done in the `new-pr`-targeted branch; awaiting re-review.
 
 ## Next releases
 
