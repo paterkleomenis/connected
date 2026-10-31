@@ -4064,6 +4064,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/lock_api/lock_api-0.5.0.crate",
+        "sha256": "65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af",
+        "dest": "cargo/vendor/lock_api-0.5.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af\", \"files\": {}}",
+        "dest": "cargo/vendor/lock_api-0.5.0",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/log/log-0.4.34.crate",
         "sha256": "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6",
         "dest": "cargo/vendor/log-0.4.34"
@@ -5130,6 +5143,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/parking_lot/parking_lot-0.13.0.crate",
+        "sha256": "a9cf937ca4e1d0b7578784559063422fc39ae7c5a00f02471f2614d5486fd226",
+        "dest": "cargo/vendor/parking_lot-0.13.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"a9cf937ca4e1d0b7578784559063422fc39ae7c5a00f02471f2614d5486fd226\", \"files\": {}}",
+        "dest": "cargo/vendor/parking_lot-0.13.0",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/parking_lot_core/parking_lot_core-0.9.12.crate",
         "sha256": "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1",
         "dest": "cargo/vendor/parking_lot_core-0.9.12"
@@ -5138,6 +5164,19 @@
         "type": "inline",
         "contents": "{\"package\": \"2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1\", \"files\": {}}",
         "dest": "cargo/vendor/parking_lot_core-0.9.12",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/parking_lot_core/parking_lot_core-0.10.0.crate",
+        "sha256": "9cfff060068cc18aa7815010fcaf80c68c7fb9e85fc7f5c0f9bf142c21d19826",
+        "dest": "cargo/vendor/parking_lot_core-0.10.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"9cfff060068cc18aa7815010fcaf80c68c7fb9e85fc7f5c0f9bf142c21d19826\", \"files\": {}}",
+        "dest": "cargo/vendor/parking_lot_core-0.10.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -5957,6 +5996,19 @@
         "type": "inline",
         "contents": "{\"package\": \"ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d\", \"files\": {}}",
         "dest": "cargo/vendor/redox_syscall-0.5.18",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/redox_syscall/redox_syscall-0.9.5.crate",
+        "sha256": "580c875845b41ecb1564ad1ae4703044cef774145e3d7a94dc2b3fa7c97868fd",
+        "dest": "cargo/vendor/redox_syscall-0.9.5"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"580c875845b41ecb1564ad1ae4703044cef774145e3d7a94dc2b3fa7c97868fd\", \"files\": {}}",
+        "dest": "cargo/vendor/redox_syscall-0.9.5",
         "dest-filename": ".cargo-checksum.json"
     },
     {
