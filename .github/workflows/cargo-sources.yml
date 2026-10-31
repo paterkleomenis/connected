@@ -1,0 +1,53 @@
+name: Cargo sources
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cargo-sources-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Update cargo-sources.json
+    if: |
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (
+        github.event.workflow_run.event == 'pull_request' ||
+        (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')
+      )
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out the branch CI ran on
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+          token: ${{ secrets.CARGO_SOURCES_TOKEN || github.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+
+      - name: Regenerate and commit cargo-sources.json
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          bash scripts/regenerate-flatpak-cargo-sources.sh
+
+          if git diff --quiet -- packaging/flatpak/cargo-sources.json; then
+            echo "cargo-sources.json is already up to date"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packaging/flatpak/cargo-sources.json
+          git commit -m "chore(deps): update cargo-sources.json"
+          git push origin "HEAD:${HEAD_BRANCH}"

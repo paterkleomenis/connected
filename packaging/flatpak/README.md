@@ -33,13 +33,17 @@ Manifests and metadata for the Flatpak packages.
 
 ## Regenerating cargo-sources.json
 
-Whenever `Cargo.lock` changes:
+Whenever `Cargo.lock` changes, run the same script CI uses:
 
 ```bash
-pip install aiohttp tomlkit   # once
-curl -O https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
-python3 flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
+bash scripts/regenerate-flatpak-cargo-sources.sh
 ```
+
+It fetches the generator from `master` and installs its dependencies, and needs
+`python3` (or `python`) plus network access. CI regenerates the file on every
+build, and a follow-up workflow commits the result back to the branch, so this
+is probably only needed to be ran manually before a release or a Flathub
+submission.
 
 ## Building locally
 
