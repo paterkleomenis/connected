@@ -4441,14 +4441,14 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/mpris-server/mpris-server-0.10.0.crate",
-        "sha256": "70cf358e9a9516cc35ed40eebd56cbe80f5190a7a2b3cd0c2d358c86b879132b",
-        "dest": "cargo/vendor/mpris-server-0.10.0"
+        "url": "https://static.crates.io/crates/mpris-server/mpris-server-0.11.0.crate",
+        "sha256": "0b8bd72df87f89d5c791fa8a8155fce408596ae20c34fefce84c17168c5d304a",
+        "dest": "cargo/vendor/mpris-server-0.11.0"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"70cf358e9a9516cc35ed40eebd56cbe80f5190a7a2b3cd0c2d358c86b879132b\", \"files\": {}}",
-        "dest": "cargo/vendor/mpris-server-0.10.0",
+        "contents": "{\"package\": \"0b8bd72df87f89d5c791fa8a8155fce408596ae20c34fefce84c17168c5d304a\", \"files\": {}}",
+        "dest": "cargo/vendor/mpris-server-0.11.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -9399,6 +9399,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/zbus/zbus-6.2.1.crate",
+        "sha256": "0ddb2961d9587ef9f24ad14cde1c3bc4c5edc9f1525932a8cffdd5bd98886eb9",
+        "dest": "cargo/vendor/zbus-6.2.1"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"0ddb2961d9587ef9f24ad14cde1c3bc4c5edc9f1525932a8cffdd5bd98886eb9\", \"files\": {}}",
+        "dest": "cargo/vendor/zbus-6.2.1",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/zbus_macros/zbus_macros-5.19.0.crate",
         "sha256": "2990635d09ade6df1868f72f8cac69a876a90981e8bd3c40b1be413f8dc88f40",
         "dest": "cargo/vendor/zbus_macros-5.19.0"
@@ -9412,6 +9425,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/zbus_macros/zbus_macros-6.2.1.crate",
+        "sha256": "083b38add47c340fc12ec560124fb1d9c23acb584f7021099f85ec6587a03c54",
+        "dest": "cargo/vendor/zbus_macros-6.2.1"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"083b38add47c340fc12ec560124fb1d9c23acb584f7021099f85ec6587a03c54\", \"files\": {}}",
+        "dest": "cargo/vendor/zbus_macros-6.2.1",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/zbus_names/zbus_names-4.3.5.crate",
         "sha256": "812a12be4ead7a59e18ea8f047d08add0066b73bc62fc1467066a2472ae088dd",
         "dest": "cargo/vendor/zbus_names-4.3.5"
@@ -9420,6 +9446,19 @@
         "type": "inline",
         "contents": "{\"package\": \"812a12be4ead7a59e18ea8f047d08add0066b73bc62fc1467066a2472ae088dd\", \"files\": {}}",
         "dest": "cargo/vendor/zbus_names-4.3.5",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/zbus_utils/zbus_utils-6.1.0.crate",
+        "sha256": "af55e52da295311b368c45bcae221f020e28e97a2420360170ce389218e76ec7",
+        "dest": "cargo/vendor/zbus_utils-6.1.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"af55e52da295311b368c45bcae221f020e28e97a2420360170ce389218e76ec7\", \"files\": {}}",
+        "dest": "cargo/vendor/zbus_utils-6.1.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -9589,6 +9628,19 @@
         "type": "inline",
         "contents": "{\"package\": \"aaf7fc5d30c28483d93805c4a5e12b05bbb52407fa67c5f8bd552374cd01fb11\", \"files\": {}}",
         "dest": "cargo/vendor/zopfli-0.8.4",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/zruntime/zruntime-0.2.2.crate",
+        "sha256": "23ef5ed7d628cdf0af82f93dfe03330a8e37383bf7422a1d3d6eb72326680be5",
+        "dest": "cargo/vendor/zruntime-0.2.2"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"23ef5ed7d628cdf0af82f93dfe03330a8e37383bf7422a1d3d6eb72326680be5\", \"files\": {}}",
+        "dest": "cargo/vendor/zruntime-0.2.2",
         "dest-filename": ".cargo-checksum.json"
     },
     {
