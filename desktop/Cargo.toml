@@ -34,7 +34,7 @@ single-instance = { git = "https://github.com/WLBF/single-instance", version = "
 mimalloc = { version = "0.1", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-mpris-server = "0.10"
+mpris-server = "0.11"
 ksni = "0.3"
 dbus = "0.9"
 mpris = "2.0"
