@@ -1,0 +1,44 @@
+name: Update AUR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-aur
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Publish the current packaging/aur recipe to the AUR without cutting a new
+  # release. Useful for packaging-only changes (icons, checksums, pkgrel bumps)
+  # that should reach AUR users before the next version bump.
+  # ---------------------------------------------------------------------------
+  update-aur:
+    name: Update AUR
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Update AUR package
+        uses: docker://archlinux:latest
+        with:
+          args: >
+            bash -c "
+            pacman -Syu --noconfirm git base-devel curl sudo openssh &&
+            useradd -m aur &&
+            echo 'aur ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers &&
+            chown -R aur:aur . &&
+            su aur -c '
+              mkdir -p ~/.ssh &&
+              echo \"${{ secrets.AUR_SSH_PRIVATE_KEY }}\" > ~/.ssh/id_rsa &&
+              chmod 600 ~/.ssh/id_rsa &&
+              ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts &&
+              git config --global user.name \"GitHub Actions\" &&
+              git config --global user.email \"actions@github.com\" &&
+              bash scripts/update-aur.sh --latest --push --remote ssh://aur@aur.archlinux.org/connected-desktop-bin.git
+            '"
