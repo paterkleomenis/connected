@@ -713,7 +713,7 @@ async fn run_wayland_session(
         .select_devices(
             &session,
             SelectDevicesOptions::default()
-                .set_devices(DeviceType::Keyboard | DeviceType::Pointer)
+                .set_devices(DeviceType::KEYBOARD | DeviceType::POINTER)
                 .set_persist_mode(PersistMode::ExplicitlyRevoked)
                 .set_restore_token(restore_token.as_deref()),
         )
@@ -732,7 +732,7 @@ async fn run_wayland_session(
         })?;
 
     let granted = selected.devices();
-    if !granted.contains(DeviceType::Keyboard) || !granted.contains(DeviceType::Pointer) {
+    if !granted.contains(DeviceType::KEYBOARD) || !granted.contains(DeviceType::POINTER) {
         return Err(WaylandSessionError::Failed(
             "the portal did not grant keyboard and pointer access".to_string(),
         ));
