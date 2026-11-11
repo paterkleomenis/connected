@@ -15,7 +15,7 @@ tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 connected-core = { path = "../core" }
 dirs = "7.0"
-rfd = "0.17"
+rfd = "0.18"
 arboard = { version = "3.6", features = ["wayland-data-control"] }
 once_cell.workspace = true
 rustls.workspace = true
