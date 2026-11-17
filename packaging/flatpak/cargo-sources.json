@@ -3882,14 +3882,14 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/libloading/libloading-0.9.0.crate",
-        "sha256": "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60",
-        "dest": "cargo/vendor/libloading-0.9.0"
+        "url": "https://static.crates.io/crates/libloading/libloading-0.9.1.crate",
+        "sha256": "a1832accd5a4ca2795ace4d05d15c4039be15b62d3b950eff99746a990e3cc10",
+        "dest": "cargo/vendor/libloading-0.9.1"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60\", \"files\": {}}",
-        "dest": "cargo/vendor/libloading-0.9.0",
+        "contents": "{\"package\": \"a1832accd5a4ca2795ace4d05d15c4039be15b62d3b950eff99746a990e3cc10\", \"files\": {}}",
+        "dest": "cargo/vendor/libloading-0.9.1",
         "dest-filename": ".cargo-checksum.json"
     },
     {
