@@ -50,19 +50,3 @@ pub fn documents_dir() -> PathBuf {
         })
         .unwrap_or_else(std::env::temp_dir)
 }
-
-/// Return the app-specific temp directory for temporary archive operations.
-///
-/// On iOS this resolves to `<Caches>/connected/tmp/`, which is inside the
-/// app sandbox and won't trigger `EPERM`. On other platforms it uses
-/// `dirs::config_dir()` / `std::env::temp_dir()` as before.
-pub fn temp_dir() -> PathBuf {
-    match IOS_CACHE_DIR.get() {
-        Some(cache) => cache.join("connected").join("tmp"),
-        None if cfg!(target_os = "ios") => std::env::temp_dir().join("connected").join("tmp"),
-        None => dirs::config_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("connected")
-            .join("tmp"),
-    }
-}

@@ -25,5 +25,3 @@ Output paths:
 - `target/msix/connected-desktop-windows.msixbundle` (created in CI/release workflow)
 
 Note: produced MSIX files are unsigned. Sign them with `signtool` for trusted installation flows.
-
-WiX/MSI packaging is no longer part of the release assets workflow.

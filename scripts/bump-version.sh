@@ -156,18 +156,7 @@ else
 fi
 
 # ────────────────────────────────────────────────────────────────────
-# 8. packaging/windows/installer.wxs
-# ────────────────────────────────────────────────────────────────────
-WXS="$ROOT_DIR/packaging/windows/installer.wxs"
-if grep -q "Version='$OLD_VER_RE'" "$WXS"; then
-  sed -i "s/Version='$OLD_VER_RE'/Version='$NEW_VER'/" "$WXS"
-  ok "packaging/windows/installer.wxs"
-else
-  warn "packaging/windows/installer.wxs: pattern not matched"
-fi
-
-# ────────────────────────────────────────────────────────────────────
-# 9. scripts/ios/sync-version.sh — reads from Cargo.toml, no change needed
+# 8. scripts/ios/sync-version.sh — reads from Cargo.toml, no change needed
 # ────────────────────────────────────────────────────────────────────
 
 echo ""

@@ -384,20 +384,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Verify installer version matches Cargo version
-        shell: pwsh
-        run: |
-          $cargoMatch = (Get-Content Cargo.toml | Select-String -Pattern '^\s*version\s*=\s*"([^"]+)"' -AllMatches | Select-Object -Last 1)
-          if ($null -eq $cargoMatch) { throw "Could not find workspace version in Cargo.toml" }
-          $cargo = $cargoMatch.Matches[0].Groups[1].Value
-          $wxs = "packaging\\windows\\installer.wxs"
-          $msiMatch = (Get-Content $wxs | Select-String -Pattern "^\s*Version=['`"`]([^'`"`]+)['`"`]" | Select-Object -First 1)
-          if ($null -eq $msiMatch) { throw "Could not find Version in installer.wxs" }
-          $msiVer = $msiMatch.Matches[0].Groups[1].Value
-          if ($msiVer -ne $cargo) {
-            throw "installer.wxs Version ($msiVer) does not match Cargo.toml workspace version ($cargo)."
-          }
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:

@@ -2193,19 +2193,6 @@ fn App() -> Element {
                 let new_status_hash = match &status {
                     TransferStatus::Idle => 0,
                     TransferStatus::Pending { .. } => 3,
-                    TransferStatus::Compressing {
-                        bytes_processed,
-                        total_bytes,
-                        ..
-                    } => {
-                        // Use progress percentage for hash to detect changes
-                        // Use tenths of a percent for smoother updates
-                        let percent_x10 = (*bytes_processed)
-                            .saturating_mul(1000)
-                            .checked_div(*total_bytes)
-                            .unwrap_or(0);
-                        10000 + percent_x10
-                    }
                     TransferStatus::Starting { .. } => 1,
                     TransferStatus::InProgress { percent, .. } => {
                         // Multiply by 10 to get tenths of a percent for finer granularity
@@ -2661,33 +2648,6 @@ fn App() -> Element {
                         }
                         }
                     },
-                    TransferStatus::Compressing {
-                        filename, current_file, files_processed, total_files,
-                        bytes_processed, total_bytes, speed_bytes_per_sec: _,
-                    } => {
-                        let percent = if *total_bytes > 0 {
-                            (*bytes_processed as f32 / *total_bytes as f32) * 100.0
-                        } else { 0.0 };
-                        let percent = clamp_transfer_percent(percent);
-                        rsx! {
-                            div { class: "global-transfer",
-                                div { class: "global-transfer-icon", Icon { icon: IconType::Sync, size: 20, color: "var(--accent)".to_string() } }
-                                div { class: "global-transfer-info",
-                                    span { "Compressing {filename}" }
-                                    span { class: "global-transfer-filename", "{current_file} ({files_processed}/{total_files})" }
-                                    div { class: "global-transfer-progress",
-                                        div { class: "global-transfer-progress-fill", style: "width: {percent}%", }
-                                    }
-                                }
-                                span { class: "global-transfer-percent", "{percent:.1}%" }
-                                button {
-                                    class: "global-transfer-cancel",
-                                    onclick: move |_| action_tx.send(AppAction::CancelFileTransfer),
-                                    Icon { icon: IconType::Close, size: 14, color: "var(--error)".to_string() }
-                                }
-                            }
-                        }
-                    },
                     TransferStatus::Completed { filename } => rsx! {
                         div { class: "global-transfer global-transfer-done",
                             div { class: "global-transfer-icon", Icon { icon: IconType::Check, size: 20, color: "var(--success)".to_string() } }
@@ -2921,108 +2881,6 @@ fn App() -> Element {
                                                     }
                                                     p { "Pending incoming transfer from {from_device}" }
                                                     p { class: "transfer-filename", "{filename}" }
-                                                }
-                                            },
-                                            TransferStatus::Compressing {
-                                                filename,
-                                                current_file,
-                                                files_processed,
-                                                total_files,
-                                                bytes_processed,
-                                                total_bytes,
-                                                speed_bytes_per_sec,
-                                            } => {
-                                                let percent = if *total_bytes > 0 {
-                                                    (*bytes_processed as f32 / *total_bytes as f32) * 100.0
-                                                } else {
-                                                    0.0
-                                                };
-                                                let percent = clamp_transfer_percent(percent);
-                                                // saturating_sub: aggregate progress can
-                                                // transiently overshoot total_bytes.
-                                                let eta_secs = (*total_bytes)
-                                                    .saturating_sub(*bytes_processed)
-                                                    .checked_div((*speed_bytes_per_sec).max(1))
-                                                    .unwrap_or(0);
-                                                let eta_str = if eta_secs >= 3600 {
-                                                    format!("{}:{:02}:{:02}", eta_secs / 3600, (eta_secs % 3600) / 60, eta_secs % 60)
-                                                } else if eta_secs >= 60 {
-                                                    format!("{}:{:02}", eta_secs / 60, eta_secs % 60)
-                                                } else {
-                                                    format!("{}s", eta_secs)
-                                                };
-                                                let speed_str = if *speed_bytes_per_sec >= 1_073_741_824 {
-                                                    format!("{:.1} GB/s", *speed_bytes_per_sec as f64 / 1_073_741_824.0)
-                                                } else if *speed_bytes_per_sec >= 1_048_576 {
-                                                    format!("{:.1} MB/s", *speed_bytes_per_sec as f64 / 1_048_576.0)
-                                                } else if *speed_bytes_per_sec >= 1024 {
-                                                    format!("{:.1} KB/s", *speed_bytes_per_sec as f64 / 1024.0)
-                                                } else {
-                                                    format!("{} B/s", speed_bytes_per_sec)
-                                                };
-                                                let bytes_str = if *total_bytes >= 1_073_741_824 {
-                                                    format!("{:.1} GB / {:.1} GB",
-                                                        *bytes_processed as f64 / 1_073_741_824.0,
-                                                        *total_bytes as f64 / 1_073_741_824.0)
-                                                } else if *total_bytes >= 1_048_576 {
-                                                    format!("{:.1} MB / {:.1} MB",
-                                                        *bytes_processed as f64 / 1_048_576.0,
-                                                        *total_bytes as f64 / 1_048_576.0)
-                                                } else {
-                                                    format!("{:.1} KB / {:.1} KB",
-                                                        *bytes_processed as f64 / 1024.0,
-                                                        *total_bytes as f64 / 1024.0)
-                                                };
-                                                rsx! {
-                                                    div {
-                                                        class: "transfer-active compression-progress",
-                                                        div {
-                                                            class: "compression-header",
-                                                            div {
-                                                                class: "transfer-icon spinning",
-                                                                Icon { icon: IconType::Sync, size: 32, color: "var(--accent)".to_string() }
-                                                            }
-                                                            div {
-                                                                class: "compression-title",
-                                                                h4 { "Compressing folder..." }
-                                                                p { class: "compression-filename", "{filename}" }
-                                                            }
-                                                        }
-                                                        div {
-                                                            class: "compression-current-file",
-                                                            span { "{current_file}" }
-                                                        }
-                                                        div {
-                                                            class: "progress-bar",
-                                                            div {
-                                                                class: "progress-fill",
-                                                                style: "width: {percent}%",
-                                                            }
-                                                        }
-                                                        div {
-                                                            class: "compression-stats",
-                                                            div {
-                                                                class: "stat-row",
-                                                                span { class: "stat-label", "{files_processed}/{total_files} files" }
-                                                                span { class: "stat-value", "{bytes_str}" }
-                                                            }
-                                                            div {
-                                                                class: "stat-row",
-                                                                span { class: "stat-label speed", "{speed_str}" }
-                                                                if *speed_bytes_per_sec > 0 {
-                                                                    span { class: "stat-value eta", "~{eta_str} remaining" }
-                                                                }
-                                                            }
-                                                        }
-                                                        button {
-                                                            class: "cancel-button",
-                                                            onclick: move |_| {
-                                                                action_tx.send(AppAction::CancelFileTransfer);
-                                                            },
-                                                            Icon { icon: IconType::Close, size: 16, color: "var(--error)".to_string() }
-                                                            span { " Cancel Compression" }
-                                                        }
-                                                    }
                                                 }
                                             },
                                             TransferStatus::Starting { filename } => rsx! {

@@ -801,17 +801,6 @@ pub trait FileTransferCallback: Send + Sync {
     fn on_transfer_completed(&self, transfer_id: String, filename: String, total_size: u64);
     fn on_transfer_failed(&self, transfer_id: String, error_msg: String);
     fn on_transfer_cancelled(&self, transfer_id: String);
-    #[allow(clippy::too_many_arguments)]
-    fn on_compression_progress(
-        &self,
-        filename: String,
-        current_file: String,
-        files_processed: u64,
-        total_files: u64,
-        bytes_processed: u64,
-        total_bytes: u64,
-        speed_bytes_per_sec: u64,
-    );
 }
 
 #[uniffi::export(callback_interface)]
@@ -1320,27 +1309,6 @@ fn spawn_event_listener(client: Arc<ConnectedClient>, runtime: &Runtime) {
                     ConnectedEvent::PairingModeChanged(enabled) => {
                         if let Some(cb) = PAIRING_CALLBACK.read().as_ref() {
                             cb.on_pairing_mode_changed(enabled);
-                        }
-                    }
-                    ConnectedEvent::CompressionProgress {
-                        filename,
-                        current_file,
-                        files_processed,
-                        total_files,
-                        bytes_processed,
-                        total_bytes,
-                        speed_bytes_per_sec,
-                    } => {
-                        if let Some(cb) = TRANSFER_CALLBACK.read().as_ref() {
-                            cb.on_compression_progress(
-                                filename,
-                                current_file,
-                                files_processed,
-                                total_files,
-                                bytes_processed,
-                                total_bytes,
-                                speed_bytes_per_sec,
-                            );
                         }
                     }
                     ConnectedEvent::RemoteInput { .. }

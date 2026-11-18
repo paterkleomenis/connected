@@ -116,8 +116,8 @@ impl UpdateChecker {
         let download_url = match platform_lower.as_str() {
             // Release workflow publishes this as `connected-android.apk`.
             "android" => Some(github_release_download_url(&tag, "connected-android.apk")),
-            // Release workflow publishes this as `connected-desktop.msi`.
-            "windows" => Some(github_release_download_url(&tag, "connected-desktop.msi")),
+            // Release workflow publishes this as `connected-desktop.exe`.
+            "windows" => Some(github_release_download_url(&tag, "connected-desktop.exe")),
             // Release workflow publishes this as `connected-desktop-macos.dmg`.
             "macos" => Some(github_release_download_url(
                 &tag,

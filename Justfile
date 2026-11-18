@@ -99,10 +99,6 @@ check-versions:
 ci-windows:
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1
 
-[doc("Build Windows MSI locally (PowerShell)")]
-build-windows-msi:
-    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci-windows.ps1
-
 [doc("Build Windows MSIX locally (PowerShell)")]
 build-windows-msix ARCH="x64" PROFILE="release":
     cargo build --workspace --{{PROFILE}} --target {{ARCH}}-pc-windows-msvc

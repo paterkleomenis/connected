@@ -1891,13 +1891,6 @@ final class ConnectedAppModel: ObservableObject {
         cleanupTempFile(transferId: tid)
     }
 
-    fileprivate func handleCompressionProgress(filename: String, currentFile: String, filesProcessed: UInt64, totalFiles: UInt64) {
-        transferStatus = "Compressing \(currentFile) (\(filesProcessed)/\(max(totalFiles, 1)))"
-        if !filename.isEmpty {
-            infoMessage = "Preparing \(filename)"
-        }
-    }
-
     fileprivate func handleDeviceUnpaired(deviceId: String, deviceName: String, reason: String) {
         trustedDeviceIds.remove(deviceId)
         trustedDeviceNames.removeValue(forKey: deviceId)
@@ -2745,17 +2738,6 @@ private final class TransferBridge: FileTransferCallback, @unchecked Sendable {
     func onTransferCancelled(transferId: String) {
         Task { @MainActor [weak app] in
             app?.handleTransferCancelled()
-        }
-    }
-
-    func onCompressionProgress(filename: String, currentFile: String, filesProcessed: UInt64, totalFiles: UInt64, bytesProcessed: UInt64, totalBytes: UInt64, speedBytesPerSec: UInt64) {
-        Task { @MainActor [weak app] in
-            app?.handleCompressionProgress(
-                filename: filename,
-                currentFile: currentFile,
-                filesProcessed: filesProcessed,
-                totalFiles: totalFiles
-            )
         }
     }
 }

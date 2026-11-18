@@ -65,7 +65,7 @@ pub fn FileDialog(
         "Click to browse or drag files here"
     };
     let support_text = if is_folder {
-        "Folder will be sent as a zip archive"
+        "Folder structure will be preserved"
     } else {
         "Supports multiple files and types"
     };

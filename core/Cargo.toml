@@ -34,10 +34,6 @@ if-addrs = "0.15"
 base64 = "0.23"
 libc = "0.2"
 blake3 = "1.8"
-zip = { version = "9.0", default-features = false, features = [
-  "deflate",
-  "time",
-] }
 walkdir = "2.5"
 reqwest = { version = "0.13", features = ["rustls"], default-features = false }
 semver = "1.0"

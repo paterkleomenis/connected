@@ -526,25 +526,6 @@ fn spawn_event_loop(
                         }
                     }
                 }
-                ConnectedEvent::CompressionProgress {
-                    filename,
-                    current_file,
-                    files_processed,
-                    total_files,
-                    bytes_processed,
-                    total_bytes,
-                    speed_bytes_per_sec,
-                } => {
-                    *get_transfer_status().lock_or_recover() = TransferStatus::Compressing {
-                        filename,
-                        current_file,
-                        files_processed,
-                        total_files,
-                        bytes_processed,
-                        total_bytes,
-                        speed_bytes_per_sec,
-                    };
-                }
                 ConnectedEvent::TransferStarting {
                     filename,
                     direction,

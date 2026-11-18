@@ -62,7 +62,6 @@ struct PendingPairingRequest {
 /// the request must be keyed on.
 type PendingPairingRequestMap = HashMap<String, PendingPairingRequest>;
 type CancelFlag = Arc<AtomicBool>;
-type OutgoingTransferEntry = (CancelFlag, Option<PathBuf>);
 
 /// Sender-side commands for one remote-input session (one peer).
 enum RemoteInputCommand {
@@ -398,8 +397,8 @@ pub struct ConnectedClient {
     pairing_mode_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     pending_transfers: Arc<RwLock<HashMap<String, PendingTransferSender>>>,
     /// Track active outgoing file transfers and their cancel flags.
-    /// Keyed by transfer_id, stores the cancel atomic flag and temp file path (if any).
-    active_outgoing_transfers: Arc<RwLock<HashMap<String, OutgoingTransferEntry>>>,
+    /// Keyed by transfer_id, stores the cancel atomic flag.
+    active_outgoing_transfers: Arc<RwLock<HashMap<String, CancelFlag>>>,
     /// Track active incoming file transfers and their cancel flags.
     /// Keyed by transfer_id, stores the cancel atomic flag.
     active_incoming_transfers: Arc<RwLock<HashMap<String, CancelFlag>>>,
@@ -3134,17 +3133,10 @@ impl ConnectedClient {
 
         // Create cancel flag for this transfer
         let cancel_flag = Arc::new(AtomicBool::new(false));
-        // Track temp file path for cleanup (if sending a folder)
-        let temp_file_path: Option<PathBuf> = if file_path.is_dir() {
-            // We can't know the exact temp ZIP path here, it will be tracked in the task
-            None
-        } else {
-            None
-        };
 
         self.active_outgoing_transfers
             .write()
-            .insert(transfer_id.clone(), (cancel_flag.clone(), temp_file_path));
+            .insert(transfer_id.clone(), cancel_flag.clone());
 
         let active_transfers = self.active_outgoing_transfers.clone();
         let tid_for_cleanup = transfer_id.clone();
@@ -3168,23 +3160,6 @@ impl ConnectedClient {
                             // Pending is only used for incoming transfers, skip for outgoing
                             continue;
                         }
-                        TransferProgress::CompressionProgress {
-                            filename,
-                            current_file,
-                            files_processed,
-                            total_files,
-                            bytes_processed,
-                            total_bytes,
-                            speed_bytes_per_sec,
-                        } => ConnectedEvent::CompressionProgress {
-                            filename,
-                            current_file,
-                            files_processed,
-                            total_files,
-                            bytes_processed,
-                            total_bytes,
-                            speed_bytes_per_sec,
-                        },
                         TransferProgress::Starting {
                             filename,
                             total_size,
@@ -3293,7 +3268,7 @@ impl ConnectedClient {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.active_outgoing_transfers
             .write()
-            .insert(transfer_id.clone(), (cancel_flag.clone(), None));
+            .insert(transfer_id.clone(), cancel_flag.clone());
 
         let active_transfers = self.active_outgoing_transfers.clone();
         let tid_for_cleanup = transfer_id.clone();
@@ -3316,23 +3291,6 @@ impl ConnectedClient {
                         TransferProgress::Pending { .. } => {
                             continue;
                         }
-                        TransferProgress::CompressionProgress {
-                            filename,
-                            current_file,
-                            files_processed,
-                            total_files,
-                            bytes_processed,
-                            total_bytes,
-                            speed_bytes_per_sec,
-                        } => ConnectedEvent::CompressionProgress {
-                            filename,
-                            current_file,
-                            files_processed,
-                            total_files,
-                            bytes_processed,
-                            total_bytes,
-                            speed_bytes_per_sec,
-                        },
                         TransferProgress::Starting {
                             filename,
                             total_size,
@@ -3407,10 +3365,10 @@ impl ConnectedClient {
 
     /// Cancel an active outgoing file transfer by its transfer_id.
     /// This sets the cancellation flag, which will be checked by the transfer task,
-    /// causing it to stop and clean up any temporary files.
+    /// causing it to stop.
     pub fn cancel_file_transfer(&self, transfer_id: &str) -> Result<()> {
         let mut transfers = self.active_outgoing_transfers.write();
-        if let Some((cancel_flag, _temp_path)) = transfers.remove(transfer_id) {
+        if let Some(cancel_flag) = transfers.remove(transfer_id) {
             // Set the cancellation flag (ignore error if already dropped)
             cancel_flag.store(true, Ordering::Relaxed);
             info!("Cancelled file transfer: {}", transfer_id);
@@ -4828,25 +4786,6 @@ impl ConnectedClient {
                                     let _ = p_tx.send(ConnectedEvent::TransferFailed {
                                         id: tid.clone(),
                                         error,
-                                    });
-                                }
-                                TransferProgress::CompressionProgress {
-                                    filename,
-                                    current_file,
-                                    files_processed,
-                                    total_files,
-                                    bytes_processed,
-                                    total_bytes,
-                                    speed_bytes_per_sec,
-                                } => {
-                                    let _ = p_tx.send(ConnectedEvent::CompressionProgress {
-                                        filename,
-                                        current_file,
-                                        files_processed,
-                                        total_files,
-                                        bytes_processed,
-                                        total_bytes,
-                                        speed_bytes_per_sec,
                                     });
                                 }
                                 TransferProgress::Cancelled => {

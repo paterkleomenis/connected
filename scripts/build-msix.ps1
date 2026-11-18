@@ -117,19 +117,6 @@ if (!(Test-Path $exePath)) {
     throw "Built executable not found at $exePath"
 }
 
-$dllPath = Join-Path $repoRoot "target\$target\$buildDirName\WebView2Loader.dll"
-if (!(Test-Path $dllPath)) {
-    $candidate = Get-ChildItem -Path (Join-Path $repoRoot "target\$target\$buildDirName\build") -Recurse -Filter "WebView2Loader.dll" |
-        Where-Object { $_.FullName -match '\\out\\(x64|arm64)\\WebView2Loader\.dll$' } |
-        Select-Object -First 1
-    if ($null -ne $candidate) {
-        Copy-Item $candidate.FullName $dllPath -Force
-    }
-}
-if (!(Test-Path $dllPath)) {
-    throw "WebView2Loader.dll not found for target '$target'"
-}
-
 $outRoot = Join-Path $repoRoot "target\msix\$Arch"
 $layoutDir = Join-Path $outRoot "layout"
 $assetsDir = Join-Path $layoutDir "Assets"
@@ -141,7 +128,6 @@ if (Test-Path $layoutDir) {
 New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
 
 Copy-Item $exePath (Join-Path $layoutDir "connected-desktop.exe") -Force
-Copy-Item $dllPath (Join-Path $layoutDir "WebView2Loader.dll") -Force
 
 $icon = Join-Path $repoRoot "desktop\assets\logo.png"
 if (!(Test-Path $icon)) {

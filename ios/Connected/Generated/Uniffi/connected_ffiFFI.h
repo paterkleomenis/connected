@@ -341,13 +341,6 @@ typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod5)(uint64_t, Rus
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD6
-#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILE_TRANSFER_CALLBACK_METHOD6
-typedef void (*UniffiCallbackInterfaceFileTransferCallbackMethod6)(uint64_t, RustBuffer, RustBuffer, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, void* _Nonnull,
-        RustCallStatus *_Nonnull uniffiCallStatus
-    );
-
-#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_FILESYSTEM_PROVIDER_CALLBACK_METHOD0
 typedef void (*UniffiCallbackInterfaceFilesystemProviderCallbackMethod0)(uint64_t, RustBuffer, RustBuffer* _Nonnull,
@@ -573,7 +566,6 @@ typedef struct UniffiVTableCallbackInterfaceFileTransferCallback {
     UniffiCallbackInterfaceFileTransferCallbackMethod3 _Nonnull onTransferCompleted;
     UniffiCallbackInterfaceFileTransferCallbackMethod4 _Nonnull onTransferFailed;
     UniffiCallbackInterfaceFileTransferCallbackMethod5 _Nonnull onTransferCancelled;
-    UniffiCallbackInterfaceFileTransferCallbackMethod6 _Nonnull onCompressionProgress;
 } UniffiVTableCallbackInterfaceFileTransferCallback;
 
 #endif
@@ -797,6 +789,11 @@ void uniffi_connected_ffi_fn_func_inject_proximity_device(RustBuffer device_id, 
 int8_t uniffi_connected_ffi_fn_func_is_device_trusted(RustBuffer device_id, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_IS_REMOTE_INPUT_ACTIVE
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_IS_REMOTE_INPUT_ACTIVE
+int8_t uniffi_connected_ffi_fn_func_is_remote_input_active(RustBuffer target_ip, uint16_t target_port, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_NOTIFY_NEW_SMS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_NOTIFY_NEW_SMS
 void uniffi_connected_ffi_fn_func_notify_new_sms(RustBuffer target_ip, uint16_t target_port, RustBuffer message, RustCallStatus *_Nonnull out_status
@@ -978,6 +975,11 @@ void uniffi_connected_ffi_fn_func_send_open_url(RustBuffer target_ip, uint16_t t
 void uniffi_connected_ffi_fn_func_send_remote_command(RustBuffer target_ip, uint16_t target_port, RustBuffer command, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_REMOTE_INPUT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_REMOTE_INPUT
+void uniffi_connected_ffi_fn_func_send_remote_input(RustBuffer target_ip, uint16_t target_port, RustBuffer events, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_SMS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_SEND_SMS
 void uniffi_connected_ffi_fn_func_send_sms(RustBuffer target_ip, uint16_t target_port, RustBuffer to, RustBuffer body, RustCallStatus *_Nonnull out_status
@@ -1024,10 +1026,20 @@ void uniffi_connected_ffi_fn_func_shutdown(RustCallStatus *_Nonnull out_status
 void uniffi_connected_ffi_fn_func_start_discovery(uint64_t callback, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_START_REMOTE_INPUT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_START_REMOTE_INPUT
+void uniffi_connected_ffi_fn_func_start_remote_input(RustBuffer target_ip, uint16_t target_port, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_STOP_DISCOVERY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_STOP_DISCOVERY
 void uniffi_connected_ffi_fn_func_stop_discovery(RustCallStatus *_Nonnull out_status
 
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_STOP_REMOTE_INPUT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_STOP_REMOTE_INPUT
+void uniffi_connected_ffi_fn_func_stop_remote_input(RustBuffer target_ip, uint16_t target_port, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_FN_FUNC_TRUST_DEVICE
@@ -1413,6 +1425,12 @@ uint16_t uniffi_connected_ffi_checksum_func_is_device_trusted(void
 
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_IS_REMOTE_INPUT_ACTIVE
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_IS_REMOTE_INPUT_ACTIVE
+uint16_t uniffi_connected_ffi_checksum_func_is_remote_input_active(void
+
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_NOTIFY_NEW_SMS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_NOTIFY_NEW_SMS
 uint16_t uniffi_connected_ffi_checksum_func_notify_new_sms(void
@@ -1629,6 +1647,12 @@ uint16_t uniffi_connected_ffi_checksum_func_send_remote_command(void
 
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_REMOTE_INPUT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_REMOTE_INPUT
+uint16_t uniffi_connected_ffi_checksum_func_send_remote_input(void
+
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_SMS
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_SEND_SMS
 uint16_t uniffi_connected_ffi_checksum_func_send_sms(void
@@ -1683,9 +1707,21 @@ uint16_t uniffi_connected_ffi_checksum_func_start_discovery(void
 
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_START_REMOTE_INPUT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_START_REMOTE_INPUT
+uint16_t uniffi_connected_ffi_checksum_func_start_remote_input(void
+
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_STOP_DISCOVERY
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_STOP_DISCOVERY
 uint16_t uniffi_connected_ffi_checksum_func_stop_discovery(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_STOP_REMOTE_INPUT
+#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_FUNC_STOP_REMOTE_INPUT
+uint16_t uniffi_connected_ffi_checksum_func_stop_remote_input(void
 
 );
 #endif
@@ -1788,12 +1824,6 @@ uint16_t uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_f
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_CANCELLED
 #define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_TRANSFER_CANCELLED
 uint16_t uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_cancelled(void
-
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_COMPRESSION_PROGRESS
-#define UNIFFI_FFIDEF_UNIFFI_CONNECTED_FFI_CHECKSUM_METHOD_FILETRANSFERCALLBACK_ON_COMPRESSION_PROGRESS
-uint16_t uniffi_connected_ffi_checksum_method_filetransfercallback_on_compression_progress(void
 
 );
 #endif

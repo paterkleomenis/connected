@@ -26,8 +26,5 @@ android_logger = "0.15"
 log = "0.4"
 tracing-log = "0.2"
 
-[build-dependencies]
-uniffi = { workspace = true, features = ["build"] }
-
 [lints]
 workspace = true

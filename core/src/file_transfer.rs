@@ -313,16 +313,6 @@ pub enum TransferProgress {
         total_size: u64,
         mime_type: Option<String>,
     },
-    /// Compression progress for folder transfers (emitted during ZIP archiving)
-    CompressionProgress {
-        filename: String,
-        current_file: String,
-        files_processed: u64,
-        total_files: u64,
-        bytes_processed: u64,
-        total_bytes: u64,
-        speed_bytes_per_sec: u64,
-    },
     Starting {
         filename: String,
         total_size: u64,

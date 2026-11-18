@@ -535,6 +535,22 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
+    typealias FfiType = Float
+    typealias SwiftType = Float
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Float {
+        return try lift(readFloat(&buf))
+    }
+
+    public static func write(_ value: Float, into buf: inout [UInt8]) {
+        writeFloat(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -2375,6 +2391,127 @@ public func FfiConverterTypeRemoteCommand_lower(_ value: RemoteCommand) -> RustB
 
 
 
+public enum RemoteInputEvent: Equatable, Hashable {
+
+    /**
+     * Relative pointer motion in device-independent pixels.
+     */
+    case pointerMotion(dx: Float, dy: Float
+    )
+    /**
+     * Mouse button state. `button` is a Linux `BTN_*` code (0x110 = left).
+     */
+    case pointerButton(button: UInt16, pressed: Bool
+    )
+    /**
+     * Relative scroll delta.
+     */
+    case scroll(dx: Float, dy: Float
+    )
+    /**
+     * X11 keysym press/release.
+     */
+    case key(keysym: UInt32, pressed: Bool
+    )
+    /**
+     * UTF-8 text to type.
+     */
+    case text(text: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RemoteInputEvent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRemoteInputEvent: FfiConverterRustBuffer {
+    typealias SwiftType = RemoteInputEvent
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RemoteInputEvent {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .pointerMotion(dx: try FfiConverterFloat.read(from: &buf), dy: try FfiConverterFloat.read(from: &buf)
+        )
+
+        case 2: return .pointerButton(button: try FfiConverterUInt16.read(from: &buf), pressed: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 3: return .scroll(dx: try FfiConverterFloat.read(from: &buf), dy: try FfiConverterFloat.read(from: &buf)
+        )
+
+        case 4: return .key(keysym: try FfiConverterUInt32.read(from: &buf), pressed: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 5: return .text(text: try FfiConverterString.read(from: &buf)
+        )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RemoteInputEvent, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case let .pointerMotion(dx,dy):
+            writeInt(&buf, Int32(1))
+            FfiConverterFloat.write(dx, into: &buf)
+            FfiConverterFloat.write(dy, into: &buf)
+
+
+        case let .pointerButton(button,pressed):
+            writeInt(&buf, Int32(2))
+            FfiConverterUInt16.write(button, into: &buf)
+            FfiConverterBool.write(pressed, into: &buf)
+
+
+        case let .scroll(dx,dy):
+            writeInt(&buf, Int32(3))
+            FfiConverterFloat.write(dx, into: &buf)
+            FfiConverterFloat.write(dy, into: &buf)
+
+
+        case let .key(keysym,pressed):
+            writeInt(&buf, Int32(4))
+            FfiConverterUInt32.write(keysym, into: &buf)
+            FfiConverterBool.write(pressed, into: &buf)
+
+
+        case let .text(text):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(text, into: &buf)
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteInputEvent_lift(_ buf: RustBuffer) throws -> RemoteInputEvent {
+    return try FfiConverterTypeRemoteInputEvent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteInputEvent_lower(_ value: RemoteInputEvent) -> RustBuffer {
+    return FfiConverterTypeRemoteInputEvent.lower(value)
+}
+
+
+
+
 public enum SmsStatus: Equatable, Hashable {
 
     case pending
@@ -3025,8 +3162,6 @@ public protocol FileTransferCallback: AnyObject, Sendable {
 
     func onTransferCancelled(transferId: String)
 
-    func onCompressionProgress(filename: String, currentFile: String, filesProcessed: UInt64, totalFiles: UInt64, bytesProcessed: UInt64, totalBytes: UInt64, speedBytesPerSec: UInt64)
-
 }
 
 
@@ -3209,42 +3344,6 @@ fileprivate struct UniffiCallbackInterfaceFileTransferCallback {
                 }
                 return uniffiObj.onTransferCancelled(
                      transferId: try FfiConverterString.lift(transferId)
-                )
-            }
-
-
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onCompressionProgress: { (
-            uniffiHandle: UInt64,
-            filename: RustBuffer,
-            currentFile: RustBuffer,
-            filesProcessed: UInt64,
-            totalFiles: UInt64,
-            bytesProcessed: UInt64,
-            totalBytes: UInt64,
-            speedBytesPerSec: UInt64,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceFileTransferCallback.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onCompressionProgress(
-                     filename: try FfiConverterString.lift(filename),
-                     currentFile: try FfiConverterString.lift(currentFile),
-                     filesProcessed: try FfiConverterUInt64.lift(filesProcessed),
-                     totalFiles: try FfiConverterUInt64.lift(totalFiles),
-                     bytesProcessed: try FfiConverterUInt64.lift(bytesProcessed),
-                     totalBytes: try FfiConverterUInt64.lift(totalBytes),
-                     speedBytesPerSec: try FfiConverterUInt64.lift(speedBytesPerSec)
                 )
             }
 
@@ -5130,6 +5229,31 @@ fileprivate struct FfiConverterSequenceTypeTrustedPeer: FfiConverterRustBuffer {
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeRemoteInputEvent: FfiConverterRustBuffer {
+    typealias SwiftType = [RemoteInputEvent]
+
+    public static func write(_ value: [RemoteInputEvent], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRemoteInputEvent.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RemoteInputEvent] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RemoteInputEvent]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRemoteInputEvent.read(from: &buf))
+        }
+        return seq
+    }
+}
 public func acceptFileTransfer(transferId: String)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
         uniffiCallStatus in
     uniffi_connected_ffi_fn_func_accept_file_transfer(
@@ -5282,6 +5406,20 @@ public func isDeviceTrusted(deviceId: String) -> Bool  {
         uniffiCallStatus in
     uniffi_connected_ffi_fn_func_is_device_trusted(
         FfiConverterString.lower(deviceId),uniffiCallStatus
+    )
+})
+}
+/**
+ * Whether the remote-input handshake with this desktop has completed. The
+ * phone uses this to distinguish "waiting for desktop approval" from an
+ * active session.
+ */
+public func isRemoteInputActive(targetIp: String, targetPort: UInt16)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_connected_ffi_fn_func_is_remote_input_active(
+        FfiConverterString.lower(targetIp),
+        FfiConverterUInt16.lower(targetPort),uniffiCallStatus
     )
 })
 }
@@ -5600,6 +5738,19 @@ public func sendRemoteCommand(targetIp: String, targetPort: UInt16, command: Rem
     )
 }
 }
+/**
+ * Queue a batch of keyboard/pointer events for a desktop. Events are sent in
+ * order on one stream and must not be reordered by the caller.
+ */
+public func sendRemoteInput(targetIp: String, targetPort: UInt16, events: [RemoteInputEvent])throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_connected_ffi_fn_func_send_remote_input(
+        FfiConverterString.lower(targetIp),
+        FfiConverterUInt16.lower(targetPort),
+        FfiConverterSequenceTypeRemoteInputEvent.lower(events),uniffiCallStatus
+    )
+}
+}
 public func sendSms(targetIp: String, targetPort: UInt16, to: String, body: String)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
         uniffiCallStatus in
     uniffi_connected_ffi_fn_func_send_sms(
@@ -5683,9 +5834,33 @@ public func startDiscovery(callback: DiscoveryCallback)throws   {try rustCallWit
     )
 }
 }
+/**
+ * Open the long-lived remote-input stream to a desktop. The desktop may show
+ * a system permission prompt the first time; the approval token is persisted
+ * there. This function returns immediately.
+ */
+public func startRemoteInput(targetIp: String, targetPort: UInt16)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_connected_ffi_fn_func_start_remote_input(
+        FfiConverterString.lower(targetIp),
+        FfiConverterUInt16.lower(targetPort),uniffiCallStatus
+    )
+}
+}
 public func stopDiscovery()  {try! rustCall() {
         uniffiCallStatus in
     uniffi_connected_ffi_fn_func_stop_discovery(uniffiCallStatus
+    )
+}
+}
+/**
+ * End the remote-input session and release the desktop-side injection backend.
+ */
+public func stopRemoteInput(targetIp: String, targetPort: UInt16)throws   {try rustCallWithError(FfiConverterTypeConnectedFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_connected_ffi_fn_func_stop_remote_input(
+        FfiConverterString.lower(targetIp),
+        FfiConverterUInt16.lower(targetPort),uniffiCallStatus
     )
 }
 }
@@ -5780,6 +5955,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_is_device_trusted() != 64010) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_connected_ffi_checksum_func_is_remote_input_active() != 2480) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_notify_new_sms() != 62779) {
@@ -5890,6 +6068,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_connected_ffi_checksum_func_send_remote_command() != 11860) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_connected_ffi_checksum_func_send_remote_input() != 31735) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_connected_ffi_checksum_func_send_sms() != 53876) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5917,7 +6098,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_connected_ffi_checksum_func_start_discovery() != 11305) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_connected_ffi_checksum_func_start_remote_input() != 45022) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_connected_ffi_checksum_func_stop_discovery() != 22037) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_connected_ffi_checksum_func_stop_remote_input() != 40658) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_func_trust_device() != 36048) {
@@ -5969,9 +6156,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_transfer_cancelled() != 17773) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_connected_ffi_checksum_method_filetransfercallback_on_compression_progress() != 31437) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_connected_ffi_checksum_method_filesystemprovidercallback_list_dir() != 55439) {

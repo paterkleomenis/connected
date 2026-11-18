@@ -97,15 +97,12 @@ import uniffi.connected_ffi.startDiscovery
 import uniffi.connected_ffi.trustDevice
 import uniffi.connected_ffi.getTrustedPeers
 import java.io.File
-import java.io.FileOutputStream
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 
 class ConnectedApp(private val context: Context) {
 
@@ -219,7 +216,6 @@ class ConnectedApp(private val context: Context) {
     private val activeIncomingTransferIds = linkedSetOf<String>()
     private val preparingTransfersCount = AtomicInteger(0)
 
-    val compressionProgress = mutableStateOf<CompressionProgress?>(null)
     val browserDownloadProgress = mutableStateOf<BrowserDownloadProgress?>(null)
 
     private fun registerOutgoingTransfer(transferId: String) {
@@ -273,21 +269,6 @@ class ConnectedApp(private val context: Context) {
     ) {
         val percentComplete: Float
             get() = if (totalBytes > 0) (bytesDownloaded.toFloat() / totalBytes * 100f) else 0f
-    }
-
-    data class CompressionProgress(
-        val currentFile: String,
-        val filesProcessed: Int,
-        val totalFiles: Int,
-        val bytesProcessed: Long,
-        val totalBytes: Long,
-        val speedBytesPerSec: Long
-    ) {
-        val percentComplete: Float
-            get() = if (totalBytes > 0) (bytesProcessed.toFloat() / totalBytes * 100f) else 0f
-
-        val estimatedSecondsRemaining: Long
-            get() = if (speedBytesPerSec > 0) ((totalBytes - bytesProcessed) / speedBytesPerSec) else 0
     }
 
     val clipboardContent = mutableStateOf("")
@@ -778,9 +759,12 @@ class ConnectedApp(private val context: Context) {
 
                         while (nextPath != null) {
 
-                            // Use proper Uri encoding to handle special characters in paths
-                            val fileUri = Uri.fromFile(File(nextPath)).toString()
-                            sendFileToDevice(device, fileUri)
+                            try {
+                                val transferId = sendFile(device.ip, device.port, nextPath)
+                                registerOutgoingTransfer(transferId)
+                            } catch (e: Exception) {
+                                Log.e("ConnectedApp", "Failed to send queued transfer: $nextPath", e)
+                            }
 
                             nextPath = queue.poll()
 
@@ -953,7 +937,6 @@ class ConnectedApp(private val context: Context) {
                     ConnectedService.restoreDefaultForegroundNotification()
                     cleanupAllPendingTempFiles()
                     cleanupStreamingTempDirectory()
-                    cleanupOrphanedCacheZipFiles()
                 }
             }
 
@@ -980,7 +963,6 @@ class ConnectedApp(private val context: Context) {
                 ConnectedService.restoreDefaultForegroundNotification()
                 cleanupAllPendingTempFiles()
                 cleanupStreamingTempDirectory()
-                cleanupOrphanedCacheZipFiles()
             }
         }
 
@@ -1000,27 +982,6 @@ class ConnectedApp(private val context: Context) {
                 cleanupAllPendingTempFiles()
                 cleanupStreamingTempDirectory()
             }
-        }
-
-        override fun onCompressionProgress(
-            filename: String,
-            currentFile: String,
-            filesProcessed: ULong,
-            totalFiles: ULong,
-            bytesProcessed: ULong,
-            totalBytes: ULong,
-            speedBytesPerSec: ULong
-        ) {
-            val percent = if (totalFiles > 0u) (filesProcessed.toLong() * 100 / totalFiles.toLong()) else 0
-            compressionProgress.value = CompressionProgress(
-                currentFile = currentFile,
-                filesProcessed = filesProcessed.toInt(),
-                totalFiles = totalFiles.toInt(),
-                bytesProcessed = bytesProcessed.toLong(),
-                totalBytes = totalBytes.toLong(),
-                speedBytesPerSec = speedBytesPerSec.toLong()
-            )
-            transferStatus.value = "Compressing: $percent% ($currentFile)"
         }
     }
 
@@ -1087,7 +1048,7 @@ class ConnectedApp(private val context: Context) {
         for ((path, file) in filesToCleanup) {
             try {
                 if (file.exists()) {
-                    file.delete()
+                    file.deleteRecursively()
                     cleanedCount++
                     Log.d("ConnectedApp", "Cleaned up temp file: ${file.name}")
                 }
@@ -1117,7 +1078,7 @@ class ConnectedApp(private val context: Context) {
             tempDir.listFiles()?.forEach { file ->
                 try {
                     val size = file.length()
-                    if (file.delete()) {
+                    if (file.deleteRecursively()) {
                         cleanedCount++
                         totalBytesFreed += size
                         Log.d("ConnectedApp", "Deleted orphaned temp file: ${file.name} (${size / (1024 * 1024)}MB)")
@@ -1139,46 +1100,6 @@ class ConnectedApp(private val context: Context) {
 
         if (cleanedCount > 0) {
             Log.d("ConnectedApp", "Freed ${totalBytesFreed / (1024 * 1024)}MB by cleaning $cleanedCount temp files")
-        }
-        return cleanedCount
-    }
-
-    /**
-     * Cleans up orphaned ZIP files in cacheDir from failed folder transfers
-     * These are files matching "connected-*.zip" or "*.zip" patterns that weren't tracked
-     */
-    private fun cleanupOrphanedCacheZipFiles(): Int {
-        val cacheDir = context.cacheDir
-        if (!cacheDir.exists()) return 0
-
-        var cleanedCount = 0
-        var totalBytesFreed = 0L
-
-        try {
-            // Clean up any ZIP files that weren't properly tracked
-            cacheDir.listFiles { _, name ->
-                name.endsWith(".zip") && (name.startsWith("connected-") || name.contains("folder") || name.contains("Folder"))
-            }?.forEach { file ->
-                try {
-                    val size = file.length()
-                    if (file.delete()) {
-                        cleanedCount++
-                        totalBytesFreed += size
-                        Log.d("ConnectedApp", "Deleted orphaned cache ZIP: ${file.name} (${size / (1024 * 1024)}MB)")
-                    }
-                } catch (e: Exception) {
-                    Log.w("ConnectedApp", "Failed to delete orphaned cache file: ${file.name}", e)
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("ConnectedApp", "Failed to cleanup orphaned cache files", e)
-        }
-
-        if (cleanedCount > 0) {
-            Log.d(
-                "ConnectedApp",
-                "Freed ${totalBytesFreed / (1024 * 1024)}MB by cleaning $cleanedCount orphaned cache files"
-            )
         }
         return cleanedCount
     }
@@ -1428,10 +1349,8 @@ class ConnectedApp(private val context: Context) {
                 try {
                     cleanupAllPendingTempFiles()
                     val orphanedCount = cleanupStreamingTempDirectory()
-                    val cacheCleaned = cleanupOrphanedCacheZipFiles()
-                    val totalCleaned = orphanedCount + cacheCleaned
-                    if (totalCleaned > 0) {
-                        Log.d("ConnectedApp", "Cleaned up $totalCleaned orphaned temp files on startup")
+                    if (orphanedCount > 0) {
+                        Log.d("ConnectedApp", "Cleaned up $orphanedCount orphaned temp files on startup")
                     }
                 } catch (e: Exception) {
                     Log.w("ConnectedApp", "Failed to cleanup orphaned temp files on startup", e)
@@ -1469,7 +1388,7 @@ class ConnectedApp(private val context: Context) {
                             queue.forEach { pathStr ->
                                 try {
                                     val f = java.io.File(pathStr)
-                                    if (f.exists() && f.delete()) {
+                                    if (f.exists() && f.deleteRecursively()) {
                                         pendingTempFilesForCleanup.remove(pathStr)
                                         Log.d("ConnectedApp", "Deleted expired queued temp file: ${f.name}")
                                     }
@@ -1531,7 +1450,6 @@ class ConnectedApp(private val context: Context) {
         // This prevents 30GB+ accumulation from aborted transfers
         cleanupAllPendingTempFiles()
         cleanupStreamingTempDirectory()
-        cleanupOrphanedCacheZipFiles()
 
         // Unregister broadcast receiver
         try {
@@ -3743,8 +3661,6 @@ class ConnectedApp(private val context: Context) {
         }
     }
 
-    // Folder Transfer (Zipped)
-
     /**
      * Scans a directory tree and returns (totalFiles, totalBytes)
      */
@@ -3769,231 +3685,127 @@ class ConnectedApp(private val context: Context) {
     }
 
     fun sendFolderToDevice(device: DiscoveredDevice, folderUri: Uri) {
-
         scope.launch(Dispatchers.IO) {
-
             val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, folderUri)
+            if (docFile == null || !docFile.isDirectory) return@launch
 
-            if (docFile != null && docFile.isDirectory) {
+            val folderName = docFile.name ?: "folder"
+            preparingTransfersCount.incrementAndGet()
 
-                val folderName = docFile.name ?: "folder"
+            try {
+                runOnMainThread {
+                    transferStatus.value = "Preparing folder..."
+                }
 
-                // Use cacheDir but with proper cleanup on failure
-                val zipFile = File(context.cacheDir, "$folderName.zip")
-
-                try {
-                    // First scan to get total size for progress tracking
+                val (totalFiles, totalBytes) = scanFolderStats(docFile)
+                if (totalFiles == 0) {
                     runOnMainThread {
-                        compressionProgress.value = CompressionProgress(
-                            currentFile = "Scanning folder...",
-                            filesProcessed = 0,
-                            totalFiles = 0,
-                            bytesProcessed = 0,
-                            totalBytes = 0,
-                            speedBytesPerSec = 0
-                        )
-                    }
-
-                    val (totalFiles, totalBytes) = scanFolderStats(docFile)
-
-                    if (totalFiles == 0) {
-                        runOnMainThread {
-                            compressionProgress.value = null
-                            android.widget.Toast.makeText(
-                                context,
-                                "Folder is empty",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                        return@launch
-                    }
-
-                    // Create ZIP with proper cleanup on failure
-                    try {
-                        ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
-                            zipRecursiveWithProgress(docFile, folderName, zos, totalFiles, totalBytes)
-                        }
-                    } catch (e: Exception) {
-                        // Clean up partial ZIP file on failure
-                        if (zipFile.exists()) {
-                            zipFile.delete()
-                        }
-                        throw e
-                    }
-
-                    // Clear compression progress
-                    runOnMainThread {
-                        compressionProgress.value = null
-                    }
-
-                    // Dev: no ZIP size limit (user requested unlimited).
-                    val zipSize = zipFile.length()
-                    Log.d("ConnectedApp", "Sending folder ZIP: ${zipFile.name}, size: ${zipSize / (1024 * 1024)}MB")
-
-                    if (isSyntheticIp(device.ip)) {
-
-                        val now = System.currentTimeMillis()
-                        val (_, queue) = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
-
-                            now to ConcurrentLinkedQueue()
-
-                        }
-
-                        queue.add(zipFile.absolutePath)
-
-                        if (hasProximityPermissions() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            try {
-                                wifiAwareManager?.requestConnect(device.id)
-                            } catch (e: SecurityException) {
-                                Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
-                            }
-                        }
-
-                        runOnMainThread {
-
-                            android.widget.Toast
-
-                                .makeText(
-
-                                    context,
-
-                                    "Waiting for nearby connection...",
-
-                                    android.widget.Toast.LENGTH_SHORT
-
-                                )
-
-                                .show()
-
-                        }
-
-                    } else {
-                        // Track temp file for cleanup after async transfer completes
-                        pendingTempFilesForCleanup[zipFile.absolutePath] = zipFile
-                        val transferId = sendFile(device.ip, device.port, zipFile.absolutePath)
-                        registerOutgoingTransfer(transferId)
-                    }
-
-                } catch (e: Exception) {
-
-                    Log.e("ConnectedApp", "Failed to zip folder", e)
-
-                    runOnMainThread {
-
+                        transferStatus.value = "Idle"
                         android.widget.Toast.makeText(
                             context,
-                            "Failed to zip folder: ${e.message}",
+                            "Folder is empty",
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
-
                     }
-
+                    return@launch
                 }
 
-            }
-
-        }
-
-    }
-
-
-    /**
-     * Iterative implementation to zip a directory structure with progress tracking.
-     * Uses an explicit stack instead of recursion to avoid stack overflow
-     * on deeply nested folder structures.
-     */
-    private fun zipRecursiveWithProgress(
-        root: androidx.documentfile.provider.DocumentFile,
-        parentPath: String,
-        zos: ZipOutputStream,
-        totalFiles: Int,
-        totalBytes: Long
-    ) {
-        // Stack holds pairs of (DocumentFile, parentPath)
-        val stack = ArrayDeque<Pair<androidx.documentfile.provider.DocumentFile, String>>()
-        stack.addLast(root to parentPath)
-
-        var filesProcessed = 0
-        var bytesProcessed = 0L
-        val startTime = System.currentTimeMillis()
-        var lastProgressUpdate = 0L
-
-        while (stack.isNotEmpty()) {
-            val (currentDir, currentParentPath) = stack.removeLast()
-
-            currentDir.listFiles().forEach { file ->
-                val entryPath = if (currentParentPath.isEmpty()) {
-                    file.name ?: ""
-                } else {
-                    "$currentParentPath/${file.name}"
+                // SAF trees are only readable through ContentResolver streams, so
+                // mirror the tree to disk and let the core stream it as a folder.
+                val tempRoot = File(
+                    File(context.filesDir, "streaming_temp"),
+                    java.util.UUID.randomUUID().toString()
+                )
+                val folderRoot = File(tempRoot, folderName)
+                if (!folderRoot.mkdirs()) {
+                    throw java.io.IOException("Failed to create ${folderRoot.absolutePath}")
                 }
+                pendingTempFilesForCleanup[folderRoot.absolutePath] = tempRoot
 
-                if (file.isDirectory) {
-                    // Push directory onto stack for later processing
-                    stack.addLast(file to entryPath)
-                } else {
-                    try {
-                        val fileName = file.name ?: "unknown"
+                var copiedFiles = 0
+                var copiedBytes = 0L
+                var lastProgressUpdate = 0L
+                val buffer = ByteArray(1024 * 1024)
 
-                        val entry = ZipEntry(entryPath)
-                        zos.putNextEntry(entry)
+                fun copyTree(source: androidx.documentfile.provider.DocumentFile, destination: File) {
+                    for (child in source.listFiles()) {
+                        val name = child.name ?: continue
+                        val target = File(destination, name)
+                        if (child.isDirectory) {
+                            target.mkdirs()
+                            copyTree(child, target)
+                            continue
+                        }
 
-                        context.contentResolver.openInputStream(file.uri)?.use { input ->
-                            val buffer = ByteArray(8192)
-                            var bytesRead: Int
-                            while (input.read(buffer).also { bytesRead = it } != -1) {
-                                zos.write(buffer, 0, bytesRead)
-                                bytesProcessed += bytesRead
+                        context.contentResolver.openInputStream(child.uri)?.use { input ->
+                            target.outputStream().use { output ->
+                                var bytesRead: Int
+                                while (input.read(buffer).also { bytesRead = it } != -1) {
+                                    output.write(buffer, 0, bytesRead)
+                                    copiedBytes += bytesRead
 
-                                // Update progress every 100ms
-                                val now = System.currentTimeMillis()
-                                if (now - lastProgressUpdate >= 100) {
-                                    lastProgressUpdate = now
-                                    val elapsedMs = now - startTime
-                                    val speed = if (elapsedMs > 0) {
-                                        (bytesProcessed * 1000 / elapsedMs)
-                                    } else 0L
-
-                                    val progress = CompressionProgress(
-                                        currentFile = fileName,
-                                        filesProcessed = filesProcessed,
-                                        totalFiles = totalFiles,
-                                        bytesProcessed = bytesProcessed,
-                                        totalBytes = totalBytes,
-                                        speedBytesPerSec = speed
-                                    )
-                                    runOnMainThread {
-                                        compressionProgress.value = progress
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastProgressUpdate >= 300) {
+                                        lastProgressUpdate = now
+                                        val percent = if (totalBytes > 0) {
+                                            (copiedBytes * 100 / totalBytes).toInt()
+                                        } else {
+                                            copiedFiles * 100 / totalFiles
+                                        }
+                                        runOnMainThread {
+                                            transferStatus.value = "Preparing folder: $percent%"
+                                        }
                                     }
                                 }
                             }
-                        }
-                        zos.closeEntry()
-                        filesProcessed++
-
-                        // Final update for this file
-                        val now = System.currentTimeMillis()
-                        val elapsedMs = now - startTime
-                        val speed = if (elapsedMs > 0) {
-                            (bytesProcessed * 1000 / elapsedMs)
-                        } else 0L
-
-                        val progress = CompressionProgress(
-                            currentFile = fileName,
-                            filesProcessed = filesProcessed,
-                            totalFiles = totalFiles,
-                            bytesProcessed = bytesProcessed,
-                            totalBytes = totalBytes,
-                            speedBytesPerSec = speed
-                        )
-                        runOnMainThread {
-                            compressionProgress.value = progress
-                        }
-
-                    } catch (e: Exception) {
-                        Log.e("ConnectedApp", "Failed to zip file: ${file.name}", e)
+                        } ?: throw java.io.IOException("Cannot read $name")
+                        copiedFiles++
                     }
                 }
+
+                copyTree(docFile, folderRoot)
+
+                if (isSyntheticIp(device.ip)) {
+                    val now = System.currentTimeMillis()
+                    val (_, queue) = pendingFileTransfersAwaitingIp.computeIfAbsent(device.id) {
+                        now to ConcurrentLinkedQueue()
+                    }
+                    queue.add(folderRoot.absolutePath)
+
+                    if (hasProximityPermissions() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        try {
+                            wifiAwareManager?.requestConnect(device.id)
+                        } catch (e: SecurityException) {
+                            Log.w("ConnectedApp", "Failed to request connect: permission denied", e)
+                        }
+                    }
+
+                    runOnMainThread {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Waiting for nearby connection...",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                } else {
+                    runOnMainThread {
+                        transferStatus.value = "Starting transfer: $folderName..."
+                    }
+                    val transferId = sendFile(device.ip, device.port, folderRoot.absolutePath)
+                    registerOutgoingTransfer(transferId)
+                }
+            } catch (e: Exception) {
+                Log.e("ConnectedApp", "Failed to send folder", e)
+                runOnMainThread {
+                    transferStatus.value = "Idle"
+                    android.widget.Toast.makeText(
+                        context,
+                        "Failed to send folder: ${e.message}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            } finally {
+                preparingTransfersCount.decrementAndGet()
             }
         }
     }
