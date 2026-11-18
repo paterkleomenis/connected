@@ -214,7 +214,7 @@ jobs:
       - name: Clean up WebView2 Ghost Languages
         shell: pwsh
         run: |
-          Get-ChildItem -Path target/ -Recurse -Directory | Where-Object { $_.Name -match '^[a-z]{2}(-[A-Za-z]+)?$' -and (Test-Path "$($_.FullName)\WebView2Loader.dll.mui" -or Test-Path "$($_.FullName)\Microsoft.Web.WebView2.Core.dll.mui") } | Remove-Item -Recurse -Force
+          Get-ChildItem -Path target/ -Recurse -Directory | Where-Object { $_.Name -match '^[a-z]{2}(-[A-Za-z]+)?$' -and ((Test-Path "$($_.FullName)\WebView2Loader.dll.mui") -or (Test-Path "$($_.FullName)\Microsoft.Web.WebView2.Core.dll.mui")) } | Remove-Item -Recurse -Force
 
       - name: Build Windows x64 MSIX
         if: matrix.target == 'x86_64-pc-windows-msvc'
