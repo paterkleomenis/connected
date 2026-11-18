@@ -6560,7 +6560,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git\\single-instance-b3fae2c\\.\" \"cargo/vendor/single-instance\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/single-instance-b3fae2c/.\" \"cargo/vendor/single-instance\""
         ]
     },
     {
