@@ -31,16 +31,6 @@ yanked = "warn"
 # Ignore advisories for unmaintained crates we can't easily replace
 # These are transitive dependencies from dioxus-desktop and other UI crates
 ignore = [
-  # gtk-rs GTK3 bindings no longer maintained - used by dioxus-desktop
-  "RUSTSEC-2024-0413",
-  "RUSTSEC-2024-0416",
-  "RUSTSEC-2024-0412",
-  "RUSTSEC-2024-0418",
-  "RUSTSEC-2024-0411",
-  "RUSTSEC-2024-0414", # gdkx11-sys - GTK3 bindings, used by tao/dioxus-desktop
-  "RUSTSEC-2024-0415",
-  "RUSTSEC-2024-0420",
-  "RUSTSEC-2024-0419",
   # paste no longer maintained - transitive dep
   "RUSTSEC-2024-0436",
   # proc-macro-error unmaintained - transitive dep from gtk
