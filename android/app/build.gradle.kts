@@ -55,6 +55,7 @@ kotlin {
 configure<ApplicationExtension> {
     namespace = "com.connected.app.sync"
     compileSdk = 37
+    compileSdkMinor = 1
     ndkVersion = latestNdkVersion
 
     defaultConfig {
